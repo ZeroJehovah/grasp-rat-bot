@@ -367,6 +367,27 @@ function runSelfTest() {
     };
   }
 
+  function buildOpportunisticShotWait(self, entities, allow = true) {
+    if (!allow) return null;
+    const target = pickOpportunisticShotTarget(self, entities);
+    if (!target) return null;
+    return {
+      kind: 'wait',
+      reason: 'opportunistic-afk-drop-shot',
+      dx: 0,
+      dy: 0,
+      opportunisticShot: {
+        id: target.user_id,
+        name: target.name,
+        x: target.x,
+        y: target.y,
+        hp: combatHpValue(target),
+        drop: target.drop,
+        distance: Math.round(target.distance)
+      }
+    };
+  }
+
   function pickPostAttackDropCoin(self, coins, activeThreats, attacks, entities) {
     const t = Date.now();
     const attack = (attacks || [])
@@ -587,6 +608,8 @@ function runSelfTest() {
         target: { distance: Math.round(dir.distance), fieldMembers: snapshotCoin.snapshotMembers, fieldAmount: snapshotCoin.snapshotAmount }
       }), self, entities, !recovery);
     }
+    const shotWait = buildOpportunisticShotWait(self, entities, !recovery);
+    if (shotWait) return shotWait;
     return { kind: 'wait', reason: 'wait-for-snapshot-coin' };
   }
 
@@ -1061,36 +1084,36 @@ function runSelfTest() {
       want: 'coin'
     },
     {
-      name: 'stationary afk target in range waits without coin',
+      name: 'stationary afk target in range is shot without combat',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 9 }]
-      }).kind,
-      want: 'wait'
+      }).opportunisticShot?.id,
+      want: 7
     },
     {
-      name: 'low value afk target in range waits without coin',
+      name: 'low value afk target in range is still shot',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 2 }]
-      }).kind,
-      want: 'wait'
+      }).opportunisticShot?.id,
+      want: 7
     },
     {
-      name: 'high own drop still ignores afk target without coin',
+      name: 'high own drop still allows afk opportunistic shot',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000, drop: 30 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 12 }]
-      }).kind,
-      want: 'wait'
+      }).opportunisticShot?.id,
+      want: 7
     },
     {
-      name: 'worthwhile close passive target waits without coin',
+      name: 'worthwhile close passive target is shot without combat',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000, drop: 30 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 16 }]
-      }).kind,
-      want: 'wait'
+      }).opportunisticShot?.id,
+      want: 7
     },
     {
       name: 'near passive drop can be opportunistic shot while collecting',
@@ -1741,6 +1764,7 @@ function browserBotSource(config) {
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 	      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
 	      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
 	      'snapshot-coin-field': '快照金币区域导航',
@@ -3415,6 +3439,19 @@ function browserBotSource(config) {
     return { ...action, opportunisticShot: shot };
   }
 
+  function buildOpportunisticShotWait(self, entities, options = {}) {
+    if (options.recovery) return null;
+    const shot = pickOpportunisticShotTarget(self, entities);
+    if (!shot) return null;
+    return {
+      kind: 'wait',
+      reason: 'opportunistic-afk-drop-shot',
+      dx: 0,
+      dy: 0,
+      opportunisticShot: shot
+    };
+  }
+
   function incomingBulletThreat(self, target = null, bullets = getBullets()) {
     const selfId = Number(self?.user_id);
     let best = null;
@@ -4233,6 +4270,8 @@ function browserBotSource(config) {
     }
 
     bot.fleeLock = null;
+    const shotWait = buildOpportunisticShotWait(self, entities, { recovery });
+    if (shotWait) return shotWait;
     return {
       kind: 'wait',
       reason: 'wait-for-snapshot-coin',

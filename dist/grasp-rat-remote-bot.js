@@ -533,6 +533,7 @@
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 	      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
 	      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
 	      'snapshot-coin-field': '快照金币区域导航',
@@ -2207,6 +2208,19 @@
     return { ...action, opportunisticShot: shot };
   }
 
+  function buildOpportunisticShotWait(self, entities, options = {}) {
+    if (options.recovery) return null;
+    const shot = pickOpportunisticShotTarget(self, entities);
+    if (!shot) return null;
+    return {
+      kind: 'wait',
+      reason: 'opportunistic-afk-drop-shot',
+      dx: 0,
+      dy: 0,
+      opportunisticShot: shot
+    };
+  }
+
   function incomingBulletThreat(self, target = null, bullets = getBullets()) {
     const selfId = Number(self?.user_id);
     let best = null;
@@ -3025,6 +3039,8 @@
     }
 
     bot.fleeLock = null;
+    const shotWait = buildOpportunisticShotWait(self, entities, { recovery });
+    if (shotWait) return shotWait;
     return {
       kind: 'wait',
       reason: 'wait-for-snapshot-coin',
