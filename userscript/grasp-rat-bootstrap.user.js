@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.5
+// @version      0.3.6
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -25,7 +25,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.5';
+  const BOOTSTRAP_VERSION = '0.3.6';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -51,6 +51,8 @@
     staleTickMs: 3000,
     debugEveryMs: 1000,
     statusEvery: 1000,
+    scriptStartupTimeoutMs: 2500,
+    installConfirmMs: 3500,
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
     authReturnGraceMs: 45000,
@@ -69,6 +71,8 @@
     staleTickMs: Math.max(1000, Number(GM_getValue('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
     debugEveryMs: Math.max(250, Number(GM_getValue('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
+    scriptStartupTimeoutMs: Math.max(500, Number(GM_getValue('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
+    installConfirmMs: Math.max(1000, Number(GM_getValue('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
     loginCooldownMs: Math.max(1000, Number(GM_getValue('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
     postLoginGraceMs: Math.max(5000, Number(GM_getValue('postLoginGraceMs', DEFAULTS.postLoginGraceMs)) || DEFAULTS.postLoginGraceMs),
     authReturnGraceMs: Math.max(5000, Number(GM_getValue('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
@@ -79,10 +83,16 @@
   };
 
   const state = {
+    bootId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     installing: false,
     polling: false,
+    lastPollAt: 0,
+    lastManifestFetchAt: 0,
+    lastScriptFetchAt: 0,
     lastManifestHash: '',
     lastManifestVersion: '',
+    lastInstallAttemptAt: 0,
+    lastInstallStatus: '',
     lastInstallAt: 0,
     lastInstallReason: '',
     lastWatchdogAt: 0,
@@ -93,6 +103,32 @@
     lastError: '',
     lastDebugAt: 0
   };
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function makeTimeoutError(label, ms) {
+    const err = new Error(`${label} timed out after ${ms}ms`);
+    err.isBootstrapTimeout = true;
+    return err;
+  }
+
+  function withTimeout(promise, ms, label) {
+    let timer = 0;
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(makeTimeoutError(label, ms)), ms);
+      })
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  function logBootstrap(message, detail) {
+    try {
+      console.log('[grasp-rat-bootstrap]', message, detail || '');
+    } catch (_) {}
+  }
 
   function isGamePage() {
     return location.origin === GAME_ORIGIN;
@@ -226,6 +262,9 @@
 
   function tickIsStale(status) {
     if (!status || !status.running) return true;
+    if (status.starting && Number(status.uptimeMs || 0) < Math.max(cfg.staleTickMs, cfg.scriptStartupTimeoutMs + cfg.installConfirmMs)) {
+      return false;
+    }
     const age = Number(status.lastTickAgeMs ?? 0);
     if (!status.timerActive && !status.ticking) return true;
     return Number.isFinite(age) && age > cfg.staleTickMs && !status.ticking;
@@ -265,9 +304,19 @@
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
     try {
       const result = unsafeWindow.eval(labeledSource);
-      if (result && typeof result.then === 'function') await result;
-      return;
+      if (result && typeof result.then === 'function') {
+        await withTimeout(result, cfg.scriptStartupTimeoutMs, 'remote bot startup');
+      }
+      return { method: 'unsafeWindow.eval', timedOut: false };
     } catch (evalErr) {
+      if (evalErr?.isBootstrapTimeout) {
+        state.lastInstallStatus = evalErr.message;
+        logBootstrap('remote bot startup promise timed out; continuing confirmation', {
+          sourceUrl,
+          timeoutMs: cfg.scriptStartupTimeoutMs
+        });
+        return { method: 'unsafeWindow.eval', timedOut: true, error: evalErr.message || String(evalErr) };
+      }
       const script = document.createElement('script');
       script.textContent = labeledSource;
       script.dataset.graspRatInjected = 'true';
@@ -276,10 +325,12 @@
       };
       (document.documentElement || document.head || document.body).appendChild(script);
       script.remove();
+      return { method: 'script-element', timedOut: false, evalError: evalErr?.message || String(evalErr) };
     }
   }
 
   async function fetchAndVerify(manifest) {
+    state.lastScriptFetchAt = Date.now();
     const source = await gmRequest('GET', withCacheBust(manifest.scriptUrl));
     const hash = await sha256Hex(source);
     if (hash !== manifest.sha256) {
@@ -291,8 +342,27 @@
     return { source, hash };
   }
 
+  async function waitForInstallConfirmation(manifest, reason, injectResult) {
+    const started = Date.now();
+    let status = null;
+    while (Date.now() - started <= cfg.installConfirmMs) {
+      status = getBotStatus();
+      if (status?.running && String(status.sourceHash || '') === String(manifest.sha256 || '')) {
+        return status;
+      }
+      state.lastInstallStatus = `confirming ${reason || 'install'}: ${JSON.stringify(status || null).slice(0, 160)}`;
+      await sleep(100);
+    }
+    throw new Error(`bot install did not confirm after ${cfg.installConfirmMs}ms: ${JSON.stringify({
+      status,
+      injectResult
+    }).slice(0, 500)}`);
+  }
+
   async function installSource(manifest, source, reason) {
     if (!isGamePage()) return false;
+    state.lastInstallAttemptAt = Date.now();
+    state.lastInstallStatus = `injecting ${manifest.version || manifest.sha256 || 'remote'}`;
     unsafeWindow.__graspRatBotRuntimeConfig = {
       ...(manifest.config || {}),
       debug: Boolean(manifest.debug ?? cfg.debug),
@@ -304,17 +374,15 @@
       sourceUrl: String(manifest.scriptUrl || ''),
       injectedBy: 'tampermonkey'
     };
-    await runInPage(source, manifest.scriptUrl);
-    await new Promise(resolve => setTimeout(resolve, 150));
-    const status = getBotStatus();
-    if (!status || !status.running || String(status.sourceHash || '') !== String(manifest.sha256 || '')) {
-      throw new Error(`bot install did not confirm: ${JSON.stringify(status || null).slice(0, 300)}`);
-    }
+    const injectResult = await runInPage(source, manifest.scriptUrl);
+    state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
+    const status = await waitForInstallConfirmation(manifest, reason, injectResult);
     state.lastManifestHash = String(manifest.sha256 || '');
     state.lastManifestVersion = String(manifest.version || '');
     state.lastInstallAt = Date.now();
     state.lastInstallReason = reason || '';
-    postDebug('install', { reason, version: manifest.version, sha256: manifest.sha256, status }, { force: true });
+    state.lastInstallStatus = 'confirmed';
+    postDebug('install', { reason, version: manifest.version, sha256: manifest.sha256, injectResult, status }, { force: true });
     return true;
   }
 
@@ -350,7 +418,9 @@
     if (!isGamePage() || state.installing || state.polling) return;
     state.polling = true;
     state.installing = true;
+    state.lastPollAt = Date.now();
     try {
+      state.lastManifestFetchAt = Date.now();
       const manifest = parseManifest(await gmRequest('GET', withCacheBust(cfg.manifestUrl)));
       if (!botNeedsInstall(manifest)) {
         postDebug('ok', { reason, version: manifest.version, sha256: manifest.sha256 });

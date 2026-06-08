@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.5","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.6","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -135,6 +135,7 @@
     offlineLeaveCooldownMs: 60000,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
+    globalRefreshTimeoutMs: 1500,
     status: '',
     ...config,
     // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
@@ -236,6 +237,7 @@
     seenKillKeys: new Set(preserved.seenKillKeys),
     seenKillKeysList: preserved.seenKillKeys,
 	    tickCount: 0,
+	    starting: true,
 	    ticking: false,
 	    lastDecision: null,
 	    errors: [],
@@ -273,6 +275,7 @@
         ticking: Boolean(this.ticking),
         timerActive: Boolean(this.timer),
         dryRun: cfg.dryRun,
+        starting: Boolean(this.starting),
         tickCount: this.tickCount,
         uptimeMs: Date.now() - this.startedAt,
         lastTickAt: this.lastTickAt,
@@ -941,6 +944,27 @@
 	    return bot.globalState.coinDrops || [];
 	  }
 
+  function fetchJsonNoStore(url, timeoutMs = cfg.globalRefreshTimeoutMs) {
+    const ms = Math.max(250, Number(timeoutMs) || cfg.globalRefreshTimeoutMs);
+    const options = { cache: 'no-store' };
+    let controller = null;
+    let timer = 0;
+    if (typeof AbortController === 'function') {
+      controller = new AbortController();
+      options.signal = controller.signal;
+    }
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try {
+          if (controller) controller.abort();
+        } catch (_) {}
+        reject(new Error(url + ' timed out after ' + ms + 'ms'));
+      }, ms);
+    });
+    const request = fetch(url, options).then(res => res.json());
+    return Promise.race([request, timeout]).finally(() => clearTimeout(timer));
+  }
+
   function summarizeSelf(self) {
     return {
       id: self.user_id,
@@ -1031,10 +1055,10 @@
 	    bot.globalState.refreshedAt = t;
 	    try {
       const [snapshotRes, minimapRes] = await Promise.all([
-        fetch('/snapshot', { cache: 'no-store' }),
-        fetch('/minimap', { cache: 'no-store' })
+        fetchJsonNoStore('/snapshot'),
+        fetchJsonNoStore('/minimap')
       ]);
-	      const [snapshot, minimap] = await Promise.all([snapshotRes.json(), minimapRes.json()]);
+	      const [snapshot, minimap] = [snapshotRes, minimapRes];
 	      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
 	      bot.globalState.entities = snapshot?.entities || [];
 	      bot.globalState.coinDrops = snapshot?.coin_drops || [];
@@ -2478,19 +2502,22 @@
 	    }
 	  }
 
+	  window[BOT_KEY] = bot;
+	  if (previousBot && previousBot !== bot && previousBot.stop) {
+	    try {
+	      previousBot.stop('replaced by ' + cfg.version);
+	    } catch (err) {
+	      console.warn('[grasp-rat-bot] previous stop failed', err);
+	    }
+	  }
+
 	  return refreshGlobalState(true)
-	    .then(() => {
-	      window[BOT_KEY] = bot;
-	      if (previousBot && previousBot !== bot && previousBot.stop) {
-	        try {
-	          previousBot.stop('replaced by ' + cfg.version);
-	        } catch (err) {
-	          console.warn('[grasp-rat-bot] previous stop failed', err);
-	        }
-	      }
-	      return tick('startup');
+	    .catch(err => {
+	      bot.globalState.error = err.message || String(err);
 	    })
+	    .then(() => tick('startup'))
 	    .then(() => {
+	      bot.starting = false;
 	      if (!cfg.once && bot.running) {
 	        bot.timer = setInterval(() => {
 	          tick();
