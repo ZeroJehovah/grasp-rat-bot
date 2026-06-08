@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.3
+// @version      0.4.4
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.3';
+  const BOOTSTRAP_VERSION = '0.4.4';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
@@ -304,6 +304,87 @@
     });
   }
 
+  async function fetchRequest(fetchFn, transport, method, url, body = null, headers = {}) {
+    if (typeof fetchFn !== 'function') throw new Error(`${transport} unavailable`);
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = 0;
+    if (controller) {
+      timer = setTimeout(() => controller.abort(), cfg.requestTimeoutMs);
+    }
+    try {
+      const fetchOptions = {
+        method,
+        headers,
+        cache: 'no-store',
+        credentials: 'omit',
+        mode: 'cors',
+        redirect: 'follow',
+        signal: controller?.signal
+      };
+      if (body !== null && body !== undefined) fetchOptions.body = body;
+      const res = await fetchFn(url, fetchOptions);
+      const text = await res.text();
+      if (res.status >= 200 && res.status < 300) return text;
+      throw new Error(`${method} ${url} failed: ${res.status}`);
+    } catch (err) {
+      const message = err?.name === 'AbortError'
+        ? `${method} ${url} timed out`
+        : (err?.message || String(err));
+      throw new Error(`${transport} ${message}`);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  function requestText(method, url, body = null, headers = {}) {
+    const attempts = [];
+    const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function' ? unsafeWindow.fetch.bind(unsafeWindow) : null;
+    const sandboxFetch = typeof fetch === 'function' ? fetch.bind(globalThis) : null;
+    if (pageFetch) {
+      attempts.push({
+        transport: 'page-fetch',
+        run: () => fetchRequest(pageFetch, 'page-fetch', method, url, body, headers)
+      });
+    }
+    if (sandboxFetch && sandboxFetch !== pageFetch) {
+      attempts.push({
+        transport: 'fetch',
+        run: () => fetchRequest(sandboxFetch, 'fetch', method, url, body, headers)
+      });
+    }
+    if (typeof GM_xmlhttpRequest === 'function') {
+      attempts.push({
+        transport: 'GM_xmlhttpRequest',
+        run: () => gmRequest(method, url, body, headers)
+      });
+    }
+    if (!attempts.length) return Promise.reject(new Error(`${method} ${url} failed: no request transports`));
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let pending = attempts.length;
+      const errors = [];
+      for (const attempt of attempts) {
+        withTimeout(
+          Promise.resolve().then(attempt.run),
+          cfg.requestTimeoutMs + 500,
+          `${attempt.transport} ${method} request`
+        ).then(text => {
+          if (settled) return;
+          settled = true;
+          resolve({ text, transport: attempt.transport });
+        }).catch(err => {
+          if (settled) return;
+          errors.push(`${attempt.transport}: ${err?.message || String(err)}`);
+          pending -= 1;
+          if (pending <= 0) {
+            settled = true;
+            reject(new Error(`${method} ${url} failed via all transports: ${errors.join(' | ')}`));
+          }
+        });
+      }
+    });
+  }
+
   async function requestAcceptedTextWithFallback(label, urls, acceptText) {
     const candidates = uniqueUrls(urls);
     if (!candidates.length) {
@@ -322,11 +403,7 @@
             total: candidates.length,
             delayMs: i * cfg.fallbackStaggerMs
           });
-          const text = await withTimeout(
-            gmRequest('GET', withCacheBust(url)),
-            cfg.requestTimeoutMs + 500,
-            `${label} request`
-          );
+          const { text, transport } = await requestText('GET', withCacheBust(url));
           const accepted = acceptText ? await acceptText(text, url) : null;
           if (settled) return;
           settled = true;
@@ -334,9 +411,10 @@
           logBootstrap(`${label} fetch ok`, {
             url,
             index: i + 1,
+            transport,
             bytes: String(text || '').length
           });
-          resolve({ text, url, accepted });
+          resolve({ text, url, accepted, transport });
         } catch (err) {
           if (settled) return;
           const error = err?.message || String(err);
