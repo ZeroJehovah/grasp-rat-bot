@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.0","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.1","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -30,8 +30,10 @@
 	    debug: Boolean(config.debug),
 	    debugEndpoint: String(config.debugEndpoint || ''),
 	    debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
-	    tickMs: 120,
+    tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
+    nativeReconnectMs: 3000,
+    botWsReconnectMs: 3000,
     dangerRadius: 28000,
     activeCautionRadius: 38000,
     activeCautionExitMargin: 4000,
@@ -224,6 +226,11 @@
 	      nativeWsReadyState: null,
 	      lastOpenAt: 0,
 	      lastMessageAt: 0,
+	      lastNativeReconnectAt: 0,
+	      nativeReconnectCount: 0,
+	      lastWsConnectAt: 0,
+	      lastWsCloseAt: 0,
+	      wsConnectCount: 0,
 	      lastError: '',
 	      lastVelocity: '',
 	      lastVelocityAt: 0
@@ -824,11 +831,19 @@
 
 	  function requestNativeReconnect(userId) {
 	    if (!userId) return;
+	    const t = Date.now();
+	    if (t - Number(bot.control.lastNativeReconnectAt || 0) < cfg.nativeReconnectMs) {
+	      return false;
+	    }
+	    bot.control.lastNativeReconnectAt = t;
+	    bot.control.nativeReconnectCount += 1;
 	    try {
 	      if (typeof connectWs === 'function') connectWs(userId);
 	      else if (typeof scheduleReconnect === 'function') scheduleReconnect();
+	      return true;
 	    } catch (err) {
 	      bot.control.lastError = 'native reconnect: ' + (err.message || String(err));
+	      return false;
 	    }
 	  }
 
@@ -870,6 +885,11 @@
 	      nativeWsReadyState: native ? native.wsReadyState : null,
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
+	      lastNativeReconnectAgeMs: control.lastNativeReconnectAt ? Date.now() - control.lastNativeReconnectAt : null,
+	      nativeReconnectCount: Number(control.nativeReconnectCount || 0),
+	      lastWsConnectAgeMs: control.lastWsConnectAt ? Date.now() - control.lastWsConnectAt : null,
+	      lastWsCloseAgeMs: control.lastWsCloseAt ? Date.now() - control.lastWsCloseAt : null,
+	      wsConnectCount: Number(control.wsConnectCount || 0),
 	      lastError: control.lastError || '',
 	      lastVelocity: control.lastVelocity || '',
 	      nativeCurrentVel,
@@ -941,12 +961,15 @@
 	    if (native) {
 	      if (bot.control.ws) closeControlWs();
 	      if (syncNativeControl(native)) return true;
+	      if (native.wsReadyState === WebSocket.CONNECTING) return false;
 	      requestNativeReconnect(userId);
 	      return false;
 	    }
 	    if (bot.control.wsOpen && bot.control.ws?.readyState === WebSocket.OPEN) return true;
 	    if (bot.control.connecting && bot.control.ws?.readyState === WebSocket.CONNECTING) return false;
 	    closeControlWs();
+	    const t = Date.now();
+	    if (t - Number(bot.control.lastWsConnectAt || 0) < cfg.botWsReconnectMs) return false;
 	    bot.control.transport = 'bot-websocket';
 	    bot.control.connecting = true;
 	    bot.control.lastError = '';
@@ -956,6 +979,8 @@
 	      + '&token=' + encodeURIComponent(token)
 	      + '&compress=';
 	    bot.control.wsUrl = wsUrl;
+	    bot.control.lastWsConnectAt = t;
+	    bot.control.wsConnectCount += 1;
 	    const ws = new WebSocket(wsUrl);
 	    ws.binaryType = 'arraybuffer';
 	    bot.control.ws = ws;
@@ -981,12 +1006,14 @@
 	      bot.control.wsOpen = false;
 	      bot.control.connecting = false;
 	      bot.control.wsReadyState = ws.readyState;
+	      bot.control.lastWsCloseAt = Date.now();
 	    });
 	    ws.addEventListener('error', () => {
 	      if (bot.control.ws !== ws) return;
 	      bot.control.wsOpen = false;
 	      bot.control.connecting = false;
 	      bot.control.wsReadyState = ws.readyState;
+	      bot.control.lastWsCloseAt = Date.now();
 	      bot.control.lastError = 'websocket error';
 	    });
 	    return false;

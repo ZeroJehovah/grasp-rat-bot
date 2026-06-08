@@ -31,6 +31,8 @@ When the game page is not logged in, the bootstrap and remote bot try `startLinu
 
 After login starts or the OAuth authorize/callback page is seen, the bootstrap suppresses another login attempt for 45 seconds. This prevents a just-authorized page from bouncing back into LinuxDO before the game writes token/self state. If the bot is already in game but page WebSocket control stays offline for more than 3 seconds, the remote bot attempts `leave(userId)` or `#leaveBtn` before any reload fallback.
 
+Remote bot WebSocket reconnects are throttled. Native page `connectWs()` calls and fallback bot-created `wss://.../ws` connections wait at least 3 seconds between attempts, and the bot does not call `connectWs()` again while the page WebSocket is already `CONNECTING`.
+
 Static full-stamina `Active` entities are treated as ordinary targets instead of active threats. Moving or non-full-stamina `Active` entities still trigger avoidance, but avoidance distances are narrower than the old bootstrap `0.2.x` build so the bot stops fleeing far across the map.
 
 ## Build Script B
