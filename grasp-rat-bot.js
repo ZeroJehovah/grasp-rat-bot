@@ -131,6 +131,9 @@ function runSelfTest() {
     fieldMigrationClusterRadius: 18000,
     fieldMigrationMinCoins: 3,
     fieldMigrationStaminaThreshold: 0,
+    snapshotCoinMaxDistance: 1200000,
+    snapshotCoinClusterRadius: 22000,
+    snapshotCoinClusterMinCoins: 2,
     patrolHeadingMs: 26000,
     patrolStaminaThreshold: 6500,
     chaseCoinStaminaThreshold: 0,
@@ -232,6 +235,33 @@ function runSelfTest() {
       .filter(c => c.amount > 0 && c.distance <= maxDistance)
       .filter(c => !activeThreats.some(t => dist(c, t) <= t.coinDangerRadius))
       .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
+  }
+
+  function pickSnapshotCoinDestination(self, coins, activeThreats) {
+    const candidates = safeCoins(self, coins, activeThreats, cfg.snapshotCoinMaxDistance);
+    if (!candidates.length) return null;
+    let best = null;
+    const radius = Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius);
+    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
+    for (const coin of candidates) {
+      const members = candidates.filter(other => dist(coin, other) <= radius);
+      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const score = totalAmount * cfg.coinOpportunityValue
+        + Math.max(0, members.length - 1) * cfg.opportunityNearBonus
+        - coin.distance * cfg.opportunityDistancePenalty;
+      const item = {
+        ...coin,
+        snapshotMembers: members.length,
+        snapshotAmount: totalAmount,
+        snapshotScore: score
+      };
+      if (members.length >= minCoins) {
+        if (!best || item.snapshotScore > best.snapshotScore || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
+      } else if (!best) {
+        best = item;
+      }
+    }
+    return best || candidates[0];
   }
 
   function enemyTargets(self, entities, activeThreats) {
@@ -422,8 +452,21 @@ function runSelfTest() {
       });
     }
     if (hasReturnBlockThreat(activeThreats)) return { kind: 'patrol', reason: 'return-block-lateral-scan' };
-    if (stamina5s >= cfg.chaseCoinStaminaThreshold) return { kind: 'patrol' };
-    return { kind: 'patrol' };
+    const snapshotCoin = pickSnapshotCoinDestination(self, coins, activeThreats);
+    if (snapshotCoin) {
+      const dir = directionTo(self, snapshotCoin);
+      return blockThreatReturnAction(self, activeThreats, {
+        kind: 'seek-coin',
+        reason: snapshotCoin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target',
+        id: snapshotCoin.drop_id,
+        amount: snapshotCoin.amount,
+        members: snapshotCoin.snapshotMembers,
+        dx: dir.dx,
+        dy: dir.dy,
+        target: { distance: Math.round(dir.distance), fieldMembers: snapshotCoin.snapshotMembers, fieldAmount: snapshotCoin.snapshotAmount }
+      });
+    }
+    return { kind: 'wait', reason: 'wait-for-snapshot-coin' };
   }
 
   const cases = [
@@ -547,24 +590,24 @@ function runSelfTest() {
       want: 'seek-coin'
     },
     {
-      name: 'far coin outside local range is not chased',
+      name: 'far snapshot coin outside local range is chased',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         global: [{ user_id: 4, x: 20000, y: 0, death_reward_preview: 7 }],
         coins: [{ drop_id: 2, x: 40000, y: 0, amount: 5 }]
       }).kind,
-      want: 'patrol'
+      want: 'seek-coin'
     },
     {
-      name: 'single far coin is ignored instead of long chase',
+      name: 'single far snapshot coin replaces open patrol',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1 }]
       }).kind,
-      want: 'patrol'
+      want: 'seek-coin'
     },
     {
-      name: 'far coin cluster outside local range is ignored',
+      name: 'far snapshot coin cluster replaces open patrol',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [
@@ -573,7 +616,26 @@ function runSelfTest() {
           { drop_id: 4, x: 57000, y: -1000, amount: 1 }
         ]
       }).kind,
-      want: 'patrol'
+      want: 'seek-coin'
+    },
+    {
+      name: 'far snapshot coin cluster uses snapshot field reason',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        coins: [
+          { drop_id: 2, x: 50000, y: 0, amount: 1 },
+          { drop_id: 3, x: 54000, y: 2000, amount: 1 },
+          { drop_id: 4, x: 57000, y: -1000, amount: 1 }
+        ]
+      }).reason,
+      want: 'snapshot-coin-field'
+    },
+    {
+      name: 'no coin fallback waits for snapshot coin',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 }
+      }).reason,
+      want: 'wait-for-snapshot-coin'
     },
     {
       name: 'low hp waits instead of chasing',
@@ -618,12 +680,12 @@ function runSelfTest() {
       want: 'flee'
     },
     {
-      name: 'moving active beyond narrowed caution does not force far flee',
+      name: 'moving active beyond narrowed caution waits when no coin exists',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 30000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
       }).kind,
-      want: 'patrol'
+      want: 'wait'
     },
     {
       name: 'stationary active outside caution allows foot coin only',
@@ -753,7 +815,7 @@ function runSelfTest() {
       want: 'seek-coin'
     },
     {
-      name: 'far active no longer forces return-block scan',
+      name: 'far active allows snapshot coin travel away from it',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
@@ -763,10 +825,10 @@ function runSelfTest() {
           { drop_id: 4, x: -98000, y: -2000, amount: 1 }
         ]
       }).kind,
-      want: 'patrol'
+      want: 'seek-coin'
     },
     {
-      name: 'far active no longer blocks distant migration by return-block',
+      name: 'far active allows snapshot coin travel beyond it',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
@@ -776,15 +838,15 @@ function runSelfTest() {
           { drop_id: 4, x: 78000, y: -2000, amount: 1 }
         ]
       }).kind,
-      want: 'patrol'
+      want: 'seek-coin'
       },
     {
-      name: 'full hp low stamina still patrols',
+      name: 'full hp low stamina waits when no snapshot coin exists',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 2000 },
         global: [{ user_id: 4, x: 20000, y: 0, death_reward_preview: 7 }]
       }).kind,
-      want: 'patrol'
+      want: 'wait'
     },
     {
       name: 'low stamina picks close safe coin',
@@ -832,7 +894,7 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 9 }]
       }).kind,
-      want: 'patrol'
+      want: 'wait'
     },
     {
       name: 'low value passive target is ignored',
@@ -840,7 +902,7 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 2 }]
       }).kind,
-      want: 'patrol'
+      want: 'wait'
     },
     {
       name: 'high own drop requires worthwhile target',
@@ -848,7 +910,7 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000, drop: 30 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 12 }]
       }).kind,
-      want: 'patrol'
+      want: 'wait'
     },
     {
       name: 'worthwhile close passive target can still be attacked',
@@ -1054,6 +1116,10 @@ function browserBotSource(config) {
     fieldMigrationClusterRadius: 18000,
     fieldMigrationMinCoins: 3,
     fieldMigrationStaminaThreshold: 0,
+    snapshotCoinMaxDistance: 1200000,
+    snapshotCoinClusterRadius: 22000,
+    snapshotCoinClusterMinCoins: 2,
+    snapshotCoinStaleMs: 30000,
     patrolHeadingMs: 26000,
     patrolStaminaThreshold: 6500,
     chaseCoinStaminaThreshold: 0,
@@ -1202,7 +1268,7 @@ function browserBotSource(config) {
     nativeErrorHandler: null,
     lastNativeTickAt: 0,
     seenEntities: new Map(),
-	    globalState: { refreshedAt: 0, tick: 0, entities: [], coinDrops: [], messages: [], minimap: null, error: '' },
+	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], coinDrops: [], messages: [], minimap: null, error: '' },
 	    control: {
 	      ws: null,
 	      wsOpen: false,
@@ -1294,9 +1360,11 @@ function browserBotSource(config) {
           reason: item.reason || '',
           remainingMs: Math.max(0, Math.round(Number(item.ignoreUntil || 0) - now()))
         })),
-	        globalState: {
-	          refreshedAt: this.globalState.refreshedAt,
-	          tick: this.globalState.tick,
+		        globalState: {
+		          refreshedAt: this.globalState.refreshedAt,
+		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
+		          snapshotAgeMs: this.globalState.snapshotRefreshedAt ? Date.now() - this.globalState.snapshotRefreshedAt : null,
+		          tick: this.globalState.tick,
 	          entities: this.globalState.entities.length,
 	          coinDrops: this.globalState.coinDrops.length,
 	          minimapPoints: this.globalState.minimap?.points?.length || 0,
@@ -1468,7 +1536,10 @@ function browserBotSource(config) {
 	      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
-	      'scan-open-area': '开阔区域巡航',
+	      'snapshot-coin-field': '快照金币区域导航',
+	      'snapshot-coin-target': '快照金币导航',
+	      'wait-for-snapshot-coin': '等待快照金币',
+	      'maintain-safe-spacing': '避开附近玩家',
 	      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
 	      'leave-stale-coin': '离开疑似卡住金币',
 	      'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
@@ -2106,11 +2177,46 @@ function browserBotSource(config) {
 	    return bot.globalState.entities || [];
 	  }
 	
-	  function getCoins() {
-	    const nativeState = getNativeState();
-	    if (Array.isArray(nativeState?.coinDrops)) return nativeState.coinDrops;
-	    return bot.globalState.coinDrops || [];
-	  }
+  function normalizeCoinDrop(raw, source) {
+    if (!raw || typeof raw !== 'object') return null;
+    const x = Number(raw.x);
+    const y = Number(raw.y);
+    const amount = Number(raw.amount ?? raw.value ?? raw.coins ?? 0);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(amount) || amount <= 0) return null;
+    const dropId = raw.drop_id ?? raw.id ?? raw.coin_id;
+    return {
+      ...raw,
+      drop_id: dropId ?? ('coord:' + Math.round(x) + ':' + Math.round(y) + ':' + amount),
+      x,
+      y,
+      amount,
+      snapshot: source === 'snapshot' || Boolean(raw.snapshot),
+      native: source === 'native' || Boolean(raw.native)
+    };
+  }
+
+  function coinDropKey(coin) {
+    const id = coin?.drop_id ?? coin?.id ?? coin?.coin_id;
+    if (id !== undefined && id !== null && id !== '') return 'id:' + id;
+    return 'xy:' + Math.round(Number(coin.x) || 0) + ':' + Math.round(Number(coin.y) || 0) + ':' + (Number(coin.amount) || 0);
+  }
+
+  function getCoins() {
+    const nativeState = getNativeState();
+    const nativeCoins = Array.isArray(nativeState?.coinDrops) ? nativeState.coinDrops : [];
+    const snapshotCoins = Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : [];
+    const byKey = new Map();
+    const add = (raw, source) => {
+      const coin = normalizeCoinDrop(raw, source);
+      if (!coin) return;
+      const key = coinDropKey(coin);
+      const previous = byKey.get(key);
+      byKey.set(key, previous ? { ...previous, ...coin, snapshot: Boolean(previous.snapshot || coin.snapshot), native: Boolean(previous.native || coin.native) } : coin);
+    };
+    for (const coin of snapshotCoins) add(coin, 'snapshot');
+    for (const coin of nativeCoins) add(coin, 'native');
+    return Array.from(byKey.values());
+  }
 
   function fetchJsonNoStore(url, timeoutMs = cfg.globalRefreshTimeoutMs) {
     const ms = Math.max(250, Number(timeoutMs) || cfg.globalRefreshTimeoutMs);
@@ -2225,13 +2331,14 @@ function browserBotSource(config) {
       const [snapshotRes, minimapRes] = await Promise.all([
         fetchJsonNoStore('/snapshot'),
         fetchJsonNoStore('/minimap')
-      ]);
-	      const [snapshot, minimap] = [snapshotRes, minimapRes];
-	      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
-	      bot.globalState.entities = snapshot?.entities || [];
-	      bot.globalState.coinDrops = snapshot?.coin_drops || [];
-	      bot.globalState.messages = snapshot?.messages || [];
-	      bot.globalState.minimap = minimap || null;
+	      ]);
+		      const [snapshot, minimap] = [snapshotRes, minimapRes];
+		      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
+		      bot.globalState.entities = snapshot?.entities || [];
+		      bot.globalState.coinDrops = snapshot?.coin_drops || [];
+		      bot.globalState.messages = snapshot?.messages || [];
+      bot.globalState.snapshotRefreshedAt = Date.now();
+		      bot.globalState.minimap = minimap || null;
 	      bot.globalState.error = '';
 	    } catch (err) {
 	      bot.globalState.error = err.message || String(err);
@@ -2803,9 +2910,10 @@ function browserBotSource(config) {
     };
   }
 
-  function classify(self) {
-    const localEntities = getEntities()
-      .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e));
+	  function classify(self) {
+    const coinDrops = getCoins();
+	    const localEntities = getEntities()
+	      .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e));
     markRecentMovement(localEntities);
     const globalById = new Map(
       (bot.globalState.entities || [])
@@ -2831,15 +2939,15 @@ function browserBotSource(config) {
         if (b.drop !== a.drop) return b.drop - a.drop;
         return a.distance - b.distance;
       });
-    const coins = getCoins()
-      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
+	    const coins = coinDrops
+	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
       .filter(c => c.amount > 0 && c.distance <= cfg.coinMaxDistance)
       .sort((a, b) => {
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
-    const allCoins = getCoins()
-      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: false }))
+	    const allCoins = coinDrops
+	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: Boolean(c.snapshot) }))
       .filter(c => c.amount > 0)
       .sort((a, b) => {
         if (a.distance !== b.distance) return a.distance - b.distance;
@@ -2869,22 +2977,22 @@ function browserBotSource(config) {
         if (b.drop !== a.drop) return b.drop - a.drop;
         return a.distance - b.distance;
       });
-    const globalCoins = getCoins()
-      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: false }))
+	    const globalCoins = coinDrops
+	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: Boolean(c.snapshot) }))
       .filter(c => c.amount > 0 && c.distance <= cfg.globalCoinMaxDistance)
       .sort((a, b) => {
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
-    const patrolCoins = getCoins()
-      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: false }))
+	    const patrolCoins = coinDrops
+	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: Boolean(c.snapshot) }))
       .filter(c => c.amount > 0 && c.distance <= cfg.patrolCoinMaxDistance)
       .sort((a, b) => {
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
-    const scanCoins = getCoins()
-      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: false }))
+	    const scanCoins = coinDrops
+	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: Boolean(c.snapshot) }))
       .filter(c => c.amount > 0 && c.distance <= cfg.scanCoinMaxDistance)
       .sort((a, b) => {
         if (a.distance !== b.distance) return a.distance - b.distance;
@@ -2893,8 +3001,9 @@ function browserBotSource(config) {
     const nearbyHumans = entities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
       .sort((a, b) => a.distance - b.distance);
-    return { entities, activeThreats, inactiveTargets, coins, allCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans };
-  }
+    const snapshotCoins = allCoins.filter(c => c.distance <= cfg.snapshotCoinMaxDistance);
+	    return { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans };
+	  }
 
   function safeCoinCandidates(coins, activeThreats, maxDistance) {
     const t = now();
@@ -2942,6 +3051,46 @@ function browserBotSource(config) {
       .filter(c => c.distance >= cfg.distantCoinMinDistance);
     if (!candidates.length) return null;
     return candidates[0];
+  }
+
+  function snapshotCoinAgeMs() {
+    return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
+  }
+
+  function pickSnapshotCoinDestination(allCoins, activeThreats) {
+    const ageMs = snapshotCoinAgeMs();
+    let candidates = safeCoinCandidates(allCoins, activeThreats, cfg.snapshotCoinMaxDistance);
+    if (ageMs > cfg.snapshotCoinStaleMs) {
+      candidates = candidates.filter(coin => coin.native);
+    }
+    if (!candidates.length) return null;
+    if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
+      const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
+      if (sticky) return { ...sticky, snapshotMembers: 1, snapshotAmount: Number(sticky.amount || 0), snapshotScore: scoreCoinOpportunity(sticky), snapshotAgeMs: ageMs };
+    }
+    let best = null;
+    const radius = Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius);
+    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
+    for (const coin of candidates.slice(0, 300)) {
+      const members = candidates.filter(other => dist(coin, other) <= radius);
+      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const score = totalAmount * cfg.coinOpportunityValue
+        + Math.max(0, members.length - 1) * cfg.opportunityNearBonus
+        - Number(coin.distance || 0) * cfg.opportunityDistancePenalty;
+      const item = {
+        ...coin,
+        snapshotMembers: members.length,
+        snapshotAmount: totalAmount,
+        snapshotScore: score,
+        snapshotAgeMs: ageMs
+      };
+      if (members.length >= minCoins) {
+        if (!best || item.snapshotScore > best.snapshotScore || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
+      } else if (!best) {
+        best = item;
+      }
+    }
+    return best || candidates[0];
   }
 
   function scoreCoinOpportunity(coin) {
@@ -3133,34 +3282,15 @@ function browserBotSource(config) {
       vx += (Number(self.x) - Number(threat.x)) * weight / d;
       vy += (Number(self.y) - Number(threat.y)) * weight / d;
     }
-    let dx = Math.abs(vx) > 0.01 ? Math.sign(vx) : 0;
-    let dy = Math.abs(vy) > 0.01 ? Math.sign(vy) : 0;
-    if (!(dx || dy)) {
-      const t = now();
-      if (bot.patrolHeading && t < Number(bot.patrolHeading.until || 0) && (bot.patrolHeading.dx || bot.patrolHeading.dy)) {
-        return { dx: bot.patrolHeading.dx, dy: bot.patrolHeading.dy, distance: 0, reason: 'scan-open-area' };
-      }
-      const bucketX = Math.floor(Number(self.x || 0) / 24000);
-      const bucketY = Math.floor(Number(self.y || 0) / 24000);
-      const phase = Math.abs(bucketX * 31 + bucketY * 17 + Math.floor(t / cfg.patrolHeadingMs)) % 8;
-      const pattern = [
-        { dx: 1, dy: 0 },
-        { dx: 1, dy: 1 },
-        { dx: 0, dy: 1 },
-        { dx: -1, dy: 1 },
-        { dx: -1, dy: 0 },
-        { dx: -1, dy: -1 },
-        { dx: 0, dy: -1 },
-        { dx: 1, dy: -1 }
-      ][phase];
-      dx = pattern.dx;
-      dy = pattern.dy;
-      bot.patrolHeading = { dx, dy, until: t + cfg.patrolHeadingMs };
-    } else {
-      bot.patrolHeading = null;
-    }
-    return { dx, dy, distance: 0, reason: 'scan-open-area' };
-  }
+	    let dx = Math.abs(vx) > 0.01 ? Math.sign(vx) : 0;
+	    let dy = Math.abs(vy) > 0.01 ? Math.sign(vy) : 0;
+	    if (dx || dy) {
+	      bot.patrolHeading = null;
+	      return { dx, dy, distance: 0, reason: 'maintain-safe-spacing' };
+	    }
+	    bot.patrolHeading = null;
+	    return { dx: 0, dy: 0, distance: 0, reason: 'wait-for-snapshot-coin' };
+	  }
 
   function coinFailureIgnore(id, reason, t) {
     const previous = bot.coinFailures.get(id) || {};
@@ -3367,7 +3497,7 @@ function browserBotSource(config) {
   }
 
   function chooseAction(self) {
-    const { activeThreats, inactiveTargets, coins, allCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans } = classify(self);
+    const { activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans } = classify(self);
     bot.actionThreats = activeThreats;
     bot.lastSafety = {
       nearestActive: activeThreats[0] ? {
@@ -3561,22 +3691,34 @@ function browserBotSource(config) {
       return buildReturnBlockScanAction(self, activeThreats, nearbyHumans);
     }
 
-    const canPatrol = stamina5s >= cfg.chaseCoinStaminaThreshold;
-    if (canPatrol) {
+    const snapshotCoin = pickSnapshotCoinDestination(snapshotCoins, activeThreats);
+    if (snapshotCoin) {
       bot.fleeLock = null;
-      const scanCoin = safeCoinCandidates(scanCoins, activeThreats, cfg.scanCoinMaxDistance)[0] || null;
-      const dir = patrolDirection(self, activeThreats, nearbyHumans, scanCoin);
-      return {
-        kind: 'patrol',
-        reason: dir.reason,
-        target: scanCoin ? { id: scanCoin.drop_id, x: scanCoin.x, y: scanCoin.y, amount: scanCoin.amount, distance: Math.round(dir.distance) } : null,
-        dx: dir.dx,
-        dy: dir.dy
-      };
+      const action = buildCoinAction(
+        self,
+        snapshotCoin,
+        snapshotCoin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target',
+        'seek-coin'
+      );
+      action.target.fieldMembers = snapshotCoin.snapshotMembers;
+      action.target.fieldAmount = snapshotCoin.snapshotAmount;
+      action.target.snapshotAgeMs = Number.isFinite(snapshotCoin.snapshotAgeMs) ? Math.round(snapshotCoin.snapshotAgeMs) : null;
+      action.score = Math.round(snapshotCoin.snapshotScore ?? action.score ?? 0);
+      return action;
     }
 
-    const dir = patrolDirection(self, activeThreats, nearbyHumans, null);
-    return { kind: 'patrol', reason: dir.reason, dx: dir.dx, dy: dir.dy };
+    bot.fleeLock = null;
+    return {
+      kind: 'wait',
+      reason: 'wait-for-snapshot-coin',
+      dx: 0,
+      dy: 0,
+      snapshot: {
+        coinDrops: bot.globalState.coinDrops.length,
+        ageMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
+        error: bot.globalState.error || ''
+      }
+    };
   }
 
   async function tick(source = 'timer') {
