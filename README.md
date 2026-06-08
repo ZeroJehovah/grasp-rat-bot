@@ -17,7 +17,7 @@ The older CDP entry points remain available in `grasp-rat-bot.js` as a fallback,
 2. Open `userscript/grasp-rat-bootstrap.user.js` and install it.
 3. Open `https://grasp-rat-game.h-e.top/` in normal Chrome.
 
-If an older `0.1.x` bootstrap is already installed, reinstall script A once. Version `0.2.0` adds `document-start` injection, LinuxDO authorization-page matching, and Tampermonkey update URLs.
+If an older `0.1.x` bootstrap is already installed, reinstall script A once. Version `0.2.x` adds `document-start` injection, LinuxDO authorization-page matching, and Tampermonkey update URLs.
 
 By default the bootstrap loads:
 
@@ -27,7 +27,7 @@ https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.j
 
 The bootstrap polls once per second. On refresh, navigation, relogin, or page recovery, Tampermonkey runs again and injects the bot from the latest verified manifest. It also runs a one-second watchdog: if the page bot is missing, stopped, stale, or on the wrong manifest hash, it reinstalls from the verified cache or latest manifest.
 
-When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap clicks the allow/authorize control automatically.
+When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap waits 10 seconds before clicking the allow/authorize control, so it acts only as a fallback behind the user's primary authorization script.
 
 ## Build Script B
 

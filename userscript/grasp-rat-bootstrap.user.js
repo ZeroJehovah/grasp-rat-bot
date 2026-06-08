@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.2.0
+// @version      0.2.1
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -37,6 +37,7 @@
     statusEvery: 1000,
     loginCooldownMs: 5000,
     authorizeCooldownMs: 1000,
+    authorizeFallbackDelayMs: 10000,
     cacheBust: true,
     autoLogin: true
   };
@@ -52,6 +53,7 @@
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
     loginCooldownMs: Math.max(1000, Number(GM_getValue('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
     authorizeCooldownMs: Math.max(250, Number(GM_getValue('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
+    authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
     autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin))
   };
@@ -434,8 +436,11 @@
   };
 
   if (isAuthorizePage()) {
-    maybeClickAuthorize('startup');
-    setInterval(() => maybeClickAuthorize('interval'), cfg.watchdogMs);
+    setTimeout(() => {
+      if (!isAuthorizePage()) return;
+      maybeClickAuthorize('fallback-delay');
+      setInterval(() => maybeClickAuthorize('fallback-interval'), Math.max(cfg.watchdogMs, cfg.authorizeCooldownMs));
+    }, cfg.authorizeFallbackDelayMs);
     return;
   }
 
