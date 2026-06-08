@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.0
+// @version      0.3.5
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -25,8 +25,22 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
+  const BOOTSTRAP_VERSION = '0.3.5';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
+  const BLOCKED_REMOTE_HASHES = new Set([
+    '4dd9444acda372a715e559b4e3a03409299aed70c09ceb58cbfd9dbf1178591a',
+    'a78f30e186e7cbaac7f2cf351aeaed6edccca787be4f238d5a895046946db58e',
+    'ba1ce672b92b19c386de8c54363f589ee291168ff0176579e995f691b8a8b99c',
+    '63c091fcff34474608176e2ab98c14fcea146c5c15337b17ee86f44bf5e311ee',
+    'f3e5fe9a9cd349bde0d00797e15532c01eb53d814b534ba82faf429ad907f7b6'
+  ]);
+  const FORBIDDEN_REMOTE_SOURCE = [
+    { label: 'bot-owned WebSocket constructor', re: /\bnew\s+WebSocket\s*\(/ },
+    { label: 'page connectWs control', re: /\bconnectWs\b/ },
+    { label: 'page scheduleReconnect control', re: /\bscheduleReconnect\b/ },
+    { label: 'direct game WebSocket URL', re: /wss:\/\/grasp-rat-game\.h-e\.top\/ws/ }
+  ];
 
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
@@ -180,6 +194,27 @@
     }
   }
 
+  function clearCachedBot(reason) {
+    GM_setValue('cachedManifest', '');
+    GM_setValue('cachedSource', '');
+    state.lastManifestHash = '';
+    state.lastManifestVersion = '';
+    if (reason) state.lastError = String(reason);
+  }
+
+  function assertSafeRemoteSource(manifest, source, hash) {
+    const version = String(manifest?.version || '');
+    const sha256 = String(hash || manifest?.sha256 || '').toLowerCase();
+    if (BLOCKED_REMOTE_HASHES.has(sha256)) {
+      throw new Error(`blocked unsafe remote bot ${version || '(unknown version)'} ${sha256}`);
+    }
+    const text = String(source || '');
+    const blocked = FORBIDDEN_REMOTE_SOURCE.find(item => item.re.test(text));
+    if (blocked) {
+      throw new Error(`remote bot rejected: ${blocked.label}`);
+    }
+  }
+
   function getBotStatus() {
     try {
       const bot = unsafeWindow.__graspRatBot || null;
@@ -250,6 +285,7 @@
     if (hash !== manifest.sha256) {
       throw new Error(`script sha256 mismatch: expected ${manifest.sha256}, got ${hash}`);
     }
+    assertSafeRemoteSource(manifest, source, hash);
     GM_setValue('cachedManifest', JSON.stringify(manifest));
     GM_setValue('cachedSource', source);
     return { source, hash };
@@ -289,7 +325,13 @@
     if (!manifest || !source) return false;
     if (!options.force && !botNeedsInstall(manifest)) return true;
     const hash = await sha256Hex(source);
-    if (hash !== manifest.sha256) throw new Error(`cached script sha256 mismatch: expected ${manifest.sha256}, got ${hash}`);
+    try {
+      if (hash !== manifest.sha256) throw new Error(`cached script sha256 mismatch: expected ${manifest.sha256}, got ${hash}`);
+      assertSafeRemoteSource(manifest, source, hash);
+    } catch (err) {
+      clearCachedBot(err?.message || String(err));
+      throw err;
+    }
     await installSource(manifest, source, reason);
     postDebug('cached-install', { reason, version: manifest.version, sha256: manifest.sha256 }, { force: true });
     return true;
@@ -493,6 +535,7 @@
   }
 
   unsafeWindow.__graspRatBotBootstrap = {
+    version: BOOTSTRAP_VERSION,
     config: cfg,
     state,
     pollOnce,
@@ -531,15 +574,19 @@
   loginSuppressRemainingMs();
 
   (async () => {
-    state.installing = true;
     try {
-      await installCached('startup', { force: true });
+      await pollOnce('startup');
     } catch (err) {
-      postDebug('cached-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
-    } finally {
-      state.installing = false;
+      postDebug('startup-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
     }
-    pollOnce('startup');
+    const status = getBotStatus();
+    if (!status || !status.running) {
+      try {
+        await installCached('startup-fallback', { force: true });
+      } catch (err) {
+        postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
+      }
+    }
   })();
   watchdogOnce('startup').catch(() => {});
   setInterval(() => pollOnce('interval'), cfg.pollMs);
