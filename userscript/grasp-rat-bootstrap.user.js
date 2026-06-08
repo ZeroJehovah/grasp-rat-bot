@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.7
+// @version      0.3.8
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -26,7 +26,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.7';
+  const BOOTSTRAP_VERSION = '0.3.8';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -127,8 +127,22 @@
 
   function logBootstrap(message, detail) {
     try {
-      console.log('[grasp-rat-bootstrap]', message, detail || '');
+      console.log('[grasp-rat-bootstrap]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
     } catch (_) {}
+  }
+
+  function shortStatus(status = getBotStatus()) {
+    return status ? {
+      running: Boolean(status.running),
+      starting: Boolean(status.starting),
+      ticking: Boolean(status.ticking),
+      timerActive: Boolean(status.timerActive),
+      version: status.version || '',
+      sourceHash: status.sourceHash || '',
+      lastTickAgeMs: status.lastTickAgeMs ?? null,
+      reason: status.lastDecision?.reason || '',
+      message: status.message || ''
+    } : null;
   }
 
   function isGamePage() {
@@ -305,6 +319,7 @@
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
     try {
       if (typeof GM_addElement === 'function') {
+        logBootstrap('inject attempt', { method: 'GM_addElement(script)', sourceUrl });
         const script = GM_addElement(document.documentElement || document.head || document.body, 'script', {
           textContent: labeledSource,
           type: 'text/javascript',
@@ -317,8 +332,10 @@
       }
     } catch (gmErr) {
       state.lastInstallStatus = 'GM_addElement injection failed: ' + (gmErr?.message || String(gmErr));
+      logBootstrap('inject method failed', { method: 'GM_addElement(script)', error: state.lastInstallStatus });
     }
     try {
+      logBootstrap('inject attempt', { method: 'unsafeWindow.eval', sourceUrl });
       const result = unsafeWindow.eval(labeledSource);
       if (result && typeof result.then === 'function') {
         await withTimeout(result, cfg.scriptStartupTimeoutMs, 'remote bot startup');
@@ -336,6 +353,7 @@
       const evalError = evalErr?.message || String(evalErr);
       state.lastInstallStatus = 'unsafeWindow.eval failed: ' + evalError;
       try {
+        logBootstrap('inject attempt', { method: 'script-element', sourceUrl, evalError });
         const script = document.createElement('script');
         script.textContent = labeledSource;
         script.dataset.graspRatInjected = 'true';
@@ -354,12 +372,19 @@
 
   async function fetchAndVerify(manifest) {
     state.lastScriptFetchAt = Date.now();
+    logBootstrap('script fetch start', {
+      version: manifest.version,
+      sha256: manifest.sha256,
+      scriptUrl: manifest.scriptUrl
+    });
     const source = await gmRequest('GET', withCacheBust(manifest.scriptUrl));
+    logBootstrap('script fetch complete', { version: manifest.version, bytes: String(source || '').length });
     const hash = await sha256Hex(source);
     if (hash !== manifest.sha256) {
       throw new Error(`script sha256 mismatch: expected ${manifest.sha256}, got ${hash}`);
     }
     assertSafeRemoteSource(manifest, source, hash);
+    logBootstrap('script verified', { version: manifest.version, sha256: hash });
     GM_setValue('cachedManifest', JSON.stringify(manifest));
     GM_setValue('cachedSource', source);
     return { source, hash };
@@ -368,14 +393,32 @@
   async function waitForInstallConfirmation(manifest, reason, injectResult) {
     const started = Date.now();
     let status = null;
+    logBootstrap('install confirm start', {
+      reason,
+      version: manifest.version,
+      sha256: manifest.sha256,
+      injectResult
+    });
     while (Date.now() - started <= cfg.installConfirmMs) {
       status = getBotStatus();
       if (status?.running && String(status.sourceHash || '') === String(manifest.sha256 || '')) {
+        logBootstrap('install confirmed', {
+          reason,
+          elapsedMs: Date.now() - started,
+          status: shortStatus(status)
+        });
         return status;
       }
       state.lastInstallStatus = `confirming ${reason || 'install'}: ${JSON.stringify(status || null).slice(0, 160)}`;
       await sleep(100);
     }
+    logBootstrap('install confirm failed', {
+      reason,
+      elapsedMs: Date.now() - started,
+      expectedHash: manifest.sha256,
+      status: shortStatus(status),
+      injectResult
+    });
     throw new Error(`bot install did not confirm after ${cfg.installConfirmMs}ms: ${JSON.stringify({
       status,
       injectResult
@@ -386,6 +429,13 @@
     if (!isGamePage()) return false;
     state.lastInstallAttemptAt = Date.now();
     state.lastInstallStatus = `injecting ${manifest.version || manifest.sha256 || 'remote'}`;
+    logBootstrap('install source start', {
+      reason,
+      version: manifest.version,
+      sha256: manifest.sha256,
+      sourceBytes: String(source || '').length,
+      currentStatus: shortStatus()
+    });
     unsafeWindow.__graspRatBotRuntimeConfig = {
       ...(manifest.config || {}),
       debug: Boolean(manifest.debug ?? cfg.debug),
@@ -405,6 +455,12 @@
     state.lastInstallAt = Date.now();
     state.lastInstallReason = reason || '';
     state.lastInstallStatus = 'confirmed';
+    logBootstrap('install source done', {
+      reason,
+      version: manifest.version,
+      elapsedMs: state.lastInstallAt - state.lastInstallAttemptAt,
+      status: shortStatus(status)
+    });
     postDebug('install', { reason, version: manifest.version, sha256: manifest.sha256, injectResult, status }, { force: true });
     return true;
   }
@@ -413,8 +469,18 @@
     if (!isGamePage()) return false;
     const manifest = readCachedManifest();
     const source = GM_getValue('cachedSource', '');
+    logBootstrap('cached install check', {
+      reason,
+      force: Boolean(options.force),
+      hasManifest: Boolean(manifest),
+      hasSource: Boolean(source),
+      currentStatus: shortStatus()
+    });
     if (!manifest || !source) return false;
-    if (!options.force && !botNeedsInstall(manifest)) return true;
+    if (!options.force && !botNeedsInstall(manifest)) {
+      logBootstrap('cached install skipped: bot current', { reason, manifestVersion: manifest.version, status: shortStatus() });
+      return true;
+    }
     const hash = await sha256Hex(source);
     try {
       if (hash !== manifest.sha256) throw new Error(`cached script sha256 mismatch: expected ${manifest.sha256}, got ${hash}`);
@@ -430,7 +496,22 @@
 
   async function installManifest(manifest, reason) {
     if (!isGamePage()) return false;
-    if (!botNeedsInstall(manifest)) return true;
+    const current = getBotStatus();
+    if (!botNeedsInstall(manifest)) {
+      logBootstrap('manifest install skipped: bot current', {
+        reason,
+        version: manifest.version,
+        sha256: manifest.sha256,
+        status: shortStatus(current)
+      });
+      return true;
+    }
+    logBootstrap('manifest install needed', {
+      reason,
+      version: manifest.version,
+      sha256: manifest.sha256,
+      status: shortStatus(current)
+    });
     const { source } = await fetchAndVerify(manifest);
     await installSource(manifest, source, reason);
     state.lastError = '';
@@ -438,26 +519,46 @@
   }
 
   async function pollOnce(reason = 'poll') {
-    if (!isGamePage() || state.installing || state.polling) return;
+    if (!isGamePage()) return;
+    if (state.installing || state.polling) {
+      logBootstrap('poll skipped: busy', {
+        reason,
+        installing: state.installing,
+        polling: state.polling,
+        lastInstallStatus: state.lastInstallStatus
+      });
+      return;
+    }
     state.polling = true;
     state.installing = true;
     state.lastPollAt = Date.now();
     try {
       state.lastManifestFetchAt = Date.now();
+      logBootstrap('manifest fetch start', { reason, manifestUrl: cfg.manifestUrl, currentStatus: shortStatus() });
       const manifest = parseManifest(await gmRequest('GET', withCacheBust(cfg.manifestUrl)));
+      logBootstrap('manifest fetch complete', {
+        reason,
+        version: manifest.version,
+        sha256: manifest.sha256,
+        scriptUrl: manifest.scriptUrl
+      });
       if (!botNeedsInstall(manifest)) {
+        logBootstrap('poll ok: bot current', { reason, version: manifest.version, status: shortStatus() });
         postDebug('ok', { reason, version: manifest.version, sha256: manifest.sha256 });
         return;
       }
       await installManifest(manifest, reason);
     } catch (err) {
       state.lastError = err?.message || String(err);
+      logBootstrap('poll error', { reason, error: state.lastError, status: shortStatus() });
       postDebug('error', { reason, error: state.lastError }, { force: true });
       const status = getBotStatus();
       if (!status || !status.running) {
         try {
+          logBootstrap('poll falling back to cache', { reason, error: state.lastError });
           await installCached(state.lastError, { force: true });
         } catch (cacheErr) {
+          logBootstrap('cached fallback error', { reason, error: cacheErr?.message || String(cacheErr) });
           postDebug('cached-error', { error: cacheErr?.message || String(cacheErr) }, { force: true });
         }
       }
@@ -600,14 +701,29 @@
       return;
     }
     state.lastWatchdogAt = Date.now();
-    if (state.installing) return;
+    if (state.installing) {
+      logBootstrap('watchdog skipped: installing', { reason, lastInstallStatus: state.lastInstallStatus });
+      return;
+    }
     const manifest = readCachedManifest();
     const status = getBotStatus();
     const missing = !status || !status.running;
     const stale = status && tickIsStale(status);
     const mismatched = manifest && status && status.running
       && (String(status.sourceHash || '') !== String(manifest.sha256 || '') || String(status.version || '') !== String(manifest.version || ''));
+    if (missing || stale || mismatched) {
+      logBootstrap('watchdog reinstall needed', {
+        reason,
+        missing,
+        stale,
+        mismatched,
+        manifestVersion: manifest?.version || '',
+        manifestHash: manifest?.sha256 || '',
+        status: shortStatus(status)
+      });
+    }
     if (!missing && !stale && !mismatched) {
+      logBootstrap('watchdog ok', { reason, status: shortStatus(status) });
       await maybeStartGameLogin(reason);
       return;
     }
@@ -620,6 +736,7 @@
       await installCached(reason, { force: true });
     } catch (err) {
       state.lastError = err?.message || String(err);
+      logBootstrap('watchdog error', { reason, error: state.lastError, missing, stale, mismatched });
       postDebug('watchdog-error', { reason, error: state.lastError, missing, stale, mismatched }, { force: true });
     } finally {
       state.installing = false;
@@ -665,18 +782,29 @@
   }
 
   loginSuppressRemainingMs();
+  logBootstrap('bootstrap start', {
+    href: location.href,
+    readyState: document.readyState,
+    manifestUrl: cfg.manifestUrl,
+    pollMs: cfg.pollMs,
+    watchdogMs: cfg.watchdogMs,
+    currentStatus: shortStatus()
+  });
 
   (async () => {
     try {
       await pollOnce('startup');
     } catch (err) {
+      logBootstrap('startup poll error', { error: err?.message || String(err) });
       postDebug('startup-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
     }
     const status = getBotStatus();
     if (!status || !status.running) {
       try {
+        logBootstrap('startup fallback cache install', { status: shortStatus(status) });
         await installCached('startup-fallback', { force: true });
       } catch (err) {
+        logBootstrap('startup fallback cache error', { error: err?.message || String(err), status: shortStatus() });
         postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
       }
     }
