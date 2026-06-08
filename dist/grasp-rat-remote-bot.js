@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.6","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.7","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'

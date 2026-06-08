@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.6
+// @version      0.3.7
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -11,6 +11,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addElement
 // @grant        unsafeWindow
 // @connect      127.0.0.1
 // @connect      localhost
@@ -25,7 +26,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.6';
+  const BOOTSTRAP_VERSION = '0.3.7';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -303,6 +304,21 @@
   async function runInPage(source, sourceUrl) {
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
     try {
+      if (typeof GM_addElement === 'function') {
+        const script = GM_addElement(document.documentElement || document.head || document.body, 'script', {
+          textContent: labeledSource,
+          type: 'text/javascript',
+          'data-grasp-rat-injected': 'true'
+        });
+        try {
+          setTimeout(() => script?.remove?.(), 1000);
+        } catch (_) {}
+        return { method: 'GM_addElement(script)', timedOut: false };
+      }
+    } catch (gmErr) {
+      state.lastInstallStatus = 'GM_addElement injection failed: ' + (gmErr?.message || String(gmErr));
+    }
+    try {
       const result = unsafeWindow.eval(labeledSource);
       if (result && typeof result.then === 'function') {
         await withTimeout(result, cfg.scriptStartupTimeoutMs, 'remote bot startup');
@@ -317,15 +333,22 @@
         });
         return { method: 'unsafeWindow.eval', timedOut: true, error: evalErr.message || String(evalErr) };
       }
-      const script = document.createElement('script');
-      script.textContent = labeledSource;
-      script.dataset.graspRatInjected = 'true';
-      script.onerror = () => {
-        state.lastError = 'script element injection failed after eval failed: ' + (evalErr?.message || String(evalErr));
-      };
-      (document.documentElement || document.head || document.body).appendChild(script);
-      script.remove();
-      return { method: 'script-element', timedOut: false, evalError: evalErr?.message || String(evalErr) };
+      const evalError = evalErr?.message || String(evalErr);
+      state.lastInstallStatus = 'unsafeWindow.eval failed: ' + evalError;
+      try {
+        const script = document.createElement('script');
+        script.textContent = labeledSource;
+        script.dataset.graspRatInjected = 'true';
+        script.onerror = () => {
+          state.lastError = 'script element injection failed after eval failed: ' + evalError;
+        };
+        (document.documentElement || document.head || document.body).appendChild(script);
+        script.remove();
+        return { method: 'script-element', timedOut: false, evalError };
+      } catch (scriptErr) {
+        state.lastError = 'script element injection failed after eval failed: ' + (scriptErr?.message || String(scriptErr));
+        throw new Error(`${state.lastError}; eval error: ${evalError}`);
+      }
     }
   }
 

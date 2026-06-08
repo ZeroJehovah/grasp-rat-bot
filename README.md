@@ -17,7 +17,7 @@ The older CDP entry points remain available in `grasp-rat-bot.js` as a fallback,
 2. Open `userscript/grasp-rat-bootstrap.user.js` and install it.
 3. Open `https://grasp-rat-game.h-e.top/` in normal Chrome.
 
-If an older bootstrap is already installed, update or reinstall script A to at least `0.3.6`. Earlier `0.3.x` source changes accidentally kept the Tampermonkey metadata version at `0.3.0`, so Tampermonkey may not auto-update A even though the repository changed.
+If an older bootstrap is already installed, update or reinstall script A to at least `0.3.7`. Earlier `0.3.x` source changes accidentally kept the Tampermonkey metadata version at `0.3.0`, so Tampermonkey may not auto-update A even though the repository changed.
 
 By default the bootstrap loads:
 
@@ -29,13 +29,15 @@ The bootstrap polls once per second. On refresh, navigation, relogin, or page re
 
 Version `0.3.6` fixes a refresh-time bootstrap race: script A no longer waits forever for script B's startup promise, and script B registers `window.__graspRatBot` before waiting on `/snapshot` or `/minimap`. Those page data requests are now timeout-bounded, so a slow page refresh cannot leave the bootstrap stuck in `installing` without future manifest polls.
 
+Version `0.3.7` changes script A's page-context injection path to prefer Tampermonkey `GM_addElement(script)`. This covers pages where normal inline script insertion is blocked by CSP or browser extension policy even though the bootstrap userscript itself is enabled.
+
 When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap waits 10 seconds before clicking the allow/authorize control, so it acts only as a fallback behind the user's primary authorization script.
 
 After login starts or the OAuth authorize/callback page is seen, the bootstrap suppresses another login attempt for 45 seconds. This prevents a just-authorized page from bouncing back into LinuxDO before the game writes token/self state. If the bot is already in game but page WebSocket control stays offline for more than 3 seconds, the remote bot attempts `leave(userId)` or `#leaveBtn` before any reload fallback.
 
 Remote bot WebSocket reconnects are page-owned. The Tampermonkey remote bot does not call page `connectWs()` / `scheduleReconnect()` and does not create its own fallback `wss://.../ws` connection; these switches are hard-disabled even if runtime config tries to enable them. If native page WebSocket state is unavailable or disconnected, the bot observes that state, stops local movement, and leaves after the configured offline window instead of creating extra sockets.
 
-If the overlay disappears and `[grasp-rat-bot] started live control` prints again, that means the bootstrap watchdog replaced or reinstalled the page bot because it was missing, stopped, stale, or on an older manifest. It is not a bot-owned WebSocket reconnect. For the stale-cache and refresh-startup fixes, script A must be updated to `0.3.6`; future strategy-only script B changes update through the manifest poll.
+If the overlay disappears and `[grasp-rat-bot] started live control` prints again, that means the bootstrap watchdog replaced or reinstalled the page bot because it was missing, stopped, stale, or on an older manifest. It is not a bot-owned WebSocket reconnect. For the stale-cache, refresh-startup, and CSP-safe injection fixes, script A must be updated to `0.3.7`; future strategy-only script B changes update through the manifest poll.
 
 Static full-stamina `Active` entities are treated as ordinary targets instead of active threats. Moving or non-full-stamina `Active` entities still trigger avoidance, but avoidance distances are narrower than the old bootstrap `0.2.x` build so the bot stops fleeing far across the map.
 
