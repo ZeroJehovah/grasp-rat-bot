@@ -224,6 +224,7 @@ function runSelfTest() {
   };
   const attackWorthTaking = (self, target) => {
     const targetDrop = dropValue(target);
+    if (isAfkTarget(target)) return targetDrop > 0;
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -310,12 +311,15 @@ function runSelfTest() {
   }
 
   function scoreEnemyOpportunity(target) {
-    const inRange = target.distance <= cfg.attackEngageRange;
-    if (!inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
+    const afk = isAfkTarget(target);
+    const inRange = target.distance <= (afk ? cfg.attackRange : cfg.attackEngageRange);
+    if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     const nearBonus = target.distance <= cfg.nearCoinPriorityDistance ? cfg.opportunityNearBonus : 0;
-    return Number(target.drop || 0) * cfg.dropOpportunityValue
+    const closeBonus = afk && target.distance <= cfg.coinPickupSweepDistance ? cfg.opportunityInRangeBonus : 0;
+    const value = Number(target.drop || 0) * (afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue);
+    return value
       - target.distance * cfg.opportunityDistancePenalty
-      + (inRange ? cfg.opportunityInRangeBonus : 0)
+      + (afk ? closeBonus : (inRange ? cfg.opportunityInRangeBonus : 0))
       + nearBonus;
   }
 
@@ -429,6 +433,7 @@ function runSelfTest() {
     const opportunities = [];
     for (const coin of safeCoins(self, coins, activeThreats, cfg.globalCoinMaxDistance)) {
       opportunities.push({
+        type: 'coin',
         kind: coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
         reason: coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin',
         id: coin.drop_id,
@@ -440,9 +445,15 @@ function runSelfTest() {
     for (const target of enemyTargets(self, entities, activeThreats)) {
       const score = scoreEnemyOpportunity(target);
       if (score === null) continue;
+      const afk = isAfkTarget(target);
+      const inRange = target.distance <= (afk ? cfg.attackRange : cfg.attackEngageRange);
       opportunities.push({
-        kind: target.distance <= cfg.attackEngageRange ? 'attack' : 'seek-enemy',
-        reason: target.distance <= cfg.attackEngageRange ? 'best-opportunity-drop-target' : 'approach-profitable-drop-target',
+        type: 'enemy',
+        afk,
+        kind: inRange ? 'attack' : 'seek-enemy',
+        reason: afk
+          ? (inRange ? 'best-opportunity-afk-drop-target' : 'approach-afk-drop-target')
+          : (inRange ? 'best-opportunity-drop-target' : 'approach-profitable-drop-target'),
         id: target.user_id,
         drop: target.drop,
         distance: target.distance,
@@ -450,7 +461,7 @@ function runSelfTest() {
       });
     }
     return opportunities
-      .sort((a, b) => b.score - a.score || a.distance - b.distance)[0] || null;
+      .sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance)[0] || null;
   }
 
   function actionMovesTowardThreat(self, threat, action) {
@@ -563,7 +574,8 @@ function runSelfTest() {
     }
     const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
     if (footCoin) return attachOpportunisticShot({ kind: 'coin', reason: 'foot-coin-priority', id: footCoin.drop_id, amount: footCoin.amount }, self, entities, !recovery);
-    const opportunity = pickBestOpportunity(self, fullHp ? [] : entities, coins, coinThreats);
+    const opportunityTargets = fullHp ? entities.filter(isAfkTarget) : entities;
+    const opportunity = pickBestOpportunity(self, opportunityTargets, coins, coinThreats);
     if (opportunity) return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, opportunity), self, entities, !recovery);
     if (stamina5s >= cfg.fieldMigrationStaminaThreshold) {
       const field = pickField(self, coins, coinThreats);
@@ -653,28 +665,31 @@ function runSelfTest() {
       want: 1
     },
     {
-      name: 'near high afk drop is shot while coin wins movement',
+      name: 'near high afk drop beats low coin by value',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 17, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 17 }],
         coins: [{ drop_id: 1, x: 8000, y: 0, amount: 1 }]
-      }).opportunisticShot?.id,
-      want: 17
+      }).kind,
+      want: 'attack'
     },
     {
-      name: 'combat-range afk drop is opportunistic while collecting',
-      got: choose({
-        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 17, x: 13000, y: 0, current_join_mode: 'Passive', death_reward_preview: 17 }],
-        coins: [{ drop_id: 1, x: 8000, y: 0, amount: 1 }]
-      }).opportunisticShot?.id,
-      want: 17
+      name: 'attack-range afk drop shoots without combat state',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 17, x: 13000, y: 0, current_join_mode: 'Passive', death_reward_preview: 17 }],
+          coins: [{ drop_id: 1, x: 8000, y: 0, amount: 1 }]
+        });
+        return action.kind + ':' + Boolean(action.combat);
+      })(),
+      want: 'attack:false'
     },
     {
-      name: 'full hp does not approach enemy outside combat range',
+      name: 'full hp does not approach moving enemy outside combat range',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        global: [{ user_id: 17, x: 24000, y: 0, current_join_mode: 'Passive', death_reward_preview: 17 }],
+        global: [{ user_id: 17, x: 24000, y: 0, current_join_mode: 'Passive', vx: 20, death_reward_preview: 17 }],
         coins: [{ drop_id: 1, x: 6000, y: 0, amount: 1 }]
       }).kind,
       want: 'coin'
@@ -716,20 +731,20 @@ function runSelfTest() {
       want: 'coin'
     },
     {
-      name: 'near coin beats far global drop',
+      name: 'higher afk drop beats lower near coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         global: [{ user_id: 4, x: 20000, y: 0, death_reward_preview: 7 }],
-        coins: [{ drop_id: 2, x: 1000, y: 0, amount: 5 }]
+        coins: [{ drop_id: 2, x: 3000, y: 0, amount: 5 }]
       }).kind,
-      want: 'coin'
+      want: 'seek-enemy'
     },
     {
-      name: 'medium safe coin beats far drop target',
+      name: 'higher medium coin beats lower far afk drop target',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         global: [{ user_id: 4, x: 20000, y: 0, death_reward_preview: 7 }],
-        coins: [{ drop_id: 2, x: 22000, y: 0, amount: 5 }]
+        coins: [{ drop_id: 2, x: 22000, y: 0, amount: 8 }]
       }).kind,
       want: 'seek-coin'
     },
@@ -737,7 +752,7 @@ function runSelfTest() {
       name: 'far snapshot coin outside local range is chased',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        global: [{ user_id: 4, x: 20000, y: 0, death_reward_preview: 7 }],
+        global: [{ user_id: 4, x: 20000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }],
         coins: [{ drop_id: 2, x: 40000, y: 0, amount: 5 }]
       }).kind,
       want: 'seek-coin'
@@ -901,12 +916,12 @@ function runSelfTest() {
       want: 'coin'
     },
     {
-      name: 'stationary full-stamina active without coin waits',
+      name: 'stationary full-stamina active with drop can be attacked',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, death_reward_preview: 20 }]
       }).kind,
-      want: 'wait'
+      want: 'attack'
     },
     {
       name: 'stationary full-stamina active in range does not start combat',
@@ -1039,7 +1054,7 @@ function runSelfTest() {
       name: 'full hp low stamina waits when no snapshot coin exists',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 2000 },
-        global: [{ user_id: 4, x: 20000, y: 0, death_reward_preview: 7 }]
+        global: [{ user_id: 4, x: 20000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
       }).kind,
       want: 'wait'
     },
@@ -1085,44 +1100,59 @@ function runSelfTest() {
     },
     {
       name: 'stationary afk target in range is shot without combat',
-      got: choose({
-        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 7, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 9 }]
-      }).opportunisticShot?.id,
-      want: 7
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 9 }]
+        });
+        return action.kind + ':' + Boolean(action.combat);
+      })(),
+      want: 'attack:false'
     },
     {
       name: 'low value afk target in range is still shot',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 2 }]
-      }).opportunisticShot?.id,
-      want: 7
+      }).kind,
+      want: 'attack'
     },
     {
-      name: 'high own drop still allows afk opportunistic shot',
+      name: 'high own drop still allows afk shot',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000, drop: 30 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 12 }]
-      }).opportunisticShot?.id,
-      want: 7
+      }).kind,
+      want: 'attack'
     },
     {
       name: 'worthwhile close passive target is shot without combat',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000, drop: 30 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 16 }]
-      }).opportunisticShot?.id,
-      want: 7
+      }).kind,
+      want: 'attack'
     },
     {
-      name: 'near passive drop can be opportunistic shot while collecting',
+      name: 'near passive drop can beat lower coin target',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 9 }],
         coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
-      }).opportunisticShot?.id,
-      want: 7
+      }).kind,
+      want: 'attack'
+    },
+    {
+      name: 'same value afk drop wins coin tie',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 5 }],
+          coins: [{ drop_id: 1, x: 10000, y: 0, amount: 5 }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'attack:best-opportunity-afk-drop-target'
     }
   ];
   const failed = cases.filter(item => item.got !== item.want);
@@ -1664,6 +1694,7 @@ function browserBotSource(config) {
   };
 	  const attackWorthTaking = (self, target) => {
 	    const targetDrop = dropValue(target);
+	    if (isAfkTarget(target)) return targetDrop > 0;
 	    const ownDrop = dropValue(self);
 	    return targetDrop >= cfg.attackMinDrop
 	      && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -1763,7 +1794,9 @@ function browserBotSource(config) {
 	      'best-opportunity-coin': '综合收益最高：拾取金币',
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 	      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
+	      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
 	      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+	      'approach-afk-drop-target': '综合收益最高：靠近挂机 Drop 目标',
 	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
@@ -1807,8 +1840,11 @@ function browserBotSource(config) {
 	      : '-';
 	    const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
 	    const velocity = control.nativeCurrentVel || control.lastVelocity || '0 0';
+	    const version = cfg.version || 'dev';
+	    const sourceHash = cfg.sourceHash ? String(cfg.sourceHash).slice(0, 8) : '-';
 	    const panelLines = [
 	      '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + '</div>',
+	      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">远端 ' + escapeHtml(version) + ' / ' + escapeHtml(sourceHash) + '</div>',
 	      '<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>',
 	      '<div>HP ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(stamina5s) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
 	      '<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / 速度 ' + escapeHtml(velocity) + '</div>',
@@ -3655,15 +3691,18 @@ function browserBotSource(config) {
   }
 
   function scoreEnemyOpportunity(target) {
-    const inRange = Number(target.distance || Infinity) <= cfg.attackEngageRange;
-    if (!inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
+    const afk = isAfkTarget(target);
+    const inRange = Number(target.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
+    if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     const sticky = bot.lastTarget?.kind === 'enemy'
       && String(bot.lastTarget.id) === String(target.user_id)
       && now() - bot.lastTargetAt < cfg.targetStickMs;
     const nearBonus = target.distance <= cfg.nearCoinPriorityDistance ? cfg.opportunityNearBonus : 0;
-    return Number(target.drop || 0) * cfg.dropOpportunityValue
+    const closeBonus = afk && target.distance <= cfg.coinPickupSweepDistance ? cfg.opportunityInRangeBonus : 0;
+    const value = Number(target.drop || 0) * (afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue);
+    return value
       - Number(target.distance || 0) * cfg.opportunityDistancePenalty
-      + (inRange ? cfg.opportunityInRangeBonus : 0)
+      + (afk ? closeBonus : (inRange ? cfg.opportunityInRangeBonus : 0))
       + nearBonus
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
@@ -3742,10 +3781,13 @@ function browserBotSource(config) {
 
   function buildEnemyAction(self, target, reason = '') {
     const dir = directionTo(self, target);
-    const inRange = Number(dir.distance || Infinity) <= cfg.attackEngageRange;
+    const afk = isAfkTarget(target);
+    const inRange = Number(dir.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     return {
       kind: inRange ? 'attack' : 'seek-enemy',
-      reason: reason || (inRange ? 'best-opportunity-drop-target' : 'approach-profitable-drop-target'),
+      reason: reason || (afk
+        ? (inRange ? 'best-opportunity-afk-drop-target' : 'approach-afk-drop-target')
+        : (inRange ? 'best-opportunity-drop-target' : 'approach-profitable-drop-target')),
       target: {
         id: target.user_id,
         name: target.name,
@@ -3753,7 +3795,9 @@ function browserBotSource(config) {
         y: target.y,
         drop: target.drop,
         distance: Math.round(dir.distance),
-        hp: target.hp
+        hp: target.hp,
+        afk,
+        mode: target.current_join_mode || ''
       },
       dx: inRange ? 0 : dir.dx,
       dy: inRange ? 0 : dir.dy,
@@ -3799,7 +3843,7 @@ function browserBotSource(config) {
       });
     }
 
-    const best = opportunities.sort((a, b) => b.score - a.score || a.distance - b.distance)[0] || null;
+    const best = opportunities.sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance)[0] || null;
     return best ? best.action() : null;
   }
 
@@ -4195,6 +4239,12 @@ function browserBotSource(config) {
       }, self, entities, { recovery });
     }
 
+    const opportunityEnemyGroups = fullHp
+      ? [
+        inactiveTargets.filter(isAfkTarget),
+        globalTargets.filter(target => !target.minimapOnly && isAfkTarget(target))
+      ]
+      : [inactiveTargets, globalTargets, minimapDropTargets];
     const opportunity = pickBestOpportunity(
       self,
       coinThreats,
@@ -4203,7 +4253,7 @@ function browserBotSource(config) {
         { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
         { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance }
       ],
-      fullHp ? [] : [inactiveTargets, globalTargets, minimapDropTargets]
+      opportunityEnemyGroups
     );
     if (opportunity) {
       bot.fleeLock = null;

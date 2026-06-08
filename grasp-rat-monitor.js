@@ -1239,11 +1239,12 @@ function isBadAction(status) {
   const humanDistance = Number(safety.nearestHuman?.distance ?? Infinity);
   const targetDrop = Number(decision.target?.drop ?? decision.target?.death_reward_preview ?? decision.target?.death_drop_coins ?? 0);
   const ownDrop = Number(self.drop ?? decision.self?.drop ?? 0);
+  const afkDropTarget = Boolean(decision.target?.afk || String(decision.reason || '').includes('afk-drop'));
 
   if (combat) return '';
   if (recovering && aggressive) return 'aggressive while recovering';
-  if (aggressive && targetDrop < 8) return `aggressive target drop too low: ${targetDrop || 'unknown'}`;
-  if (aggressive && ownDrop > 0 && targetDrop < ownDrop * 0.5) return `aggressive target drop below reward ratio: target=${targetDrop || 'unknown'} own=${ownDrop}`;
+  if (aggressive && !afkDropTarget && targetDrop < 8) return `aggressive target drop too low: ${targetDrop || 'unknown'}`;
+  if (aggressive && !afkDropTarget && ownDrop > 0 && targetDrop < ownDrop * 0.5) return `aggressive target drop below reward ratio: target=${targetDrop || 'unknown'} own=${ownDrop}`;
   if (aggressive && activeDistance <= activeThreatRadius) return 'aggressive action with active unit too close';
   if (!fullHp && activeDistance <= activeThreatRadius && kind !== 'flee') return 'not fleeing active unit near active-view edge';
   if (!recovering && kind === 'idle' && activeDistance <= activeCautionRadius) return 'idle with active unit in caution ring';

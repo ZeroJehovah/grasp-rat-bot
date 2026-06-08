@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.0","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.1","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -433,6 +433,7 @@
   };
 	  const attackWorthTaking = (self, target) => {
 	    const targetDrop = dropValue(target);
+	    if (isAfkTarget(target)) return targetDrop > 0;
 	    const ownDrop = dropValue(self);
 	    return targetDrop >= cfg.attackMinDrop
 	      && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -532,7 +533,9 @@
 	      'best-opportunity-coin': '综合收益最高：拾取金币',
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 	      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
+	      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
 	      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+	      'approach-afk-drop-target': '综合收益最高：靠近挂机 Drop 目标',
 	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
@@ -576,8 +579,11 @@
 	      : '-';
 	    const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
 	    const velocity = control.nativeCurrentVel || control.lastVelocity || '0 0';
+	    const version = cfg.version || 'dev';
+	    const sourceHash = cfg.sourceHash ? String(cfg.sourceHash).slice(0, 8) : '-';
 	    const panelLines = [
 	      '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + '</div>',
+	      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">远端 ' + escapeHtml(version) + ' / ' + escapeHtml(sourceHash) + '</div>',
 	      '<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>',
 	      '<div>HP ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(stamina5s) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
 	      '<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / 速度 ' + escapeHtml(velocity) + '</div>',
@@ -2424,15 +2430,18 @@
   }
 
   function scoreEnemyOpportunity(target) {
-    const inRange = Number(target.distance || Infinity) <= cfg.attackEngageRange;
-    if (!inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
+    const afk = isAfkTarget(target);
+    const inRange = Number(target.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
+    if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     const sticky = bot.lastTarget?.kind === 'enemy'
       && String(bot.lastTarget.id) === String(target.user_id)
       && now() - bot.lastTargetAt < cfg.targetStickMs;
     const nearBonus = target.distance <= cfg.nearCoinPriorityDistance ? cfg.opportunityNearBonus : 0;
-    return Number(target.drop || 0) * cfg.dropOpportunityValue
+    const closeBonus = afk && target.distance <= cfg.coinPickupSweepDistance ? cfg.opportunityInRangeBonus : 0;
+    const value = Number(target.drop || 0) * (afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue);
+    return value
       - Number(target.distance || 0) * cfg.opportunityDistancePenalty
-      + (inRange ? cfg.opportunityInRangeBonus : 0)
+      + (afk ? closeBonus : (inRange ? cfg.opportunityInRangeBonus : 0))
       + nearBonus
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
@@ -2511,10 +2520,13 @@
 
   function buildEnemyAction(self, target, reason = '') {
     const dir = directionTo(self, target);
-    const inRange = Number(dir.distance || Infinity) <= cfg.attackEngageRange;
+    const afk = isAfkTarget(target);
+    const inRange = Number(dir.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     return {
       kind: inRange ? 'attack' : 'seek-enemy',
-      reason: reason || (inRange ? 'best-opportunity-drop-target' : 'approach-profitable-drop-target'),
+      reason: reason || (afk
+        ? (inRange ? 'best-opportunity-afk-drop-target' : 'approach-afk-drop-target')
+        : (inRange ? 'best-opportunity-drop-target' : 'approach-profitable-drop-target')),
       target: {
         id: target.user_id,
         name: target.name,
@@ -2522,7 +2534,9 @@
         y: target.y,
         drop: target.drop,
         distance: Math.round(dir.distance),
-        hp: target.hp
+        hp: target.hp,
+        afk,
+        mode: target.current_join_mode || ''
       },
       dx: inRange ? 0 : dir.dx,
       dy: inRange ? 0 : dir.dy,
@@ -2568,7 +2582,7 @@
       });
     }
 
-    const best = opportunities.sort((a, b) => b.score - a.score || a.distance - b.distance)[0] || null;
+    const best = opportunities.sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance)[0] || null;
     return best ? best.action() : null;
   }
 
@@ -2964,6 +2978,12 @@
       }, self, entities, { recovery });
     }
 
+    const opportunityEnemyGroups = fullHp
+      ? [
+        inactiveTargets.filter(isAfkTarget),
+        globalTargets.filter(target => !target.minimapOnly && isAfkTarget(target))
+      ]
+      : [inactiveTargets, globalTargets, minimapDropTargets];
     const opportunity = pickBestOpportunity(
       self,
       coinThreats,
@@ -2972,7 +2992,7 @@
         { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
         { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance }
       ],
-      fullHp ? [] : [inactiveTargets, globalTargets, minimapDropTargets]
+      opportunityEnemyGroups
     );
     if (opportunity) {
       bot.fleeLock = null;
