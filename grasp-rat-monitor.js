@@ -942,12 +942,13 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
           .map(entity => {
             const d = dist(own, entity);
             const moving = speed(entity) >= 5;
-            const active = entity.current_join_mode === 'Active' || moving;
             const limit = staminaLimit(entity);
             const sta = stamina5(entity);
             const staminaNotFull = limit > 0 && sta > 0 && sta < limit * 0.98;
-            const threatRadius = moving ? 45000 : 22000;
-            const cautionRadius = moving ? 60000 : 26000;
+            const staminaFull = limit > 0 && sta >= limit * 0.98;
+            const active = moving || (entity.current_join_mode === 'Active' && !staminaFull);
+            const threatRadius = moving ? 28000 : 18000;
+            const cautionRadius = moving ? 38000 : 22000;
             return {
               id: entity.user_id,
               name: entity.name || '',
@@ -956,6 +957,7 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
               stamina5s: sta,
               stamina5sLimit: limit,
               staminaNotFull,
+              staminaFull,
               mode: entity.current_join_mode || '',
               active,
               moving,

@@ -89,20 +89,20 @@ Options:
 
 function runSelfTest() {
   const cfg = {
-    dangerRadius: 45000,
-    activeCautionRadius: 60000,
-    activeCautionExitMargin: 6000,
-    activeReturnBlockMargin: 20000,
-    activeReturnBlockExitMargin: 30000,
-    activeReturnBlockResumeMargin: 50000,
-    activeReturnBlockClearMargin: 45000,
+    dangerRadius: 28000,
+    activeCautionRadius: 38000,
+    activeCautionExitMargin: 4000,
+    activeReturnBlockMargin: 5000,
+    activeReturnBlockExitMargin: 5000,
+    activeReturnBlockResumeMargin: 8000,
+    activeReturnBlockClearMargin: 10000,
     returnBlockScanHeadingMs: 2600,
     returnBlockScanStuckMs: 1400,
     returnBlockScanStuckDistance: 350,
-    returnBlockCooldownMs: 22000,
-    stationaryActiveDangerRadius: 22000,
-    stationaryActiveCautionRadius: 26000,
-    attackDangerRadius: 45000,
+    returnBlockCooldownMs: 8000,
+    stationaryActiveDangerRadius: 18000,
+    stationaryActiveCautionRadius: 22000,
+    attackDangerRadius: 30000,
     attackRange: 14500,
     attackEngageRange: 11000,
     attackApproachRange: 26000,
@@ -118,8 +118,8 @@ function runSelfTest() {
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
     coinMaxDistance: 18000,
-    coinDangerRadius: 45000,
-    stationaryActiveCoinDangerRadius: 18000,
+    coinDangerRadius: 30000,
+    stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 22000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
@@ -159,8 +159,14 @@ function runSelfTest() {
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const speed = e => Math.hypot(Number(e.vx) || 0, Number(e.vy) || 0);
+  const staminaLimit = e => Number(e?.stamina_5s_limit_milli || 10000);
+  const hasFullStamina = e => {
+    const limit = staminaLimit(e);
+    const stamina = Number(e?.stamina_5s_remaining_milli ?? NaN);
+    return Number.isFinite(stamina) && limit > 0 && stamina >= limit * cfg.staminaFullRatio;
+  };
   const isMovingThreat = e => speed(e) >= 5 || Boolean(e.recentlyMoved);
-  const isActive = e => e.current_join_mode === 'Active' || isMovingThreat(e);
+  const isActive = e => isMovingThreat(e) || (e.current_join_mode === 'Active' && !hasFullStamina(e));
   const decorateThreat = (self, e) => {
     const moving = isMovingThreat(e);
     return {
@@ -332,6 +338,9 @@ function runSelfTest() {
       || activeThreats.find(e => e.distance <= returnBlockResumeRadius(e) && actionMovesTowardThreat(self, e, action));
     if (!threat) return action;
     if (isShortSafeCoinAction(action) && !actionMovesTowardThreat(self, threat, action)) return action;
+    if (threat.distance > threat.threatRadius && !actionMovesTowardThreat(self, threat, action)) {
+      return { kind: 'patrol', reason: 'return-block-lateral-scan' };
+    }
     return {
       kind: 'flee',
       reason: 'active-threat-return-block',
@@ -599,9 +608,17 @@ function runSelfTest() {
       name: 'active player in caution ring triggers migration when no safe coin exists',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+        local: [{ user_id: 4, x: 36000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
       }).kind,
       want: 'flee'
+    },
+    {
+      name: 'moving active beyond narrowed caution does not force far flee',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+      }).kind,
+      want: 'patrol'
     },
     {
       name: 'stationary active outside caution allows foot coin only',
@@ -613,13 +630,30 @@ function runSelfTest() {
       want: 'coin'
     },
     {
-      name: 'stationary active just outside nominal caution keeps migrating',
+      name: 'stationary non-full active inside narrowed caution keeps migrating',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 29000, y: 0, current_join_mode: 'Active', death_reward_preview: 7 }],
+        local: [{ user_id: 4, x: 25000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 5000, death_reward_preview: 7 }],
         coins: [{ drop_id: 2, x: -18000, y: 0, amount: 1 }]
       }).kind,
       want: 'flee'
+    },
+    {
+      name: 'stationary full-stamina active is treated as normal target',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, death_reward_preview: 20 }]
+      }).kind,
+      want: 'attack'
+    },
+    {
+      name: 'stationary full-stamina active does not block safe coin',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 }],
+        coins: [{ drop_id: 2, x: 5000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'coin'
     },
     {
       name: 'safe near coin beats active caution migration',
@@ -634,7 +668,7 @@ function runSelfTest() {
       name: 'active caution blocks medium coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', vx: -50 }],
+        local: [{ user_id: 4, x: 36000, y: 0, current_join_mode: 'Active', vx: -50 }],
         coins: [{ drop_id: 2, x: -22000, y: 0, amount: 5 }]
       }).kind,
       want: 'flee'
@@ -644,7 +678,7 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [
-          { user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', vx: -50 },
+          { user_id: 4, x: 36000, y: 0, current_join_mode: 'Active', vx: -50 },
           { user_id: 17, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 17 }
         ]
       }).kind,
@@ -654,7 +688,7 @@ function runSelfTest() {
       name: 'return block prevents moving back toward nearby active',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 42000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
         { kind: 'coin', dx: 1, dy: 0 }
       ).kind,
       want: 'flee'
@@ -663,43 +697,43 @@ function runSelfTest() {
       name: 'return block allows moving away from nearby active',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 42000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
         { kind: 'coin', dx: -1, dy: 0, target: { distance: 500 } }
       ).kind,
       want: 'coin'
     },
     {
-      name: 'return block stops ordinary near coin while backing away',
+      name: 'return block scans instead of fleeing when already backing away',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 42000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
         { kind: 'coin', dx: -1, dy: 0, target: { distance: 5000 } }
       ).kind,
-      want: 'flee'
+      want: 'patrol'
     },
     {
-      name: 'return block stops far migration even if not directly toward active',
+      name: 'return block scans instead of far fleeing when not heading toward active',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 42000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: 0, dy: -1, target: { distance: 90000 } }
       ).kind,
-      want: 'flee'
+      want: 'patrol'
     },
     {
-      name: 'return block starts inside exit radius after fresh injection',
+      name: 'return block scans inside exit radius when moving away after fresh injection',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 70000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 35000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: -1, dy: -1, target: { distance: 120000 } }
       ).kind,
-      want: 'flee'
+      want: 'patrol'
     },
     {
       name: 'return block guards against turning back after exit radius',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 100000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 43000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: 1, dy: 0, target: { distance: 120000 } }
       ).kind,
       want: 'flee'
@@ -708,7 +742,7 @@ function runSelfTest() {
       name: 'return block allows moving farther away after exit radius',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 100000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 43000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: -1, dy: 0, target: { distance: 120000 } }
       ).kind,
       want: 'seek-coin'
@@ -717,7 +751,7 @@ function runSelfTest() {
       name: 'return block uses lateral scan instead of far migration away from active',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 100000, y: 0, current_join_mode: 'Active' }],
+        local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
         coins: [
           { drop_id: 2, x: -90000, y: -1000, amount: 1 },
           { drop_id: 3, x: -94000, y: 2000, amount: 1 },
@@ -730,7 +764,7 @@ function runSelfTest() {
       name: 'return block avoids far migration toward active',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 100000, y: 0, current_join_mode: 'Active' }],
+        local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
         coins: [
           { drop_id: 2, x: 70000, y: -1000, amount: 1 },
           { drop_id: 3, x: 74000, y: 2000, amount: 1 },
@@ -966,19 +1000,19 @@ function browserBotSource(config) {
 	    debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
 	    tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
-    dangerRadius: 45000,
-    activeCautionRadius: 60000,
-    activeCautionExitMargin: 6000,
-    activeReturnBlockMargin: 20000,
-    activeReturnBlockExitMargin: 30000,
-    activeReturnBlockResumeMargin: 50000,
-    activeReturnBlockClearMargin: 45000,
+    dangerRadius: 28000,
+    activeCautionRadius: 38000,
+    activeCautionExitMargin: 4000,
+    activeReturnBlockMargin: 5000,
+    activeReturnBlockExitMargin: 5000,
+    activeReturnBlockResumeMargin: 8000,
+    activeReturnBlockClearMargin: 10000,
     returnBlockScanHeadingMs: 2600,
     returnBlockScanStuckMs: 1400,
     returnBlockScanStuckDistance: 350,
-    returnBlockCooldownMs: 22000,
-    stationaryActiveDangerRadius: 22000,
-    stationaryActiveCautionRadius: 26000,
+    returnBlockCooldownMs: 8000,
+    stationaryActiveDangerRadius: 18000,
+    stationaryActiveCautionRadius: 22000,
     panicRadius: 14500,
     passiveAvoidRadius: 11000,
     passivePanicRadius: 120,
@@ -990,7 +1024,7 @@ function browserBotSource(config) {
     attackPreferredRange: 14500,
     attackEngageRange: 11000,
     attackApproachRange: 26000,
-    attackDangerRadius: 45000,
+    attackDangerRadius: 30000,
     globalAttackMaxDistance: 26000,
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
@@ -1002,8 +1036,8 @@ function browserBotSource(config) {
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
     coinMaxDistance: 18000,
-    coinDangerRadius: 45000,
-    stationaryActiveCoinDangerRadius: 18000,
+    coinDangerRadius: 30000,
+    stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 22000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
@@ -1063,7 +1097,10 @@ function browserBotSource(config) {
     staminaFullRatio: 0.98,
     autoLogin: true,
     loginCooldownMs: 5000,
+    postLoginGraceMs: 45000,
     fleeLockMs: 1400,
+    offlineLeaveMs: 3000,
+    offlineLeaveCooldownMs: 60000,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
     status: '',
@@ -1110,6 +1147,8 @@ function browserBotSource(config) {
     offlineSince: 0,
     lastLoginAt: 0,
     lastLoginResult: null,
+    lastOfflineLeaveAt: 0,
+    lastOfflineLeaveResult: null,
     reloadRequestedAt: 0,
     lastTarget: null,
     lastTargetAt: 0,
@@ -1243,6 +1282,11 @@ function browserBotSource(config) {
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
           lastResult: this.lastLoginResult
         },
+        offlineLeave: {
+          lastAt: this.lastOfflineLeaveAt || 0,
+          lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
+          lastResult: this.lastOfflineLeaveResult
+        },
 	        stopReason: this.stopReason,
 	        errors: this.errors.slice(-5)
 	      };
@@ -1258,8 +1302,14 @@ function browserBotSource(config) {
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const hasMoveStamina = e => Number(e?.stamina_5s_remaining_milli || 0) > 250;
   const hasAttackStamina = e => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina;
+  const staminaLimit = e => Number(e?.stamina_5s_limit_milli || 10000);
+  const hasFullStamina = e => {
+    const limit = staminaLimit(e);
+    const stamina = Number(e?.stamina_5s_remaining_milli ?? NaN);
+    return Number.isFinite(stamina) && limit > 0 && stamina >= limit * cfg.staminaFullRatio;
+  };
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
-  const isCurrentlyActive = e => e.current_join_mode === 'Active' || isMovingThreat(e);
+  const isCurrentlyActive = e => isMovingThreat(e) || (e.current_join_mode === 'Active' && !hasFullStamina(e));
   const decorateActiveThreat = (self, e) => {
     const moving = isMovingThreat(e);
     return {
@@ -1391,6 +1441,7 @@ function browserBotSource(config) {
 	      'conserve-stamina-before-chasing': '兼容旧状态：保存体力',
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'control-ws-offline': 'WebSocket 离线',
+	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'auto-login': '自动触发登录/加入',
 	      'login-cooldown': '登录已触发，等待页面跳转',
 	      'login-control-missing': '等待登录控件出现',
@@ -1522,12 +1573,49 @@ function browserBotSource(config) {
 
   function hasLoginRequiredText() {
     const text = (document.body?.innerText || '').slice(0, 5000);
-    return /login required|please login|sign in|登录|登陆|授权|LinuxDO/i.test(text);
+    return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
+  }
+
+  function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {
+    const until = Date.now() + Math.max(1000, Number(ms) || cfg.postLoginGraceMs);
+    try {
+      localStorage.setItem('graspRatLoginSuppressUntil', String(until));
+      localStorage.setItem('graspRatLoginSuppressReason', String(reason || 'login flow'));
+    } catch (_) {}
+    return until;
+  }
+
+  function loginSuppressRemainingMs() {
+    let until = 0;
+    try {
+      until = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+    } catch (_) {}
+    const remaining = Math.max(0, until - Date.now());
+    if (!remaining && until) {
+      try {
+        localStorage.removeItem('graspRatLoginSuppressUntil');
+        localStorage.removeItem('graspRatLoginSuppressReason');
+      } catch (_) {}
+    }
+    return remaining;
   }
 
   async function maybeStartAutoLogin(reason) {
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
+    const suppressRemainingMs = loginSuppressRemainingMs();
+    if (suppressRemainingMs > 0) {
+      return {
+        needed: true,
+        attempted: false,
+        reason: 'suppressed',
+        cooldownRemainingMs: Math.round(suppressRemainingMs),
+        error: '',
+        suppressReason: localStorage.getItem('graspRatLoginSuppressReason') || 'login flow',
+        hasToken: Boolean(getSessionToken()),
+        currentUserId: getCurrentUserId()
+      };
+    }
     const userId = getCurrentUserId();
     const hasToken = Boolean(getSessionToken());
     const loginControl = findLoginControl();
@@ -1571,8 +1659,52 @@ function browserBotSource(config) {
     } catch (err) {
       detail.error = err?.message || String(err);
     }
+    if (detail.attempted && !detail.error) setLoginSuppress('bot login started', cfg.postLoginGraceMs);
     bot.lastLoginResult = detail;
     postDebugEvent(detail.error ? 'login-error' : 'login', detail, { force: true });
+    return detail;
+  }
+
+  async function leaveOffline(reason) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    if (t - Number(bot.lastOfflineLeaveAt || 0) < cfg.offlineLeaveCooldownMs) {
+      return {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.offlineLeaveCooldownMs - (t - Number(bot.lastOfflineLeaveAt || 0))))
+      };
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason,
+      userId: getCurrentUserId() || null,
+      error: ''
+    };
+    bot.lastOfflineLeaveAt = t;
+    try {
+      if (typeof leave === 'function') {
+        const result = detail.userId ? leave(detail.userId) : leave();
+        if (result && typeof result.then === 'function') await result;
+        detail.attempted = true;
+        detail.method = detail.userId ? 'leave(userId)' : 'leave';
+      } else {
+        const leaveBtn = document.querySelector('#leaveBtn');
+        if (leaveBtn && isVisible(leaveBtn)) {
+          leaveBtn.click();
+          detail.attempted = true;
+          detail.method = '#leaveBtn';
+        } else {
+          detail.error = 'leave control not found';
+        }
+      }
+    } catch (err) {
+      detail.error = err?.message || String(err);
+    }
+    if (detail.attempted && !detail.error) setLoginSuppress('offline leave', cfg.offlineLeaveCooldownMs);
+    bot.lastOfflineLeaveResult = detail;
+    postDebugEvent(detail.error ? 'leave-error' : 'leave-offline', detail, { force: true });
     return detail;
   }
 
@@ -2440,6 +2572,34 @@ function browserBotSource(config) {
       markReturnBlockPressure(threat);
       return action;
     }
+    if (threat.distance > threat.threatRadius && !actionMovesTowardThreat(self, threat, action)) {
+      markReturnBlockPressure(threat);
+      const dir = returnBlockScanDirection(self, [threat], []);
+      return {
+        kind: 'patrol',
+        reason: 'return-block-lateral-scan',
+        dx: dir.dx,
+        dy: dir.dy,
+        locked: dir.locked,
+        blockedAction: {
+          kind: action.kind,
+          reason: action.reason || '',
+          target: action.target || null,
+          returnBlockMode: picked.mode || ''
+        },
+        threats: [{
+          id: threat.user_id,
+          name: threat.name,
+          d: Math.round(threat.distance),
+          drop: threat.drop,
+          speed: Math.round(threat.speed),
+          moving: Boolean(threat.moving),
+          r: Math.round(returnBlockRadius(threat)),
+          exitR: Math.round(returnBlockExitRadius(threat)),
+          resumeR: Math.round(returnBlockResumeRadius(threat))
+        }]
+      };
+    }
     markReturnBlockPressure(threat, true);
     const flee = lockedFleeDirection(self, [threat], 'active-threat-return-block');
     return {
@@ -3238,9 +3398,20 @@ function browserBotSource(config) {
 	      if (!cfg.dryRun && !bot.control.wsOpen) {
 	        safeSendVelocity(0, 0, true);
 	        if (!bot.offlineSince) bot.offlineSince = Date.now();
-	        bot.lastDecision = { kind: 'wait', reason: 'control-ws-offline', control: summarizeControl(), self: summarizeSelf(self) };
+	        const offlineAgeMs = Date.now() - bot.offlineSince;
+	        const leaveResult = offlineAgeMs >= cfg.offlineLeaveMs
+	          ? await leaveOffline('websocket offline')
+	          : null;
+	        bot.lastDecision = {
+	          kind: 'wait',
+	          reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'control-ws-offline',
+	          control: summarizeControl(),
+	          self: summarizeSelf(self),
+	          offlineAgeMs,
+	          leave: leaveResult
+	        };
 	        updateBotPanel(bot.lastDecision);
-	        if (Date.now() - bot.offlineSince > cfg.reloadAfterOfflineMs) {
+	        if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
 	          requestReload('websocket offline too long');
 	        }
         if (cfg.once) bot.stop('once');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.2.1
+// @version      0.3.0
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -25,6 +25,8 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
+  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
+  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
 
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
@@ -36,6 +38,8 @@
     debugEveryMs: 1000,
     statusEvery: 1000,
     loginCooldownMs: 5000,
+    postLoginGraceMs: 45000,
+    authReturnGraceMs: 45000,
     authorizeCooldownMs: 1000,
     authorizeFallbackDelayMs: 10000,
     cacheBust: true,
@@ -52,6 +56,8 @@
     debugEveryMs: Math.max(250, Number(GM_getValue('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
     loginCooldownMs: Math.max(1000, Number(GM_getValue('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
+    postLoginGraceMs: Math.max(5000, Number(GM_getValue('postLoginGraceMs', DEFAULTS.postLoginGraceMs)) || DEFAULTS.postLoginGraceMs),
+    authReturnGraceMs: Math.max(5000, Number(GM_getValue('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
     authorizeCooldownMs: Math.max(250, Number(GM_getValue('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
     authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
@@ -67,6 +73,8 @@
     lastInstallReason: '',
     lastWatchdogAt: 0,
     lastLoginAt: 0,
+    lastLoginSuppressUntil: 0,
+    lastLoginSuppressReason: '',
     lastAuthorizeAt: 0,
     lastError: '',
     lastDebugAt: 0
@@ -78,6 +86,50 @@
 
   function isAuthorizePage() {
     return location.origin === AUTH_ORIGIN && location.pathname.startsWith('/oauth2/authorize');
+  }
+
+  function isGameAuthCallback() {
+    return isGamePage() && location.pathname.startsWith('/auth/linuxdo/callback');
+  }
+
+  function suppressLogin(reason, ms) {
+    const until = Date.now() + Math.max(1000, Number(ms || cfg.postLoginGraceMs) || cfg.postLoginGraceMs);
+    state.lastLoginSuppressUntil = until;
+    state.lastLoginSuppressReason = String(reason || 'login flow');
+    GM_setValue(LOGIN_SUPPRESS_KEY, until);
+    GM_setValue(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);
+    try {
+      localStorage.setItem(LOGIN_SUPPRESS_KEY, String(until));
+      localStorage.setItem(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);
+    } catch (_) {}
+    return until;
+  }
+
+  function loginSuppressRemainingMs() {
+    let localUntil = 0;
+    try {
+      localUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+    } catch (_) {}
+    const until = Math.max(Number(GM_getValue(LOGIN_SUPPRESS_KEY, 0)) || 0, Number(state.lastLoginSuppressUntil || 0), localUntil);
+    const remaining = Math.max(0, until - Date.now());
+    if (!remaining && until) {
+      GM_setValue(LOGIN_SUPPRESS_KEY, 0);
+      GM_setValue(LOGIN_SUPPRESS_REASON_KEY, '');
+      state.lastLoginSuppressUntil = 0;
+      state.lastLoginSuppressReason = '';
+      try {
+        localStorage.removeItem(LOGIN_SUPPRESS_KEY);
+        localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+      } catch (_) {}
+    } else if (remaining) {
+      state.lastLoginSuppressUntil = until;
+      state.lastLoginSuppressReason = String(GM_getValue(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason || '') || 'login flow');
+      try {
+        localStorage.setItem(LOGIN_SUPPRESS_KEY, String(until));
+        localStorage.setItem(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);
+      } catch (_) {}
+    }
+    return remaining;
   }
 
   function withCacheBust(url) {
@@ -305,13 +357,27 @@
 
   function hasLoginRequiredText() {
     const text = (document.body?.innerText || '').slice(0, 4000);
-    return /login required|please login|sign in|登录|登陆|授权|LinuxDO/i.test(text);
+    return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
   }
 
   async function maybeStartGameLogin(reason = 'watchdog') {
     if (!cfg.autoLogin || !isGamePage()) return false;
+    if (isGameAuthCallback()) {
+      suppressLogin('oauth callback', cfg.authReturnGraceMs);
+      postDebug('login-suppressed', { reason, suppressReason: 'oauth callback', remainingMs: loginSuppressRemainingMs() });
+      return false;
+    }
     const t = Date.now();
     if (t - state.lastLoginAt < cfg.loginCooldownMs) return false;
+    const suppressRemainingMs = loginSuppressRemainingMs();
+    if (suppressRemainingMs > 0) {
+      postDebug('login-suppressed', {
+        reason,
+        suppressReason: state.lastLoginSuppressReason || GM_getValue(LOGIN_SUPPRESS_REASON_KEY, ''),
+        remainingMs: Math.round(suppressRemainingMs)
+      });
+      return false;
+    }
     const status = getBotStatus();
     const hasToken = Boolean(localStorage.getItem('tmpGameSessionToken') || status?.control?.hasToken);
     const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
@@ -344,6 +410,7 @@
     } catch (err) {
       detail.error = err?.message || String(err);
     }
+    if (detail.method && !detail.error) suppressLogin('login started', cfg.postLoginGraceMs);
     postDebug(detail.error ? 'login-error' : 'login', detail, { force: true });
     return Boolean(detail.method && !detail.error);
   }
@@ -381,6 +448,7 @@
     } catch (err) {
       detail.error = err?.message || String(err);
     }
+    if (detail.method && !detail.error) suppressLogin('authorize clicked', cfg.authReturnGraceMs);
     postDebug(detail.error ? 'authorize-error' : 'authorize', detail, { force: true });
     return Boolean(detail.method && !detail.error);
   }
@@ -391,8 +459,12 @@
       return;
     }
     if (!isGamePage()) return;
+    if (isGameAuthCallback()) {
+      suppressLogin('oauth callback', cfg.authReturnGraceMs);
+      postDebug('callback-wait', { reason, remainingMs: loginSuppressRemainingMs() });
+      return;
+    }
     state.lastWatchdogAt = Date.now();
-    await maybeStartGameLogin(reason);
     if (state.installing) return;
     const manifest = readCachedManifest();
     const status = getBotStatus();
@@ -400,7 +472,10 @@
     const stale = status && tickIsStale(status);
     const mismatched = manifest && status && status.running
       && (String(status.sourceHash || '') !== String(manifest.sha256 || '') || String(status.version || '') !== String(manifest.version || ''));
-    if (!missing && !stale && !mismatched) return;
+    if (!missing && !stale && !mismatched) {
+      await maybeStartGameLogin(reason);
+      return;
+    }
     try {
       if (!manifest) {
         await pollOnce(reason);
@@ -414,6 +489,7 @@
     } finally {
       state.installing = false;
     }
+    await maybeStartGameLogin(reason);
   }
 
   unsafeWindow.__graspRatBotBootstrap = {
@@ -436,6 +512,7 @@
   };
 
   if (isAuthorizePage()) {
+    suppressLogin('authorize page', cfg.authReturnGraceMs);
     setTimeout(() => {
       if (!isAuthorizePage()) return;
       maybeClickAuthorize('fallback-delay');
@@ -445,6 +522,13 @@
   }
 
   if (!isGamePage()) return;
+  if (isGameAuthCallback()) {
+    suppressLogin('oauth callback', cfg.authReturnGraceMs);
+    setInterval(() => watchdogOnce('callback-interval').catch(() => {}), cfg.watchdogMs);
+    return;
+  }
+
+  loginSuppressRemainingMs();
 
   (async () => {
     state.installing = true;
