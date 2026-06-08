@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.9
+// @version      0.3.10
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -17,6 +17,7 @@
 // @connect      localhost
 // @connect      raw.githubusercontent.com
 // @connect      githubusercontent.com
+// @connect      cdn.jsdelivr.net
 // @connect      github.io
 // @connect      *
 // ==/UserScript==
@@ -26,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.9';
+  const BOOTSTRAP_VERSION = '0.3.10';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -51,6 +52,7 @@
     watchdogMs: 1000,
     busyLeaseMs: 12000,
     requestTimeoutMs: 7000,
+    fallbackStaggerMs: 1200,
     staleTickMs: 3000,
     debugEveryMs: 1000,
     statusEvery: 1000,
@@ -73,6 +75,7 @@
     watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
     busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
     requestTimeoutMs: Math.max(3000, Number(GM_getValue('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
+    fallbackStaggerMs: Math.max(0, Number(GM_getValue('fallbackStaggerMs', DEFAULTS.fallbackStaggerMs)) || DEFAULTS.fallbackStaggerMs),
     staleTickMs: Math.max(1000, Number(GM_getValue('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
     debugEveryMs: Math.max(250, Number(GM_getValue('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
@@ -248,6 +251,38 @@
     return `${url}${sep}_graspRatTs=${Date.now()}`;
   }
 
+  function uniqueUrls(urls) {
+    const seen = new Set();
+    return urls
+      .map(url => String(url || '').trim())
+      .filter(url => {
+        if (!url || seen.has(url)) return false;
+        seen.add(url);
+        return true;
+      });
+  }
+
+  function rawGithubToJsDelivr(url) {
+    const match = String(url || '').match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
+    if (!match) return '';
+    const [, owner, repo, branch, path] = match;
+    return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${path}`;
+  }
+
+  function manifestUrls() {
+    return uniqueUrls([
+      cfg.manifestUrl,
+      rawGithubToJsDelivr(cfg.manifestUrl)
+    ]);
+  }
+
+  function scriptUrls(manifest) {
+    return uniqueUrls([
+      manifest?.scriptUrl,
+      rawGithubToJsDelivr(manifest?.scriptUrl)
+    ]);
+  }
+
   function gmRequest(method, url, body = null, headers = {}) {
     return new Promise((resolve, reject) => {
 	    GM_xmlhttpRequest({
@@ -264,6 +299,64 @@
         onerror: err => reject(new Error(`${method} ${url} error: ${err?.error || err?.message || 'unknown'}`))
       });
     });
+  }
+
+  async function requestAcceptedTextWithFallback(label, urls, acceptText) {
+    const candidates = uniqueUrls(urls);
+    if (!candidates.length) {
+      throw new Error(`${label} fetch failed: no urls`);
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let completed = 0;
+      const errors = [];
+      const timers = candidates.map((url, i) => setTimeout(async () => {
+        if (settled) return;
+        try {
+          logBootstrap(`${label} fetch try`, {
+            url,
+            index: i + 1,
+            total: candidates.length,
+            delayMs: i * cfg.fallbackStaggerMs
+          });
+          const text = await withTimeout(
+            gmRequest('GET', withCacheBust(url)),
+            cfg.requestTimeoutMs + 500,
+            `${label} request`
+          );
+          const accepted = acceptText ? await acceptText(text, url) : null;
+          if (settled) return;
+          settled = true;
+          timers.forEach(timer => clearTimeout(timer));
+          logBootstrap(`${label} fetch ok`, {
+            url,
+            index: i + 1,
+            bytes: String(text || '').length
+          });
+          resolve({ text, url, accepted });
+        } catch (err) {
+          if (settled) return;
+          const error = err?.message || String(err);
+          errors[i] = `${url}: ${error}`;
+          completed += 1;
+          logBootstrap(`${label} fetch failed`, {
+            url,
+            index: i + 1,
+            total: candidates.length,
+            error
+          });
+          if (completed >= candidates.length) {
+            settled = true;
+            reject(new Error(`${label} fetch failed from ${candidates.length} url(s): ${errors.filter(Boolean).join(' | ')}`));
+          }
+        }
+      }, i * cfg.fallbackStaggerMs));
+    });
+  }
+
+  async function requestTextWithFallback(label, urls) {
+    const { text, url } = await requestAcceptedTextWithFallback(label, urls, text => ({ text }));
+    return { text, url };
   }
 
   async function sha256Hex(text) {
@@ -415,24 +508,32 @@
     }
   }
 
-	  async function fetchAndVerify(manifest) {
-	    state.lastScriptFetchAt = Date.now();
+  async function fetchAndVerify(manifest) {
+    state.lastScriptFetchAt = Date.now();
     logBootstrap('script fetch start', {
       version: manifest.version,
       sha256: manifest.sha256,
-      scriptUrl: manifest.scriptUrl
+      scriptUrl: manifest.scriptUrl,
+      urls: scriptUrls(manifest)
     });
-	    const source = await withTimeout(
-	      gmRequest('GET', withCacheBust(manifest.scriptUrl)),
-	      cfg.requestTimeoutMs + 500,
-	      'remote bot script request'
-	    );
-    logBootstrap('script fetch complete', { version: manifest.version, bytes: String(source || '').length });
-    const hash = await sha256Hex(source);
-    if (hash !== manifest.sha256) {
-      throw new Error(`script sha256 mismatch: expected ${manifest.sha256}, got ${hash}`);
-    }
-    assertSafeRemoteSource(manifest, source, hash);
+    const { text: source, url: sourceUrl, accepted } = await requestAcceptedTextWithFallback(
+      'remote bot script',
+      scriptUrls(manifest),
+      async sourceText => {
+        const sourceHash = await sha256Hex(sourceText);
+        if (sourceHash !== manifest.sha256) {
+          throw new Error(`script sha256 mismatch: expected ${manifest.sha256}, got ${sourceHash}`);
+        }
+        assertSafeRemoteSource(manifest, sourceText, sourceHash);
+        return { hash: sourceHash };
+      }
+    );
+    logBootstrap('script fetch complete', {
+      version: manifest.version,
+      bytes: String(source || '').length,
+      sourceUrl
+    });
+    const hash = String(accepted?.hash || '');
     logBootstrap('script verified', { version: manifest.version, sha256: hash });
     GM_setValue('cachedManifest', JSON.stringify(manifest));
     GM_setValue('cachedSource', source);
@@ -567,43 +668,49 @@
     return true;
   }
 
-	  async function pollOnce(reason = 'poll') {
-	    if (!isGamePage()) return;
-	    if (state.installing || state.polling) {
-	      resetStaleBusy(reason);
-	    }
-	    if (state.installing || state.polling) {
-	      logBootstrap('poll skipped: busy', {
-	        reason,
-	        installing: state.installing,
-	        polling: state.polling,
-	        busyAgeMs: state.busyStartedAt ? Date.now() - state.busyStartedAt : null,
-	        busyReason: state.busyReason,
-	        lastInstallStatus: state.lastInstallStatus
-	      });
-	      return;
-	    }
-	    const busyToken = beginBusy(`poll:${reason}`, { installing: true, polling: true });
-	    state.lastPollAt = Date.now();
-	    try {
-	      state.lastManifestFetchAt = Date.now();
-	      logBootstrap('manifest fetch start', { reason, manifestUrl: cfg.manifestUrl, currentStatus: shortStatus() });
-	      const manifest = parseManifest(await withTimeout(
-	        gmRequest('GET', withCacheBust(cfg.manifestUrl)),
-	        cfg.requestTimeoutMs + 500,
-	        'manifest request'
-	      ));
+  async function pollOnce(reason = 'poll') {
+    if (!isGamePage()) return;
+    if (state.installing || state.polling) {
+      resetStaleBusy(reason);
+    }
+    if (state.installing || state.polling) {
+      logBootstrap('poll skipped: busy', {
+        reason,
+        installing: state.installing,
+        polling: state.polling,
+        busyAgeMs: state.busyStartedAt ? Date.now() - state.busyStartedAt : null,
+        busyReason: state.busyReason,
+        lastInstallStatus: state.lastInstallStatus
+      });
+      return;
+    }
+    const busyToken = beginBusy(`poll:${reason}`, { polling: true });
+    state.lastPollAt = Date.now();
+    try {
+      state.lastManifestFetchAt = Date.now();
+      const urls = manifestUrls();
+      logBootstrap('manifest fetch start', { reason, manifestUrl: cfg.manifestUrl, urls, currentStatus: shortStatus() });
+      const { accepted, url: manifestUrl } = await requestAcceptedTextWithFallback(
+        'manifest',
+        urls,
+        manifestText => ({ manifest: parseManifest(manifestText) })
+      );
+      const manifest = accepted.manifest;
       logBootstrap('manifest fetch complete', {
         reason,
         version: manifest.version,
         sha256: manifest.sha256,
-        scriptUrl: manifest.scriptUrl
+        scriptUrl: manifest.scriptUrl,
+        manifestUrl
       });
       if (!botNeedsInstall(manifest)) {
         logBootstrap('poll ok: bot current', { reason, version: manifest.version, status: shortStatus() });
         postDebug('ok', { reason, version: manifest.version, sha256: manifest.sha256 });
         return;
       }
+      state.installing = true;
+      state.busyReason = `poll:${reason}:install`;
+      state.busyStartedAt = Date.now();
       await installManifest(manifest, reason);
     } catch (err) {
       state.lastError = err?.message || String(err);
@@ -613,16 +720,19 @@
       if (!status || !status.running) {
         try {
           logBootstrap('poll falling back to cache', { reason, error: state.lastError });
+          state.installing = true;
+          state.busyReason = `poll:${reason}:cache-fallback`;
+          state.busyStartedAt = Date.now();
           await installCached(state.lastError, { force: true });
         } catch (cacheErr) {
           logBootstrap('cached fallback error', { reason, error: cacheErr?.message || String(cacheErr) });
           postDebug('cached-error', { error: cacheErr?.message || String(cacheErr) }, { force: true });
         }
       }
-	    } finally {
-	      clearBusy(busyToken);
-	    }
-	  }
+    } finally {
+      clearBusy(busyToken);
+    }
+  }
 
   function visible(el) {
     if (!el) return false;
@@ -757,12 +867,14 @@
       return;
     }
     state.lastWatchdogAt = Date.now();
-    if (state.installing) {
+    if (state.installing || state.polling) {
       resetStaleBusy(reason);
     }
-    if (state.installing) {
-      logBootstrap('watchdog skipped: installing', {
+    if (state.installing || state.polling) {
+      logBootstrap('watchdog skipped: busy', {
         reason,
+        installing: state.installing,
+        polling: state.polling,
         busyAgeMs: state.busyStartedAt ? Date.now() - state.busyStartedAt : null,
         busyReason: state.busyReason,
         lastInstallStatus: state.lastInstallStatus
