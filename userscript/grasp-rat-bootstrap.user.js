@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.10
+// @version      0.3.11
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.10';
+  const BOOTSTRAP_VERSION = '0.3.11';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -644,6 +644,46 @@
     return true;
   }
 
+  function shouldFastStartFromCache(manifest, source, status) {
+    if (!manifest || !source) return false;
+    if (!status || !status.running) return true;
+    if (tickIsStale(status)) return true;
+    return false;
+  }
+
+  async function installCachedForFastStart(reason = 'startup-cache-first') {
+    if (!isGamePage()) return false;
+    const manifest = readCachedManifest();
+    const source = GM_getValue('cachedSource', '');
+    const status = getBotStatus();
+    const shouldInstall = shouldFastStartFromCache(manifest, source, status);
+    logBootstrap('fast cache install check', {
+      reason,
+      shouldInstall,
+      hasManifest: Boolean(manifest),
+      hasSource: Boolean(source),
+      manifestVersion: manifest?.version || '',
+      manifestHash: manifest?.sha256 || '',
+      currentStatus: shortStatus(status)
+    });
+    if (!shouldInstall) return false;
+    const busyToken = beginBusy(`fast-cache:${reason}`, { installing: true });
+    try {
+      const installed = await installCached(reason, { force: true });
+      if (installed) {
+        logBootstrap('fast cache install done', { reason, version: manifest.version, sha256: manifest.sha256 });
+      }
+      return installed;
+    } catch (err) {
+      state.lastError = err?.message || String(err);
+      logBootstrap('fast cache install error', { reason, error: state.lastError });
+      postDebug('cached-error', { reason, error: state.lastError }, { force: true });
+      return false;
+    } finally {
+      clearBusy(busyToken);
+    }
+  }
+
   async function installManifest(manifest, reason) {
     if (!isGamePage()) return false;
     const current = getBotStatus();
@@ -969,8 +1009,9 @@
   });
 
   (async () => {
+    const cacheInstalled = await installCachedForFastStart('startup-cache-first');
     try {
-      await pollOnce('startup');
+      await pollOnce(cacheInstalled ? 'startup-after-cache' : 'startup');
     } catch (err) {
       logBootstrap('startup poll error', { error: err?.message || String(err) });
       postDebug('startup-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
@@ -979,7 +1020,7 @@
     if (!status || !status.running) {
       try {
         logBootstrap('startup fallback cache install', { status: shortStatus(status) });
-        await installCached('startup-fallback', { force: true });
+        await installCachedForFastStart('startup-fallback');
       } catch (err) {
         logBootstrap('startup fallback cache error', { error: err?.message || String(err), status: shortStatus() });
         postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
