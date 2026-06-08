@@ -1228,8 +1228,11 @@ function isBadAction(status) {
   const safety = status?.safety || {};
   const kind = decision.kind;
   const aggressive = kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop';
+  const combat = Boolean(decision.combat);
   const hp = Number(self.hp || 0);
-  const recovering = hp > 0 && hp < 95;
+  const maxHp = Number(self.maxHp ?? self.max_hp ?? decision.self?.maxHp ?? decision.self?.max_hp ?? 0);
+  const fullHp = maxHp > 0 ? hp >= maxHp : hp >= 100;
+  const recovering = hp > 0 && !fullHp;
   const activeDistance = Number(safety.nearestActive?.distance ?? Infinity);
   const activeThreatRadius = Number(safety.nearestActive?.threatRadius ?? 45000);
   const activeCautionRadius = Number(safety.nearestActive?.cautionRadius ?? 60000);
@@ -1237,14 +1240,15 @@ function isBadAction(status) {
   const targetDrop = Number(decision.target?.drop ?? decision.target?.death_reward_preview ?? decision.target?.death_drop_coins ?? 0);
   const ownDrop = Number(self.drop ?? decision.self?.drop ?? 0);
 
+  if (combat) return '';
   if (recovering && aggressive) return 'aggressive while recovering';
   if (aggressive && targetDrop < 8) return `aggressive target drop too low: ${targetDrop || 'unknown'}`;
   if (aggressive && ownDrop > 0 && targetDrop < ownDrop * 0.5) return `aggressive target drop below reward ratio: target=${targetDrop || 'unknown'} own=${ownDrop}`;
   if (aggressive && activeDistance <= activeThreatRadius) return 'aggressive action with active unit too close';
-  if (activeDistance <= activeThreatRadius && kind !== 'flee') return 'not fleeing active unit near active-view edge';
+  if (!fullHp && activeDistance <= activeThreatRadius && kind !== 'flee') return 'not fleeing active unit near active-view edge';
   if (!recovering && kind === 'idle' && activeDistance <= activeCautionRadius) return 'idle with active unit in caution ring';
   if (!recovering && kind === 'idle') return 'idle while healthy';
-  if (!recovering && humanDistance <= 120 && kind !== 'flee') return 'not avoiding touching human at panic distance';
+  if (!fullHp && humanDistance <= 120 && kind !== 'flee') return 'not avoiding touching human at panic distance';
   return '';
 }
 
@@ -1393,6 +1397,17 @@ function bypassReinstallCooldown(issue) {
 
 async function maybeStartRelogin(cdp, sample, issues, state, context) {
   const t = Date.now();
+  const page = sample?.page || {};
+  if (!context?.afterLeave && (page.hasToken || page.hasSelf || page.inGame)) {
+    log('login-blocked', sample, issues, compactDetail({
+      ...context,
+      reason: 'leave required before relogin',
+      hasToken: Boolean(page.hasToken),
+      hasSelf: Boolean(page.hasSelf || page.own),
+      inGame: Boolean(page.inGame)
+    }));
+    return false;
+  }
   const blocked = reloginBlockedDetail(state, context || {});
   if (blocked) {
     if (context?.logBlocked !== false) log('login-wait', sample, issues, compactDetail({ ...context, ...blocked }));

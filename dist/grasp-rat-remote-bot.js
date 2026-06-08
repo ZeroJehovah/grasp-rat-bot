@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.9","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.0","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -59,6 +59,17 @@
     attackApproachRange: 26000,
     attackDangerRadius: 25000,
     globalAttackMaxDistance: 26000,
+    combatAttackRange: 14500,
+    combatLowHpLeaveThreshold: 50,
+    combatShootEveryMs: 80,
+    combatStationarySpeed: 5,
+    combatAimJitterRadians: 0.08,
+    combatBulletDetectRadius: 26000,
+    combatBulletLaneRadius: 2400,
+    combatBulletLookaheadDistance: 36000,
+    combatStrafeLockMs: 700,
+    combatLeaveRetryMs: 1500,
+    combatReloginDelayMs: 30000,
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
@@ -202,8 +213,11 @@
     lastOfflineLeaveResult: null,
     lastPursuitLeaveAt: 0,
     lastPursuitLeaveResult: null,
+    lastCombatLeaveAt: 0,
+    lastCombatLeaveResult: null,
     pursuitReloginUntil: 0,
     pursuit: null,
+    combatStrafe: null,
     reloadRequestedAt: 0,
     lastTarget: null,
     lastTargetAt: 0,
@@ -233,7 +247,7 @@
     nativeErrorHandler: null,
     lastNativeTickAt: 0,
     seenEntities: new Map(),
-	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], coinDrops: [], messages: [], minimap: null, error: '' },
+	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], bullets: [], coinDrops: [], messages: [], minimap: null, error: '' },
 	    control: {
 	      ws: null,
 	      wsOpen: false,
@@ -331,6 +345,7 @@
 		          snapshotAgeMs: this.globalState.snapshotRefreshedAt ? Date.now() - this.globalState.snapshotRefreshedAt : null,
 		          tick: this.globalState.tick,
 	          entities: this.globalState.entities.length,
+	          bullets: this.globalState.bullets.length,
 	          coinDrops: this.globalState.coinDrops.length,
 	          minimapPoints: this.globalState.minimap?.points?.length || 0,
 	          error: this.globalState.error
@@ -347,13 +362,18 @@
           lastResult: this.lastOfflineLeaveResult
         },
         pursuit: summarizePursuit(this.pursuit),
-        pursuitLeave: {
-          lastAt: this.lastPursuitLeaveAt || 0,
-          lastAgeMs: this.lastPursuitLeaveAt ? Date.now() - this.lastPursuitLeaveAt : null,
-          holdUntil: this.pursuitReloginUntil || 0,
-          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
-          lastResult: this.lastPursuitLeaveResult
-        },
+	        pursuitLeave: {
+	          lastAt: this.lastPursuitLeaveAt || 0,
+	          lastAgeMs: this.lastPursuitLeaveAt ? Date.now() - this.lastPursuitLeaveAt : null,
+	          holdUntil: this.pursuitReloginUntil || 0,
+	          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+	          lastResult: this.lastPursuitLeaveResult
+	        },
+	        combatLeave: {
+	          lastAt: this.lastCombatLeaveAt || 0,
+	          lastAgeMs: this.lastCombatLeaveAt ? Date.now() - this.lastCombatLeaveAt : null,
+	          lastResult: this.lastCombatLeaveResult
+	        },
 	        stopReason: this.stopReason,
 	        errors: this.errors.slice(-5)
 	      };
@@ -377,6 +397,17 @@
   };
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
   const isCurrentlyActive = e => isMovingThreat(e) || (e.current_join_mode === 'Active' && !hasFullStamina(e));
+  const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
+  const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
+  const hpValue = e => Number(e?.hp ?? 0) || 0;
+  const combatHpValue = e => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
+  const maxHpValue = e => Number(e?.max_hp ?? e?.maxHp ?? 0) || 0;
+  const isFullHp = self => {
+    const hp = hpValue(self);
+    const maxHp = maxHpValue(self);
+    if (maxHp > 0) return hp >= maxHp;
+    return hp >= 100;
+  };
   const decorateActiveThreat = (self, e) => {
     const moving = isMovingThreat(e);
     return {
@@ -390,11 +421,12 @@
       coinDangerRadius: moving ? cfg.coinDangerRadius : cfg.stationaryActiveCoinDangerRadius
     };
   };
-  const isRecovering = self => {
-    const hp = Number(self?.hp || 0);
-    return hp < cfg.lowHpThreshold
-      || hp < cfg.recoverHpThreshold;
-  };
+	  const isRecovering = self => {
+	    if (!self) return false;
+	    const maxHp = maxHpValue(self);
+	    if (maxHp > 0) return hpValue(self) < maxHp;
+	    return hpValue(self) < cfg.recoverHpThreshold;
+	  };
   const isConservingStamina = self => {
     const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
     return stamina < cfg.conserveStaminaThreshold;
@@ -462,7 +494,7 @@
 	    const threats = Array.isArray(decision?.threats) ? decision.threats : [];
 	    if (kind === 'coin') return '拾取金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
 	    if (kind === 'seek-coin') return '前往金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
-	    if (kind === 'attack') return '攻击 ' + (target?.name || ('#' + (target?.id ?? '-'))) + ' Drop ' + (target?.drop ?? '-');
+    if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' HP ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
 	    if (kind === 'seek-enemy' || kind === 'seek-drop') return '前往目标 ' + (target?.name || ('#' + (target?.id ?? '-'))) + (target?.drop ? ' Drop ' + target.drop : '');
 	    if (kind === 'flee') {
 	      const threat = threats[0];
@@ -474,6 +506,7 @@
 	      return '巡航扫描';
 	    }
 	    if (kind === 'wait') return '等待：' + (decision?.reason || '状态不足');
+	    if (kind === 'leave') return '退出：' + (decision?.reason || '状态不足');
 	    if (kind === 'idle') return '待命';
 	    return kind;
 	  }
@@ -495,6 +528,7 @@
 	      'safe-global-coin-before-drop-target': '前往可见安全金币',
 	      'safe-patrol-coin': '巡航拾取安全金币',
 	      'safe-distant-coin': '前往远处安全金币',
+	      'post-attack-drop-coin': '战斗后优先拾取掉落',
 	      'best-opportunity-coin': '综合收益最高：拾取金币',
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 	      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
@@ -510,6 +544,9 @@
 	      'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
 	      'conserve-stamina-before-chasing': '兼容旧状态：保存体力',
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
+	      'combat-attack': '战斗：持续开火',
+	      'combat-tangent-dodge': '战斗：切线规避并开火',
+	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
@@ -549,6 +586,13 @@
 	      const target = decision.target;
 	      panelLines.push('<div>目标：' + escapeHtml(target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(target.distance)) + ' 金币 ' + escapeHtml(target.amount ?? '-') + ' Drop ' + escapeHtml(target.drop ?? '-') + '</div>');
 	    }
+    if (decision?.combat) {
+      panelLines.push('<div>战斗：瞄准 ' + escapeHtml(decision?.aimTarget?.mode || '-') + ' / 来弹 ' + escapeHtml(decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-') + '</div>');
+    }
+    if (decision?.opportunisticShot) {
+      const shot = decision.opportunisticShot;
+      panelLines.push('<div>顺手射击：' + escapeHtml(shot.name || ('#' + (shot.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(shot.distance)) + ' Drop ' + escapeHtml(shot.drop ?? '-') + '</div>');
+    }
 	    const pursuit = decision?.pursuit || safety.pursuit || summarizePursuit(bot.pursuit);
 	    if (pursuit) {
 	      panelLines.push('<div>追击：' + escapeHtml(pursuit.name || ('#' + pursuit.id)) + ' ' + escapeHtml(formatDistance(pursuit.distance)) + ' / ' + escapeHtml(Math.round((pursuit.durationMs || 0) / 1000)) + 's</div>');
@@ -844,7 +888,8 @@
     const userId = getCurrentUserId();
     const hasToken = Boolean(getSessionToken());
     const loginControl = findLoginControl();
-    const needsLogin = Boolean(loginControl) || !hasToken || hasLoginRequiredText();
+    const loginRequired = hasLoginRequiredText();
+    const needsLogin = !hasToken || loginRequired;
     if (!needsLogin) return null;
     if (t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
       const lastError = bot.lastLoginResult?.error || '';
@@ -864,6 +909,8 @@
       reason,
       hasToken,
       currentUserId: userId,
+      loginRequired,
+      loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
       method: '',
       error: ''
     };
@@ -947,6 +994,40 @@
     }
     bot.lastPursuitLeaveResult = detail;
     postDebugEvent(detail.error ? 'pursuit-leave-error' : 'pursuit-leave', detail, { force: true });
+    return detail;
+  }
+
+  async function leaveForCombat(action) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
+      return {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastCombatLeaveAt || 0)))),
+        combat: action?.combatState || null,
+        target: action?.target || null
+      };
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason: 'combat low hp disadvantage',
+      userId: getCurrentUserId() || null,
+      target: action?.target || null,
+      combat: action?.combatState || null,
+      reloginDelayMs: cfg.combatReloginDelayMs,
+      error: ''
+    };
+    bot.lastCombatLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted && !detail.error) {
+      const reloginUntil = setLoginSuppress('combat leave', cfg.combatReloginDelayMs);
+      detail.reloginUntil = reloginUntil;
+      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
+    }
+    bot.lastCombatLeaveResult = detail;
+    postDebugEvent(detail.error ? 'combat-leave-error' : 'combat-leave', detail, { force: true });
     return detail;
   }
 
@@ -1183,6 +1264,45 @@
     return Array.from(byKey.values());
   }
 
+  function normalizeBullet(raw, source) {
+    if (!raw || typeof raw !== 'object') return null;
+    const x = Number(raw.x ?? raw.pos_x ?? raw.start_x);
+    const y = Number(raw.y ?? raw.pos_y ?? raw.start_y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const vx = Number(raw.vx ?? raw.velocity_x ?? raw.dx ?? 0) || 0;
+    const vy = Number(raw.vy ?? raw.velocity_y ?? raw.dy ?? 0) || 0;
+    const ownerId = raw.ownerId ?? raw.owner_id ?? raw.owner_user_id ?? raw.source_user_id ?? raw.shooter_user_id ?? raw.user_id ?? raw.from_user_id ?? null;
+    const id = raw.bullet_id ?? raw.id ?? raw.entity_id ?? (Math.round(x) + ':' + Math.round(y) + ':' + Math.round(vx) + ':' + Math.round(vy));
+    return {
+      ...raw,
+      id,
+      x,
+      y,
+      vx,
+      vy,
+      ownerId,
+      snapshot: source === 'snapshot' || Boolean(raw.snapshot),
+      native: source === 'native' || Boolean(raw.native)
+    };
+  }
+
+  function getBullets() {
+    const nativeState = getNativeState();
+    const nativeBullets = Array.isArray(nativeState?.bullets) ? nativeState.bullets : [];
+    const snapshotBullets = Array.isArray(bot.globalState.bullets) ? bot.globalState.bullets : [];
+    const byKey = new Map();
+    const add = (raw, source) => {
+      const bullet = normalizeBullet(raw, source);
+      if (!bullet) return;
+      const key = String(bullet.id ?? (bullet.x + ':' + bullet.y + ':' + bullet.vx + ':' + bullet.vy));
+      const previous = byKey.get(key);
+      byKey.set(key, previous ? { ...previous, ...bullet, snapshot: Boolean(previous.snapshot || bullet.snapshot), native: Boolean(previous.native || bullet.native) } : bullet);
+    };
+    for (const bullet of snapshotBullets) add(bullet, 'snapshot');
+    for (const bullet of nativeBullets) add(bullet, 'native');
+    return Array.from(byKey.values());
+  }
+
   function fetchJsonNoStore(url, timeoutMs = cfg.globalRefreshTimeoutMs) {
     const ms = Math.max(250, Number(timeoutMs) || cfg.globalRefreshTimeoutMs);
     const options = { cache: 'no-store' };
@@ -1211,6 +1331,7 @@
       x: Math.round(Number(self.x) || 0),
       y: Math.round(Number(self.y) || 0),
       hp: self.hp,
+      maxHp: Number(self.max_hp ?? self.maxHp ?? 0) || null,
       stamina5s: self.stamina_5s_remaining_milli,
       stamina1h: self.stamina_1h_remaining_milli,
       drop: dropValue(self),
@@ -1298,9 +1419,10 @@
         fetchJsonNoStore('/minimap')
 	      ]);
 		      const [snapshot, minimap] = [snapshotRes, minimapRes];
-		      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
-		      bot.globalState.entities = snapshot?.entities || [];
-		      bot.globalState.coinDrops = snapshot?.coin_drops || [];
+			      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
+			      bot.globalState.entities = snapshot?.entities || [];
+			      bot.globalState.bullets = snapshot?.bullets || [];
+			      bot.globalState.coinDrops = snapshot?.coin_drops || [];
 		      bot.globalState.messages = snapshot?.messages || [];
       bot.globalState.snapshotRefreshedAt = Date.now();
 		      bot.globalState.minimap = minimap || null;
@@ -1467,10 +1589,11 @@
 	    }
 	  }
 
-  function shootAt(self, target, force = false) {
+  function shootAt(self, target, force = false, options = {}) {
     if (!target) return false;
     const t = now();
-    if (!force && t - bot.lastShotAt < cfg.shootEveryMs) return false;
+    const shootEveryMs = Number(options.shootEveryMs ?? cfg.shootEveryMs);
+    if (!force && t - bot.lastShotAt < shootEveryMs) return false;
     bot.lastShotAt = t;
     aimAt(target);
     if (sendNativeShoot(self, target)) return true;
@@ -1807,6 +1930,8 @@
   }
 
   function blockThreatReturnAction(self, activeThreats, action) {
+    if (action?.ignoreReturnBlock || action?.combat || action?.kind === 'leave') return action;
+    if (isFullHp(self)) return action;
     if (!action || action.kind === 'flee' || action.kind === 'recover' || action.kind === 'wait' || action.kind === 'idle') return action;
     const picked = pickReturnBlockThreat(self, activeThreats, action);
     if (!picked) return action;
@@ -1877,6 +2002,7 @@
 
 	  function classify(self) {
     const coinDrops = getCoins();
+    const bullets = getBullets();
 	    const localEntities = getEntities()
 	      .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e));
     markRecentMovement(localEntities);
@@ -1963,11 +2089,21 @@
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
-    const nearbyHumans = entities
-      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
-      .sort((a, b) => a.distance - b.distance);
+	    const nearbyHumans = entities
+	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
+	      .sort((a, b) => a.distance - b.distance);
+    const combatTargets = entities
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => e.distance <= cfg.combatAttackRange)
+      .sort((a, b) => {
+        const stickyA = bot.lastTarget?.kind === 'enemy' && String(bot.lastTarget.id) === String(a.user_id);
+        const stickyB = bot.lastTarget?.kind === 'enemy' && String(bot.lastTarget.id) === String(b.user_id);
+        if (stickyA !== stickyB && now() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
+        if (isCurrentlyActive(a) !== isCurrentlyActive(b)) return isCurrentlyActive(a) ? -1 : 1;
+        return a.distance - b.distance;
+      });
     const snapshotCoins = allCoins.filter(c => c.distance <= cfg.snapshotCoinMaxDistance);
-	    return { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans };
+	    return { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets };
 	  }
 
   function safeCoinCandidates(coins, activeThreats, maxDistance) {
@@ -2016,6 +2152,208 @@
       .filter(c => c.distance >= cfg.distantCoinMinDistance);
     if (!candidates.length) return null;
     return candidates[0];
+  }
+
+  function pickCombatTarget(self, combatTargets, bullets) {
+    if (!combatTargets.length) return null;
+    const incoming = incomingBulletThreat(self, null, bullets);
+    if (incoming?.ownerId !== null && incoming?.ownerId !== undefined) {
+      const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId));
+      if (shooter) return { ...shooter, incomingBullet: incoming };
+    }
+    const eligibleTargets = combatTargets.filter(target => !isAfkTarget(target));
+    if (!eligibleTargets.length) return null;
+    const sticky = bot.lastTarget?.kind === 'enemy' && now() - bot.lastTargetAt < cfg.targetStickMs
+      ? eligibleTargets.find(target => String(target.user_id) === String(bot.lastTarget.id))
+      : null;
+    return sticky || eligibleTargets[0] || null;
+  }
+
+  function pickOpportunisticShotTarget(self, entities) {
+    const candidates = (entities || [])
+      .filter(e => Number(e.user_id) !== Number(self.user_id))
+      .filter(isAlive)
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => e.distance <= cfg.attackRange)
+      .filter(e => Number(e.drop || 0) > 0 && Number(e.invulnerable_remaining_ticks || 0) <= 0)
+      .filter(isAfkTarget)
+      .sort((a, b) => {
+        const stickyA = bot.attackHistory.some(item => String(item.id) === String(a.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
+        const stickyB = bot.attackHistory.some(item => String(item.id) === String(b.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
+        if (stickyA !== stickyB) return stickyA ? -1 : 1;
+        if (b.drop !== a.drop) return b.drop - a.drop;
+        return a.distance - b.distance;
+      });
+    const target = candidates[0] || null;
+    if (!target) return null;
+    return {
+      id: target.user_id,
+      name: target.name || '',
+      x: Number(target.x),
+      y: Number(target.y),
+      hp: combatHpValue(target),
+      drop: target.drop,
+      distance: Math.round(target.distance),
+      mode: target.current_join_mode || '',
+      reason: 'opportunistic-afk-drop-shot'
+    };
+  }
+
+  function attachOpportunisticShot(action, self, entities, options = {}) {
+    if (!action || !['coin', 'seek-coin'].includes(action.kind) || action.combat) return action;
+    if (options.recovery) return action;
+    const shot = pickOpportunisticShotTarget(self, entities);
+    if (!shot) return action;
+    return { ...action, opportunisticShot: shot };
+  }
+
+  function incomingBulletThreat(self, target = null, bullets = getBullets()) {
+    const selfId = Number(self?.user_id);
+    let best = null;
+    for (const raw of bullets || []) {
+      const bullet = normalizeBullet(raw, raw?.native ? 'native' : 'snapshot');
+      if (!bullet) continue;
+      if (bullet.ownerId !== null && bullet.ownerId !== undefined && Number(bullet.ownerId) === selfId) continue;
+      if (target && bullet.ownerId !== null && bullet.ownerId !== undefined && String(bullet.ownerId) !== String(target.user_id)) {
+        continue;
+      }
+      const speedValue = hypot(Number(bullet.vx) || 0, Number(bullet.vy) || 0);
+      if (speedValue <= 0.01) continue;
+      const toSelfX = Number(self.x) - Number(bullet.x);
+      const toSelfY = Number(self.y) - Number(bullet.y);
+      const distance = hypot(toSelfX, toSelfY);
+      if (distance > cfg.combatBulletDetectRadius) continue;
+      const projection = (toSelfX * bullet.vx + toSelfY * bullet.vy) / speedValue;
+      if (projection <= 0 || projection > cfg.combatBulletLookaheadDistance) continue;
+      const laneDistance = Math.abs(toSelfX * bullet.vy - toSelfY * bullet.vx) / speedValue;
+      if (laneDistance > cfg.combatBulletLaneRadius) continue;
+      const score = (cfg.combatBulletLaneRadius - laneDistance) * 1000 + (cfg.combatBulletDetectRadius - distance);
+      const item = {
+        id: bullet.id,
+        ownerId: bullet.ownerId,
+        x: bullet.x,
+        y: bullet.y,
+        vx: bullet.vx,
+        vy: bullet.vy,
+        distance,
+        projection,
+        laneDistance,
+        score
+      };
+      if (!best || item.score > best.score) best = item;
+    }
+    return best;
+  }
+
+  function tangentMoveForBullet(self, target, bullet) {
+    if (!bullet) return { dx: 0, dy: 0, locked: false };
+    const t = now();
+    const key = String(bullet.id ?? bullet.ownerId ?? target?.user_id ?? 'bullet');
+    let sign = 0;
+    if (bot.combatStrafe && bot.combatStrafe.key === key && t < Number(bot.combatStrafe.until || 0)) {
+      sign = Number(bot.combatStrafe.sign || 0);
+    }
+    if (!sign) {
+      sign = Math.random() < 0.5 ? -1 : 1;
+      bot.combatStrafe = { key, sign, until: t + cfg.combatStrafeLockMs };
+    }
+    let baseX = Number(bullet.vx) || 0;
+    let baseY = Number(bullet.vy) || 0;
+    if (!(baseX || baseY) && target) {
+      baseX = Number(target.x) - Number(self.x);
+      baseY = Number(target.y) - Number(self.y);
+    }
+    let tangentX = -baseY * sign;
+    let tangentY = baseX * sign;
+    let dx = Math.sign(tangentX || 0);
+    let dy = Math.sign(tangentY || 0);
+    if (!(dx || dy) && target) {
+      dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
+      dy = Math.sign(Number(target.x) - Number(self.x)) || 0;
+    }
+    return { dx, dy, locked: Boolean(bot.combatStrafe && bot.combatStrafe.key === key), sign };
+  }
+
+  function combatAimTarget(self, target) {
+    const moving = speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved);
+    const exact = {
+      x: Number(target.x),
+      y: Number(target.y),
+      mode: 'exact',
+      moving
+    };
+    if (!moving) return exact;
+    const dx = Number(target.x) - Number(self.x);
+    const dy = Number(target.y) - Number(self.y);
+    const angle = (Math.random() * 2 - 1) * cfg.combatAimJitterRadians;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      x: Number(self.x) + dx * cos - dy * sin,
+      y: Number(self.y) + dx * sin + dy * cos,
+      mode: 'jitter',
+      moving,
+      angle
+    };
+  }
+
+  function buildCombatAction(self, target, bullets) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const baseTarget = {
+      id: target.user_id,
+      name: target.name,
+      x: target.x,
+      y: target.y,
+      hp: targetHp,
+      drop: target.drop,
+      distance: Math.round(Number(target.distance || dist(self, target))),
+      moving: speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved)
+    };
+    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
+      return {
+        kind: 'leave',
+        reason: 'combat-low-hp-leave',
+        combat: true,
+        ignoreReturnBlock: true,
+        dx: 0,
+        dy: 0,
+        target: baseTarget,
+        combatState: { selfHp, targetHp }
+      };
+    }
+    const bullet = target.incomingBullet || incomingBulletThreat(self, target, bullets) || incomingBulletThreat(self, null, bullets);
+    const strafe = tangentMoveForBullet(self, target, bullet);
+    const aim = combatAimTarget(self, target);
+    return {
+      kind: 'attack',
+      reason: bullet ? 'combat-tangent-dodge' : 'combat-attack',
+      combat: true,
+      ignoreReturnBlock: true,
+      shoot: true,
+      forceShoot: true,
+      shootEveryMs: cfg.combatShootEveryMs,
+      dx: bullet ? strafe.dx : 0,
+      dy: bullet ? strafe.dy : 0,
+      target: baseTarget,
+      aimTarget: {
+        x: aim.x,
+        y: aim.y,
+        mode: aim.mode,
+        angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0
+      },
+      incomingBullet: bullet ? {
+        id: bullet.id,
+        ownerId: bullet.ownerId,
+        distance: Math.round(bullet.distance),
+        laneDistance: Math.round(bullet.laneDistance)
+      } : null,
+      combatState: {
+        selfHp,
+        targetHp,
+        strafe: bullet ? { dx: strafe.dx, dy: strafe.dy, sign: strafe.sign } : null
+      }
+    };
   }
 
   function snapshotCoinAgeMs() {
@@ -2108,6 +2446,7 @@
         && Number.isFinite(Number(item.y)));
     if (!attack || recentAttackTargetStillAttackable(attack, entities)) return null;
     const candidates = safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
+      .filter(coin => Number(coin.amount || 0) > cfg.postAttackDropCoinMinAmount)
       .filter(coin => dist(coin, attack) <= cfg.postAttackDropCoinRadius)
       .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
     const coin = candidates[0] || null;
@@ -2462,9 +2801,16 @@
   }
 
   function chooseAction(self) {
-    const { activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans } = classify(self);
+    const { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets } = classify(self);
+    bot.lastActionEntities = entities;
     bot.actionThreats = activeThreats;
+    const fullHp = isFullHp(self);
+    const recovery = !fullHp && isRecovering(self);
+    const coinThreats = fullHp ? [] : activeThreats;
+    const combatTarget = pickCombatTarget(self, combatTargets, bullets);
     bot.lastSafety = {
+      fullHp,
+      combatTargets: combatTargets.length,
       nearestActive: activeThreats[0] ? {
         id: activeThreats[0].user_id,
         name: activeThreats[0].name,
@@ -2483,11 +2829,16 @@
         distance: Math.round(nearbyHumans[0].distance),
         mode: nearbyHumans[0].current_join_mode
       } : null,
-      recovery: isRecovering(self),
+      recovery,
       conservingStamina: isConservingStamina(self)
     };
+    if (combatTarget) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      return buildCombatAction(self, combatTarget, bullets);
+    }
     const closeThreats = activeThreats.filter(e => e.distance <= e.threatRadius);
-    if (closeThreats.length) {
+    if (!fullHp && closeThreats.length) {
       const flee = lockedFleeDirection(self, closeThreats, 'active-threat-before-bullet-range');
       return {
         kind: 'flee',
@@ -2500,13 +2851,23 @@
     }
     const cautionThreats = activeThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
 
-    const recovery = isRecovering(self);
     const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
       : cfg.nearCoinPriorityDistance;
-    const nearCoin = pickCoin(coins, activeThreats, nearCoinLimit);
-    const footCoin = pickCoin(coins, activeThreats, cfg.footCoinPriorityDistance);
+    const nearCoin = pickCoin(coins, coinThreats, nearCoinLimit);
+    const footCoin = pickCoin(coins, coinThreats, cfg.footCoinPriorityDistance);
+    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities);
+    if (postAttackCoin) {
+      bot.fleeLock = null;
+      if (bot.lastTarget?.kind === 'enemy') {
+        bot.lastTarget = null;
+        bot.lastTargetAt = 0;
+      }
+      const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
+      action.postAttackTarget = postAttackCoin.postAttackTarget;
+      return action;
+    }
     if (recovery && nearCoin) {
       bot.fleeLock = null;
       const dir = coinDirectionTo(self, nearCoin);
@@ -2520,8 +2881,11 @@
       };
     }
 
-    const avoidHumans = nearbyHumans.filter(e => e.distance <= (recovery ? cfg.recoveryAvoidRadius : cfg.passivePanicRadius));
-    if (avoidHumans.length) {
+    const avoidHumans = nearbyHumans.filter(e => {
+      if (e.distance > (recovery ? cfg.recoveryAvoidRadius : cfg.passivePanicRadius)) return false;
+      return recovery ? isRecoveryUnsafeHuman(e) : true;
+    });
+    if (!fullHp && avoidHumans.length) {
       const reason = recovery ? 'recovery-avoid-humans' : 'passive-panic-distance';
       const flee = lockedFleeDirection(self, avoidHumans, reason);
       return {
@@ -2549,7 +2913,7 @@
       };
     }
 
-    if (cautionThreats.length) {
+    if (!fullHp && cautionThreats.length) {
       if (footCoin) {
         bot.fleeLock = null;
         const dir = coinDirectionTo(self, footCoin);
@@ -2576,50 +2940,38 @@
     if (footCoin) {
       bot.fleeLock = null;
       const dir = coinDirectionTo(self, footCoin);
-      return {
+      return attachOpportunisticShot({
         kind: 'coin',
         reason: 'foot-coin-priority',
         target: { id: footCoin.drop_id, x: footCoin.x, y: footCoin.y, amount: footCoin.amount, distance: Math.round(dir.distance) },
         dx: dir.dx,
         dy: dir.dy,
         ...coinMotionMeta(dir)
-      };
-    }
-
-    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, activeThreats, entities);
-    if (postAttackCoin) {
-      bot.fleeLock = null;
-      if (bot.lastTarget?.kind === 'enemy') {
-        bot.lastTarget = null;
-        bot.lastTargetAt = 0;
-      }
-      const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
-      action.postAttackTarget = postAttackCoin.postAttackTarget;
-      return action;
+      }, self, entities, { recovery });
     }
 
     const opportunity = pickBestOpportunity(
       self,
-      activeThreats,
+      coinThreats,
       [
         { coins, maxDistance: cfg.coinMaxDistance },
         { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
         { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance }
       ],
-      [inactiveTargets, globalTargets, minimapDropTargets]
+      fullHp ? [] : [inactiveTargets, globalTargets, minimapDropTargets]
     );
     if (opportunity) {
       bot.fleeLock = null;
-      return opportunity;
+      return attachOpportunisticShot(opportunity, self, entities, { recovery });
     }
 
     const fieldTarget = stamina5s >= cfg.fieldMigrationStaminaThreshold
-      ? pickCoinField(allCoins, activeThreats)
+      ? pickCoinField(allCoins, coinThreats)
       : null;
     if (fieldTarget) {
       bot.fleeLock = null;
       const dir = coinDirectionTo(self, fieldTarget);
-      return {
+      return attachOpportunisticShot({
         kind: 'seek-coin',
         reason: 'migrate-to-known-field',
         target: {
@@ -2634,29 +2986,29 @@
         dx: dir.dx,
         dy: dir.dy,
         ...coinMotionMeta(dir)
-      };
+      }, self, entities, { recovery });
     }
 
-    const distantCoin = pickDistantCoin(allCoins, activeThreats);
+    const distantCoin = pickDistantCoin(allCoins, coinThreats);
     if (distantCoin) {
       bot.fleeLock = null;
       const dir = coinDirectionTo(self, distantCoin);
-      return {
+      return attachOpportunisticShot({
         kind: 'seek-coin',
         reason: 'safe-distant-coin',
         target: { id: distantCoin.drop_id, x: distantCoin.x, y: distantCoin.y, amount: distantCoin.amount, distance: Math.round(dir.distance) },
         dx: dir.dx,
         dy: dir.dy,
         ...coinMotionMeta(dir)
-      };
+      }, self, entities, { recovery });
     }
 
-    if (hasReturnBlockThreat(activeThreats)) {
+    if (!fullHp && hasReturnBlockThreat(activeThreats)) {
       bot.fleeLock = null;
       return buildReturnBlockScanAction(self, activeThreats, nearbyHumans);
     }
 
-    const snapshotCoin = pickSnapshotCoinDestination(snapshotCoins, activeThreats);
+    const snapshotCoin = pickSnapshotCoinDestination(snapshotCoins, coinThreats);
     if (snapshotCoin) {
       bot.fleeLock = null;
       const action = buildCoinAction(
@@ -2669,7 +3021,7 @@
       action.target.fieldAmount = snapshotCoin.snapshotAmount;
       action.target.snapshotAgeMs = Number.isFinite(snapshotCoin.snapshotAgeMs) ? Math.round(snapshotCoin.snapshotAgeMs) : null;
       action.score = Math.round(snapshotCoin.snapshotScore ?? action.score ?? 0);
-      return action;
+      return attachOpportunisticShot(action, self, entities, { recovery });
     }
 
     bot.fleeLock = null;
@@ -2783,9 +3135,22 @@
         bot.globalState.error = err.message || String(err);
       });
 
-      let action = chooseAction(self);
-      action = blockThreatReturnAction(self, bot.actionThreats || [], action);
-      action = trackCoinProgress(action, self);
+	      let action = chooseAction(self);
+	      action = blockThreatReturnAction(self, bot.actionThreats || [], action);
+      if (action.kind === 'leave' && action.reason === 'combat-low-hp-leave') {
+        stopMotionSafely('combat-low-hp-leave');
+        const leaveResult = await leaveForCombat(action);
+        bot.lastDecision = {
+          ...action,
+          leave: leaveResult,
+          source,
+          self: summarizeSelf(self)
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
+	      action = trackCoinProgress(action, self);
       const escape = bot.staleCoinEscape;
       const escapeActive = escape && now() < Number(escape.until || 0) && (escape.dx || escape.dy);
       if (escapeActive && action.kind !== 'flee') {
@@ -2839,10 +3204,14 @@
       const canMove = true;
       const canAttack = true;
       sendActionVelocity(action);
+      if (action.opportunisticShot) {
+        const shotSent = shootAt(self, action.opportunisticShot, false, { shootEveryMs: cfg.opportunisticShootEveryMs });
+        if (shotSent) rememberAttack(self, action.opportunisticShot, 'opportunistic-shot');
+      }
       if (action.kind === 'attack' && action.shoot && action.target) {
-        shootAt(self, action.target);
+        shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
         setLastTarget('enemy', action.target.id);
-        rememberAttack(self, action.target, action.kind);
+	        rememberAttack(self, action.target, action.kind);
       } else if ((action.kind === 'coin' || action.kind === 'seek-coin') && action.target) {
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {

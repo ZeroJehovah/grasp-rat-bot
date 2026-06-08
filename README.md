@@ -17,7 +17,7 @@ The older CDP entry points remain available in `grasp-rat-bot.js` as a fallback,
 2. Open `userscript/grasp-rat-bootstrap.user.js` and install it.
 3. Open `https://grasp-rat-game.h-e.top/` in normal Chrome.
 
-If an older bootstrap is already installed, update or reinstall script A to at least `0.3.7`. Earlier `0.3.x` source changes accidentally kept the Tampermonkey metadata version at `0.3.0`, so Tampermonkey may not auto-update A even though the repository changed.
+If an older bootstrap is already installed, update or reinstall script A to at least `0.4.0`. Earlier `0.3.x` source changes accidentally kept the Tampermonkey metadata version at `0.3.0`, so Tampermonkey may not auto-update A even though the repository changed.
 
 By default the bootstrap loads:
 
@@ -34,6 +34,8 @@ Version `0.3.7` changes script A's page-context injection path to prefer Tamperm
 Version `0.3.8` changes script B strategy only. If the same unsafe player keeps pressuring the bot for about 5 minutes, the bot leaves the game, stops local movement, suppresses relogin for 30 seconds, then lets the normal login flow resume. The overlay and status include the current pursuit target, duration, and pursuit-leave wait state.
 
 Version `0.3.9` changes script B strategy only. The bot now merges page-native coin drops with `/snapshot` `coin_drops`, uses the snapshot to navigate directly toward known coin areas when no higher-priority local/safety action exists, and removes the old open-area patrol fallback. If no native or fresh snapshot coin is available, it waits for the next snapshot instead of cruising randomly.
+
+Version `0.4.0` changes both script A and script B. At full HP, the bot no longer actively avoids or approaches players and keeps collecting coins. Moving, active, or firing enemies inside attack range trigger combat: the bot shoots more frequently, dodges incoming bullets along a random tangent, aims exactly at stationary targets, and adds small aim jitter for moving targets. In combat, if own HP is below 50 and below the target HP, the bot leaves. While collecting coins, static AFK players with `Drop > 0` inside shooting range are shot opportunistically without switching to combat. After a recent fight, dropped coins with amount greater than 1 are picked before returning to recovery wait. Script A and the monitor also avoid starting LinuxDO login while the page still has token/self/in-game state unless a leave was issued first.
 
 When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap waits 10 seconds before clicking the allow/authorize control, so it acts only as a fallback behind the user's primary authorization script.
 

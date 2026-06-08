@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.11
+// @version      0.4.0
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.11';
+  const BOOTSTRAP_VERSION = '0.4.0';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -825,16 +825,18 @@
     const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
     const decisionReason = String(status?.lastDecision?.reason || '');
     const loginControl = findGameLoginControl();
-    const shouldLogin = Boolean(loginControl)
-      || !hasToken
-      || (!hasSelf && /login|required|no-self/i.test(decisionReason) && hasLoginRequiredText());
+    const loginRequired = hasLoginRequiredText();
+    const shouldLogin = !hasToken
+      || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired);
     if (!shouldLogin) return false;
     state.lastLoginAt = t;
     const detail = {
       reason,
       hasToken,
       hasSelf,
+      loginRequired,
       decisionReason,
+      loginControl: loginControl ? (loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase()) : '',
       method: '',
       error: ''
     };
