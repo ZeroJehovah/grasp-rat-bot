@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.1","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.2","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -34,6 +34,7 @@
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
     nativeReconnectMs: 3000,
     botWsReconnectMs: 3000,
+    allowBotWebSocketFallback: Boolean(config.allowBotWebSocketFallback),
     dangerRadius: 28000,
     activeCautionRadius: 38000,
     activeCautionExitMargin: 4000,
@@ -251,7 +252,7 @@
 	      if (this.velocityStopTimer) clearTimeout(this.velocityStopTimer);
 	      this.velocityStopTimer = 0;
 	      this.velocityPulseToken += 1;
-	      safeSendVelocity(0, 0, true);
+	      stopMotionSafely('stop');
 	      detachNativeMessagePump();
 	      closeControlWs(reason);
 	      if (this.timer) clearInterval(this.timer);
@@ -881,6 +882,7 @@
 	      wsReadyState: native ? native.wsReadyState : (control.ws ? control.ws.readyState : control.wsReadyState),
 	      connecting: Boolean(control.connecting),
 	      transport: control.transport || (native ? 'native-page' : (control.ws ? 'bot-websocket' : 'none')),
+	      allowBotWebSocketFallback: Boolean(cfg.allowBotWebSocketFallback),
 	      nativeWsOpen: Boolean(native?.wsOpen),
 	      nativeWsReadyState: native ? native.wsReadyState : null,
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
@@ -963,6 +965,14 @@
 	      if (syncNativeControl(native)) return true;
 	      if (native.wsReadyState === WebSocket.CONNECTING) return false;
 	      requestNativeReconnect(userId);
+	      return false;
+	    }
+	    if (!cfg.allowBotWebSocketFallback) {
+	      if (bot.control.ws) closeControlWs('bot websocket fallback disabled');
+	      bot.control.transport = 'native-page-missing';
+	      bot.control.connecting = false;
+	      bot.control.wsOpen = false;
+	      bot.control.lastError = 'native page websocket unavailable';
 	      return false;
 	    }
 	    if (bot.control.wsOpen && bot.control.ws?.readyState === WebSocket.OPEN) return true;
@@ -1192,6 +1202,41 @@
 	    return true;
 	  }
 
+  function stopLocalMotionOnly(reason = '') {
+    const nativeState = getNativeState();
+    if (nativeState) {
+      setNativeKeys(nativeState, 0, 0);
+      if (nativeState.currentVel && typeof nativeState.currentVel === 'object') {
+        nativeState.currentVel.dx = 0;
+        nativeState.currentVel.dy = 0;
+      }
+      if (nativeState.touchMove) {
+        nativeState.touchMove.active = false;
+        nativeState.touchMove.dx = 0;
+        nativeState.touchMove.dy = 0;
+      }
+    }
+    bot.control.lastVelocity = '0 0';
+    bot.control.lastVelocityAt = now();
+    if (reason) bot.control.lastLocalStopReason = reason;
+    return true;
+  }
+
+  function stopMotionSafely(reason = '') {
+    const native = getNativeControl();
+    if (native?.wsOpen) {
+      bot.control.lastVelocity = '0 0';
+      bot.control.lastVelocityAt = now();
+      return sendNativeVelocity(0, 0, true) || stopLocalMotionOnly(reason);
+    }
+    if (!native && bot.control.wsOpen && bot.control.ws?.readyState === WebSocket.OPEN) {
+      bot.control.lastVelocity = '0 0';
+      bot.control.lastVelocityAt = now();
+      return wsSend('vel 0 0') || stopLocalMotionOnly(reason);
+    }
+    return stopLocalMotionOnly(reason);
+  }
+
 	  function sendNativeVelocity(dx, dy, force = false) {
 	    const native = getNativeControl();
 	    if (!native) return false;
@@ -1242,7 +1287,7 @@
 	      bot.velocityStopTimer = setTimeout(() => {
 	        if (bot.velocityPulseToken !== token) return;
 	        bot.velocityStopTimer = 0;
-	        safeSendVelocity(0, 0, true);
+	        stopMotionSafely('precision-pulse');
 	      }, clamp(Math.round(pulseMs), 20, 110));
 	    }
 	    return sent;
@@ -2422,7 +2467,7 @@
       bot.lastTickAt = Date.now();
 	      const self = getSelf();
 	      if (!self || !isAlive(self)) {
-	        safeSendVelocity(0, 0, true);
+	        stopMotionSafely('no-self');
 	        if (!bot.waitSince) bot.waitSince = Date.now();
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
 	        refreshGlobalState(false).catch(err => {
@@ -2455,7 +2500,7 @@
 	      updateKillHistory(self);
 	      ensureControlWs();
 	      if (!cfg.dryRun && !bot.control.wsOpen) {
-	        safeSendVelocity(0, 0, true);
+	        stopMotionSafely('control-ws-offline');
 	        if (!bot.offlineSince) bot.offlineSince = Date.now();
 	        const offlineAgeMs = Date.now() - bot.offlineSince;
 	        const leaveResult = offlineAgeMs >= cfg.offlineLeaveMs
@@ -2538,7 +2583,7 @@
 	    } catch (err) {
 	      bot.errors.push({ at: Date.now(), message: err.message, stack: String(err.stack || '') });
       if (bot.errors.length > 20) bot.errors.shift();
-      safeSendVelocity(0, 0, true);
+      stopMotionSafely('bot-error');
       bot.lastDecision = {
         kind: 'wait',
         reason: 'bot-error',
