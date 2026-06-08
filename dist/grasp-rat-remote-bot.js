@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.6","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.7","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -13,6 +13,8 @@
 		  const config = { ...baseConfig, ...runtimeConfig };
 		  const BOT_KEY = '__graspRatBot';
 		  const PANEL_ID = 'grasp-rat-bot-panel';
+		  const PAUSED_KEY = 'graspRatBotPaused';
+		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
 		  const previousBot = window[BOT_KEY] || null;
   const preserved = {
     attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
@@ -75,7 +77,8 @@
     combatBulletLookaheadDistance: 36000,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1500,
-    combatReloginDelayMs: 30000,
+    enemyReloginMinDelayMs: 60000,
+    enemyReloginMaxDelayMs: 180000,
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
@@ -160,7 +163,6 @@
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
     pursuitLeaveMs: 300000,
-    pursuitReloginDelayMs: 30000,
     pursuitLostGraceMs: 10000,
     pursuitLeaveRetryMs: 5000,
     pursuitTrackRadius: 42000,
@@ -224,6 +226,11 @@
     lastPursuitLeaveResult: null,
     lastCombatLeaveAt: 0,
     lastCombatLeaveResult: null,
+    lastInjuryLeaveAt: 0,
+    lastInjuryLeaveResult: null,
+    pendingInjuryLeave: null,
+    lastEnemyLeaveRetryAt: 0,
+    lastEnemyLeaveRetryResult: null,
     pursuitReloginUntil: 0,
     pursuit: null,
     combatStrafe: null,
@@ -286,6 +293,9 @@
 	    errors: [],
 	    lastDebugAt: 0,
 	    stopReason: '',
+	    paused: Boolean(config.paused || window.__graspRatBotPaused),
+	    pauseReason: '',
+	    pauseChangedAt: 0,
 	    stop(reason = 'manual') {
 	      this.running = false;
 	      this.stopReason = reason;
@@ -300,10 +310,41 @@
 	      logStatus('stopped: ' + reason);
 	      if (window[BOT_KEY] === this) removeBotPanel();
 	    },
+	    setPaused(paused, reason = 'external') {
+	      const next = Boolean(paused);
+	      const changed = this.paused !== next;
+	      this.paused = next;
+	      this.pauseReason = next ? String(reason || 'manual') : '';
+	      if (changed) this.pauseChangedAt = Date.now();
+	      window.__graspRatBotPaused = next;
+	      window.__graspRatBotPauseReason = this.pauseReason;
+	      try {
+	        localStorage.setItem(PAUSED_KEY, next ? 'true' : 'false');
+	        if (next) localStorage.setItem(PAUSE_REASON_KEY, this.pauseReason || 'manual');
+	        else localStorage.removeItem(PAUSE_REASON_KEY);
+	      } catch (_) {}
+	      if (next) {
+	        stopMotionSafely('paused');
+	        this.lastDecision = {
+	          kind: 'idle',
+	          reason: 'paused',
+	          dx: 0,
+	          dy: 0,
+	          self: this.lastSelf,
+	          paused: true,
+	          pauseReason: this.pauseReason || 'manual'
+	        };
+	      }
+	      postDebugEvent(next ? 'paused' : 'resumed', { reason: this.pauseReason || reason }, { force: true });
+	      return this.status();
+	    },
     step(source = 'external') {
       return tick(source);
     },
     status() {
+      try {
+        if (!this.ticking) syncPausedFromPage();
+      } catch (_) {}
       if (this.running && !this.ticking && this.lastTickAt && Date.now() - this.lastTickAt > Math.max(3000, cfg.tickMs * 10)) {
         triggerNativeTick('status-watchdog', false);
       }
@@ -315,6 +356,9 @@
 	        sourceUrl: cfg.sourceUrl,
 	        injectedBy: cfg.injectedBy,
 	        running: this.running,
+	        paused: Boolean(this.paused),
+	        pauseReason: this.pauseReason || '',
+	        pauseChangedAt: this.pauseChangedAt || 0,
         ticking: Boolean(this.ticking),
         timerActive: Boolean(this.timer),
         dryRun: cfg.dryRun,
@@ -379,6 +423,15 @@
 	          holdUntil: this.pursuitReloginUntil || 0,
 	          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
 	          lastResult: this.lastPursuitLeaveResult
+	        },
+	        enemyLeave: {
+	          holdUntil: this.pursuitReloginUntil || 0,
+	          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+	          reason: this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || '',
+	          lastInjuryResult: this.lastInjuryLeaveResult,
+	          lastPursuitResult: this.lastPursuitLeaveResult,
+	          lastCombatResult: this.lastCombatLeaveResult,
+	          lastRetryResult: this.lastEnemyLeaveRetryResult
 	        },
 	        combatLeave: {
 	          lastAt: this.lastCombatLeaveAt || 0,
@@ -451,6 +504,7 @@
 	  };
 
 	  function ensureBotPanel() {
+	    return null;
 	    if (!document.body) return null;
 	    let panel = document.getElementById(PANEL_ID);
 	    if (panel) return panel;
@@ -481,6 +535,7 @@
 	  }
 
 	  function removeBotPanel() {
+	    return;
 	    const panel = document.getElementById(PANEL_ID);
 	    if (panel) panel.remove();
 	  }
@@ -577,6 +632,7 @@
 	  }
 
 	  function updateBotPanel(decision = bot.lastDecision) {
+	    return;
 	    const panel = ensureBotPanel();
 	    if (!panel) return;
 	    const self = decision?.self || bot.lastSelf || null;
@@ -738,12 +794,59 @@
     return remaining;
   }
 
-  function pursuitReloginHoldRemainingMs() {
+  function readPauseReason() {
+    let reason = '';
+    try {
+      reason = String(localStorage.getItem(PAUSE_REASON_KEY) || '');
+    } catch (_) {}
+    return String(window.__graspRatBotPauseReason || reason || '');
+  }
+
+  function syncPausedFromPage() {
+    let localPaused = false;
+    try {
+      localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
+    } catch (_) {}
+    const paused = Boolean(window.__graspRatBotPaused === true || localPaused);
+    if (paused !== bot.paused) {
+      bot.paused = paused;
+      bot.pauseChangedAt = Date.now();
+      if (paused) stopMotionSafely('paused');
+    }
+    bot.pauseReason = paused ? (readPauseReason() || bot.pauseReason || 'manual') : '';
+    return paused;
+  }
+
+  function randomBetween(min, max) {
+    const lo = Math.max(0, Number(min) || 0);
+    const hi = Math.max(lo, Number(max) || lo);
+    return Math.round(lo + Math.random() * (hi - lo));
+  }
+
+  function setEnemyLeaveSuppress(reason, detail) {
+    const delayMs = randomBetween(cfg.enemyReloginMinDelayMs, cfg.enemyReloginMaxDelayMs);
+    const reloginUntil = setLoginSuppress('enemy leave', delayMs);
+    bot.pursuitReloginUntil = reloginUntil;
+    bot.lastEnemyLeaveWaitMs = delayMs;
+    if (detail) {
+      detail.reloginDelayMs = delayMs;
+      detail.reloginDelayRangeMs = {
+        min: cfg.enemyReloginMinDelayMs,
+        max: cfg.enemyReloginMaxDelayMs
+      };
+      detail.reloginUntil = reloginUntil;
+      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
+      detail.enemyLeaveReason = reason;
+    }
+    return reloginUntil;
+  }
+
+  function enemyReloginHoldRemainingMs() {
     let until = Number(bot.pursuitReloginUntil || 0);
     try {
       const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
       const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
-      if (suppressReason === 'pursuit leave' && suppressUntil > until) {
+      if ((suppressReason === 'enemy leave' || suppressReason === 'pursuit leave' || suppressReason === 'combat leave') && suppressUntil > until) {
         until = suppressUntil;
         bot.pursuitReloginUntil = suppressUntil;
       }
@@ -888,6 +991,16 @@
   }
 
   async function maybeStartAutoLogin(reason) {
+    if (syncPausedFromPage()) {
+      return {
+        needed: false,
+        attempted: false,
+        reason: 'paused',
+        error: '',
+        hasToken: Boolean(getSessionToken()),
+        currentUserId: getCurrentUserId()
+      };
+    }
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
     const suppressRemainingMs = loginSuppressRemainingMs();
@@ -980,6 +1093,36 @@
     return detail;
   }
 
+  async function leaveForInjury(injury) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    if (t - Number(bot.lastInjuryLeaveAt || 0) < cfg.combatLeaveRetryMs) {
+      return {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastInjuryLeaveAt || 0)))),
+        injury
+      };
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason: 'injury hp drop',
+      userId: getCurrentUserId() || null,
+      injury,
+      error: ''
+    };
+    bot.lastInjuryLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted && !detail.error) {
+      setEnemyLeaveSuppress('injury hp drop', detail);
+      bot.pendingInjuryLeave = null;
+    }
+    bot.lastInjuryLeaveResult = detail;
+    postDebugEvent(detail.error ? 'injury-leave-error' : 'injury-leave', detail, { force: true });
+    return detail;
+  }
+
   async function leaveForPursuit(pursuit) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
@@ -997,16 +1140,12 @@
       reason: 'sustained pursuit',
       userId: getCurrentUserId() || null,
       pursuit: summarizePursuit(pursuit),
-      reloginDelayMs: cfg.pursuitReloginDelayMs,
       error: ''
     };
     bot.lastPursuitLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      const reloginUntil = setLoginSuppress('pursuit leave', cfg.pursuitReloginDelayMs);
-      bot.pursuitReloginUntil = reloginUntil;
-      detail.reloginUntil = reloginUntil;
-      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
+      setEnemyLeaveSuppress('sustained pursuit', detail);
       bot.pursuit = null;
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
     }
@@ -1034,18 +1173,43 @@
       userId: getCurrentUserId() || null,
       target: action?.target || null,
       combat: action?.combatState || null,
-      reloginDelayMs: cfg.combatReloginDelayMs,
       error: ''
     };
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      const reloginUntil = setLoginSuppress('combat leave', cfg.combatReloginDelayMs);
-      detail.reloginUntil = reloginUntil;
-      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
+      setEnemyLeaveSuppress('combat low hp disadvantage', detail);
     }
     bot.lastCombatLeaveResult = detail;
     postDebugEvent(detail.error ? 'combat-leave-error' : 'combat-leave', detail, { force: true });
+    return detail;
+  }
+
+  async function leaveDuringEnemyHold(reason = 'enemy leave wait') {
+    const t = Date.now();
+    const retryMs = Math.max(cfg.pursuitLeaveRetryMs, cfg.combatLeaveRetryMs);
+    if (cfg.dryRun || cfg.once) return null;
+    if (t - Number(bot.lastEnemyLeaveRetryAt || 0) < retryMs) {
+      return {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastEnemyLeaveRetryAt || 0)))),
+        holdRemainingMs: enemyReloginHoldRemainingMs()
+      };
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason,
+      userId: getCurrentUserId() || null,
+      holdRemainingMs: enemyReloginHoldRemainingMs(),
+      error: ''
+    };
+    bot.lastEnemyLeaveRetryAt = t;
+    await issueLeaveCommand(detail);
+    detail.holdRemainingMs = enemyReloginHoldRemainingMs();
+    bot.lastEnemyLeaveRetryResult = detail;
+    postDebugEvent(detail.error ? 'enemy-leave-retry-error' : 'enemy-leave-retry', detail, { force: true });
     return detail;
   }
 
@@ -3247,29 +3411,47 @@
     try {
       bot.tickCount += 1;
       bot.lastTickAt = Date.now();
+      if (syncPausedFromPage()) {
+        bot.lastDecision = {
+          kind: 'idle',
+          reason: 'paused',
+          dx: 0,
+          dy: 0,
+          self: bot.lastSelf,
+          paused: true,
+          pauseReason: bot.pauseReason || 'manual'
+        };
+        if (cfg.once) bot.stop('once');
+        return;
+      }
 		      const self = getSelf();
-      const pursuitHoldRemainingMs = pursuitReloginHoldRemainingMs();
-      if (pursuitHoldRemainingMs > 0) {
+      const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
+      if (enemyHoldRemainingMs > 0) {
         bot.pursuit = null;
-        stopMotionSafely('pursuit-leave-wait');
+        stopMotionSafely('enemy-leave-wait');
         const selfAlive = Boolean(self && isAlive(self));
         const leaveResult = selfAlive
-          ? await leaveForPursuit(bot.lastPursuitLeaveResult?.pursuit || null)
+          ? await leaveDuringEnemyHold('enemy leave wait')
           : null;
         refreshGlobalState(false).catch(err => {
           bot.globalState.error = err.message || String(err);
         });
         bot.lastDecision = {
           kind: 'wait',
-          reason: 'pursuit-leave-wait',
+          reason: 'enemy-leave-wait',
           dx: 0,
           dy: 0,
           self: self ? summarizeSelf(self) : null,
           currentUserId: getCurrentUserId(),
           control: summarizeControl(),
-          holdRemainingMs: pursuitReloginHoldRemainingMs(),
+          holdRemainingMs: enemyReloginHoldRemainingMs(),
           leave: leaveResult,
-          pursuit: bot.lastPursuitLeaveResult?.pursuit || null
+          pursuit: bot.lastPursuitLeaveResult?.pursuit || null,
+          enemyLeave: {
+            lastPursuitResult: bot.lastPursuitLeaveResult,
+            lastCombatResult: bot.lastCombatLeaveResult,
+            lastRetryResult: bot.lastEnemyLeaveRetryResult
+          }
         };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
@@ -3302,9 +3484,11 @@
 	      }
 	      bot.waitSince = 0;
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
+	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
 	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
+      const currentHp = Number(currentSummary.hp ?? NaN);
       const coinMarked = hadPreviousSelf
         && Number(currentSummary.coins || 0) > previousCoins
         && markCoinCollected(self, currentSummary, previousCoins);
@@ -3313,6 +3497,39 @@
 	      }
 	      bot.lastSelf = currentSummary;
 	      updateKillHistory(self);
+      if (hadPreviousSelf && Number.isFinite(previousHp) && Number.isFinite(currentHp) && currentHp > 0 && previousHp > currentHp) {
+        bot.pendingInjuryLeave = {
+          previousHp,
+          currentHp,
+          lostHp: Math.max(0, previousHp - currentHp),
+          self: currentSummary,
+          nearestActive: bot.lastSafety?.nearestActive || null,
+          nearestHuman: bot.lastSafety?.nearestHuman || null
+        };
+      }
+      if (bot.pendingInjuryLeave) {
+        bot.pursuit = null;
+        stopMotionSafely('injury-leave');
+        const injury = {
+          ...bot.pendingInjuryLeave,
+          self: currentSummary,
+          currentHp
+        };
+        const leaveResult = await leaveForInjury(injury);
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'injury-leave',
+          dx: 0,
+          dy: 0,
+          self: currentSummary,
+          injury,
+          leave: leaveResult,
+          holdRemainingMs: enemyReloginHoldRemainingMs()
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
 	      ensureControlWs();
 	      if (!cfg.dryRun && !bot.control.wsOpen) {
 	        bot.pursuit = null;
@@ -3390,8 +3607,8 @@
             self: summarizeSelf(self),
             pursuit: pursuitSummary,
             leave: leaveResult,
-            reloginDelayMs: cfg.pursuitReloginDelayMs,
-            holdRemainingMs: pursuitReloginHoldRemainingMs()
+            reloginDelayMs: leaveResult.reloginDelayMs,
+            holdRemainingMs: enemyReloginHoldRemainingMs()
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop('once');

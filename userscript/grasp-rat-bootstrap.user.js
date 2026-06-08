@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.4
+// @version      0.4.7
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,8 +27,11 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.4';
+  const BOOTSTRAP_VERSION = '0.4.7';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
+  const PANEL_ID = 'grasp-rat-bot-panel';
+  const PAUSED_KEY = 'graspRatBotPaused';
+  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -65,6 +68,7 @@
     authReturnGraceMs: 45000,
     authorizeCooldownMs: 1000,
     authorizeFallbackDelayMs: 10000,
+    panelUpdateMs: 500,
     cacheBust: true,
     autoLogin: true
   };
@@ -89,6 +93,7 @@
     authReturnGraceMs: Math.max(5000, Number(GM_getValue('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
     authorizeCooldownMs: Math.max(250, Number(GM_getValue('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
     authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
+    panelUpdateMs: Math.max(250, Number(GM_getValue('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
     autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin))
   };
@@ -113,6 +118,13 @@
     lastAuthorizeAt: 0,
     lastError: '',
     lastDebugAt: 0,
+    lastManifestStatus: '',
+    lastScriptStatus: '',
+    lastRemoteStatus: '',
+    lastPanelUpdateAt: 0,
+    paused: false,
+    pauseReason: '',
+    pauseChangedAt: 0,
     busyStartedAt: 0,
     busyReason: '',
     busyToken: ''
@@ -190,10 +202,101 @@
       timerActive: Boolean(status.timerActive),
       version: status.version || '',
       sourceHash: status.sourceHash || '',
+      paused: Boolean(status.paused),
       lastTickAgeMs: status.lastTickAgeMs ?? null,
       reason: status.lastDecision?.reason || '',
       message: status.message || ''
     } : null;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+  }
+
+  function formatDistance(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+  }
+
+  function formatDuration(ms) {
+    const n = Math.max(0, Math.round(Number(ms) || 0));
+    if (n >= 60000) return `${Math.floor(n / 60000)}m${String(Math.floor((n % 60000) / 1000)).padStart(2, '0')}s`;
+    return `${Math.ceil(n / 1000)}s`;
+  }
+
+  function formatAge(at) {
+    const t = Number(at || 0);
+    return t ? formatDuration(Date.now() - t) : '-';
+  }
+
+  function reasonText(reason) {
+    const map = {
+      'active-threat-before-bullet-range': 'Active 玩家进入危险圈',
+      'active-threat-caution-migration': 'Active 玩家进入预警圈',
+      'active-threat-return-block': '阻止回头靠近 Active 玩家',
+      'return-block-lateral-scan': 'Active 返程冷却：横向扫描',
+      'passive-panic-distance': '玩家距离过近',
+      'recovery-avoid-humans': '回血时避开附近玩家',
+      'recovery-foot-coin': '回血时顺手拾取脚下金币',
+      'foot-coin-priority': '贴身金币优先拾取',
+      'post-attack-drop-coin': '战斗后优先拾取掉落',
+      'best-opportunity-coin': '综合收益最高：拾取金币',
+      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
+      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
+      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
+      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+      'approach-afk-drop-target': '综合收益最高：靠近挂机 Drop 目标',
+      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
+      'migrate-to-known-field': '迁移到金币密集区域',
+      'snapshot-coin-field': '快照金币区域导航',
+      'snapshot-coin-target': '快照金币导航',
+      'wait-for-snapshot-coin': '等待快照金币',
+      'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
+      'combat-attack': '战斗：持续开火',
+      'combat-tangent-dodge': '战斗：切线规避并开火',
+      'combat-low-hp-leave': '战斗低血劣势，立即退出',
+      'injury-leave': '受伤后立即退出',
+      'enemy-leave-wait': '敌方行为退出后等待',
+      'pursuit-leave': '被同一玩家持续追击，退出等待',
+      'pursuit-leave-wait': '追击退出后等待重新登录',
+      'paused': '手动暂停',
+      'auto-login': '自动触发登录/加入',
+      'login-cooldown': '登录已触发，等待页面跳转',
+      'control-ws-offline': 'WebSocket 离线',
+      'offline-leave': 'WebSocket 离线，正在退出',
+      'no-self': '未读到自身实体',
+      'not-alive': '不在存活状态',
+      'bot-error': '脚本异常'
+    };
+    return map[reason] || reason || '-';
+  }
+
+  function actionText(decision, status) {
+    if (status?.paused || isPaused()) return '已暂停';
+    const kind = decision?.kind || (status?.running ? 'wait' : 'missing');
+    const target = decision?.target || null;
+    const threats = Array.isArray(decision?.threats) ? decision.threats : [];
+    if (kind === 'coin') return '拾取金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
+    if (kind === 'seek-coin') return '前往金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
+    if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' HP ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
+    if (kind === 'seek-enemy' || kind === 'seek-drop') return '前往目标 ' + (target?.name || ('#' + (target?.id ?? '-'))) + (target?.drop ? ' Drop ' + target.drop : '');
+    if (kind === 'flee') {
+      const threat = threats[0];
+      return '避险撤离' + (threat ? '：' + (threat.name || ('#' + threat.id)) + ' 距离 ' + formatDistance(threat.d ?? threat.distance) : '');
+    }
+    if (kind === 'recover') return '恢复体力/血量';
+    if (kind === 'patrol') return target ? '巡航到 #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '巡航扫描';
+    if (kind === 'wait') return '等待：' + reasonText(decision?.reason);
+    if (kind === 'leave') return '退出：' + reasonText(decision?.reason);
+    if (kind === 'idle') return '待命';
+    if (kind === 'missing') return '远端未运行';
+    return kind;
   }
 
   function isGamePage() {
@@ -246,6 +349,175 @@
       } catch (_) {}
     }
     return remaining;
+  }
+
+  function readPauseReason() {
+    let reason = '';
+    try {
+      reason = String(localStorage.getItem(PAUSE_REASON_KEY) || '');
+    } catch (_) {}
+    return String(GM_getValue(PAUSE_REASON_KEY, reason || '') || reason || '');
+  }
+
+  function isPaused() {
+    let localPaused = false;
+    try {
+      localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
+    } catch (_) {}
+    const paused = Boolean(GM_getValue(PAUSED_KEY, false) || localPaused || unsafeWindow.__graspRatBotPaused === true);
+    state.paused = paused;
+    state.pauseReason = paused ? (readPauseReason() || state.pauseReason || 'manual') : '';
+    return paused;
+  }
+
+  function syncPauseToPage() {
+    const paused = isPaused();
+    unsafeWindow.__graspRatBotPaused = paused;
+    unsafeWindow.__graspRatBotPauseReason = paused ? (state.pauseReason || 'manual') : '';
+    try {
+      localStorage.setItem(PAUSED_KEY, paused ? 'true' : 'false');
+      if (paused) localStorage.setItem(PAUSE_REASON_KEY, state.pauseReason || 'manual');
+      else localStorage.removeItem(PAUSE_REASON_KEY);
+    } catch (_) {}
+    const bot = unsafeWindow.__graspRatBot || null;
+    try {
+      if (bot?.setPaused) {
+        bot.setPaused(paused, paused ? (state.pauseReason || 'bootstrap') : 'bootstrap resume');
+      } else if (paused && bot?.stop) {
+        bot.stop('paused by bootstrap');
+      }
+    } catch (err) {
+      state.lastError = 'pause sync failed: ' + (err?.message || String(err));
+    }
+    return paused;
+  }
+
+  function setPaused(paused, reason = 'panel') {
+    state.paused = Boolean(paused);
+    state.pauseReason = state.paused ? String(reason || 'manual') : '';
+    state.pauseChangedAt = Date.now();
+    GM_setValue(PAUSED_KEY, state.paused);
+    GM_setValue(PAUSE_REASON_KEY, state.pauseReason);
+    syncPauseToPage();
+    state.lastInstallStatus = state.paused ? 'paused by user' : 'resumed by user';
+    logBootstrap(state.paused ? 'paused' : 'resumed', { reason: state.pauseReason || reason });
+    postDebug(state.paused ? 'paused' : 'resumed', { reason: state.pauseReason || reason }, { force: true });
+    updateBootstrapPanel(true);
+    return state.paused;
+  }
+
+  function ensureBootstrapPanel() {
+    if (!isGamePage() || !document.body) return null;
+    let panel = document.getElementById(PANEL_ID);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      document.body.appendChild(panel);
+    }
+    panel.setAttribute('aria-live', 'polite');
+    panel.style.cssText = [
+      'position:fixed',
+      'right:12px',
+      'top:12px',
+      'z-index:2147483647',
+      'width:min(360px,calc(100vw - 24px))',
+      'max-width:360px',
+      'box-sizing:border-box',
+      'padding:10px 12px',
+      'border:1px solid rgba(148,163,184,.35)',
+      'border-radius:8px',
+      'background:rgba(15,23,42,.9)',
+      'color:#e5e7eb',
+      'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif',
+      'box-shadow:0 10px 32px rgba(0,0,0,.38)',
+      'backdrop-filter:blur(8px)',
+      'pointer-events:auto',
+      'white-space:normal'
+    ].join(';');
+    return panel;
+  }
+
+  function updateBootstrapPanel(force = false) {
+    if (!isGamePage()) return;
+    const t = Date.now();
+    if (!force && t - Number(state.lastPanelUpdateAt || 0) < cfg.panelUpdateMs) return;
+    state.lastPanelUpdateAt = t;
+    const panel = ensureBootstrapPanel();
+    if (!panel) return;
+    const paused = isPaused();
+    const status = getBotStatus();
+    const decision = status?.lastDecision || null;
+    const self = status?.self || decision?.self || null;
+    const safety = status?.safety || {};
+    const control = status?.control || {};
+    const manifest = readCachedManifest();
+    const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
+    const bHash = String(status?.sourceHash || manifest?.sha256 || state.lastManifestHash || '').slice(0, 8) || '-';
+    const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
+    const nearestActive = safety.nearestActive
+      ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
+      : '-';
+    const remoteStatus = state.lastRemoteStatus || state.lastScriptStatus || state.lastManifestStatus || state.lastInstallStatus || 'waiting';
+    const buttonText = paused ? '继续' : '暂停';
+    const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
+    const panelLines = [
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">',
+      '<div style="font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">BOT ' + escapeHtml(actionText(decision, status)) + '</div>',
+      '<button type="button" data-grasp-rat-pause="1" title="' + escapeHtml(buttonTitle) + '" style="flex:0 0 auto;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:' + (paused ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.18)') + ';color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer">' + escapeHtml(buttonText) + '</button>',
+      '</div>',
+      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">A ' + escapeHtml(BOOTSTRAP_VERSION) + ' / B ' + escapeHtml(bVersion) + ' / ' + escapeHtml(bHash) + '</div>',
+      '<div>获取：' + escapeHtml(remoteStatus) + '</div>',
+      '<div>Manifest：' + escapeHtml(state.lastManifestStatus || '-') + ' / ' + escapeHtml(formatAge(state.lastManifestFetchAt)) + '</div>',
+      '<div>脚本：' + escapeHtml(state.lastScriptStatus || '-') + ' / ' + escapeHtml(formatAge(state.lastScriptFetchAt)) + '</div>',
+      '<div>注入：' + escapeHtml(state.lastInstallStatus || '-') + '</div>',
+      '<div>状态：' + escapeHtml(paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + escapeHtml(state.pauseReason) : '') + '</div>'
+    ];
+    if (state.lastError) panelLines.push('<div style="color:#fca5a5">错误：' + escapeHtml(state.lastError) + '</div>');
+    if (status?.running) {
+      panelLines.push('<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>');
+      panelLines.push('<div>HP ' + escapeHtml(self?.hp ?? '-') + ' / 体力 ' + escapeHtml(self?.stamina5s ?? self?.stamina_5s_remaining_milli ?? '-') + ' / Drop ' + escapeHtml(self?.drop ?? '-') + '</div>');
+      panelLines.push('<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / WS ' + escapeHtml(wsLabel) + ' / Active ' + escapeHtml(nearestActive) + '</div>');
+      if (decision?.target) {
+        const target = decision.target;
+        panelLines.push('<div>目标：' + escapeHtml(target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(target.distance)) + ' 金币 ' + escapeHtml(target.amount ?? '-') + ' Drop ' + escapeHtml(target.drop ?? '-') + '</div>');
+      }
+      if (decision?.combat) {
+        panelLines.push('<div>战斗：瞄准 ' + escapeHtml(decision?.aimTarget?.mode || '-') + ' / 来弹 ' + escapeHtml(decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-') + '</div>');
+      }
+      if (decision?.opportunisticShot) {
+        const shot = decision.opportunisticShot;
+        panelLines.push('<div>顺手射击：' + escapeHtml(shot.name || ('#' + (shot.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(shot.distance)) + ' Drop ' + escapeHtml(shot.drop ?? '-') + '</div>');
+      }
+      const pursuit = decision?.pursuit || safety.pursuit || status?.pursuit;
+      if (pursuit) {
+        panelLines.push('<div>追击：' + escapeHtml(pursuit.name || ('#' + pursuit.id)) + ' ' + escapeHtml(formatDistance(pursuit.distance)) + ' / ' + escapeHtml(Math.round((pursuit.durationMs || 0) / 1000)) + 's</div>');
+      }
+      const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || 0;
+      if (hold > 0) panelLines.push('<div>等待重连：' + escapeHtml(formatDuration(hold)) + '</div>');
+      if (Array.isArray(status.errors) && status.errors.length) {
+        panelLines.push('<div style="color:#fca5a5">BOT错误：' + escapeHtml(status.errors[status.errors.length - 1]?.message || '') + '</div>');
+      }
+    }
+    panel.innerHTML = panelLines.join('');
+    const button = panel.querySelector('[data-grasp-rat-pause]');
+    if (button) {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        setPaused(!isPaused(), 'panel button');
+      }, { once: true });
+    }
+  }
+
+  function noteFetchStatus(label, text, forcePanel = false) {
+    const value = String(text || '');
+    if (/manifest/i.test(label)) {
+      state.lastManifestStatus = value;
+    } else if (/script|bot/i.test(label)) {
+      state.lastScriptStatus = value;
+    }
+    state.lastRemoteStatus = `${label}: ${value}`;
+    updateBootstrapPanel(forcePanel);
   }
 
   function withCacheBust(url) {
@@ -403,11 +675,13 @@
             total: candidates.length,
             delayMs: i * cfg.fallbackStaggerMs
           });
+          noteFetchStatus(label, `fetching ${i + 1}/${candidates.length}`);
           const { text, transport } = await requestText('GET', withCacheBust(url));
           const accepted = acceptText ? await acceptText(text, url) : null;
           if (settled) return;
           settled = true;
           timers.forEach(timer => clearTimeout(timer));
+          noteFetchStatus(label, `ok via ${transport}`, true);
           logBootstrap(`${label} fetch ok`, {
             url,
             index: i + 1,
@@ -420,6 +694,7 @@
           const error = err?.message || String(err);
           errors[i] = `${url}: ${error}`;
           completed += 1;
+          noteFetchStatus(label, `failed ${completed}/${candidates.length}: ${error}`);
           logBootstrap(`${label} fetch failed`, {
             url,
             index: i + 1,
@@ -428,6 +703,7 @@
           });
           if (completed >= candidates.length) {
             settled = true;
+            noteFetchStatus(label, `failed: ${errors.filter(Boolean).join(' | ')}`, true);
             reject(new Error(`${label} fetch failed from ${candidates.length} url(s): ${errors.filter(Boolean).join(' | ')}`));
           }
         }
@@ -525,6 +801,7 @@
 
   function tickIsStale(status) {
     if (!status || !status.running) return true;
+    if (status.paused || isPaused()) return false;
     if (status.starting && Number(status.uptimeMs || 0) < Math.max(cfg.staleTickMs, cfg.scriptStartupTimeoutMs + cfg.installConfirmMs)) {
       return false;
     }
@@ -724,6 +1001,9 @@
 
   async function fetchAndVerify(manifest) {
     state.lastScriptFetchAt = Date.now();
+    state.lastScriptStatus = `fetching ${manifest.version || manifest.sha256 || 'remote'}`;
+    state.lastRemoteStatus = state.lastScriptStatus;
+    updateBootstrapPanel(true);
     logBootstrap('script fetch start', {
       version: manifest.version,
       sha256: manifest.sha256,
@@ -748,6 +1028,9 @@
       sourceUrl
     });
     const hash = String(accepted?.hash || '');
+    state.lastScriptStatus = `verified ${manifest.version || hash.slice(0, 8)}`;
+    state.lastRemoteStatus = state.lastScriptStatus;
+    updateBootstrapPanel(true);
     logBootstrap('script verified', { version: manifest.version, sha256: hash });
     GM_setValue('cachedManifest', JSON.stringify(manifest));
     GM_setValue('cachedSource', source);
@@ -791,6 +1074,12 @@
 
   async function installSource(manifest, source, reason) {
     if (!isGamePage()) return false;
+    if (isPaused()) {
+      syncPauseToPage();
+      state.lastInstallStatus = `paused; install skipped for ${manifest.version || manifest.sha256 || 'remote'}`;
+      updateBootstrapPanel(true);
+      return false;
+    }
     state.lastInstallAttemptAt = Date.now();
     state.lastInstallStatus = `injecting ${manifest.version || manifest.sha256 || 'remote'}`;
     logBootstrap('install source start', {
@@ -868,6 +1157,12 @@
 
   async function installCachedForFastStart(reason = 'startup-cache-first') {
     if (!isGamePage()) return false;
+    if (isPaused()) {
+      syncPauseToPage();
+      state.lastInstallStatus = 'paused; fast cache install skipped';
+      updateBootstrapPanel(true);
+      return false;
+    }
     const manifest = readCachedManifest();
     const source = GM_getValue('cachedSource', '');
     const status = getBotStatus();
@@ -915,6 +1210,15 @@
       });
       await fetchAndVerify(manifest);
     }
+    if (isPaused()) {
+      syncPauseToPage();
+      state.lastManifestHash = String(manifest.sha256 || '');
+      state.lastManifestVersion = String(manifest.version || '');
+      state.lastInstallStatus = `paused; cached ${manifest.version || manifest.sha256 || 'remote'}`;
+      state.lastError = '';
+      updateBootstrapPanel(true);
+      return true;
+    }
     const status = getBotStatus();
     if (status?.running && !botMatchesManifest(status, manifest)) {
       logBootstrap('remote update cached; restarting instead of hot executing', {
@@ -953,6 +1257,7 @@
 
   async function pollOnce(reason = 'poll') {
     if (!isGamePage()) return;
+    syncPauseToPage();
     if (state.installing || state.polling) {
       resetStaleBusy(reason);
     }
@@ -979,6 +1284,10 @@
         manifestText => ({ manifest: parseManifest(manifestText) })
       );
       const manifest = accepted.manifest;
+      state.lastManifestHash = String(manifest.sha256 || '');
+      state.lastManifestVersion = String(manifest.version || '');
+      state.lastManifestStatus = `ok ${manifest.version || String(manifest.sha256 || '').slice(0, 8)}`;
+      updateBootstrapPanel(true);
       logBootstrap('manifest fetch complete', {
         reason,
         version: manifest.version,
@@ -986,6 +1295,20 @@
         scriptUrl: manifest.scriptUrl,
         manifestUrl
       });
+      if (isPaused()) {
+        if (!cachedManifestMatches(manifest)) {
+          state.installing = true;
+          state.busyReason = `poll:${reason}:paused-cache-sync`;
+          state.busyStartedAt = Date.now();
+          await fetchAndVerify(manifest);
+        } else {
+          state.lastScriptStatus = `cache current ${manifest.version || String(manifest.sha256 || '').slice(0, 8)}`;
+        }
+        state.lastInstallStatus = `paused; remote ${manifest.version || manifest.sha256 || 'manifest'} cached`;
+        state.lastError = '';
+        updateBootstrapPanel(true);
+        return;
+      }
       if (!botNeedsInstall(manifest) && cachedManifestMatches(manifest)) {
         logBootstrap('poll ok: bot current', { reason, version: manifest.version, status: shortStatus() });
         postDebug('ok', { reason, version: manifest.version, sha256: manifest.sha256 });
@@ -1000,7 +1323,7 @@
       logBootstrap('poll error', { reason, error: state.lastError, status: shortStatus() });
       postDebug('error', { reason, error: state.lastError }, { force: true });
       const status = getBotStatus();
-      if (!status || !status.running) {
+      if ((!status || !status.running) && !isPaused()) {
         try {
           logBootstrap('poll falling back to cache', { reason, error: state.lastError });
           state.installing = true;
@@ -1047,6 +1370,10 @@
 
   async function maybeStartGameLogin(reason = 'watchdog') {
     if (!cfg.autoLogin || !isGamePage()) return false;
+    if (isPaused()) {
+      syncPauseToPage();
+      return false;
+    }
     if (isGameAuthCallback()) {
       suppressLogin('oauth callback', cfg.authReturnGraceMs);
       postDebug('login-suppressed', { reason, suppressReason: 'oauth callback', remainingMs: loginSuppressRemainingMs() });
@@ -1146,9 +1473,17 @@
       return;
     }
     if (!isGamePage()) return;
+    updateBootstrapPanel();
     if (isGameAuthCallback()) {
       suppressLogin('oauth callback', cfg.authReturnGraceMs);
       postDebug('callback-wait', { reason, remainingMs: loginSuppressRemainingMs() });
+      return;
+    }
+    if (isPaused()) {
+      syncPauseToPage();
+      state.lastWatchdogAt = Date.now();
+      state.lastInstallStatus = 'paused; watchdog idle';
+      updateBootstrapPanel(true);
       return;
     }
     state.lastWatchdogAt = Date.now();
@@ -1231,6 +1566,18 @@
     watchdogOnce,
     maybeStartGameLogin,
     maybeClickAuthorize,
+    isPaused,
+    setPaused,
+    pause(reason = 'api') {
+      return setPaused(true, reason);
+    },
+    resume(reason = 'api') {
+      return setPaused(false, reason);
+    },
+    updatePanel() {
+      updateBootstrapPanel(true);
+      return true;
+    },
     setManifestUrl(url) {
       cfg.manifestUrl = String(url || '');
       GM_setValue('manifestUrl', cfg.manifestUrl);
@@ -1254,13 +1601,19 @@
   }
 
   if (!isGamePage()) return;
+  loginSuppressRemainingMs();
+  syncPauseToPage();
+  const renderPanelWhenReady = () => updateBootstrapPanel(true);
+  if (document.body) renderPanelWhenReady();
+  else document.addEventListener('DOMContentLoaded', renderPanelWhenReady, { once: true });
+  setInterval(() => updateBootstrapPanel(), cfg.panelUpdateMs);
+
   if (isGameAuthCallback()) {
     suppressLogin('oauth callback', cfg.authReturnGraceMs);
     setInterval(() => watchdogOnce('callback-interval').catch(() => {}), cfg.watchdogMs);
     return;
   }
 
-  loginSuppressRemainingMs();
   logBootstrap('bootstrap start', {
     href: location.href,
     readyState: document.readyState,
