@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.5","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.6","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1270,10 +1270,6 @@
   }
 
   function snapshotEntityAllowed(self, entity, nativeMeta) {
-    if (!nativeMeta?.available) return true;
-    const key = entityIdKey(entity);
-    if (key && nativeMeta.aliveIds.has(key)) return true;
-    if (key && nativeMeta.ids.has(key)) return false;
     const distance = self ? dist(self, entity) : Infinity;
     const authoritativeRadius = Math.max(
       Number(cfg.nativeEntityAuthoritativeRadius || 0),
@@ -1281,7 +1277,11 @@
       Number(cfg.attackRange || 0),
       Number(cfg.globalAttackMaxDistance || 0)
     );
-    return !(Number.isFinite(distance) && distance <= authoritativeRadius);
+    if (Number.isFinite(distance) && distance <= authoritativeRadius) return false;
+    if (!nativeMeta?.available) return true;
+    const key = entityIdKey(entity);
+    if (key && nativeMeta.ids.has(key) && !nativeMeta.aliveIds.has(key)) return false;
+    return true;
   }
 	
   function normalizeCoinDrop(raw, source) {
@@ -1308,29 +1308,7 @@
     return 'xy:' + Math.round(Number(coin.x) || 0) + ':' + Math.round(Number(coin.y) || 0) + ':' + (Number(coin.amount) || 0);
   }
 
-  function coinDropId(coin) {
-    const id = coin?.drop_id ?? coin?.id ?? coin?.coin_id;
-    return id === undefined || id === null || id === '' ? '' : String(id);
-  }
-
-  function nativeCoinMatchesSnapshot(coin, nativeCoins) {
-    const id = coinDropId(coin);
-    if (id && nativeCoins.some(nativeCoin => coinDropId(nativeCoin) === id)) return true;
-    const x = Number(coin.x);
-    const y = Number(coin.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-    const radius = Math.max(120, Number(cfg.coinCollectedPruneRadius || 0));
-    return nativeCoins.some(nativeCoin => {
-      const nx = Number(nativeCoin.x);
-      const ny = Number(nativeCoin.y);
-      if (!Number.isFinite(nx) || !Number.isFinite(ny)) return false;
-      return hypot(x - nx, y - ny) <= radius;
-    });
-  }
-
-  function snapshotCoinAllowed(self, coin, nativeCoins) {
-    if (!Array.isArray(nativeCoins)) return true;
-    if (nativeCoinMatchesSnapshot(coin, nativeCoins)) return true;
+  function snapshotCoinAllowed(self, coin) {
     const distance = self ? dist(self, coin) : Infinity;
     return !(Number.isFinite(distance) && distance <= Number(cfg.nativeCoinAuthoritativeRadius || 0));
   }
@@ -1351,7 +1329,7 @@
     };
     for (const coin of snapshotCoins) {
       const normalized = normalizeCoinDrop(coin, 'snapshot');
-      if (!normalized || !snapshotCoinAllowed(self, normalized, nativeCoinList ? nativeCoins : null)) continue;
+      if (!normalized || !snapshotCoinAllowed(self, normalized)) continue;
       add(normalized, 'snapshot');
     }
     for (const coin of nativeCoins) add(coin, 'native');
@@ -2099,7 +2077,7 @@
     const nativeMeta = buildNativeEntityMeta(nativeEntities);
     const coinDrops = getCoins(self);
     const bullets = getBullets();
-    const localSource = nativeMeta.available ? nativeEntities : getEntities();
+    const localSource = nativeMeta.available ? nativeEntities : [];
     const localEntities = (localSource || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e))
       .map(e => ({ ...e, native: Boolean(nativeMeta.available), snapshot: !nativeMeta.available || Boolean(e.snapshot) }));
