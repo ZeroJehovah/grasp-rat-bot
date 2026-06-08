@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.1","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.5","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -59,11 +59,17 @@
     attackApproachRange: 26000,
     attackDangerRadius: 25000,
     globalAttackMaxDistance: 26000,
+    nativeEntityAuthoritativeRadius: 42000,
+    nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
     combatLowHpLeaveThreshold: 50,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
+    combatAimJitterMinRadians: 0.025,
+    combatAimJitterMaxRadians: 0.16,
+    combatAimJitterCloseDistance: 2500,
+    combatAimJitterFarDistance: 14500,
     combatBulletDetectRadius: 26000,
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
@@ -114,6 +120,9 @@
     coinNoProgressMs: 18000,
     coinProgressMinGain: 250,
     coinIgnoreMs: 20000,
+    coinCollectedIgnoreMs: 60000,
+    coinCollectedConfirmDistance: 1800,
+    coinCollectedPruneRadius: 900,
     coinNoProgressIgnoreMs: 45000,
     coinNearFailureIgnoreMs: 30000,
     coinCloseFailureIgnoreMs: 20000,
@@ -235,6 +244,7 @@
     coinApproachLock: null,
     staleCoinEscape: null,
     coinProgress: null,
+    lastCoinCollected: null,
     coinAttempts: new Map(),
     ignoredCoins: new Map(restoredFailures
       .filter(([, item]) => Number(item?.ignoreUntil || 0) > performance.now())
@@ -322,6 +332,7 @@
         attackHistory: this.attackHistory.slice(-10),
         killHistory: this.killHistory.slice(-10),
         coinProgress: this.coinProgress,
+        lastCoinCollected: this.lastCoinCollected,
         coinAttempts: Array.from(this.coinAttempts.values()).slice(-8).map(item => ({
           id: item.id,
           bestDistance: Math.round(item.bestDistance),
@@ -1229,6 +1240,49 @@
 	    if (Array.isArray(nativeState?.entities) && nativeState.entities.length) return nativeState.entities;
 	    return bot.globalState.entities || [];
 	  }
+
+  function getNativeEntityList() {
+    const nativeState = getNativeState();
+    return Array.isArray(nativeState?.entities) ? nativeState.entities : null;
+  }
+
+  function getNativeCoinList() {
+    const nativeState = getNativeState();
+    return Array.isArray(nativeState?.coinDrops) ? nativeState.coinDrops : null;
+  }
+
+  function entityIdKey(entity) {
+    const id = entity?.user_id ?? entity?.id;
+    return id === undefined || id === null || id === '' ? '' : String(id);
+  }
+
+  function buildNativeEntityMeta(nativeEntities) {
+    if (!Array.isArray(nativeEntities)) return { available: false, ids: new Set(), aliveIds: new Set() };
+    const ids = new Set();
+    const aliveIds = new Set();
+    for (const entity of nativeEntities) {
+      const key = entityIdKey(entity);
+      if (!key) continue;
+      ids.add(key);
+      if (isAlive(entity)) aliveIds.add(key);
+    }
+    return { available: true, ids, aliveIds };
+  }
+
+  function snapshotEntityAllowed(self, entity, nativeMeta) {
+    if (!nativeMeta?.available) return true;
+    const key = entityIdKey(entity);
+    if (key && nativeMeta.aliveIds.has(key)) return true;
+    if (key && nativeMeta.ids.has(key)) return false;
+    const distance = self ? dist(self, entity) : Infinity;
+    const authoritativeRadius = Math.max(
+      Number(cfg.nativeEntityAuthoritativeRadius || 0),
+      Number(cfg.combatAttackRange || 0),
+      Number(cfg.attackRange || 0),
+      Number(cfg.globalAttackMaxDistance || 0)
+    );
+    return !(Number.isFinite(distance) && distance <= authoritativeRadius);
+  }
 	
   function normalizeCoinDrop(raw, source) {
     if (!raw || typeof raw !== 'object') return null;
@@ -1254,9 +1308,38 @@
     return 'xy:' + Math.round(Number(coin.x) || 0) + ':' + Math.round(Number(coin.y) || 0) + ':' + (Number(coin.amount) || 0);
   }
 
-  function getCoins() {
-    const nativeState = getNativeState();
-    const nativeCoins = Array.isArray(nativeState?.coinDrops) ? nativeState.coinDrops : [];
+  function coinDropId(coin) {
+    const id = coin?.drop_id ?? coin?.id ?? coin?.coin_id;
+    return id === undefined || id === null || id === '' ? '' : String(id);
+  }
+
+  function nativeCoinMatchesSnapshot(coin, nativeCoins) {
+    const id = coinDropId(coin);
+    if (id && nativeCoins.some(nativeCoin => coinDropId(nativeCoin) === id)) return true;
+    const x = Number(coin.x);
+    const y = Number(coin.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    const radius = Math.max(120, Number(cfg.coinCollectedPruneRadius || 0));
+    return nativeCoins.some(nativeCoin => {
+      const nx = Number(nativeCoin.x);
+      const ny = Number(nativeCoin.y);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) return false;
+      return hypot(x - nx, y - ny) <= radius;
+    });
+  }
+
+  function snapshotCoinAllowed(self, coin, nativeCoins) {
+    if (!Array.isArray(nativeCoins)) return true;
+    if (nativeCoinMatchesSnapshot(coin, nativeCoins)) return true;
+    const distance = self ? dist(self, coin) : Infinity;
+    return !(Number.isFinite(distance) && distance <= Number(cfg.nativeCoinAuthoritativeRadius || 0));
+  }
+
+  function getCoins(self = null) {
+    const nativeCoinList = getNativeCoinList();
+    const nativeCoins = Array.isArray(nativeCoinList)
+      ? nativeCoinList.map(coin => normalizeCoinDrop(coin, 'native')).filter(Boolean)
+      : [];
     const snapshotCoins = Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : [];
     const byKey = new Map();
     const add = (raw, source) => {
@@ -1266,7 +1349,11 @@
       const previous = byKey.get(key);
       byKey.set(key, previous ? { ...previous, ...coin, snapshot: Boolean(previous.snapshot || coin.snapshot), native: Boolean(previous.native || coin.native) } : coin);
     };
-    for (const coin of snapshotCoins) add(coin, 'snapshot');
+    for (const coin of snapshotCoins) {
+      const normalized = normalizeCoinDrop(coin, 'snapshot');
+      if (!normalized || !snapshotCoinAllowed(self, normalized, nativeCoinList ? nativeCoins : null)) continue;
+      add(normalized, 'snapshot');
+    }
     for (const coin of nativeCoins) add(coin, 'native');
     return Array.from(byKey.values());
   }
@@ -2007,19 +2094,30 @@
     };
   }
 
-	  function classify(self) {
-    const coinDrops = getCoins();
+  function classify(self) {
+    const nativeEntities = getNativeEntityList();
+    const nativeMeta = buildNativeEntityMeta(nativeEntities);
+    const coinDrops = getCoins(self);
     const bullets = getBullets();
-	    const localEntities = getEntities()
-	      .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e));
+    const localSource = nativeMeta.available ? nativeEntities : getEntities();
+    const localEntities = (localSource || [])
+      .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e))
+      .map(e => ({ ...e, native: Boolean(nativeMeta.available), snapshot: !nativeMeta.available || Boolean(e.snapshot) }));
     markRecentMovement(localEntities);
-    const globalById = new Map(
-      (bot.globalState.entities || [])
-        .filter(e => Number(e.user_id) !== Number(self.user_id) && isAlive(e))
-        .map(e => [Number(e.user_id), e])
-    );
+    const globalById = new Map();
+    for (const entity of bot.globalState.entities || []) {
+      if (Number(entity.user_id) === Number(self.user_id) || !isAlive(entity)) continue;
+      if (!snapshotEntityAllowed(self, entity, nativeMeta)) continue;
+      globalById.set(Number(entity.user_id), { ...entity, snapshot: true, native: false });
+    }
     for (const entity of localEntities) {
-      globalById.set(Number(entity.user_id), { ...(globalById.get(Number(entity.user_id)) || {}), ...entity });
+      const previous = globalById.get(Number(entity.user_id)) || {};
+      globalById.set(Number(entity.user_id), {
+        ...previous,
+        ...entity,
+        native: Boolean(entity.native || previous.native),
+        snapshot: Boolean(entity.snapshot || previous.snapshot)
+      });
     }
     const entities = Array.from(globalById.values());
     const activeThreats = entities
@@ -2101,6 +2199,7 @@
 	      .sort((a, b) => a.distance - b.distance);
     const combatTargets = entities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => !nativeMeta.available || e.native)
       .filter(e => e.distance <= cfg.combatAttackRange)
       .sort((a, b) => {
         const stickyA = bot.lastTarget?.kind === 'enemy' && String(bot.lastTarget.id) === String(a.user_id);
@@ -2294,18 +2393,33 @@
     return { dx, dy, locked: Boolean(bot.combatStrafe && bot.combatStrafe.key === key), sign };
   }
 
+  function combatAimJitterLimit(distance) {
+    const maxJitter = Math.max(0, Number(cfg.combatAimJitterMaxRadians || cfg.combatAimJitterRadians || 0));
+    const minJitter = clamp(Number(cfg.combatAimJitterMinRadians ?? maxJitter), 0, maxJitter);
+    const closeDistance = Math.max(0, Number(cfg.combatAimJitterCloseDistance || 0));
+    const farDistance = Math.max(closeDistance + 1, Number(cfg.combatAimJitterFarDistance || cfg.combatAttackRange || closeDistance + 1));
+    const rawDistance = Number(distance);
+    const d = clamp(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
+    const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
+    return minJitter + (maxJitter - minJitter) * nearFactor;
+  }
+
   function combatAimTarget(self, target) {
     const moving = speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved);
+    const targetDistance = Number(target.distance);
+    const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, target);
     const exact = {
       x: Number(target.x),
       y: Number(target.y),
       mode: 'exact',
-      moving
+      moving,
+      distance
     };
     if (!moving) return exact;
     const dx = Number(target.x) - Number(self.x);
     const dy = Number(target.y) - Number(self.y);
-    const angle = (Math.random() * 2 - 1) * cfg.combatAimJitterRadians;
+    const jitterLimit = combatAimJitterLimit(distance);
+    const angle = (Math.random() * 2 - 1) * jitterLimit;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     return {
@@ -2313,7 +2427,9 @@
       y: Number(self.y) + dx * sin + dy * cos,
       mode: 'jitter',
       moving,
-      angle
+      angle,
+      jitterLimit,
+      distance
     };
   }
 
@@ -2360,7 +2476,8 @@
         x: aim.x,
         y: aim.y,
         mode: aim.mode,
-        angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0
+        angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
+        jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0
       },
       incomingBullet: bullet ? {
         id: bullet.id,
@@ -2828,6 +2945,77 @@
     bot.lastCoinClearReason = reason;
   }
 
+  function trackedCoinTargetForCollection(self) {
+    const decision = bot.lastDecision || null;
+    const decisionTarget = decision?.target || null;
+    const decisionLooksLikeCoin = decisionTarget
+      && (decision.kind === 'coin'
+        || decision.kind === 'seek-coin'
+        || (decision.kind === 'patrol' && String(decision.reason || '').includes('coin')));
+    if (decisionLooksLikeCoin) {
+      const target = { ...decisionTarget };
+      target.id = target.id ?? bot.lastTarget?.id ?? bot.coinProgress?.id;
+      if (!Number.isFinite(Number(target.distance)) && Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.y)) && self) {
+        target.distance = dist(self, target);
+      }
+      return target;
+    }
+    if (bot.lastTarget?.kind === 'coin') {
+      return {
+        id: bot.lastTarget.id,
+        distance: bot.coinProgress?.lastDistance
+      };
+    }
+    if (bot.coinProgress?.id) {
+      return {
+        id: bot.coinProgress.id,
+        distance: bot.coinProgress.lastDistance
+      };
+    }
+    return null;
+  }
+
+  function pruneCollectedSnapshotCoin(target) {
+    const id = target?.id === undefined || target?.id === null ? '' : String(target.id);
+    const x = Number(target?.x);
+    const y = Number(target?.y);
+    const hasPoint = Number.isFinite(x) && Number.isFinite(y);
+    if (!id && !hasPoint) return 0;
+    const before = bot.globalState.coinDrops.length;
+    bot.globalState.coinDrops = (bot.globalState.coinDrops || []).filter(raw => {
+      const coin = normalizeCoinDrop(raw, 'snapshot');
+      if (!coin) return false;
+      if (id && String(coin.drop_id) === id) return false;
+      if (hasPoint && dist({ x, y }, coin) <= Number(cfg.coinCollectedPruneRadius || 0)) return false;
+      return true;
+    });
+    return before - bot.globalState.coinDrops.length;
+  }
+
+  function markCoinCollected(self, currentSummary, previousCoins) {
+    const target = trackedCoinTargetForCollection(self);
+    if (!target) return false;
+    const id = target.id === undefined || target.id === null ? '' : String(target.id);
+    const distance = Number(target.distance);
+    if (Number.isFinite(distance) && distance > Number(cfg.coinCollectedConfirmDistance || 0)) return false;
+    const t = now();
+    if (id) {
+      bot.ignoredCoins.set(id, t + Number(cfg.coinCollectedIgnoreMs || 0));
+      bot.coinAttempts.delete(id);
+    }
+    const pruned = pruneCollectedSnapshotCoin(target);
+    bot.lastCoinCollected = {
+      id,
+      distance: Number.isFinite(distance) ? Math.round(distance) : null,
+      previousCoins,
+      currentCoins: Number(currentSummary?.coins || 0),
+      pruned,
+      at: Date.now()
+    };
+    clearCoinTracking('coins-increased');
+    return true;
+  }
+
   function chooseAction(self) {
     const { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets } = classify(self);
     bot.lastActionEntities = entities;
@@ -3135,9 +3323,14 @@
         return;
 	      }
 	      bot.waitSince = 0;
+	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
+	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
-	      if (Number(currentSummary.drop || 0) > previousDrop) {
+      const coinMarked = hadPreviousSelf
+        && Number(currentSummary.coins || 0) > previousCoins
+        && markCoinCollected(self, currentSummary, previousCoins);
+	      if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
 	        clearCoinTracking('drop-increased');
 	      }
 	      bot.lastSelf = currentSummary;
