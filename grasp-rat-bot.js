@@ -1061,6 +1061,8 @@ function browserBotSource(config) {
     lowHpThreshold: 60,
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
+    autoLogin: true,
+    loginCooldownMs: 5000,
     fleeLockMs: 1400,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
@@ -1106,6 +1108,8 @@ function browserBotSource(config) {
     lastAction: null,
     waitSince: 0,
     offlineSince: 0,
+    lastLoginAt: 0,
+    lastLoginResult: null,
     reloadRequestedAt: 0,
     lastTarget: null,
     lastTargetAt: 0,
@@ -1175,7 +1179,7 @@ function browserBotSource(config) {
 	      if (this.timer) clearInterval(this.timer);
 	      this.timer = 0;
 	      logStatus('stopped: ' + reason);
-	      removeBotPanel();
+	      if (window[BOT_KEY] === this) removeBotPanel();
 	    },
     step(source = 'external') {
       return tick(source);
@@ -1233,7 +1237,12 @@ function browserBotSource(config) {
 	          minimapPoints: this.globalState.minimap?.points?.length || 0,
 	          error: this.globalState.error
 	        },
-	        control: summarizeControl(),
+        control: summarizeControl(),
+        login: {
+          lastAt: this.lastLoginAt || 0,
+          lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
+          lastResult: this.lastLoginResult
+        },
 	        stopReason: this.stopReason,
 	        errors: this.errors.slice(-5)
 	      };
@@ -1382,6 +1391,9 @@ function browserBotSource(config) {
 	      'conserve-stamina-before-chasing': '兼容旧状态：保存体力',
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'control-ws-offline': 'WebSocket 离线',
+	      'auto-login': '自动触发登录/加入',
+	      'login-cooldown': '登录已触发，等待页面跳转',
+	      'login-control-missing': '等待登录控件出现',
 	      'no-self': '未读到自身实体',
 	      'not-alive': '不在存活状态',
 	      'bot-error': '脚本异常'
@@ -1484,6 +1496,85 @@ function browserBotSource(config) {
 	  function getSessionToken() {
 	    return localStorage.getItem('tmpGameSessionToken') || '';
 	  }
+
+  function isVisible(el) {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+  }
+
+  function controlText(el) {
+    return (el?.innerText || el?.value || el?.getAttribute?.('aria-label') || el?.getAttribute?.('title') || '').trim();
+  }
+
+  function findLoginControl() {
+    const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
+    if (direct && isVisible(direct)) return direct;
+    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'))
+      .filter(isVisible);
+    return candidates.find(el => {
+      const text = controlText(el);
+      if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
+      return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text);
+    }) || null;
+  }
+
+  function hasLoginRequiredText() {
+    const text = (document.body?.innerText || '').slice(0, 5000);
+    return /login required|please login|sign in|登录|登陆|授权|LinuxDO/i.test(text);
+  }
+
+  async function maybeStartAutoLogin(reason) {
+    if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
+    const t = Date.now();
+    const userId = getCurrentUserId();
+    const hasToken = Boolean(getSessionToken());
+    const loginControl = findLoginControl();
+    const needsLogin = Boolean(loginControl) || !hasToken || hasLoginRequiredText();
+    if (!needsLogin) return null;
+    if (t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
+      const lastError = bot.lastLoginResult?.error || '';
+      return {
+        needed: true,
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.loginCooldownMs - (t - Number(bot.lastLoginAt || 0)))),
+        error: lastError,
+        hasToken,
+        currentUserId: userId
+      };
+    }
+    const detail = {
+      needed: true,
+      attempted: false,
+      reason,
+      hasToken,
+      currentUserId: userId,
+      method: '',
+      error: ''
+    };
+    bot.lastLoginAt = t;
+    try {
+      if (typeof startLinuxDoLogin === 'function') {
+        const result = startLinuxDoLogin();
+        if (result && typeof result.then === 'function') await result;
+        detail.attempted = true;
+        detail.method = 'startLinuxDoLogin';
+      } else if (loginControl) {
+        loginControl.click();
+        detail.attempted = true;
+        detail.method = loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase());
+      } else {
+        detail.error = 'login control not found';
+      }
+    } catch (err) {
+      detail.error = err?.message || String(err);
+    }
+    bot.lastLoginResult = detail;
+    postDebugEvent(detail.error ? 'login-error' : 'login', detail, { force: true });
+    return detail;
+  }
 
 	  function getNativeState() {
 	    try {
@@ -3114,19 +3205,22 @@ function browserBotSource(config) {
 	      if (!self || !isAlive(self)) {
 	        safeSendVelocity(0, 0, true);
 	        if (!bot.waitSince) bot.waitSince = Date.now();
+        const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
 	        refreshGlobalState(false).catch(err => {
 	          bot.globalState.error = err.message || String(err);
 	        });
 	        bot.lastDecision = {
 	          kind: 'wait',
-	          reason: self ? 'not-alive' : 'no-self',
+	          reason: login?.attempted ? 'auto-login' : (login?.needed ? (login?.error ? 'login-control-missing' : 'login-cooldown') : (self ? 'not-alive' : 'no-self')),
 	          currentUserId: getCurrentUserId(),
 	          control: summarizeControl(),
 	          visibleEntities: bot.globalState.entities.length,
-	          self
+	          self,
+          login
 	        };
 	        updateBotPanel(bot.lastDecision);
-	        if (Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
+	        const loginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
+	        if (!loginPending && Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
 	          requestReload('no self for too long');
         }
         if (cfg.once) bot.stop('once');
