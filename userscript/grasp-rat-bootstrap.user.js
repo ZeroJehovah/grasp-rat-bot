@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.3.8
+// @version      0.3.9
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -26,7 +26,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.3.8';
+  const BOOTSTRAP_VERSION = '0.3.9';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -49,6 +49,8 @@
     debugEndpoint: 'http://127.0.0.1:18777/events',
     pollMs: 1000,
     watchdogMs: 1000,
+    busyLeaseMs: 12000,
+    requestTimeoutMs: 7000,
     staleTickMs: 3000,
     debugEveryMs: 1000,
     statusEvery: 1000,
@@ -69,6 +71,8 @@
     debugEndpoint: String(GM_getValue('debugEndpoint', DEFAULTS.debugEndpoint) || DEFAULTS.debugEndpoint),
     pollMs: Math.max(250, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
     watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
+    busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
+    requestTimeoutMs: Math.max(3000, Number(GM_getValue('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
     staleTickMs: Math.max(1000, Number(GM_getValue('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
     debugEveryMs: Math.max(250, Number(GM_getValue('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
@@ -102,7 +106,10 @@
     lastLoginSuppressReason: '',
     lastAuthorizeAt: 0,
     lastError: '',
-    lastDebugAt: 0
+    lastDebugAt: 0,
+    busyStartedAt: 0,
+    busyReason: '',
+    busyToken: ''
   };
 
   function sleep(ms) {
@@ -129,6 +136,44 @@
     try {
       console.log('[grasp-rat-bootstrap]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
     } catch (_) {}
+  }
+
+  function beginBusy(reason, flags = {}) {
+    const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    state.busyToken = token;
+    state.busyStartedAt = Date.now();
+    state.busyReason = String(reason || '');
+    if (flags.installing) state.installing = true;
+    if (flags.polling) state.polling = true;
+    return token;
+  }
+
+  function clearBusy(token) {
+    if (token && state.busyToken && token !== state.busyToken) return;
+    state.installing = false;
+    state.polling = false;
+    state.busyStartedAt = 0;
+    state.busyReason = '';
+    state.busyToken = '';
+  }
+
+  function resetStaleBusy(reason) {
+    if (!state.installing && !state.polling) return false;
+    const startedAt = Number(state.busyStartedAt || state.lastInstallAttemptAt || state.lastPollAt || 0);
+    const ageMs = startedAt ? Date.now() - startedAt : 0;
+    if (ageMs > 0 && ageMs <= cfg.busyLeaseMs) return false;
+    logBootstrap('busy lease expired; clearing stuck flags', {
+      reason,
+      ageMs,
+      busyReason: state.busyReason,
+      installing: state.installing,
+      polling: state.polling,
+      lastInstallStatus: state.lastInstallStatus,
+      lastError: state.lastError
+    });
+    clearBusy(state.busyToken);
+    state.lastInstallStatus = `busy reset by ${reason || 'watchdog'}`;
+    return true;
   }
 
   function shortStatus(status = getBotStatus()) {
@@ -205,12 +250,12 @@
 
   function gmRequest(method, url, body = null, headers = {}) {
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method,
-        url,
-        data: body,
-        headers,
-        timeout: 5000,
+	    GM_xmlhttpRequest({
+	        method,
+	        url,
+	        data: body,
+	        headers,
+	        timeout: cfg.requestTimeoutMs,
         onload: res => {
           if (res.status >= 200 && res.status < 300) resolve(res.responseText || '');
           else reject(new Error(`${method} ${url} failed: ${res.status}`));
@@ -370,14 +415,18 @@
     }
   }
 
-  async function fetchAndVerify(manifest) {
-    state.lastScriptFetchAt = Date.now();
+	  async function fetchAndVerify(manifest) {
+	    state.lastScriptFetchAt = Date.now();
     logBootstrap('script fetch start', {
       version: manifest.version,
       sha256: manifest.sha256,
       scriptUrl: manifest.scriptUrl
     });
-    const source = await gmRequest('GET', withCacheBust(manifest.scriptUrl));
+	    const source = await withTimeout(
+	      gmRequest('GET', withCacheBust(manifest.scriptUrl)),
+	      cfg.requestTimeoutMs + 500,
+	      'remote bot script request'
+	    );
     logBootstrap('script fetch complete', { version: manifest.version, bytes: String(source || '').length });
     const hash = await sha256Hex(source);
     if (hash !== manifest.sha256) {
@@ -518,24 +567,32 @@
     return true;
   }
 
-  async function pollOnce(reason = 'poll') {
-    if (!isGamePage()) return;
-    if (state.installing || state.polling) {
-      logBootstrap('poll skipped: busy', {
-        reason,
-        installing: state.installing,
-        polling: state.polling,
-        lastInstallStatus: state.lastInstallStatus
-      });
-      return;
-    }
-    state.polling = true;
-    state.installing = true;
-    state.lastPollAt = Date.now();
-    try {
-      state.lastManifestFetchAt = Date.now();
-      logBootstrap('manifest fetch start', { reason, manifestUrl: cfg.manifestUrl, currentStatus: shortStatus() });
-      const manifest = parseManifest(await gmRequest('GET', withCacheBust(cfg.manifestUrl)));
+	  async function pollOnce(reason = 'poll') {
+	    if (!isGamePage()) return;
+	    if (state.installing || state.polling) {
+	      resetStaleBusy(reason);
+	    }
+	    if (state.installing || state.polling) {
+	      logBootstrap('poll skipped: busy', {
+	        reason,
+	        installing: state.installing,
+	        polling: state.polling,
+	        busyAgeMs: state.busyStartedAt ? Date.now() - state.busyStartedAt : null,
+	        busyReason: state.busyReason,
+	        lastInstallStatus: state.lastInstallStatus
+	      });
+	      return;
+	    }
+	    const busyToken = beginBusy(`poll:${reason}`, { installing: true, polling: true });
+	    state.lastPollAt = Date.now();
+	    try {
+	      state.lastManifestFetchAt = Date.now();
+	      logBootstrap('manifest fetch start', { reason, manifestUrl: cfg.manifestUrl, currentStatus: shortStatus() });
+	      const manifest = parseManifest(await withTimeout(
+	        gmRequest('GET', withCacheBust(cfg.manifestUrl)),
+	        cfg.requestTimeoutMs + 500,
+	        'manifest request'
+	      ));
       logBootstrap('manifest fetch complete', {
         reason,
         version: manifest.version,
@@ -562,11 +619,10 @@
           postDebug('cached-error', { error: cacheErr?.message || String(cacheErr) }, { force: true });
         }
       }
-    } finally {
-      state.installing = false;
-      state.polling = false;
-    }
-  }
+	    } finally {
+	      clearBusy(busyToken);
+	    }
+	  }
 
   function visible(el) {
     if (!el) return false;
@@ -702,7 +758,15 @@
     }
     state.lastWatchdogAt = Date.now();
     if (state.installing) {
-      logBootstrap('watchdog skipped: installing', { reason, lastInstallStatus: state.lastInstallStatus });
+      resetStaleBusy(reason);
+    }
+    if (state.installing) {
+      logBootstrap('watchdog skipped: installing', {
+        reason,
+        busyAgeMs: state.busyStartedAt ? Date.now() - state.busyStartedAt : null,
+        busyReason: state.busyReason,
+        lastInstallStatus: state.lastInstallStatus
+      });
       return;
     }
     const manifest = readCachedManifest();
@@ -732,14 +796,15 @@
         await pollOnce(reason);
         return;
       }
-      state.installing = true;
+      const busyToken = beginBusy(`watchdog:${reason}`, { installing: true });
       await installCached(reason, { force: true });
+      clearBusy(busyToken);
     } catch (err) {
       state.lastError = err?.message || String(err);
       logBootstrap('watchdog error', { reason, error: state.lastError, missing, stale, mismatched });
       postDebug('watchdog-error', { reason, error: state.lastError, missing, stale, mismatched }, { force: true });
     } finally {
-      state.installing = false;
+      if (String(state.busyReason || '').startsWith(`watchdog:${reason}`)) clearBusy(state.busyToken);
     }
     await maybeStartGameLogin(reason);
   }
