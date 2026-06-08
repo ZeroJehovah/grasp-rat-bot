@@ -31,7 +31,9 @@ When the game page is not logged in, the bootstrap and remote bot try `startLinu
 
 After login starts or the OAuth authorize/callback page is seen, the bootstrap suppresses another login attempt for 45 seconds. This prevents a just-authorized page from bouncing back into LinuxDO before the game writes token/self state. If the bot is already in game but page WebSocket control stays offline for more than 3 seconds, the remote bot attempts `leave(userId)` or `#leaveBtn` before any reload fallback.
 
-Remote bot WebSocket reconnects are page-owned. By default the Tampermonkey remote bot does not call page `connectWs()` / `scheduleReconnect()` and does not create its own fallback `wss://.../ws` connection. If native page WebSocket state is unavailable or disconnected, the bot observes that state and waits or leaves instead of creating extra sockets.
+Remote bot WebSocket reconnects are page-owned. The Tampermonkey remote bot does not call page `connectWs()` / `scheduleReconnect()` and does not create its own fallback `wss://.../ws` connection; these switches are hard-disabled even if runtime config tries to enable them. If native page WebSocket state is unavailable or disconnected, the bot observes that state, stops local movement, and leaves after the configured offline window instead of creating extra sockets.
+
+If the overlay disappears and `[grasp-rat-bot] started live control` prints again, that means the bootstrap watchdog replaced or reinstalled the page bot because it was missing, stopped, stale, or on an older manifest. It is not a bot-owned WebSocket reconnect. The installed script A does not need to be reinstalled for `bootstrap-0.3.4`; the remote script B updates through the manifest poll.
 
 Static full-stamina `Active` entities are treated as ordinary targets instead of active threats. Moving or non-full-stamina `Active` entities still trigger avoidance, but avoidance distances are narrower than the old bootstrap `0.2.x` build so the bot stops fleeing far across the map.
 

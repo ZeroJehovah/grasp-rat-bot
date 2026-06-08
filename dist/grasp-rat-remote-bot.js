@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.3","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.4","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -29,13 +29,9 @@
 	    injectedBy: String(config.injectedBy || 'cdp'),
 	    debug: Boolean(config.debug),
 	    debugEndpoint: String(config.debugEndpoint || ''),
-	    debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
+    debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
     tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
-    nativeReconnectMs: 3000,
-    botWsReconnectMs: 3000,
-    allowNativeReconnect: Boolean(config.allowNativeReconnect),
-    allowBotWebSocketFallback: Boolean(config.allowBotWebSocketFallback),
     dangerRadius: 28000,
     activeCautionRadius: 38000,
     activeCautionExitMargin: 4000,
@@ -140,7 +136,10 @@
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
     status: '',
-    ...config
+    ...config,
+    // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
+    allowNativeReconnect: false,
+    allowBotWebSocketFallback: false
   };
 
   function restoredCoinFailures() {
@@ -228,11 +227,6 @@
 	      nativeWsReadyState: null,
 	      lastOpenAt: 0,
 	      lastMessageAt: 0,
-	      lastNativeReconnectAt: 0,
-	      nativeReconnectCount: 0,
-	      lastWsConnectAt: 0,
-	      lastWsCloseAt: 0,
-	      wsConnectCount: 0,
 	      lastError: '',
 	      lastVelocity: '',
 	      lastVelocityAt: 0
@@ -831,26 +825,9 @@
 	    }
 	  }
 
-	  function requestNativeReconnect(userId) {
-	    if (!userId) return;
-	    if (!cfg.allowNativeReconnect) {
-	      bot.control.lastError = 'native reconnect disabled; page owns websocket reconnect';
-	      return false;
-	    }
-	    const t = Date.now();
-	    if (t - Number(bot.control.lastNativeReconnectAt || 0) < cfg.nativeReconnectMs) {
-	      return false;
-	    }
-	    bot.control.lastNativeReconnectAt = t;
-	    bot.control.nativeReconnectCount += 1;
-	    try {
-	      if (typeof connectWs === 'function') connectWs(userId);
-	      else if (typeof scheduleReconnect === 'function') scheduleReconnect();
-	      return true;
-	    } catch (err) {
-	      bot.control.lastError = 'native reconnect: ' + (err.message || String(err));
-	      return false;
-	    }
+	  function notePageOwnsReconnect() {
+	    bot.control.lastError = 'native reconnect disabled; page owns websocket reconnect';
+	    return false;
 	  }
 
 	  function syncNativeControl(native = getNativeControl()) {
@@ -886,59 +863,19 @@
 	      wsOpen: Boolean(control.wsOpen),
 	      wsReadyState: native ? native.wsReadyState : (control.ws ? control.ws.readyState : control.wsReadyState),
 	      connecting: Boolean(control.connecting),
-	      transport: control.transport || (native ? 'native-page' : (control.ws ? 'bot-websocket' : 'none')),
-	      allowNativeReconnect: Boolean(cfg.allowNativeReconnect),
-	      allowBotWebSocketFallback: Boolean(cfg.allowBotWebSocketFallback),
+	      transport: control.transport || (native ? 'native-page' : 'none'),
+	      allowNativeReconnect: false,
+	      allowBotWebSocketFallback: false,
 	      nativeWsOpen: Boolean(native?.wsOpen),
 	      nativeWsReadyState: native ? native.wsReadyState : null,
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
-	      lastNativeReconnectAgeMs: control.lastNativeReconnectAt ? Date.now() - control.lastNativeReconnectAt : null,
-	      nativeReconnectCount: Number(control.nativeReconnectCount || 0),
-	      lastWsConnectAgeMs: control.lastWsConnectAt ? Date.now() - control.lastWsConnectAt : null,
-	      lastWsCloseAgeMs: control.lastWsCloseAt ? Date.now() - control.lastWsCloseAt : null,
-	      wsConnectCount: Number(control.wsConnectCount || 0),
 	      lastError: control.lastError || '',
 	      lastVelocity: control.lastVelocity || '',
 	      nativeCurrentVel,
 	      nativeLastVel: nativeState?.lastVel || '',
 	      nativeKeys
 	    };
-	  }
-	
-	  function handleControlMessage(msg) {
-	    if (!msg || typeof msg !== 'object') return;
-	    bot.control.lastMessageAt = Date.now();
-	    if (msg.type === 'snapshot') {
-	      bot.globalState.tick = Number(msg.tick || bot.globalState.tick || 0);
-	      bot.globalState.entities = msg.entities || [];
-	      bot.globalState.coinDrops = msg.coin_drops || [];
-	      bot.globalState.messages = msg.messages || [];
-	      bot.globalState.refreshedAt = Date.now();
-	      bot.globalState.error = '';
-	      return;
-	    }
-	    if (msg.type === 'pos') {
-	      bot.globalState.tick = Number(msg.tick || bot.globalState.tick || 0);
-	      const previous = new Map((bot.globalState.entities || []).map(entity => [Number(entity.user_id), entity]));
-	      for (const item of msg.entities || []) {
-	        const id = Number(item.user_id);
-	        if (!id) continue;
-	        previous.set(id, {
-	          ...(previous.get(id) || {}),
-	          ...item
-	        });
-	      }
-	      bot.globalState.entities = Array.from(previous.values());
-	      bot.globalState.refreshedAt = Date.now();
-	      bot.globalState.error = '';
-	    }
-	  }
-	
-	  async function readWsPayload(data) {
-	    if (typeof data === 'string') return data;
-	    const bytes = new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : data);
-	    return new TextDecoder().decode(bytes);
 	  }
 	
 	  function closeControlWs(reason = '') {
@@ -970,68 +907,14 @@
 	      if (bot.control.ws) closeControlWs();
 	      if (syncNativeControl(native)) return true;
 	      if (native.wsReadyState === WebSocket.CONNECTING) return false;
-	      if (cfg.allowNativeReconnect) requestNativeReconnect(userId);
+	      bot.control.lastError = 'native page websocket offline; page owns reconnect';
 	      return false;
 	    }
-	    if (!cfg.allowBotWebSocketFallback) {
-	      if (bot.control.ws) closeControlWs('bot websocket fallback disabled');
-	      bot.control.transport = 'native-page-missing';
-	      bot.control.connecting = false;
-	      bot.control.wsOpen = false;
-	      bot.control.lastError = 'native page websocket unavailable';
-	      return false;
-	    }
-	    if (bot.control.wsOpen && bot.control.ws?.readyState === WebSocket.OPEN) return true;
-	    if (bot.control.connecting && bot.control.ws?.readyState === WebSocket.CONNECTING) return false;
-	    closeControlWs();
-	    const t = Date.now();
-	    if (t - Number(bot.control.lastWsConnectAt || 0) < cfg.botWsReconnectMs) return false;
-	    bot.control.transport = 'bot-websocket';
-	    bot.control.connecting = true;
-	    bot.control.lastError = '';
-	    const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-	    const wsUrl = scheme + location.host
-	      + '/ws?user_id=' + encodeURIComponent(userId)
-	      + '&token=' + encodeURIComponent(token)
-	      + '&compress=';
-	    bot.control.wsUrl = wsUrl;
-	    bot.control.lastWsConnectAt = t;
-	    bot.control.wsConnectCount += 1;
-	    const ws = new WebSocket(wsUrl);
-	    ws.binaryType = 'arraybuffer';
-	    bot.control.ws = ws;
-	    bot.control.wsReadyState = ws.readyState;
-	    ws.addEventListener('open', () => {
-	      if (bot.control.ws !== ws) return;
-	      bot.control.wsOpen = true;
-	      bot.control.connecting = false;
-	      bot.control.wsReadyState = ws.readyState;
-	      bot.control.lastOpenAt = Date.now();
-	      bot.control.lastError = '';
-	    });
-	    ws.addEventListener('message', event => {
-	      if (bot.control.ws !== ws) return;
-	      readWsPayload(event.data)
-	        .then(text => handleControlMessage(JSON.parse(text)))
-	        .catch(err => {
-	          bot.control.lastError = 'ws decode: ' + (err.message || String(err));
-	        });
-	    });
-	    ws.addEventListener('close', () => {
-	      if (bot.control.ws !== ws) return;
-	      bot.control.wsOpen = false;
-	      bot.control.connecting = false;
-	      bot.control.wsReadyState = ws.readyState;
-	      bot.control.lastWsCloseAt = Date.now();
-	    });
-	    ws.addEventListener('error', () => {
-	      if (bot.control.ws !== ws) return;
-	      bot.control.wsOpen = false;
-	      bot.control.connecting = false;
-	      bot.control.wsReadyState = ws.readyState;
-	      bot.control.lastWsCloseAt = Date.now();
-	      bot.control.lastError = 'websocket error';
-	    });
+	    if (bot.control.ws) closeControlWs('bot websocket fallback disabled');
+	    bot.control.transport = 'native-page-missing';
+	    bot.control.connecting = false;
+	    bot.control.wsOpen = false;
+	    bot.control.lastError = 'native page websocket unavailable';
 	    return false;
 	  }
 	
@@ -1168,7 +1051,7 @@
 	    const native = getNativeControl();
 	    if (native) {
 	      if (!syncNativeControl(native)) {
-	        requestNativeReconnect(getCurrentUserId());
+	        notePageOwnsReconnect();
 	        return false;
 	      }
 	      try {
@@ -1181,14 +1064,7 @@
 	      }
 	    }
 	    if (!ensureControlWs()) return false;
-	    try {
-	      bot.control.ws.send(message);
-	      return true;
-	    } catch (err) {
-	      bot.control.lastError = err.message || String(err);
-	      closeControlWs(bot.control.lastError);
-	      return false;
-	    }
+	    return false;
 	  }
 
 	  function setNativeKeys(nativeState, dx, dy) {
@@ -1235,11 +1111,6 @@
       bot.control.lastVelocityAt = now();
       return sendNativeVelocity(0, 0, true) || stopLocalMotionOnly(reason);
     }
-    if (!native && bot.control.wsOpen && bot.control.ws?.readyState === WebSocket.OPEN) {
-      bot.control.lastVelocity = '0 0';
-      bot.control.lastVelocityAt = now();
-      return wsSend('vel 0 0') || stopLocalMotionOnly(reason);
-    }
     return stopLocalMotionOnly(reason);
   }
 
@@ -1248,7 +1119,7 @@
 	    if (!native) return false;
 	    setNativeKeys(native.state, dx, dy);
 	    if (!syncNativeControl(native)) {
-	      requestNativeReconnect(getCurrentUserId());
+	      notePageOwnsReconnect();
 	      return false;
 	    }
 	    if (typeof sendVelocity !== 'function') return wsSend('vel ' + dx + ' ' + dy);
@@ -1315,7 +1186,7 @@
 	    const native = getNativeControl();
 	    if (!native) return false;
 	    if (!syncNativeControl(native)) {
-	      requestNativeReconnect(getCurrentUserId());
+	      notePageOwnsReconnect();
 	      return false;
 	    }
 	    aimAt(target);
