@@ -1099,6 +1099,13 @@ function browserBotSource(config) {
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
+    pursuitLeaveMs: 300000,
+    pursuitReloginDelayMs: 30000,
+    pursuitLostGraceMs: 10000,
+    pursuitLeaveRetryMs: 5000,
+    pursuitTrackRadius: 42000,
+    pursuitTowardCosMin: 0.25,
+    pursuitClosingMinDistance: 250,
     offlineLeaveMs: 3000,
     offlineLeaveCooldownMs: 60000,
     reloadAfterNoSelfMs: 45000,
@@ -1153,6 +1160,10 @@ function browserBotSource(config) {
     lastLoginResult: null,
     lastOfflineLeaveAt: 0,
     lastOfflineLeaveResult: null,
+    lastPursuitLeaveAt: 0,
+    lastPursuitLeaveResult: null,
+    pursuitReloginUntil: 0,
+    pursuit: null,
     reloadRequestedAt: 0,
     lastTarget: null,
     lastTargetAt: 0,
@@ -1292,6 +1303,14 @@ function browserBotSource(config) {
           lastAt: this.lastOfflineLeaveAt || 0,
           lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
           lastResult: this.lastOfflineLeaveResult
+        },
+        pursuit: summarizePursuit(this.pursuit),
+        pursuitLeave: {
+          lastAt: this.lastPursuitLeaveAt || 0,
+          lastAgeMs: this.lastPursuitLeaveAt ? Date.now() - this.lastPursuitLeaveAt : null,
+          holdUntil: this.pursuitReloginUntil || 0,
+          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+          lastResult: this.lastPursuitLeaveResult
         },
 	        stopReason: this.stopReason,
 	        errors: this.errors.slice(-5)
@@ -1448,6 +1467,8 @@ function browserBotSource(config) {
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'offline-leave': 'WebSocket 离线，正在退出',
+	      'pursuit-leave': '被同一玩家持续追击，退出等待',
+	      'pursuit-leave-wait': '追击退出后等待重新登录',
 	      'auto-login': '自动触发登录/加入',
 	      'login-cooldown': '登录已触发，等待页面跳转',
 	      'login-control-missing': '等待登录控件出现',
@@ -1482,6 +1503,10 @@ function browserBotSource(config) {
 	    if (decision?.target) {
 	      const target = decision.target;
 	      panelLines.push('<div>目标：' + escapeHtml(target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(target.distance)) + ' 金币 ' + escapeHtml(target.amount ?? '-') + ' Drop ' + escapeHtml(target.drop ?? '-') + '</div>');
+	    }
+	    const pursuit = decision?.pursuit || safety.pursuit || summarizePursuit(bot.pursuit);
+	    if (pursuit) {
+	      panelLines.push('<div>追击：' + escapeHtml(pursuit.name || ('#' + pursuit.id)) + ' ' + escapeHtml(formatDistance(pursuit.distance)) + ' / ' + escapeHtml(Math.round((pursuit.durationMs || 0) / 1000)) + 's</div>');
 	    }
 	    if (Array.isArray(bot.errors) && bot.errors.length) {
 	      panelLines.push('<div style="color:#fca5a5">错误：' + escapeHtml(bot.errors[bot.errors.length - 1]?.message || '') + '</div>');
@@ -1606,6 +1631,155 @@ function browserBotSource(config) {
     return remaining;
   }
 
+  function pursuitReloginHoldRemainingMs() {
+    let until = Number(bot.pursuitReloginUntil || 0);
+    try {
+      const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+      const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+      if (suppressReason === 'pursuit leave' && suppressUntil > until) {
+        until = suppressUntil;
+        bot.pursuitReloginUntil = suppressUntil;
+      }
+    } catch (_) {}
+    const remaining = Math.max(0, until - Date.now());
+    if (!remaining && bot.pursuitReloginUntil) bot.pursuitReloginUntil = 0;
+    return Math.round(remaining);
+  }
+
+  function summarizePursuit(pursuit = bot.pursuit) {
+    if (!pursuit) return null;
+    const t = now();
+    const lastSeenAt = Number(pursuit.lastSeenAt || pursuit.startedAt || t);
+    return {
+      id: pursuit.id,
+      name: pursuit.name || '',
+      distance: Number.isFinite(Number(pursuit.distance)) ? Math.round(Number(pursuit.distance)) : null,
+      speed: Number.isFinite(Number(pursuit.speed)) ? Math.round(Number(pursuit.speed)) : null,
+      moving: Boolean(pursuit.moving),
+      active: Boolean(pursuit.active),
+      reason: pursuit.reason || '',
+      durationMs: Math.max(0, Math.round(Number(pursuit.durationMs ?? (lastSeenAt - Number(pursuit.startedAt || lastSeenAt))))),
+      thresholdMs: cfg.pursuitLeaveMs,
+      lastSeenAgeMs: Math.max(0, Math.round(t - lastSeenAt)),
+      towardScore: Number.isFinite(Number(pursuit.towardScore)) ? Number(pursuit.towardScore).toFixed(2) : null,
+      closingDistance: Number.isFinite(Number(pursuit.closingDistance)) ? Math.round(Number(pursuit.closingDistance)) : null
+    };
+  }
+
+  function actionThreatId(action) {
+    const threat = Array.isArray(action?.threats) ? action.threats[0] : null;
+    return threat ? String(threat.id ?? threat.user_id ?? '') : '';
+  }
+
+  function pursuitPressure(self, threat, previous, action) {
+    if (!threat) return null;
+    const distance = Number(threat.distance ?? dist(self, threat));
+    if (!Number.isFinite(distance) || distance > cfg.pursuitTrackRadius) return null;
+    const id = threatKey(threat);
+    const vx = Number(threat.vx || 0);
+    const vy = Number(threat.vy || 0);
+    const s = Math.max(0, Number(threat.speed ?? speed(threat)) || 0);
+    const tx = Number(self.x) - Number(threat.x);
+    const ty = Number(self.y) - Number(threat.y);
+    const d = Math.max(1, Math.hypot(tx, ty));
+    const towardScore = s > 0 ? ((vx * tx) + (vy * ty)) / (s * d) : 0;
+    const closingDistance = previous && String(previous.id) === id
+      ? Number(previous.distance) - distance
+      : 0;
+    const actionMatches = actionThreatId(action) === id
+      && (action?.kind === 'flee' || action?.reason === 'return-block-lateral-scan');
+    const closePressure = distance <= Number(threat.threatRadius || cfg.dangerRadius);
+    const cautionPressure = distance <= Number(threat.cautionRadius || cfg.activeCautionRadius) + cfg.activeCautionExitMargin;
+    const towardPressure = cautionPressure && towardScore >= cfg.pursuitTowardCosMin;
+    const closingPressure = cautionPressure && closingDistance >= cfg.pursuitClosingMinDistance;
+    const returnBlockPressure = distance <= returnBlockRadius(threat);
+    if (!closePressure && !towardPressure && !closingPressure && !actionMatches && !returnBlockPressure) return null;
+    return {
+      threat,
+      id,
+      score: (actionMatches ? 100000 : 0)
+        + (closePressure ? 30000 : 0)
+        + (returnBlockPressure ? 15000 : 0)
+        + Math.max(0, towardScore) * 10000
+        + Math.max(0, closingDistance)
+        - distance / 10,
+      reason: actionMatches ? 'bot-fleeing-from-threat'
+        : closePressure ? 'inside-danger-radius'
+          : returnBlockPressure ? 'return-block-pressure'
+            : towardPressure ? 'moving-toward-self'
+              : 'closing-distance',
+      distance,
+      speed: s,
+      moving: Boolean(threat.moving),
+      towardScore,
+      closingDistance
+    };
+  }
+
+  function updatePursuitTracking(self, activeThreats, action) {
+    const t = now();
+    const previous = bot.pursuit;
+    const candidates = (activeThreats || [])
+      .map(threat => pursuitPressure(self, threat, previous, action))
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+    const picked = candidates[0] || null;
+    if (!picked) {
+      if (previous && t - Number(previous.lastSeenAt || 0) <= cfg.pursuitLostGraceMs) {
+        previous.active = false;
+        previous.durationMs = Math.max(0, Number(previous.lastSeenAt || t) - Number(previous.startedAt || t));
+        if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(previous);
+        return previous;
+      }
+      bot.pursuit = null;
+      if (bot.lastSafety) bot.lastSafety.pursuit = null;
+      return null;
+    }
+    const same = previous && String(previous.id) === String(picked.id)
+      && t - Number(previous.lastSeenAt || t) <= cfg.pursuitLostGraceMs;
+    const startedAt = same ? Number(previous.startedAt || t) : t;
+    bot.pursuit = {
+      id: picked.id,
+      name: picked.threat.name || '',
+      startedAt,
+      lastSeenAt: t,
+      durationMs: Math.max(0, t - startedAt),
+      distance: picked.distance,
+      speed: picked.speed,
+      moving: picked.moving,
+      active: true,
+      reason: picked.reason,
+      towardScore: picked.towardScore,
+      closingDistance: picked.closingDistance,
+      thresholdMs: cfg.pursuitLeaveMs
+    };
+    if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(bot.pursuit);
+    return bot.pursuit;
+  }
+
+  async function issueLeaveCommand(detail) {
+    try {
+      if (typeof leave === 'function') {
+        const result = detail.userId ? leave(detail.userId) : leave();
+        if (result && typeof result.then === 'function') await result;
+        detail.attempted = true;
+        detail.method = detail.userId ? 'leave(userId)' : 'leave';
+      } else {
+        const leaveBtn = document.querySelector('#leaveBtn');
+        if (leaveBtn && isVisible(leaveBtn)) {
+          leaveBtn.click();
+          detail.attempted = true;
+          detail.method = '#leaveBtn';
+        } else {
+          detail.error = 'leave control not found';
+        }
+      }
+    } catch (err) {
+      detail.error = err?.message || String(err);
+    }
+    return detail;
+  }
+
   async function maybeStartAutoLogin(reason) {
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
@@ -1689,28 +1863,45 @@ function browserBotSource(config) {
       error: ''
     };
     bot.lastOfflineLeaveAt = t;
-    try {
-      if (typeof leave === 'function') {
-        const result = detail.userId ? leave(detail.userId) : leave();
-        if (result && typeof result.then === 'function') await result;
-        detail.attempted = true;
-        detail.method = detail.userId ? 'leave(userId)' : 'leave';
-      } else {
-        const leaveBtn = document.querySelector('#leaveBtn');
-        if (leaveBtn && isVisible(leaveBtn)) {
-          leaveBtn.click();
-          detail.attempted = true;
-          detail.method = '#leaveBtn';
-        } else {
-          detail.error = 'leave control not found';
-        }
-      }
-    } catch (err) {
-      detail.error = err?.message || String(err);
-    }
+    await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) setLoginSuppress('offline leave', cfg.offlineLeaveCooldownMs);
     bot.lastOfflineLeaveResult = detail;
     postDebugEvent(detail.error ? 'leave-error' : 'leave-offline', detail, { force: true });
+    return detail;
+  }
+
+  async function leaveForPursuit(pursuit) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    if (t - Number(bot.lastPursuitLeaveAt || 0) < cfg.pursuitLeaveRetryMs) {
+      return {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.pursuitLeaveRetryMs - (t - Number(bot.lastPursuitLeaveAt || 0)))),
+        pursuit: summarizePursuit(pursuit)
+      };
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason: 'sustained pursuit',
+      userId: getCurrentUserId() || null,
+      pursuit: summarizePursuit(pursuit),
+      reloginDelayMs: cfg.pursuitReloginDelayMs,
+      error: ''
+    };
+    bot.lastPursuitLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted && !detail.error) {
+      const reloginUntil = setLoginSuppress('pursuit leave', cfg.pursuitReloginDelayMs);
+      bot.pursuitReloginUntil = reloginUntil;
+      detail.reloginUntil = reloginUntil;
+      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
+      bot.pursuit = null;
+      if (bot.lastSafety) bot.lastSafety.pursuit = null;
+    }
+    bot.lastPursuitLeaveResult = detail;
+    postDebugEvent(detail.error ? 'pursuit-leave-error' : 'pursuit-leave', detail, { force: true });
     return detail;
   }
 
@@ -3334,8 +3525,36 @@ function browserBotSource(config) {
     try {
       bot.tickCount += 1;
       bot.lastTickAt = Date.now();
-	      const self = getSelf();
-	      if (!self || !isAlive(self)) {
+		      const self = getSelf();
+      const pursuitHoldRemainingMs = pursuitReloginHoldRemainingMs();
+      if (pursuitHoldRemainingMs > 0) {
+        bot.pursuit = null;
+        stopMotionSafely('pursuit-leave-wait');
+        const selfAlive = Boolean(self && isAlive(self));
+        const leaveResult = selfAlive
+          ? await leaveForPursuit(bot.lastPursuitLeaveResult?.pursuit || null)
+          : null;
+        refreshGlobalState(false).catch(err => {
+          bot.globalState.error = err.message || String(err);
+        });
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'pursuit-leave-wait',
+          dx: 0,
+          dy: 0,
+          self: self ? summarizeSelf(self) : null,
+          currentUserId: getCurrentUserId(),
+          control: summarizeControl(),
+          holdRemainingMs: pursuitReloginHoldRemainingMs(),
+          leave: leaveResult,
+          pursuit: bot.lastPursuitLeaveResult?.pursuit || null
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
+		      if (!self || !isAlive(self)) {
+		        bot.pursuit = null;
 	        stopMotionSafely('no-self');
 	        if (!bot.waitSince) bot.waitSince = Date.now();
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
@@ -3369,6 +3588,7 @@ function browserBotSource(config) {
 	      updateKillHistory(self);
 	      ensureControlWs();
 	      if (!cfg.dryRun && !bot.control.wsOpen) {
+	        bot.pursuit = null;
 	        stopMotionSafely('control-ws-offline');
 	        if (!bot.offlineSince) bot.offlineSince = Date.now();
 	        const offlineAgeMs = Date.now() - bot.offlineSince;
@@ -3416,6 +3636,38 @@ function browserBotSource(config) {
         bot.staleCoinEscape = null;
       }
       action = blockThreatReturnAction(self, bot.actionThreats || [], action);
+      const pursuit = updatePursuitTracking(self, bot.actionThreats || [], action);
+      const pursuitSummary = summarizePursuit(pursuit);
+      if (pursuitSummary && pursuitSummary.durationMs >= cfg.pursuitLeaveMs) {
+        const leaveResult = await leaveForPursuit(pursuit);
+        if (leaveResult?.attempted && !leaveResult?.error) {
+          stopMotionSafely('pursuit-leave');
+          bot.lastDecision = {
+            kind: 'wait',
+            reason: 'pursuit-leave',
+            dx: 0,
+            dy: 0,
+            self: summarizeSelf(self),
+            pursuit: pursuitSummary,
+            leave: leaveResult,
+            reloginDelayMs: cfg.pursuitReloginDelayMs,
+            holdRemainingMs: pursuitReloginHoldRemainingMs()
+          };
+          updateBotPanel(bot.lastDecision);
+          if (cfg.once) bot.stop('once');
+          return;
+        }
+        action = {
+          ...action,
+          pursuit: pursuitSummary,
+          pursuitLeave: leaveResult
+        };
+      } else if (pursuitSummary) {
+        action = {
+          ...action,
+          pursuit: pursuitSummary
+        };
+      }
       const canMove = true;
       const canAttack = true;
       sendActionVelocity(action);

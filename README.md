@@ -31,6 +31,8 @@ Version `0.3.6` fixes a refresh-time bootstrap race: script A no longer waits fo
 
 Version `0.3.7` changes script A's page-context injection path to prefer Tampermonkey `GM_addElement(script)`. This covers pages where normal inline script insertion is blocked by CSP or browser extension policy even though the bootstrap userscript itself is enabled.
 
+Version `0.3.8` changes script B strategy only. If the same unsafe player keeps pressuring the bot for about 5 minutes, the bot leaves the game, stops local movement, suppresses relogin for 30 seconds, then lets the normal login flow resume. The overlay and status include the current pursuit target, duration, and pursuit-leave wait state.
+
 When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap waits 10 seconds before clicking the allow/authorize control, so it acts only as a fallback behind the user's primary authorization script.
 
 After login starts or the OAuth authorize/callback page is seen, the bootstrap suppresses another login attempt for 45 seconds. This prevents a just-authorized page from bouncing back into LinuxDO before the game writes token/self state. If the bot is already in game but page WebSocket control stays offline for more than 3 seconds, the remote bot attempts `leave(userId)` or `#leaveBtn` before any reload fallback.
