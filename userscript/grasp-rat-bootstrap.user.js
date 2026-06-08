@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.0
+// @version      0.4.3
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,8 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.0';
+  const BOOTSTRAP_VERSION = '0.4.3';
+  const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
   const BLOCKED_REMOTE_HASHES = new Set([
@@ -58,6 +59,7 @@
     statusEvery: 1000,
     scriptStartupTimeoutMs: 2500,
     installConfirmMs: 3500,
+    restartAfterCacheUpdateMs: 800,
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
     authReturnGraceMs: 45000,
@@ -81,6 +83,7 @@
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
     scriptStartupTimeoutMs: Math.max(500, Number(GM_getValue('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
     installConfirmMs: Math.max(1000, Number(GM_getValue('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
+    restartAfterCacheUpdateMs: Math.max(0, Number(GM_getValue('restartAfterCacheUpdateMs', DEFAULTS.restartAfterCacheUpdateMs)) || DEFAULTS.restartAfterCacheUpdateMs),
     loginCooldownMs: Math.max(1000, Number(GM_getValue('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
     postLoginGraceMs: Math.max(5000, Number(GM_getValue('postLoginGraceMs', DEFAULTS.postLoginGraceMs)) || DEFAULTS.postLoginGraceMs),
     authReturnGraceMs: Math.max(5000, Number(GM_getValue('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
@@ -373,6 +376,34 @@
     return manifest;
   }
 
+  function parseRemoteBotVersion(value) {
+    const match = String(value || '').match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!match) return null;
+    return match.slice(1).map(part => Number(part));
+  }
+
+  function compareRemoteBotVersion(a, b) {
+    const left = parseRemoteBotVersion(a);
+    const right = parseRemoteBotVersion(b);
+    if (!left || !right) return null;
+    for (let i = 0; i < 3; i += 1) {
+      if (left[i] !== right[i]) return left[i] - right[i];
+    }
+    return 0;
+  }
+
+  function remoteBotVersionIsBlocked(version) {
+    const cmp = compareRemoteBotVersion(version, MIN_REMOTE_BOT_VERSION);
+    return cmp !== null && cmp < 0;
+  }
+
+  function assertRemoteBotVersionAllowed(manifest) {
+    const version = String(manifest?.version || '');
+    if (remoteBotVersionIsBlocked(version)) {
+      throw new Error(`remote bot ${version || '(unknown version)'} is below required ${MIN_REMOTE_BOT_VERSION}`);
+    }
+  }
+
   function readCachedManifest() {
     const raw = GM_getValue('cachedManifest', '');
     if (!raw) return null;
@@ -394,6 +425,7 @@
   function assertSafeRemoteSource(manifest, source, hash) {
     const version = String(manifest?.version || '');
     const sha256 = String(hash || manifest?.sha256 || '').toLowerCase();
+    assertRemoteBotVersionAllowed(manifest);
     if (BLOCKED_REMOTE_HASHES.has(sha256)) {
       throw new Error(`blocked unsafe remote bot ${version || '(unknown version)'} ${sha256}`);
     }
@@ -423,13 +455,117 @@
     return Number.isFinite(age) && age > cfg.staleTickMs && !status.ticking;
   }
 
+  function runningBotUsesBlockedStrategy(status) {
+    return Boolean(status?.running && remoteBotVersionIsBlocked(status.version));
+  }
+
+  function stopBlockedRunningBot(reason, status = getBotStatus()) {
+    if (!runningBotUsesBlockedStrategy(status)) return false;
+    try {
+      logBootstrap('stopping blocked remote bot', {
+        reason,
+        minVersion: MIN_REMOTE_BOT_VERSION,
+        status: shortStatus(status)
+      });
+      unsafeWindow.__graspRatBot?.stop?.(`bootstrap blocked old strategy: ${reason || 'version gate'}`);
+      return true;
+    } catch (err) {
+      state.lastError = 'failed to stop blocked remote bot: ' + (err?.message || String(err));
+      logBootstrap('stop blocked remote bot failed', { reason, error: state.lastError, status: shortStatus(status) });
+      return false;
+    }
+  }
+
   function botNeedsInstall(manifest) {
     const status = getBotStatus();
     if (!status || !status.running) return true;
+    if (runningBotUsesBlockedStrategy(status)) return true;
     if (String(status.sourceHash || '') !== String(manifest.sha256 || '')) return true;
     if (String(status.version || '') !== String(manifest.version || '')) return true;
     if (tickIsStale(status)) return true;
     return false;
+  }
+
+  function botMatchesManifest(status, manifest) {
+    return Boolean(status?.running)
+      && String(status.sourceHash || '') === String(manifest?.sha256 || '')
+      && String(status.version || '') === String(manifest?.version || '')
+      && !runningBotUsesBlockedStrategy(status);
+  }
+
+  function cachedManifestMatches(manifest) {
+    const cached = readCachedManifest();
+    const source = GM_getValue('cachedSource', '');
+    return Boolean(cached && source)
+      && String(cached.sha256 || '') === String(manifest?.sha256 || '')
+      && String(cached.version || '') === String(manifest?.version || '')
+      && !remoteBotVersionIsBlocked(cached.version);
+  }
+
+  function currentUserIdFromStatus(status) {
+    return status?.control?.currentUserId
+      || status?.self?.id
+      || status?.lastDecision?.self?.id
+      || 0;
+  }
+
+  async function leaveGameForCachedUpdate(reason, status) {
+    const detail = {
+      attempted: false,
+      method: '',
+      reason,
+      userId: currentUserIdFromStatus(status) || null,
+      error: ''
+    };
+    try {
+      if (typeof unsafeWindow.leave === 'function') {
+        const result = detail.userId ? unsafeWindow.leave(detail.userId) : unsafeWindow.leave();
+        if (result && typeof result.then === 'function') await withTimeout(result, 1200, 'leave before cached update restart');
+        detail.attempted = true;
+        detail.method = detail.userId ? 'leave(userId)' : 'leave';
+      } else {
+        const leaveBtn = document.querySelector('#leaveBtn');
+        if (leaveBtn && visible(leaveBtn)) {
+          leaveBtn.click();
+          detail.attempted = true;
+          detail.method = '#leaveBtn';
+        } else {
+          detail.error = 'leave control not found';
+        }
+      }
+    } catch (err) {
+      detail.error = err?.message || String(err);
+    }
+    return detail;
+  }
+
+  async function restartForCachedUpdate(manifest, reason, status = getBotStatus()) {
+    const detail = {
+      reason,
+      version: manifest?.version || '',
+      sha256: manifest?.sha256 || '',
+      previousStatus: shortStatus(status),
+      leave: null,
+      reloadDelayMs: cfg.restartAfterCacheUpdateMs
+    };
+    logBootstrap('cached update restart start', detail);
+    detail.leave = await leaveGameForCachedUpdate(reason, status);
+    try {
+      unsafeWindow.__graspRatBot?.stop?.(`cached update restart: ${manifest?.version || manifest?.sha256 || reason || 'remote update'}`);
+    } catch (err) {
+      detail.stopError = err?.message || String(err);
+    }
+    state.lastInstallStatus = `cached update restart scheduled for ${manifest?.version || manifest?.sha256 || 'remote update'}`;
+    postDebug('cached-update-restart', detail, { force: true });
+    setTimeout(() => {
+      try {
+        location.reload();
+      } catch (err) {
+        state.lastError = 'reload after cached update failed: ' + (err?.message || String(err));
+        logBootstrap('cached update reload failed', { reason, error: state.lastError });
+      }
+    }, cfg.restartAfterCacheUpdateMs);
+    return true;
   }
 
   function postDebug(type, detail = {}, options = {}) {
@@ -646,6 +782,7 @@
 
   function shouldFastStartFromCache(manifest, source, status) {
     if (!manifest || !source) return false;
+    if (runningBotUsesBlockedStrategy(status)) return false;
     if (!status || !status.running) return true;
     if (tickIsStale(status)) return true;
     return false;
@@ -660,6 +797,8 @@
     logBootstrap('fast cache install check', {
       reason,
       shouldInstall,
+      blockedCurrentStrategy: runningBotUsesBlockedStrategy(status),
+      minVersion: MIN_REMOTE_BOT_VERSION,
       hasManifest: Boolean(manifest),
       hasSource: Boolean(source),
       manifestVersion: manifest?.version || '',
@@ -678,6 +817,7 @@
       state.lastError = err?.message || String(err);
       logBootstrap('fast cache install error', { reason, error: state.lastError });
       postDebug('cached-error', { reason, error: state.lastError }, { force: true });
+      stopBlockedRunningBot(`${reason}:cache-error`, status);
       return false;
     } finally {
       clearBusy(busyToken);
@@ -687,23 +827,48 @@
   async function installManifest(manifest, reason) {
     if (!isGamePage()) return false;
     const current = getBotStatus();
-    if (!botNeedsInstall(manifest)) {
-      logBootstrap('manifest install skipped: bot current', {
+    const cacheCurrent = cachedManifestMatches(manifest);
+    if (!cacheCurrent) {
+      logBootstrap('remote update caching needed', {
         reason,
         version: manifest.version,
         sha256: manifest.sha256,
         status: shortStatus(current)
       });
+      await fetchAndVerify(manifest);
+    }
+    const status = getBotStatus();
+    if (status?.running && !botMatchesManifest(status, manifest)) {
+      logBootstrap('remote update cached; restarting instead of hot executing', {
+        reason,
+        version: manifest.version,
+        sha256: manifest.sha256,
+        cacheCurrent,
+        blockedCurrentStrategy: runningBotUsesBlockedStrategy(status),
+        status: shortStatus(status)
+      });
+      await restartForCachedUpdate(manifest, reason, status);
+      state.lastError = '';
       return true;
     }
-    logBootstrap('manifest install needed', {
+    if (!status || !status.running || tickIsStale(status)) {
+      logBootstrap('installing cached bot after manifest sync', {
+        reason,
+        version: manifest.version,
+        sha256: manifest.sha256,
+        status: shortStatus(status)
+      });
+      await installCached(reason, { force: true });
+      state.lastError = '';
+      return true;
+    }
+    logBootstrap('manifest sync skipped: running bot and cache current', {
       reason,
       version: manifest.version,
       sha256: manifest.sha256,
-      status: shortStatus(current)
+      status: shortStatus(status),
+      cacheCurrent: cachedManifestMatches(manifest)
     });
-    const { source } = await fetchAndVerify(manifest);
-    await installSource(manifest, source, reason);
     state.lastError = '';
     return true;
   }
@@ -743,7 +908,7 @@
         scriptUrl: manifest.scriptUrl,
         manifestUrl
       });
-      if (!botNeedsInstall(manifest)) {
+      if (!botNeedsInstall(manifest) && cachedManifestMatches(manifest)) {
         logBootstrap('poll ok: bot current', { reason, version: manifest.version, status: shortStatus() });
         postDebug('ok', { reason, version: manifest.version, sha256: manifest.sha256 });
         return;
@@ -927,27 +1092,39 @@
     const status = getBotStatus();
     const missing = !status || !status.running;
     const stale = status && tickIsStale(status);
+    const blockedStrategy = runningBotUsesBlockedStrategy(status);
     const mismatched = manifest && status && status.running
       && (String(status.sourceHash || '') !== String(manifest.sha256 || '') || String(status.version || '') !== String(manifest.version || ''));
-    if (missing || stale || mismatched) {
+    if (missing || stale || mismatched || blockedStrategy) {
       logBootstrap('watchdog reinstall needed', {
         reason,
         missing,
         stale,
         mismatched,
+        blockedStrategy,
+        minVersion: MIN_REMOTE_BOT_VERSION,
         manifestVersion: manifest?.version || '',
         manifestHash: manifest?.sha256 || '',
         status: shortStatus(status)
       });
     }
-    if (!missing && !stale && !mismatched) {
+    if (!missing && !stale && !mismatched && !blockedStrategy) {
       logBootstrap('watchdog ok', { reason, status: shortStatus(status) });
       await maybeStartGameLogin(reason);
       return;
     }
     try {
+      if (blockedStrategy && (!manifest || remoteBotVersionIsBlocked(manifest.version))) {
+        stopBlockedRunningBot(`watchdog:${reason}:blocked-strategy`, status);
+        await pollOnce(`${reason}-blocked-strategy`);
+        return;
+      }
       if (!manifest) {
         await pollOnce(reason);
+        return;
+      }
+      if (status?.running && (mismatched || blockedStrategy) && !remoteBotVersionIsBlocked(manifest.version)) {
+        await restartForCachedUpdate(manifest, `watchdog:${reason}`, status);
         return;
       }
       const busyToken = beginBusy(`watchdog:${reason}`, { installing: true });
@@ -955,8 +1132,13 @@
       clearBusy(busyToken);
     } catch (err) {
       state.lastError = err?.message || String(err);
-      logBootstrap('watchdog error', { reason, error: state.lastError, missing, stale, mismatched });
-      postDebug('watchdog-error', { reason, error: state.lastError, missing, stale, mismatched }, { force: true });
+      logBootstrap('watchdog error', { reason, error: state.lastError, missing, stale, mismatched, blockedStrategy });
+      postDebug('watchdog-error', { reason, error: state.lastError, missing, stale, mismatched, blockedStrategy }, { force: true });
+      if (blockedStrategy) {
+        clearBusy(state.busyToken);
+        stopBlockedRunningBot(`watchdog:${reason}:error`, status);
+        await pollOnce(`${reason}-blocked-strategy-error`);
+      }
     } finally {
       if (String(state.busyReason || '').startsWith(`watchdog:${reason}`)) clearBusy(state.busyToken);
     }
