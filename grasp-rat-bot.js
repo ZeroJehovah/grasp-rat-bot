@@ -89,20 +89,21 @@ Options:
 
 function runSelfTest() {
   const cfg = {
-    dangerRadius: 28000,
-    activeCautionRadius: 38000,
-    activeCautionExitMargin: 4000,
-    activeReturnBlockMargin: 5000,
-    activeReturnBlockExitMargin: 5000,
-    activeReturnBlockResumeMargin: 8000,
-    activeReturnBlockClearMargin: 10000,
+    dangerRadius: 17000,
+    activeCautionRadius: 23000,
+    activeCautionExitMargin: 2000,
+    activeAvoidMaxDistance: 25000,
+    activeReturnBlockMargin: 0,
+    activeReturnBlockExitMargin: 0,
+    activeReturnBlockResumeMargin: 0,
+    activeReturnBlockClearMargin: 0,
     returnBlockScanHeadingMs: 2600,
     returnBlockScanStuckMs: 1400,
     returnBlockScanStuckDistance: 350,
     returnBlockCooldownMs: 8000,
     stationaryActiveDangerRadius: 18000,
     stationaryActiveCautionRadius: 22000,
-    attackDangerRadius: 30000,
+    attackDangerRadius: 25000,
     attackRange: 14500,
     attackEngageRange: 11000,
     attackApproachRange: 26000,
@@ -118,7 +119,7 @@ function runSelfTest() {
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
     coinMaxDistance: 18000,
-    coinDangerRadius: 30000,
+    coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 22000,
     patrolCoinMaxDistance: 22000,
@@ -137,6 +138,9 @@ function runSelfTest() {
     footCoinPriorityDistance: 1200,
     nearCoinPriorityDistance: 13500,
     activeReturnBlockCoinPassDistance: 900,
+    postAttackDropCoinPriorityMs: 12000,
+    postAttackDropCoinRadius: 3500,
+    postAttackDropCoinMaxDistance: 22000,
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
@@ -313,7 +317,8 @@ function runSelfTest() {
   }
 
   function returnBlockRadius(threat) {
-    return threat.cautionRadius + cfg.activeCautionExitMargin + cfg.activeReturnBlockMargin;
+    const limit = Math.max(0, Number(cfg.activeAvoidMaxDistance || 0) || Infinity);
+    return Math.min(limit, threat.cautionRadius + cfg.activeCautionExitMargin + cfg.activeReturnBlockMargin);
   }
 
   function returnBlockExitRadius(threat) {
@@ -597,10 +602,10 @@ function runSelfTest() {
       want: 'flee'
     },
     {
-      name: 'active player near active-view edge triggers early flee',
+      name: 'moving active inside 17k triggers early flee',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+        local: [{ user_id: 4, x: 16000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
       }).kind,
       want: 'flee'
     },
@@ -608,7 +613,7 @@ function runSelfTest() {
       name: 'active player in caution ring triggers migration when no safe coin exists',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 36000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+        local: [{ user_id: 4, x: 24000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
       }).kind,
       want: 'flee'
     },
@@ -616,7 +621,7 @@ function runSelfTest() {
       name: 'moving active beyond narrowed caution does not force far flee',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+        local: [{ user_id: 4, x: 30000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
       }).kind,
       want: 'patrol'
     },
@@ -633,7 +638,7 @@ function runSelfTest() {
       name: 'stationary non-full active inside narrowed caution keeps migrating',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 25000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 5000, death_reward_preview: 7 }],
+        local: [{ user_id: 4, x: 23000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 5000, death_reward_preview: 7 }],
         coins: [{ drop_id: 2, x: -18000, y: 0, amount: 1 }]
       }).kind,
       want: 'flee'
@@ -668,7 +673,7 @@ function runSelfTest() {
       name: 'active caution blocks medium coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 36000, y: 0, current_join_mode: 'Active', vx: -50 }],
+        local: [{ user_id: 4, x: 24000, y: 0, current_join_mode: 'Active', vx: -50 }],
         coins: [{ drop_id: 2, x: -22000, y: 0, amount: 5 }]
       }).kind,
       want: 'flee'
@@ -678,7 +683,7 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [
-          { user_id: 4, x: 36000, y: 0, current_join_mode: 'Active', vx: -50 },
+          { user_id: 4, x: 24000, y: 0, current_join_mode: 'Active', vx: -50 },
           { user_id: 17, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 17 }
         ]
       }).kind,
@@ -688,7 +693,7 @@ function runSelfTest() {
       name: 'return block prevents moving back toward nearby active',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 23000, y: 0, current_join_mode: 'Active' })],
         { kind: 'coin', dx: 1, dy: 0 }
       ).kind,
       want: 'flee'
@@ -697,7 +702,7 @@ function runSelfTest() {
       name: 'return block allows moving away from nearby active',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 23000, y: 0, current_join_mode: 'Active' })],
         { kind: 'coin', dx: -1, dy: 0, target: { distance: 500 } }
       ).kind,
       want: 'coin'
@@ -706,7 +711,7 @@ function runSelfTest() {
       name: 'return block scans instead of fleeing when already backing away',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 23000, y: 0, current_join_mode: 'Active' })],
         { kind: 'coin', dx: -1, dy: 0, target: { distance: 5000 } }
       ).kind,
       want: 'patrol'
@@ -715,7 +720,7 @@ function runSelfTest() {
       name: 'return block scans instead of far fleeing when not heading toward active',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 23000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: 0, dy: -1, target: { distance: 90000 } }
       ).kind,
       want: 'patrol'
@@ -724,31 +729,31 @@ function runSelfTest() {
       name: 'return block scans inside exit radius when moving away after fresh injection',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 35000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 23000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: -1, dy: -1, target: { distance: 120000 } }
       ).kind,
       want: 'patrol'
     },
     {
-      name: 'return block guards against turning back after exit radius',
+      name: 'return block guards against turning back inside 25k cap',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 43000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 23000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: 1, dy: 0, target: { distance: 120000 } }
       ).kind,
       want: 'flee'
     },
     {
-      name: 'return block allows moving farther away after exit radius',
+      name: 'return block allows moving after 25k cap',
       got: blockThreatReturnAction(
         { user_id: 1, x: 0, y: 0 },
-        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 43000, y: 0, current_join_mode: 'Active' })],
+        [decorateThreat({ x: 0, y: 0 }, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active' })],
         { kind: 'seek-coin', dx: -1, dy: 0, target: { distance: 120000 } }
       ).kind,
       want: 'seek-coin'
     },
     {
-      name: 'return block uses lateral scan instead of far migration away from active',
+      name: 'far active no longer forces return-block scan',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
@@ -757,11 +762,11 @@ function runSelfTest() {
           { drop_id: 3, x: -94000, y: 2000, amount: 1 },
           { drop_id: 4, x: -98000, y: -2000, amount: 1 }
         ]
-      }).reason,
-      want: 'return-block-lateral-scan'
+      }).kind,
+      want: 'patrol'
     },
     {
-      name: 'return block avoids far migration toward active',
+      name: 'far active no longer blocks distant migration by return-block',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
@@ -770,9 +775,9 @@ function runSelfTest() {
           { drop_id: 3, x: 74000, y: 2000, amount: 1 },
           { drop_id: 4, x: 78000, y: -2000, amount: 1 }
         ]
-      }).reason,
-      want: 'return-block-lateral-scan'
-    },
+      }).kind,
+      want: 'patrol'
+      },
     {
       name: 'full hp low stamina still patrols',
       got: choose({
@@ -1000,13 +1005,14 @@ function browserBotSource(config) {
     debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
     tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
-    dangerRadius: 28000,
-    activeCautionRadius: 38000,
-    activeCautionExitMargin: 4000,
-    activeReturnBlockMargin: 5000,
-    activeReturnBlockExitMargin: 5000,
-    activeReturnBlockResumeMargin: 8000,
-    activeReturnBlockClearMargin: 10000,
+    dangerRadius: 17000,
+    activeCautionRadius: 23000,
+    activeCautionExitMargin: 2000,
+    activeAvoidMaxDistance: 25000,
+    activeReturnBlockMargin: 0,
+    activeReturnBlockExitMargin: 0,
+    activeReturnBlockResumeMargin: 0,
+    activeReturnBlockClearMargin: 0,
     returnBlockScanHeadingMs: 2600,
     returnBlockScanStuckMs: 1400,
     returnBlockScanStuckDistance: 350,
@@ -1024,7 +1030,7 @@ function browserBotSource(config) {
     attackPreferredRange: 14500,
     attackEngageRange: 11000,
     attackApproachRange: 26000,
-    attackDangerRadius: 30000,
+    attackDangerRadius: 25000,
     globalAttackMaxDistance: 26000,
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
@@ -1036,7 +1042,7 @@ function browserBotSource(config) {
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
     coinMaxDistance: 18000,
-    coinDangerRadius: 30000,
+    coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 22000,
     patrolCoinMaxDistance: 22000,
@@ -1055,6 +1061,9 @@ function browserBotSource(config) {
     footCoinPriorityDistance: 1200,
     nearCoinPriorityDistance: 13500,
     activeReturnBlockCoinPassDistance: 900,
+    postAttackDropCoinPriorityMs: 12000,
+    postAttackDropCoinRadius: 3500,
+    postAttackDropCoinMaxDistance: 22000,
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
@@ -2572,7 +2581,8 @@ function browserBotSource(config) {
   }
 
   function returnBlockRadius(threat) {
-    return threat.cautionRadius + cfg.activeCautionExitMargin + cfg.activeReturnBlockMargin;
+    const limit = Math.max(0, Number(cfg.activeAvoidMaxDistance || 0) || Infinity);
+    return Math.min(limit, threat.cautionRadius + cfg.activeCautionExitMargin + cfg.activeReturnBlockMargin);
   }
 
   function returnBlockExitRadius(threat) {
@@ -2604,7 +2614,7 @@ function browserBotSource(config) {
     const recentId = bot.returnBlockRecentThreatId || bot.returnBlockLock?.id || '';
     if (recentId) {
       const recent = activeThreats.find(threat => threatKey(threat) === String(recentId));
-      if (recent && (recent.distance <= returnBlockSuppressRadius(recent) || t < Number(bot.returnBlockCooldownUntil || 0))) {
+      if (recent && recent.distance <= returnBlockSuppressRadius(recent)) {
         return recent;
       }
       if (t >= Number(bot.returnBlockCooldownUntil || 0)) {
@@ -2961,6 +2971,44 @@ function browserBotSource(config) {
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function recentAttackTargetStillAttackable(attack, entities) {
+    const id = String(attack?.id ?? '');
+    const name = String(attack?.name || '');
+    const target = (entities || []).find(entity => {
+      if (id && String(entity.user_id ?? entity.id ?? '') === id) return true;
+      return name && String(entity.name || '') === name;
+    });
+    if (!target || !isAlive(target)) return false;
+    if (isCurrentlyActive(target)) return false;
+    if (Number(target.invulnerable_remaining_ticks || 0) > 0) return false;
+    return dropValue(target) > 0;
+  }
+
+  function pickPostAttackDropCoin(self, coins, activeThreats, entities) {
+    const t = Date.now();
+    const attack = bot.attackHistory
+      .slice()
+      .reverse()
+      .find(item => t - Number(item.at || 0) <= cfg.postAttackDropCoinPriorityMs
+        && Number.isFinite(Number(item.x))
+        && Number.isFinite(Number(item.y)));
+    if (!attack || recentAttackTargetStillAttackable(attack, entities)) return null;
+    const candidates = safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
+      .filter(coin => dist(coin, attack) <= cfg.postAttackDropCoinRadius)
+      .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
+    const coin = candidates[0] || null;
+    if (!coin) return null;
+    return {
+      ...coin,
+      postAttackTarget: {
+        id: attack.id,
+        name: attack.name || '',
+        drop: attack.drop,
+        ageMs: Math.max(0, Math.round(t - Number(attack.at || t)))
+      }
+    };
+  }
+
   function enemyOpportunityCandidates(self, targets, activeThreats) {
     const byId = new Map();
     for (const raw of targets) {
@@ -3079,8 +3127,9 @@ function browserBotSource(config) {
     }
     for (const threat of activeThreats.slice(0, 4)) {
       const d = Math.max(1, dist(self, threat));
-      if (d > cfg.activeCautionRadius * 1.4) continue;
-      const weight = (cfg.activeCautionRadius * 1.4 - d + 1000) / d;
+      const activeLimit = Math.max(cfg.dangerRadius, Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius));
+      if (d > activeLimit) continue;
+      const weight = (activeLimit - d + 1000) / d;
       vx += (Number(self.x) - Number(threat.x)) * weight / d;
       vy += (Number(self.y) - Number(threat.y)) * weight / d;
     }
@@ -3440,6 +3489,18 @@ function browserBotSource(config) {
         dy: dir.dy,
         ...coinMotionMeta(dir)
       };
+    }
+
+    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, activeThreats, entities);
+    if (postAttackCoin) {
+      bot.fleeLock = null;
+      if (bot.lastTarget?.kind === 'enemy') {
+        bot.lastTarget = null;
+        bot.lastTargetAt = 0;
+      }
+      const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
+      action.postAttackTarget = postAttackCoin.postAttackTarget;
+      return action;
     }
 
     const opportunity = pickBestOpportunity(

@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.8","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.9","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -32,13 +32,14 @@
     debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
     tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
-    dangerRadius: 28000,
-    activeCautionRadius: 38000,
-    activeCautionExitMargin: 4000,
-    activeReturnBlockMargin: 5000,
-    activeReturnBlockExitMargin: 5000,
-    activeReturnBlockResumeMargin: 8000,
-    activeReturnBlockClearMargin: 10000,
+    dangerRadius: 17000,
+    activeCautionRadius: 23000,
+    activeCautionExitMargin: 2000,
+    activeAvoidMaxDistance: 25000,
+    activeReturnBlockMargin: 0,
+    activeReturnBlockExitMargin: 0,
+    activeReturnBlockResumeMargin: 0,
+    activeReturnBlockClearMargin: 0,
     returnBlockScanHeadingMs: 2600,
     returnBlockScanStuckMs: 1400,
     returnBlockScanStuckDistance: 350,
@@ -56,7 +57,7 @@
     attackPreferredRange: 14500,
     attackEngageRange: 11000,
     attackApproachRange: 26000,
-    attackDangerRadius: 30000,
+    attackDangerRadius: 25000,
     globalAttackMaxDistance: 26000,
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
@@ -68,7 +69,7 @@
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
     coinMaxDistance: 18000,
-    coinDangerRadius: 30000,
+    coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 22000,
     patrolCoinMaxDistance: 22000,
@@ -87,6 +88,9 @@
     footCoinPriorityDistance: 1200,
     nearCoinPriorityDistance: 13500,
     activeReturnBlockCoinPassDistance: 900,
+    postAttackDropCoinPriorityMs: 12000,
+    postAttackDropCoinRadius: 3500,
+    postAttackDropCoinMaxDistance: 22000,
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
@@ -1604,7 +1608,8 @@
   }
 
   function returnBlockRadius(threat) {
-    return threat.cautionRadius + cfg.activeCautionExitMargin + cfg.activeReturnBlockMargin;
+    const limit = Math.max(0, Number(cfg.activeAvoidMaxDistance || 0) || Infinity);
+    return Math.min(limit, threat.cautionRadius + cfg.activeCautionExitMargin + cfg.activeReturnBlockMargin);
   }
 
   function returnBlockExitRadius(threat) {
@@ -1636,7 +1641,7 @@
     const recentId = bot.returnBlockRecentThreatId || bot.returnBlockLock?.id || '';
     if (recentId) {
       const recent = activeThreats.find(threat => threatKey(threat) === String(recentId));
-      if (recent && (recent.distance <= returnBlockSuppressRadius(recent) || t < Number(bot.returnBlockCooldownUntil || 0))) {
+      if (recent && recent.distance <= returnBlockSuppressRadius(recent)) {
         return recent;
       }
       if (t >= Number(bot.returnBlockCooldownUntil || 0)) {
@@ -1993,6 +1998,44 @@
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function recentAttackTargetStillAttackable(attack, entities) {
+    const id = String(attack?.id ?? '');
+    const name = String(attack?.name || '');
+    const target = (entities || []).find(entity => {
+      if (id && String(entity.user_id ?? entity.id ?? '') === id) return true;
+      return name && String(entity.name || '') === name;
+    });
+    if (!target || !isAlive(target)) return false;
+    if (isCurrentlyActive(target)) return false;
+    if (Number(target.invulnerable_remaining_ticks || 0) > 0) return false;
+    return dropValue(target) > 0;
+  }
+
+  function pickPostAttackDropCoin(self, coins, activeThreats, entities) {
+    const t = Date.now();
+    const attack = bot.attackHistory
+      .slice()
+      .reverse()
+      .find(item => t - Number(item.at || 0) <= cfg.postAttackDropCoinPriorityMs
+        && Number.isFinite(Number(item.x))
+        && Number.isFinite(Number(item.y)));
+    if (!attack || recentAttackTargetStillAttackable(attack, entities)) return null;
+    const candidates = safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
+      .filter(coin => dist(coin, attack) <= cfg.postAttackDropCoinRadius)
+      .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
+    const coin = candidates[0] || null;
+    if (!coin) return null;
+    return {
+      ...coin,
+      postAttackTarget: {
+        id: attack.id,
+        name: attack.name || '',
+        drop: attack.drop,
+        ageMs: Math.max(0, Math.round(t - Number(attack.at || t)))
+      }
+    };
+  }
+
   function enemyOpportunityCandidates(self, targets, activeThreats) {
     const byId = new Map();
     for (const raw of targets) {
@@ -2111,8 +2154,9 @@
     }
     for (const threat of activeThreats.slice(0, 4)) {
       const d = Math.max(1, dist(self, threat));
-      if (d > cfg.activeCautionRadius * 1.4) continue;
-      const weight = (cfg.activeCautionRadius * 1.4 - d + 1000) / d;
+      const activeLimit = Math.max(cfg.dangerRadius, Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius));
+      if (d > activeLimit) continue;
+      const weight = (activeLimit - d + 1000) / d;
       vx += (Number(self.x) - Number(threat.x)) * weight / d;
       vy += (Number(self.y) - Number(threat.y)) * weight / d;
     }
@@ -2472,6 +2516,18 @@
         dy: dir.dy,
         ...coinMotionMeta(dir)
       };
+    }
+
+    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, activeThreats, entities);
+    if (postAttackCoin) {
+      bot.fleeLock = null;
+      if (bot.lastTarget?.kind === 'enemy') {
+        bot.lastTarget = null;
+        bot.lastTargetAt = 0;
+      }
+      const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
+      action.postAttackTarget = postAttackCoin.postAttackTarget;
+      return action;
     }
 
     const opportunity = pickBestOpportunity(
