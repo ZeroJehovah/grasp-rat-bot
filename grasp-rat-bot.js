@@ -1002,6 +1002,7 @@ function browserBotSource(config) {
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
     nativeReconnectMs: 3000,
     botWsReconnectMs: 3000,
+    allowNativeReconnect: Boolean(config.allowNativeReconnect),
     allowBotWebSocketFallback: Boolean(config.allowBotWebSocketFallback),
     dangerRadius: 28000,
     activeCautionRadius: 38000,
@@ -1800,6 +1801,10 @@ function browserBotSource(config) {
 
 	  function requestNativeReconnect(userId) {
 	    if (!userId) return;
+	    if (!cfg.allowNativeReconnect) {
+	      bot.control.lastError = 'native reconnect disabled; page owns websocket reconnect';
+	      return false;
+	    }
 	    const t = Date.now();
 	    if (t - Number(bot.control.lastNativeReconnectAt || 0) < cfg.nativeReconnectMs) {
 	      return false;
@@ -1850,6 +1855,7 @@ function browserBotSource(config) {
 	      wsReadyState: native ? native.wsReadyState : (control.ws ? control.ws.readyState : control.wsReadyState),
 	      connecting: Boolean(control.connecting),
 	      transport: control.transport || (native ? 'native-page' : (control.ws ? 'bot-websocket' : 'none')),
+	      allowNativeReconnect: Boolean(cfg.allowNativeReconnect),
 	      allowBotWebSocketFallback: Boolean(cfg.allowBotWebSocketFallback),
 	      nativeWsOpen: Boolean(native?.wsOpen),
 	      nativeWsReadyState: native ? native.wsReadyState : null,
@@ -1932,7 +1938,7 @@ function browserBotSource(config) {
 	      if (bot.control.ws) closeControlWs();
 	      if (syncNativeControl(native)) return true;
 	      if (native.wsReadyState === WebSocket.CONNECTING) return false;
-	      requestNativeReconnect(userId);
+	      if (cfg.allowNativeReconnect) requestNativeReconnect(userId);
 	      return false;
 	    }
 	    if (!cfg.allowBotWebSocketFallback) {

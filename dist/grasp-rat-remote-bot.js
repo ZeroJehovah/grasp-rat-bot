@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.2","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.3.3","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -34,6 +34,7 @@
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
     nativeReconnectMs: 3000,
     botWsReconnectMs: 3000,
+    allowNativeReconnect: Boolean(config.allowNativeReconnect),
     allowBotWebSocketFallback: Boolean(config.allowBotWebSocketFallback),
     dangerRadius: 28000,
     activeCautionRadius: 38000,
@@ -832,6 +833,10 @@
 
 	  function requestNativeReconnect(userId) {
 	    if (!userId) return;
+	    if (!cfg.allowNativeReconnect) {
+	      bot.control.lastError = 'native reconnect disabled; page owns websocket reconnect';
+	      return false;
+	    }
 	    const t = Date.now();
 	    if (t - Number(bot.control.lastNativeReconnectAt || 0) < cfg.nativeReconnectMs) {
 	      return false;
@@ -882,6 +887,7 @@
 	      wsReadyState: native ? native.wsReadyState : (control.ws ? control.ws.readyState : control.wsReadyState),
 	      connecting: Boolean(control.connecting),
 	      transport: control.transport || (native ? 'native-page' : (control.ws ? 'bot-websocket' : 'none')),
+	      allowNativeReconnect: Boolean(cfg.allowNativeReconnect),
 	      allowBotWebSocketFallback: Boolean(cfg.allowBotWebSocketFallback),
 	      nativeWsOpen: Boolean(native?.wsOpen),
 	      nativeWsReadyState: native ? native.wsReadyState : null,
@@ -964,7 +970,7 @@
 	      if (bot.control.ws) closeControlWs();
 	      if (syncNativeControl(native)) return true;
 	      if (native.wsReadyState === WebSocket.CONNECTING) return false;
-	      requestNativeReconnect(userId);
+	      if (cfg.allowNativeReconnect) requestNativeReconnect(userId);
 	      return false;
 	    }
 	    if (!cfg.allowBotWebSocketFallback) {
