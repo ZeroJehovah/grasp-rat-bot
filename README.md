@@ -1,0 +1,101 @@
+# Grasp Rat Bot
+
+This repository contains the browser-side automation scripts for `https://grasp-rat-game.h-e.top/`.
+
+The primary runtime is now Tampermonkey-based:
+
+- `userscript/grasp-rat-bootstrap.user.js` is script A. Install it in the user's normal Chrome. It checks the manifest every second, verifies the remote bot hash, injects the bot, and hot-updates without stopping a working old bot when download or verification fails.
+- `dist/grasp-rat-remote-bot.js` is script B. It contains the game strategy and native page WebSocket control.
+- `dist/manifest.json` points A at B and includes the SHA-256 hash A must verify before injection.
+- `grasp-rat-debug-api.js` is a local WSL debug/development API. It receives browser debug events and can serve local `dist/` files for development.
+
+The older CDP entry points remain available in `grasp-rat-bot.js` as a fallback, but normal use should prefer Tampermonkey injection.
+
+## Install Script A
+
+1. Install Tampermonkey in normal Chrome.
+2. Open `userscript/grasp-rat-bootstrap.user.js` and install it.
+3. Open `https://grasp-rat-game.h-e.top/` in normal Chrome and log in normally.
+
+By default the bootstrap loads:
+
+```text
+https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json
+```
+
+The bootstrap polls once per second. On refresh, navigation, relogin, or page recovery, Tampermonkey runs again and injects the bot from the latest verified manifest.
+
+## Build Script B
+
+After changing strategy code in `grasp-rat-bot.js`, regenerate the remote bot and manifest:
+
+```bash
+node scripts/build-remote-bot.js
+```
+
+Use an explicit version when needed:
+
+```bash
+node scripts/build-remote-bot.js --version 20260608-remote-loader
+```
+
+Then commit and push `dist/grasp-rat-remote-bot.js` and `dist/manifest.json`. Installed bootstrap scripts will pick up the new manifest on the next poll.
+
+## Local Debug API
+
+Start the debug API from WSL:
+
+```bash
+node grasp-rat-debug-api.js
+```
+
+It listens on `0.0.0.0:18777` and provides:
+
+- `POST /events` for bot/debug events.
+- `GET /events` for recent events.
+- `GET /health` for status.
+- `GET /bot/manifest.json` and `GET /bot/grasp-rat-remote-bot.js` for local development files.
+
+Events are written to `grasp-rat-debug-events.log`, which is ignored by git.
+
+## Local Development Loader
+
+To temporarily load from the WSL debug API instead of GitHub, run this in the game page console:
+
+```js
+window.__graspRatBotBootstrap.setManifestUrl('http://127.0.0.1:18777/bot/manifest.json')
+```
+
+To switch back to GitHub:
+
+```js
+window.__graspRatBotBootstrap.setManifestUrl('https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json')
+```
+
+If Windows Chrome cannot reach WSL through `127.0.0.1`, use the WSL IP instead and update the URL accordingly.
+
+## Validation
+
+Run these checks before pushing strategy changes:
+
+```bash
+node --check grasp-rat-bot.js
+node --check grasp-rat-debug-api.js
+node --check scripts/build-remote-bot.js
+node --check userscript/grasp-rat-bootstrap.user.js
+node grasp-rat-bot.js --self-test
+node scripts/build-remote-bot.js
+```
+
+## CDP Fallback
+
+The old CDP fallback commands still exist:
+
+```bash
+node grasp-rat-bot.js
+node grasp-rat-bot.js --status
+node grasp-rat-bot.js --diagnose
+node grasp-rat-stop.js
+```
+
+Use them only for deliberate debugging. The primary injection path is the Tampermonkey bootstrap.

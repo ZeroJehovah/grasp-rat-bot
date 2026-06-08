@@ -1,0 +1,7 @@
+*.log
+*.pid
+*-state.json
+AGENTS.md
+grasp-rat-debug-events.log
+node_modules/
+.DS_Store
