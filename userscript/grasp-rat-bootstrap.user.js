@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.8
+// @version      0.4.9
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.8';
+  const BOOTSTRAP_VERSION = '0.4.9';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -154,6 +154,13 @@
     try {
       console.log('[grasp-rat-bootstrap]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
     } catch (_) {}
+  }
+
+  function noteBootstrapError(message, err, detail = {}) {
+    const error = err?.message || String(err);
+    state.lastError = `${message}: ${error}`;
+    logBootstrap(message, { ...detail, error });
+    return state.lastError;
   }
 
   function beginBusy(reason, flags = {}) {
@@ -375,30 +382,35 @@
   }
 
   function syncPauseToPage() {
-    const paused = isPaused();
-    unsafeWindow.__graspRatBotPaused = paused;
-    unsafeWindow.__graspRatBotPauseReason = paused ? (state.pauseReason || 'manual') : '';
     try {
-      localStorage.setItem(PAUSED_KEY, paused ? 'true' : 'false');
-      if (paused) localStorage.setItem(PAUSE_REASON_KEY, state.pauseReason || 'manual');
-      else localStorage.removeItem(PAUSE_REASON_KEY);
-    } catch (_) {}
-    const bot = unsafeWindow.__graspRatBot || null;
-    try {
-      if (bot?.setPaused) {
-        const reason = paused ? (state.pauseReason || 'bootstrap') : 'bootstrap resume';
-        const botPaused = Boolean(bot.paused);
-        const botReason = String(bot.pauseReason || '');
-        if (botPaused !== paused || (paused && botReason !== reason)) {
-          bot.setPaused(paused, reason);
+      const paused = isPaused();
+      unsafeWindow.__graspRatBotPaused = paused;
+      unsafeWindow.__graspRatBotPauseReason = paused ? (state.pauseReason || 'manual') : '';
+      try {
+        localStorage.setItem(PAUSED_KEY, paused ? 'true' : 'false');
+        if (paused) localStorage.setItem(PAUSE_REASON_KEY, state.pauseReason || 'manual');
+        else localStorage.removeItem(PAUSE_REASON_KEY);
+      } catch (_) {}
+      const bot = unsafeWindow.__graspRatBot || null;
+      try {
+        if (bot?.setPaused) {
+          const reason = paused ? (state.pauseReason || 'bootstrap') : 'bootstrap resume';
+          const botPaused = Boolean(bot.paused);
+          const botReason = String(bot.pauseReason || '');
+          if (botPaused !== paused || (paused && botReason !== reason)) {
+            bot.setPaused(paused, reason);
+          }
+        } else if (paused && bot?.stop) {
+          bot.stop('paused by bootstrap');
         }
-      } else if (paused && bot?.stop) {
-        bot.stop('paused by bootstrap');
+      } catch (err) {
+        noteBootstrapError('pause sync failed', err);
       }
+      return paused;
     } catch (err) {
-      state.lastError = 'pause sync failed: ' + (err?.message || String(err));
+      noteBootstrapError('pause state sync failed', err);
+      return Boolean(state.paused);
     }
-    return paused;
   }
 
   function setPaused(paused, reason = 'panel') {
@@ -446,7 +458,38 @@
     return panel;
   }
 
-  function updateBootstrapPanel(force = false) {
+  function renderBootstrapPanelError(message) {
+    try {
+      if (!isGamePage() || !document.body) return;
+      let panel = document.getElementById(PANEL_ID);
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = PANEL_ID;
+        document.body.appendChild(panel);
+      }
+      panel.style.cssText = [
+        'position:fixed',
+        'right:12px',
+        'top:12px',
+        'z-index:2147483647',
+        'width:min(360px,calc(100vw - 24px))',
+        'max-width:360px',
+        'box-sizing:border-box',
+        'padding:10px 12px',
+        'border:1px solid rgba(248,113,113,.45)',
+        'border-radius:8px',
+        'background:rgba(15,23,42,.92)',
+        'color:#fee2e2',
+        'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif',
+        'box-shadow:0 10px 32px rgba(0,0,0,.38)',
+        'pointer-events:auto',
+        'white-space:normal'
+      ].join(';');
+      panel.textContent = `BOT 面板错误：${message || state.lastError || 'unknown error'}`;
+    } catch (_) {}
+  }
+
+  function renderBootstrapPanel(force = false) {
     if (!isGamePage()) return;
     const t = Date.now();
     if (!force && t - Number(state.lastPanelUpdateAt || 0) < cfg.panelUpdateMs) return;
@@ -515,6 +558,15 @@
         event.stopPropagation();
         setPaused(!isPaused(), 'panel button');
       }, { once: true });
+    }
+  }
+
+  function updateBootstrapPanel(force = false) {
+    try {
+      renderBootstrapPanel(force);
+    } catch (err) {
+      const message = noteBootstrapError('panel update failed', err);
+      renderBootstrapPanelError(message);
     }
   }
 
