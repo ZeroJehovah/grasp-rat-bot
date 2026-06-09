@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.17","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.18","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -3089,7 +3089,10 @@
     if (!candidates.length) return null;
     if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
       const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
-      if (sticky) return { ...sticky, snapshotMembers: 1, snapshotAmount: Number(sticky.amount || 0), snapshotScore: scoreCoinOpportunity(sticky), snapshotAgeMs: ageMs };
+      if (sticky) {
+        const score = scoreCoinOpportunity(sticky);
+        return { ...sticky, snapshotMembers: 1, snapshotAmount: Number(sticky.amount || 0), snapshotScore: score, opportunityScore: score, snapshotAgeMs: ageMs };
+      }
     }
     let best = null;
     const radius = Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius);
@@ -3113,10 +3116,16 @@
         best = item;
       }
     }
-    return best || candidates[0];
+    if (best) return { ...best, opportunityScore: best.snapshotScore };
+    const first = candidates[0];
+    if (!first) return null;
+    const score = scoreCoinOpportunity(first);
+    return { ...first, snapshotMembers: 1, snapshotAmount: Number(first.amount || 0), snapshotScore: score, opportunityScore: score, snapshotAgeMs: ageMs };
   }
 
   function scoreCoinOpportunity(coin) {
+    const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? NaN);
+    if (Number.isFinite(override)) return override;
     const sticky = bot.lastTarget?.kind === 'coin'
       && String(bot.lastTarget.id) === String(coin.drop_id)
       && now() - bot.lastTargetAt < cfg.coinStickMs;
@@ -3237,7 +3246,16 @@
     return {
       kind: kind || (coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'),
       reason,
-      target: { id: coin.drop_id, x: coin.x, y: coin.y, amount: coin.amount, distance: Math.round(dir.distance) },
+      target: {
+        id: coin.drop_id,
+        x: coin.x,
+        y: coin.y,
+        amount: coin.amount,
+        distance: Math.round(dir.distance),
+        fieldMembers: coin.snapshotMembers ?? coin.fieldMembers ?? null,
+        fieldAmount: coin.snapshotAmount ?? coin.fieldAmount ?? null,
+        snapshotAgeMs: Number.isFinite(Number(coin.snapshotAgeMs)) ? Math.round(Number(coin.snapshotAgeMs)) : null
+      },
       dx: dir.dx,
       dy: dir.dy,
       ...coinMotionMeta(dir),
@@ -3285,6 +3303,9 @@
       }
     }
     for (const coin of coinById.values()) {
+      const reason = coin.snapshotMembers
+        ? (coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target')
+        : (coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin');
       opportunities.push({
         type: 'coin',
         distance: coin.distance,
@@ -3292,7 +3313,7 @@
         action: () => buildCoinAction(
           self,
           coin,
-          coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin'
+          reason
         )
       });
     }
@@ -3805,10 +3826,12 @@
       }, self, entities, { recovery });
     }
 
+    const snapshotCompetitionCoin = pickSnapshotCoinDestination(snapshotCoins, coinThreats);
     const opportunityCoinGroups = [
       { coins, maxDistance: cfg.coinMaxDistance },
       { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
-      { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance }
+      { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance },
+      ...(snapshotCompetitionCoin ? [{ coins: [snapshotCompetitionCoin], maxDistance: cfg.snapshotCoinMaxDistance }] : [])
     ];
     const profitableCombatTarget = pickProfitableCombatTarget(self, combatTargets, bullets, opportunityCoinGroups, coinThreats);
     if (profitableCombatTarget) {
@@ -3877,7 +3900,7 @@
       return buildReturnBlockScanAction(self, avoidanceThreats, nearbyHumans);
     }
 
-    const snapshotCoin = pickSnapshotCoinDestination(snapshotCoins, coinThreats);
+    const snapshotCoin = snapshotCompetitionCoin;
     if (snapshotCoin) {
       bot.fleeLock = null;
       const action = buildCoinAction(
