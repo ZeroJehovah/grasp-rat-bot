@@ -2531,21 +2531,31 @@ function browserBotSource(config) {
     return { delayMs, minMs, maxMs, hp: info };
   }
 
+  function isExitLoginSuppressReason(reason) {
+    return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ''));
+  }
+
   function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
     let existingUntil = Number(options.existingUntil || 0);
+    let existingReason = '';
     try {
       const storedReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
       const storedUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
-      if (storedReason === storageReason && storedUntil > existingUntil) existingUntil = storedUntil;
+      if (isExitLoginSuppressReason(storedReason) && storedUntil > existingUntil) {
+        existingUntil = storedUntil;
+        existingReason = storedReason;
+      }
     } catch (_) {}
     if (existingUntil > Date.now()) {
-      if (storageReason === 'enemy leave') bot.pursuitReloginUntil = existingUntil;
-      else if (storageReason === 'offline leave') bot.offlineReloginUntil = existingUntil;
+      const holdReason = existingReason || storageReason;
+      if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
+      if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
       if (detail) {
         detail.reloginUntil = existingUntil;
         detail.holdRemainingMs = Math.max(0, Math.round(existingUntil - Date.now()));
         detail.enemyLeaveReason = reason;
-        detail.loginSuppressReason = storageReason;
+        detail.loginSuppressReason = holdReason;
+        detail.reusedExitSuppress = true;
       }
       return existingUntil;
     }

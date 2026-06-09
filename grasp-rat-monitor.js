@@ -1420,14 +1420,29 @@ async function setPageLoginSuppress(cdp, reason, until) {
   } catch (_) {}
 }
 
+function isExitReloginReason(reason) {
+  return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ''));
+}
+
 async function setExitReloginHold(cdp, sample, state, reason) {
-  const current = Number(state.exitReloginUntil || 0);
+  let current = Number(state.exitReloginUntil || 0);
+  let currentReason = state.exitReloginReason || reason;
+  const pageUntil = Number(sample?.page?.loginSuppressUntil || 0) || 0;
+  const pageReason = String(sample?.page?.loginSuppressReason || '');
+  if (isExitReloginReason(pageReason) && pageUntil > current) {
+    current = pageUntil;
+    currentReason = pageReason;
+    state.exitReloginUntil = pageUntil;
+    state.exitReloginReason = pageReason;
+    state.exitReloginHp = state.exitReloginHp || hpInfoForRelogin(sample);
+  }
   if (current > Date.now()) {
+    await setPageLoginSuppress(cdp, currentReason, current);
     return {
       until: current,
       remainingMs: Math.max(0, current - Date.now()),
       reused: true,
-      reason: state.exitReloginReason || reason,
+      reason: currentReason,
       hp: state.exitReloginHp || hpInfoForRelogin(sample)
     };
   }
@@ -1451,7 +1466,7 @@ function syncExitReloginHoldFromSample(sample, state) {
   const page = sample?.page || {};
   const until = Number(page.loginSuppressUntil || 0) || 0;
   const reason = String(page.loginSuppressReason || '');
-  if (!/enemy leave|offline.*leave|combat leave|pursuit leave/i.test(reason)) return null;
+  if (!isExitReloginReason(reason)) return null;
   if (until <= Date.now()) return null;
   if (until > Number(state.exitReloginUntil || 0)) {
     state.exitReloginUntil = until;
