@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Grasp Rat Bot Bootstrap",
+  "version": "0.1.0",
+  "description": "Loads, hot-updates, and supervises the Grasp Rat bot from the shared signed manifest.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "Grasp Rat Bot"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://grasp-rat-game.h-e.top/*",
+        "https://connect.linux.do/oauth2/authorize*"
+      ],
+      "js": [
+        "content-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://grasp-rat-game.h-e.top/*",
+        "https://connect.linux.do/oauth2/authorize*"
+      ],
+      "js": [
+        "page-bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

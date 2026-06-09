@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.42","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.43","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -202,6 +202,7 @@
     serverPositionStallEnabled: true,
     serverPositionStallProbeMs: 1000,
     serverPositionStallMs: 2500,
+    serverPositionNoMoveStallMs: 6000,
     serverPositionStallHoldMs: 6000,
     serverPositionCommandFreshMs: 900,
     serverPositionSnapshotMaxAgeMs: 2500,
@@ -2043,6 +2044,7 @@
       serverMoved: Number.isFinite(Number(state.serverMoved)) ? Math.round(Number(state.serverMoved)) : null,
       gap: Number.isFinite(Number(state.gap)) ? Math.round(Number(state.gap)) : null,
       gapDelta: Number.isFinite(Number(state.gapDelta)) ? Math.round(Number(state.gapDelta)) : null,
+      noServerMove: Boolean(state.noServerMove),
       snapshotAgeMs: Number.isFinite(Number(state.snapshotAgeMs)) ? Math.round(Number(state.snapshotAgeMs)) : null,
       client: state.client ? { x: Math.round(Number(state.client.x) || 0), y: Math.round(Number(state.client.y) || 0) } : null,
       server: state.server ? { x: Math.round(Number(state.server.x) || 0), y: Math.round(Number(state.server.y) || 0) } : null
@@ -2142,15 +2144,21 @@
     const gapDelta = Math.max(0, gap - Number(state.baseGap || 0));
     const movingMs = t - movingSince;
     const ageMs = t - Number(state.startedAt || t);
-    const stalled = movingMs >= Math.max(500, Number(cfg.serverPositionStallMs || 2500))
-      && ageMs >= Math.max(500, Number(cfg.serverPositionStallMs || 2500))
+    const stallMs = Math.max(500, Number(cfg.serverPositionStallMs || 2500));
+    const noMoveStallMs = Math.max(stallMs, Number(cfg.serverPositionNoMoveStallMs || 6000));
+    const clientDiverged = movingMs >= stallMs
+      && ageMs >= stallMs
       && clientMoved >= Math.max(0, Number(cfg.serverPositionClientMoveMin || 300))
       && serverMoved <= serverMoveMax
       && (gap >= Math.max(0, Number(cfg.serverPositionGapMin || 400))
         || gapDelta >= Math.max(0, Number(cfg.serverPositionGapMin || 400)));
+    const noServerMove = movingMs >= noMoveStallMs
+      && ageMs >= noMoveStallMs
+      && serverMoved <= serverMoveMax;
+    const stalled = clientDiverged || noServerMove;
     Object.assign(state, {
       stalled,
-      reason: stalled ? 'server-position-stalled' : 'tracking',
+      reason: stalled ? (noServerMove ? 'server-position-no-move' : 'server-position-stalled') : 'tracking',
       stalledAt: stalled ? (state.stalledAt || t) : 0,
       stalledUntil: stalled ? Math.max(Number(state.stalledUntil || 0), t + Math.max(1000, Number(cfg.serverPositionStallHoldMs || 6000))) : 0,
       client,
@@ -2159,6 +2167,7 @@
       serverMoved,
       gap,
       gapDelta,
+      noServerMove,
       snapshotAgeMs
     });
     if (stalled) bot.control.lastError = 'server position stalled';

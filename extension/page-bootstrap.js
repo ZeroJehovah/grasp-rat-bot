@@ -1,40 +1,19 @@
-// ==UserScript==
-// @name         Grasp Rat Bot Bootstrap
-// @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.18
-// @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
-// @match        https://grasp-rat-game.h-e.top/*
-// @match        https://connect.linux.do/oauth2/authorize*
-// @downloadURL  https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js
-// @updateURL    https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js
-// @run-at       document-start
-// @grant        GM_xmlhttpRequest
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_addElement
-// @grant        unsafeWindow
-// @connect      127.0.0.1
-// @connect      localhost
-// @connect      raw.githubusercontent.com
-// @connect      githubusercontent.com
-// @connect      cdn.jsdelivr.net
-// @connect      github.io
-// @connect      *
-// ==/UserScript==
-
 (function () {
   'use strict';
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.18';
-  const BOOTSTRAP_OWNER = 'tampermonkey';
+  const BOOTSTRAP_VERSION = '0.1.0';
+  const BOOTSTRAP_OWNER = 'extension';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
   const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
+  const REQUEST_CHANNEL = 'grasp-rat-extension-bridge-request';
+  const RESPONSE_CHANNEL = 'grasp-rat-extension-bridge-response';
+
   const BLOCKED_REMOTE_HASHES = new Set([
     '4dd9444acda372a715e559b4e3a03409299aed70c09ceb58cbfd9dbf1178591a',
     'a78f30e186e7cbaac7f2cf351aeaed6edccca787be4f238d5a895046946db58e',
@@ -42,6 +21,7 @@
     '63c091fcff34474608176e2ab98c14fcea146c5c15337b17ee86f44bf5e311ee',
     'f3e5fe9a9cd349bde0d00797e15532c01eb53d814b534ba82faf429ad907f7b6'
   ]);
+
   const FORBIDDEN_REMOTE_SOURCE = [
     { label: 'bot-owned WebSocket constructor', re: /\bnew\s+WebSocket\s*\(/ },
     { label: 'page connectWs control', re: /\bconnectWs\b/ },
@@ -74,40 +54,18 @@
     autoLogin: true
   };
 
-  try {
-    unsafeWindow.__graspRatBotTampermonkeyBootstrapPresent = true;
-    unsafeWindow.__graspRatBotBootstrapOwner = BOOTSTRAP_OWNER;
-  } catch (_) {}
-
-  const cfg = {
-    manifestUrl: String(GM_getValue('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
-    debug: Boolean(GM_getValue('debug', DEFAULTS.debug)),
-    debugEndpoint: String(GM_getValue('debugEndpoint', DEFAULTS.debugEndpoint) || DEFAULTS.debugEndpoint),
-    pollMs: Math.max(5000, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
-    watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
-    busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
-    requestTimeoutMs: Math.max(3000, Number(GM_getValue('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
-    fallbackStaggerMs: Math.max(0, Number(GM_getValue('fallbackStaggerMs', DEFAULTS.fallbackStaggerMs)) || DEFAULTS.fallbackStaggerMs),
-    staleTickMs: Math.max(1000, Number(GM_getValue('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
-    debugEveryMs: Math.max(250, Number(GM_getValue('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
-    statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
-    scriptStartupTimeoutMs: Math.max(500, Number(GM_getValue('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
-    installConfirmMs: Math.max(1000, Number(GM_getValue('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
-    restartAfterCacheUpdateMs: Math.max(0, Number(GM_getValue('restartAfterCacheUpdateMs', DEFAULTS.restartAfterCacheUpdateMs)) || DEFAULTS.restartAfterCacheUpdateMs),
-    loginCooldownMs: Math.max(1000, Number(GM_getValue('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
-    postLoginGraceMs: Math.max(5000, Number(GM_getValue('postLoginGraceMs', DEFAULTS.postLoginGraceMs)) || DEFAULTS.postLoginGraceMs),
-    authReturnGraceMs: Math.max(5000, Number(GM_getValue('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
-    authorizeCooldownMs: Math.max(250, Number(GM_getValue('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
-    authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
-    panelUpdateMs: Math.max(250, Number(GM_getValue('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
-    cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
-    autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin))
-  };
+  let cfg = { ...DEFAULTS };
+  let storedValues = {};
+  let bootstrapApi = null;
+  const bridgePending = new Map();
+  const timers = new Set();
 
   const state = {
     bootId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     installing: false,
     polling: false,
+    disabled: false,
+    disabledReason: '',
     lastPollAt: 0,
     lastManifestFetchAt: 0,
     lastScriptFetchAt: 0,
@@ -135,6 +93,31 @@
     busyReason: '',
     busyToken: ''
   };
+
+  window.addEventListener('message', event => {
+    if (event.source !== window) return;
+    const message = event.data || {};
+    if (message.channel !== RESPONSE_CHANNEL || !message.id) return;
+    const pending = bridgePending.get(message.id);
+    if (!pending) return;
+    bridgePending.delete(message.id);
+    clearTimeout(pending.timer);
+    const response = message.response || {};
+    if (response.ok === false) pending.reject(new Error(response.error || 'extension bridge request failed'));
+    else pending.resolve(response);
+  });
+
+  function bridge(type, payload = {}, timeoutMs = 9000) {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        bridgePending.delete(id);
+        reject(new Error(`${type} timed out`));
+      }, Math.max(1000, Number(timeoutMs) || 9000));
+      bridgePending.set(id, { resolve, reject, timer });
+      window.postMessage({ channel: REQUEST_CHANNEL, id, type, payload }, '*');
+    });
+  }
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -178,7 +161,7 @@
 
   function logBootstrap(message, detail) {
     try {
-      console.log('[grasp-rat-bootstrap]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
+      console.log('[grasp-rat-extension]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
     } catch (_) {}
   }
 
@@ -189,30 +172,12 @@
     return state.lastError;
   }
 
-  function recordBootstrapException(label, err, detail = {}) {
-    const message = noteBootstrapError(label, err, detail);
-    try {
-      postDebug('exception', {
-        label,
-        message,
-        error: err?.message || String(err),
-        stack: String(err?.stack || ''),
-        ...detail
-      }, { force: true });
-    } catch (_) {}
-    try {
-      renderBootstrapPanelError(message);
-    } catch (_) {}
-    return message;
-  }
-
   function runSafely(label, fn) {
     try {
+      if (!ensureNotBlocked()) return null;
       const result = fn();
       if (result && typeof result.then === 'function') {
-        result.catch(err => {
-          recordBootstrapException(label, err);
-        });
+        result.catch(err => recordBootstrapException(label, err));
       }
       return result;
     } catch (err) {
@@ -223,7 +188,10 @@
 
   function runAsyncSafely(label, fn) {
     return Promise.resolve()
-      .then(fn)
+      .then(() => {
+        if (!ensureNotBlocked()) return null;
+        return fn();
+      })
       .catch(err => {
         recordBootstrapException(label, err);
         return null;
@@ -231,11 +199,26 @@
   }
 
   function setSafeTimeout(label, fn, ms) {
-    return setTimeout(() => runSafely(label, fn), ms);
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      runSafely(label, fn);
+    }, ms);
+    timers.add(timer);
+    return timer;
   }
 
   function setSafeInterval(label, fn, ms) {
-    return setInterval(() => runSafely(label, fn), ms);
+    const timer = setInterval(() => runSafely(label, fn), ms);
+    timers.add(timer);
+    return timer;
+  }
+
+  function clearAllTimers() {
+    for (const timer of timers) {
+      clearTimeout(timer);
+      clearInterval(timer);
+    }
+    timers.clear();
   }
 
   function beginBusy(reason, flags = {}) {
@@ -276,23 +259,113 @@
     return true;
   }
 
-  function shortStatus(status = getBotStatus()) {
+  function isGamePage() {
+    return location.origin === GAME_ORIGIN;
+  }
+
+  function isAuthorizePage() {
+    return location.origin === AUTH_ORIGIN && location.pathname.startsWith('/oauth2/authorize');
+  }
+
+  function isGameAuthCallback() {
+    return isGamePage() && location.pathname.startsWith('/auth/linuxdo/callback');
+  }
+
+  function tampermonkeyDetected() {
     try {
-      return status ? {
-        running: Boolean(status.running),
-        starting: Boolean(status.starting),
-        ticking: Boolean(status.ticking),
-        timerActive: Boolean(status.timerActive),
-        version: status.version || '',
-        sourceHash: status.sourceHash || '',
-        paused: Boolean(status.paused),
-        lastTickAgeMs: status.lastTickAgeMs ?? null,
-        reason: status.lastDecision?.reason || '',
-        message: status.message || ''
-      } : null;
-    } catch (err) {
-      return { running: false, message: 'status summary failed: ' + (err?.message || String(err)) };
+      if (window.__graspRatBotTampermonkeyBootstrapPresent === true) return true;
+      if (window.__graspRatBotBootstrapOwner === 'tampermonkey') return true;
+      const api = window.__graspRatBotBootstrap;
+      if (!api || api === bootstrapApi) return false;
+      if (api.owner === 'extension' || api.injectedBy === 'extension' || api.extensionBootId === state.bootId) return false;
+      return Boolean(api.version || api.pollOnce || api.watchdogOnce);
+    } catch (_) {
+      return false;
     }
+  }
+
+  function disableForTampermonkey(reason = 'tampermonkey bootstrap detected') {
+    if (state.disabled) return false;
+    state.disabled = true;
+    state.disabledReason = reason;
+    state.lastError = `extension disabled: ${reason}`;
+    clearAllTimers();
+    clearBusy(state.busyToken);
+    try {
+      if (window.__graspRatBotBootstrapOwner === BOOTSTRAP_OWNER) window.__graspRatBotBootstrapOwner = 'tampermonkey';
+    } catch (_) {}
+    logBootstrap('disabled because Tampermonkey bootstrap is present', { reason });
+    return true;
+  }
+
+  function ensureNotBlocked() {
+    if (state.disabled) return false;
+    if (tampermonkeyDetected()) {
+      disableForTampermonkey();
+      return false;
+    }
+    return true;
+  }
+
+  function storedBoolean(value) {
+    return value === true || value === 'true' || value === 1 || value === '1';
+  }
+
+  function readStored(key, fallback = '') {
+    return storedValues[key] !== undefined ? storedValues[key] : fallback;
+  }
+
+  function writeStored(items) {
+    storedValues = { ...storedValues, ...(items || {}) };
+    bridge('storageSet', { items }).catch(err => noteBootstrapError('storage write failed', err));
+  }
+
+  async function loadStoredValues() {
+    const defaults = {
+      ...DEFAULTS,
+      cachedManifest: '',
+      cachedSource: '',
+      [PAUSED_KEY]: false,
+      [PAUSE_REASON_KEY]: '',
+      [LOGIN_SUPPRESS_KEY]: 0,
+      [LOGIN_SUPPRESS_REASON_KEY]: ''
+    };
+    let result = null;
+    let lastError = null;
+    for (let attempt = 0; attempt < 20 && !result; attempt += 1) {
+      try {
+        result = await bridge('storageGet', { defaults }, Math.max(1000, DEFAULTS.requestTimeoutMs + 2000));
+      } catch (err) {
+        lastError = err;
+        await sleep(100);
+      }
+    }
+    if (!result) throw lastError || new Error('extension storage bridge unavailable');
+    storedValues = result.values || defaults;
+    cfg = {
+      manifestUrl: String(readStored('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
+      debug: Boolean(storedBoolean(readStored('debug', DEFAULTS.debug))),
+      debugEndpoint: String(readStored('debugEndpoint', DEFAULTS.debugEndpoint) || DEFAULTS.debugEndpoint),
+      pollMs: Math.max(5000, Number(readStored('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
+      watchdogMs: Math.max(250, Number(readStored('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
+      busyLeaseMs: Math.max(3000, Number(readStored('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
+      requestTimeoutMs: Math.max(3000, Number(readStored('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
+      fallbackStaggerMs: Math.max(0, Number(readStored('fallbackStaggerMs', DEFAULTS.fallbackStaggerMs)) || DEFAULTS.fallbackStaggerMs),
+      staleTickMs: Math.max(1000, Number(readStored('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
+      debugEveryMs: Math.max(250, Number(readStored('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
+      statusEvery: Math.max(250, Number(readStored('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
+      scriptStartupTimeoutMs: Math.max(500, Number(readStored('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
+      installConfirmMs: Math.max(1000, Number(readStored('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
+      restartAfterCacheUpdateMs: Math.max(0, Number(readStored('restartAfterCacheUpdateMs', DEFAULTS.restartAfterCacheUpdateMs)) || DEFAULTS.restartAfterCacheUpdateMs),
+      loginCooldownMs: Math.max(1000, Number(readStored('loginCooldownMs', DEFAULTS.loginCooldownMs)) || DEFAULTS.loginCooldownMs),
+      postLoginGraceMs: Math.max(5000, Number(readStored('postLoginGraceMs', DEFAULTS.postLoginGraceMs)) || DEFAULTS.postLoginGraceMs),
+      authReturnGraceMs: Math.max(5000, Number(readStored('authReturnGraceMs', DEFAULTS.authReturnGraceMs)) || DEFAULTS.authReturnGraceMs),
+      authorizeCooldownMs: Math.max(250, Number(readStored('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
+      authorizeFallbackDelayMs: Math.max(0, Number(readStored('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
+      panelUpdateMs: Math.max(250, Number(readStored('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
+      cacheBust: Boolean(storedBoolean(readStored('cacheBust', DEFAULTS.cacheBust))),
+      autoLogin: Boolean(storedBoolean(readStored('autoLogin', DEFAULTS.autoLogin)))
+    };
   }
 
   function escapeHtml(value) {
@@ -325,11 +398,6 @@
     return Number.isFinite(n) ? String(Math.round(n)) : fallback;
   }
 
-  function formatAge(at) {
-    const t = Number(at || 0);
-    return t ? formatDuration(Date.now() - t) : '-';
-  }
-
   function reasonText(reason) {
     const map = {
       'active-threat-before-bullet-range': 'Active 玩家进入危险圈',
@@ -355,6 +423,8 @@
       'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
       'combat-attack': '战斗：持续开火',
       'combat-tangent-dodge': '战斗：切线规避并开火',
+      'combat-reengage': '战斗：重新靠近目标',
+      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
       'combat-low-hp-leave': '战斗低血劣势，立即退出',
       'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
       'injury-leave': '受伤后立即退出',
@@ -395,18 +465,6 @@
     return kind;
   }
 
-  function isGamePage() {
-    return location.origin === GAME_ORIGIN;
-  }
-
-  function isAuthorizePage() {
-    return location.origin === AUTH_ORIGIN && location.pathname.startsWith('/oauth2/authorize');
-  }
-
-  function isGameAuthCallback() {
-    return isGamePage() && location.pathname.startsWith('/auth/linuxdo/callback');
-  }
-
   function readLocalSuppress() {
     try {
       return {
@@ -419,16 +477,16 @@
   }
 
   function currentSuppressEntry() {
-    const gm = {
-      until: Number(GM_getValue(LOGIN_SUPPRESS_KEY, 0)) || 0,
-      reason: String(GM_getValue(LOGIN_SUPPRESS_REASON_KEY, '') || '')
+    const extension = {
+      until: Number(readStored(LOGIN_SUPPRESS_KEY, 0)) || 0,
+      reason: String(readStored(LOGIN_SUPPRESS_REASON_KEY, '') || '')
     };
     const memory = {
       until: Number(state.lastLoginSuppressUntil || 0) || 0,
       reason: String(state.lastLoginSuppressReason || '')
     };
     const local = readLocalSuppress();
-    return [gm, memory, local].sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || { until: 0, reason: '' };
+    return [extension, memory, local].sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || { until: 0, reason: '' };
   }
 
   function suppressLogin(reason, ms) {
@@ -440,8 +498,10 @@
       ? String(existing.reason || reason || 'login flow')
       : String(reason || 'login flow');
     state.lastLoginSuppressUntil = until;
-    GM_setValue(LOGIN_SUPPRESS_KEY, until);
-    GM_setValue(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);
+    writeStored({
+      [LOGIN_SUPPRESS_KEY]: until,
+      [LOGIN_SUPPRESS_REASON_KEY]: state.lastLoginSuppressReason
+    });
     try {
       localStorage.setItem(LOGIN_SUPPRESS_KEY, String(until));
       localStorage.setItem(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);
@@ -454,8 +514,7 @@
     const until = Number(entry.until || 0) || 0;
     const remaining = Math.max(0, until - Date.now());
     if (!remaining && until) {
-      GM_setValue(LOGIN_SUPPRESS_KEY, 0);
-      GM_setValue(LOGIN_SUPPRESS_REASON_KEY, '');
+      writeStored({ [LOGIN_SUPPRESS_KEY]: 0, [LOGIN_SUPPRESS_REASON_KEY]: '' });
       state.lastLoginSuppressUntil = 0;
       state.lastLoginSuppressReason = '';
       try {
@@ -478,11 +537,7 @@
     try {
       reason = String(localStorage.getItem(PAUSE_REASON_KEY) || '');
     } catch (_) {}
-    return String(GM_getValue(PAUSE_REASON_KEY, reason || '') || reason || '');
-  }
-
-  function storedBoolean(value) {
-    return value === true || value === 'true' || value === 1 || value === '1';
+    return String(readStored(PAUSE_REASON_KEY, reason || '') || reason || '');
   }
 
   function isPaused(options = {}) {
@@ -491,7 +546,7 @@
       localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
     } catch (_) {}
     const includePageFlag = options.includePageFlag !== false;
-    const paused = Boolean(storedBoolean(GM_getValue(PAUSED_KEY, false)) || localPaused || (includePageFlag && unsafeWindow.__graspRatBotPaused === true));
+    const paused = Boolean(storedBoolean(readStored(PAUSED_KEY, false)) || localPaused || (includePageFlag && window.__graspRatBotPaused === true));
     state.paused = paused;
     state.pauseReason = paused ? (readPauseReason() || state.pauseReason || 'manual') : '';
     return paused;
@@ -502,10 +557,9 @@
     const text = next ? String(reason || state.pauseReason || 'manual') : '';
     state.paused = next;
     state.pauseReason = text;
-    GM_setValue(PAUSED_KEY, next);
-    GM_setValue(PAUSE_REASON_KEY, text);
-    unsafeWindow.__graspRatBotPaused = next;
-    unsafeWindow.__graspRatBotPauseReason = text;
+    writeStored({ [PAUSED_KEY]: next, [PAUSE_REASON_KEY]: text });
+    window.__graspRatBotPaused = next;
+    window.__graspRatBotPauseReason = text;
     try {
       localStorage.setItem(PAUSED_KEY, next ? 'true' : 'false');
       if (next) localStorage.setItem(PAUSE_REASON_KEY, text || 'manual');
@@ -518,17 +572,15 @@
     try {
       const paused = forcedPaused === null ? isPaused() : Boolean(forcedPaused);
       writePauseState(paused, paused ? (state.pauseReason || readPauseReason() || 'manual') : '');
-      const bot = unsafeWindow.__graspRatBot || null;
+      const bot = window.__graspRatBot || null;
       try {
         if (bot?.setPaused) {
           const reason = paused ? (state.pauseReason || 'bootstrap') : 'bootstrap resume';
           const botPaused = Boolean(bot.paused);
           const botReason = String(bot.pauseReason || '');
-          if (botPaused !== paused || (paused && botReason !== reason)) {
-            bot.setPaused(paused, reason);
-          }
+          if (botPaused !== paused || (paused && botReason !== reason)) bot.setPaused(paused, reason);
         } else if (paused && bot?.stop) {
-          bot.stop('paused by bootstrap');
+          bot.stop('paused by extension bootstrap');
         }
       } catch (err) {
         noteBootstrapError('pause sync failed', err);
@@ -586,37 +638,17 @@
 
   function renderBootstrapPanelError(message) {
     try {
-      if (!isGamePage() || !document.body) return;
-      let panel = document.getElementById(PANEL_ID);
-      if (!panel) {
-        panel = document.createElement('div');
-        panel.id = PANEL_ID;
-        document.body.appendChild(panel);
-      }
-      panel.style.cssText = [
-        'position:fixed',
-        'right:12px',
-        'top:12px',
-        'z-index:2147483647',
-        'width:min(360px,calc(100vw - 24px))',
-        'max-width:360px',
-        'box-sizing:border-box',
-        'padding:10px 12px',
-        'border:1px solid rgba(248,113,113,.45)',
-        'border-radius:8px',
-        'background:rgba(15,23,42,.92)',
-        'color:#fee2e2',
-        'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif',
-        'box-shadow:0 10px 32px rgba(0,0,0,.38)',
-        'pointer-events:auto',
-        'white-space:normal'
-      ].join(';');
+      if (!isGamePage() || !document.body || state.disabled) return;
+      const panel = ensureBootstrapPanel();
+      if (!panel) return;
+      panel.style.borderColor = 'rgba(248,113,113,.45)';
+      panel.style.color = '#fee2e2';
       panel.textContent = `BOT 面板错误：${message || state.lastError || 'unknown error'}`;
     } catch (_) {}
   }
 
   function renderBootstrapPanel(force = false) {
-    if (!isGamePage()) return;
+    if (!isGamePage() || state.disabled) return;
     const t = Date.now();
     if (!force && t - Number(state.lastPanelUpdateAt || 0) < cfg.panelUpdateMs) return;
     state.lastPanelUpdateAt = t;
@@ -642,7 +674,7 @@
       '<div style="font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">BOT ' + escapeHtml(actionText(decision, status)) + '</div>',
       '<button type="button" data-grasp-rat-pause="1" title="' + escapeHtml(buttonTitle) + '" style="flex:0 0 auto;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:' + (paused ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.18)') + ';color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer">' + escapeHtml(buttonText) + '</button>',
       '</div>',
-      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">版本：' + escapeHtml(bVersion) + '</div>',
+      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">版本：' + escapeHtml(bVersion) + ' / 插件 A ' + escapeHtml(BOOTSTRAP_VERSION) + '</div>',
       '<div>状态：' + escapeHtml(paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + escapeHtml(state.pauseReason) : '') + '</div>'
     ];
     if (status?.running) {
@@ -670,6 +702,10 @@
       if (Array.isArray(status.errors) && status.errors.length) {
         panelLines.push('<div style="color:#fca5a5">BOT错误：' + escapeHtml(status.errors[status.errors.length - 1]?.message || '') + '</div>');
       }
+    } else if (state.lastRemoteStatus || state.lastInstallStatus || state.lastError) {
+      panelLines.push('<div>远端：' + escapeHtml(state.lastRemoteStatus || '- ') + '</div>');
+      panelLines.push('<div>安装：' + escapeHtml(state.lastInstallStatus || '-') + '</div>');
+      if (state.lastError) panelLines.push('<div style="color:#fca5a5">错误：' + escapeHtml(state.lastError) + '</div>');
     }
     panel.innerHTML = panelLines.join('');
     const button = panel.querySelector('[data-grasp-rat-pause]');
@@ -693,11 +729,8 @@
 
   function noteFetchStatus(label, text, forcePanel = false) {
     const value = String(text || '');
-    if (/manifest/i.test(label)) {
-      state.lastManifestStatus = value;
-    } else if (/script|bot/i.test(label)) {
-      state.lastScriptStatus = value;
-    }
+    if (/manifest/i.test(label)) state.lastManifestStatus = value;
+    else if (/script|bot/i.test(label)) state.lastScriptStatus = value;
     state.lastRemoteStatus = `${label}: ${value}`;
     updateBootstrapPanel(forcePanel);
   }
@@ -727,162 +760,50 @@
   }
 
   function manifestUrls() {
-    return uniqueUrls([
-      cfg.manifestUrl,
-      rawGithubToJsDelivr(cfg.manifestUrl)
-    ]);
+    return uniqueUrls([cfg.manifestUrl, rawGithubToJsDelivr(cfg.manifestUrl)]);
   }
 
   function scriptUrls(manifest) {
-    return uniqueUrls([
-      manifest?.scriptUrl,
-      rawGithubToJsDelivr(manifest?.scriptUrl)
-    ]);
-  }
-
-  function gmRequest(method, url, body = null, headers = {}) {
-    return new Promise((resolve, reject) => {
-	    GM_xmlhttpRequest({
-	        method,
-	        url,
-	        data: body,
-	        headers,
-	        timeout: cfg.requestTimeoutMs,
-        onload: res => {
-          if (res.status >= 200 && res.status < 300) resolve(res.responseText || '');
-          else reject(new Error(`${method} ${url} failed: ${res.status}`));
-        },
-        ontimeout: () => reject(new Error(`${method} ${url} timed out`)),
-        onerror: err => reject(new Error(`${method} ${url} error: ${err?.error || err?.message || 'unknown'}`))
-      });
-    });
-  }
-
-  async function fetchRequest(fetchFn, transport, method, url, body = null, headers = {}) {
-    if (typeof fetchFn !== 'function') throw new Error(`${transport} unavailable`);
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timer = 0;
-    if (controller) {
-      timer = setTimeout(() => controller.abort(), cfg.requestTimeoutMs);
-    }
-    try {
-      const fetchOptions = {
-        method,
-        headers,
-        cache: 'no-store',
-        credentials: 'omit',
-        mode: 'cors',
-        redirect: 'follow',
-        signal: controller?.signal
-      };
-      if (body !== null && body !== undefined) fetchOptions.body = body;
-      const res = await fetchFn(url, fetchOptions);
-      const text = await res.text();
-      if (res.status >= 200 && res.status < 300) return text;
-      throw new Error(`${method} ${url} failed: ${res.status}`);
-    } catch (err) {
-      const message = err?.name === 'AbortError'
-        ? `${method} ${url} timed out`
-        : (err?.message || String(err));
-      throw new Error(`${transport} ${message}`);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    return uniqueUrls([manifest?.scriptUrl, rawGithubToJsDelivr(manifest?.scriptUrl)]);
   }
 
   function requestText(method, url, body = null, headers = {}) {
-    const attempts = [];
-    const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function' ? unsafeWindow.fetch.bind(unsafeWindow) : null;
-    const sandboxFetch = typeof fetch === 'function' ? fetch.bind(globalThis) : null;
-    if (pageFetch) {
-      attempts.push({
-        transport: 'page-fetch',
-        run: () => fetchRequest(pageFetch, 'page-fetch', method, url, body, headers)
-      });
-    }
-    if (sandboxFetch && sandboxFetch !== pageFetch) {
-      attempts.push({
-        transport: 'fetch',
-        run: () => fetchRequest(sandboxFetch, 'fetch', method, url, body, headers)
-      });
-    }
-    if (typeof GM_xmlhttpRequest === 'function') {
-      attempts.push({
-        transport: 'GM_xmlhttpRequest',
-        run: () => gmRequest(method, url, body, headers)
-      });
-    }
-    if (!attempts.length) return Promise.reject(new Error(`${method} ${url} failed: no request transports`));
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let pending = attempts.length;
-      const errors = [];
-      for (const attempt of attempts) {
-        withTimeout(
-          Promise.resolve().then(attempt.run),
-          cfg.requestTimeoutMs + 500,
-          `${attempt.transport} ${method} request`
-        ).then(text => {
-          if (settled) return;
-          settled = true;
-          resolve({ text, transport: attempt.transport });
-        }).catch(err => {
-          if (settled) return;
-          errors.push(`${attempt.transport}: ${err?.message || String(err)}`);
-          pending -= 1;
-          if (pending <= 0) {
-            settled = true;
-            reject(new Error(`${method} ${url} failed via all transports: ${errors.join(' | ')}`));
-          }
-        });
-      }
-    });
+    return bridge('fetchText', {
+      method,
+      url,
+      body,
+      headers,
+      timeoutMs: cfg.requestTimeoutMs
+    }, cfg.requestTimeoutMs + 1500);
   }
 
   async function requestAcceptedTextWithFallback(label, urls, acceptText) {
     const candidates = uniqueUrls(urls);
-    if (!candidates.length) {
-      throw new Error(`${label} fetch failed: no urls`);
-    }
+    if (!candidates.length) throw new Error(`${label} fetch failed: no urls`);
     return new Promise((resolve, reject) => {
       let settled = false;
       let completed = 0;
       const errors = [];
-      const timers = candidates.map((url, i) => setTimeout(async () => {
-        if (settled) return;
+      const localTimers = candidates.map((url, i) => setTimeout(async () => {
+        if (settled || state.disabled) return;
         try {
-          logBootstrap(`${label} fetch try`, {
-            url,
-            index: i + 1,
-            total: candidates.length,
-            delayMs: i * cfg.fallbackStaggerMs
-          });
+          logBootstrap(`${label} fetch try`, { url, index: i + 1, total: candidates.length, delayMs: i * cfg.fallbackStaggerMs });
           noteFetchStatus(label, `fetching ${i + 1}/${candidates.length}`);
-          const { text, transport } = await requestText('GET', withCacheBust(url));
+          const { text, url: finalUrl } = await requestText('GET', withCacheBust(url));
           const accepted = acceptText ? await acceptText(text, url) : null;
           if (settled) return;
           settled = true;
-          timers.forEach(timer => clearTimeout(timer));
-          noteFetchStatus(label, `ok via ${transport}`, true);
-          logBootstrap(`${label} fetch ok`, {
-            url,
-            index: i + 1,
-            transport,
-            bytes: String(text || '').length
-          });
-          resolve({ text, url, accepted, transport });
+          localTimers.forEach(timer => clearTimeout(timer));
+          noteFetchStatus(label, 'ok via extension-fetch', true);
+          logBootstrap(`${label} fetch ok`, { url: finalUrl || url, index: i + 1, bytes: String(text || '').length });
+          resolve({ text, url: finalUrl || url, accepted, transport: 'extension-fetch' });
         } catch (err) {
           if (settled) return;
           const error = err?.message || String(err);
           errors[i] = `${url}: ${error}`;
           completed += 1;
           noteFetchStatus(label, `failed ${completed}/${candidates.length}: ${error}`);
-          logBootstrap(`${label} fetch failed`, {
-            url,
-            index: i + 1,
-            total: candidates.length,
-            error
-          });
+          logBootstrap(`${label} fetch failed`, { url, index: i + 1, total: candidates.length, error });
           if (completed >= candidates.length) {
             settled = true;
             noteFetchStatus(label, `failed: ${errors.filter(Boolean).join(' | ')}`, true);
@@ -891,11 +812,6 @@
         }
       }, i * cfg.fallbackStaggerMs));
     });
-  }
-
-  async function requestTextWithFallback(label, urls) {
-    const { text, url } = await requestAcceptedTextWithFallback(label, urls, text => ({ text }));
-    return { text, url };
   }
 
   async function sha256Hex(text) {
@@ -941,7 +857,7 @@
   }
 
   function readCachedManifest() {
-    const raw = GM_getValue('cachedManifest', '');
+    const raw = readStored('cachedManifest', '');
     if (!raw) return null;
     try {
       return parseManifest(raw);
@@ -953,13 +869,9 @@
   function knownRemoteManifests() {
     const known = [];
     const cached = readCachedManifest();
-    if (cached?.version) {
-      known.push({ source: 'cache', version: String(cached.version || ''), sha256: String(cached.sha256 || '') });
-    }
+    if (cached?.version) known.push({ source: 'cache', version: String(cached.version || ''), sha256: String(cached.sha256 || '') });
     const status = getBotStatus();
-    if (status?.running && status.version) {
-      known.push({ source: 'running', version: String(status.version || ''), sha256: String(status.sourceHash || '') });
-    }
+    if (status?.running && status.version) known.push({ source: 'running', version: String(status.version || ''), sha256: String(status.sourceHash || '') });
     return known;
   }
 
@@ -977,30 +889,8 @@
     }
   }
 
-  function keepRunningAfterRemoteFailure(error, reason, status = getBotStatus()) {
-    if (!status?.running || tickIsStale(status) || runningBotUsesBlockedStrategy(status) || isPaused()) return false;
-    const text = String(error || 'remote unavailable');
-    state.lastError = '';
-    state.lastManifestStatus = `remote unavailable; using running ${status.version || 'bot'}`;
-    state.lastRemoteStatus = state.lastManifestStatus;
-    state.lastInstallStatus = `kept running after ${reason || 'poll'} remote failure`;
-    logBootstrap('remote failure ignored while bot healthy', {
-      reason,
-      error: text,
-      status: shortStatus(status)
-    });
-    postDebug('remote-degraded', {
-      reason,
-      error: text,
-      status: shortStatus(status)
-    });
-    updateBootstrapPanel(true);
-    return true;
-  }
-
   function clearCachedBot(reason) {
-    GM_setValue('cachedManifest', '');
-    GM_setValue('cachedSource', '');
+    writeStored({ cachedManifest: '', cachedSource: '' });
     state.lastManifestHash = '';
     state.lastManifestVersion = '';
     if (reason) state.lastError = String(reason);
@@ -1010,31 +900,44 @@
     const version = String(manifest?.version || '');
     const sha256 = String(hash || manifest?.sha256 || '').toLowerCase();
     assertRemoteBotVersionAllowed(manifest);
-    if (BLOCKED_REMOTE_HASHES.has(sha256)) {
-      throw new Error(`blocked unsafe remote bot ${version || '(unknown version)'} ${sha256}`);
-    }
+    if (BLOCKED_REMOTE_HASHES.has(sha256)) throw new Error(`blocked unsafe remote bot ${version || '(unknown version)'} ${sha256}`);
     const text = String(source || '');
     const blocked = FORBIDDEN_REMOTE_SOURCE.find(item => item.re.test(text));
-    if (blocked) {
-      throw new Error(`remote bot rejected: ${blocked.label}`);
-    }
+    if (blocked) throw new Error(`remote bot rejected: ${blocked.label}`);
   }
 
   function getBotStatus() {
     try {
-      const bot = unsafeWindow.__graspRatBot || null;
+      const bot = window.__graspRatBot || null;
       return bot?.status ? bot.status() : null;
     } catch (err) {
       return { running: false, message: err?.message || String(err) };
     }
   }
 
+  function shortStatus(status = getBotStatus()) {
+    try {
+      return status ? {
+        running: Boolean(status.running),
+        starting: Boolean(status.starting),
+        ticking: Boolean(status.ticking),
+        timerActive: Boolean(status.timerActive),
+        version: status.version || '',
+        sourceHash: status.sourceHash || '',
+        paused: Boolean(status.paused),
+        lastTickAgeMs: status.lastTickAgeMs ?? null,
+        reason: status.lastDecision?.reason || '',
+        message: status.message || ''
+      } : null;
+    } catch (err) {
+      return { running: false, message: 'status summary failed: ' + (err?.message || String(err)) };
+    }
+  }
+
   function tickIsStale(status) {
     if (!status || !status.running) return true;
     if (status.paused || isPaused()) return false;
-    if (status.starting && Number(status.uptimeMs || 0) < Math.max(cfg.staleTickMs, cfg.scriptStartupTimeoutMs + cfg.installConfirmMs)) {
-      return false;
-    }
+    if (status.starting && Number(status.uptimeMs || 0) < Math.max(cfg.staleTickMs, cfg.scriptStartupTimeoutMs + cfg.installConfirmMs)) return false;
     const age = Number(status.lastTickAgeMs ?? 0);
     if (!status.timerActive && !status.ticking) return true;
     return Number.isFinite(age) && age > cfg.staleTickMs && !status.ticking;
@@ -1047,12 +950,8 @@
   function stopBlockedRunningBot(reason, status = getBotStatus()) {
     if (!runningBotUsesBlockedStrategy(status)) return false;
     try {
-      logBootstrap('stopping blocked remote bot', {
-        reason,
-        minVersion: MIN_REMOTE_BOT_VERSION,
-        status: shortStatus(status)
-      });
-      unsafeWindow.__graspRatBot?.stop?.(`bootstrap blocked old strategy: ${reason || 'version gate'}`);
+      logBootstrap('stopping blocked remote bot', { reason, minVersion: MIN_REMOTE_BOT_VERSION, status: shortStatus(status) });
+      window.__graspRatBot?.stop?.(`extension bootstrap blocked old strategy: ${reason || 'version gate'}`);
       return true;
     } catch (err) {
       state.lastError = 'failed to stop blocked remote bot: ' + (err?.message || String(err));
@@ -1080,7 +979,7 @@
 
   function cachedManifestMatches(manifest) {
     const cached = readCachedManifest();
-    const source = GM_getValue('cachedSource', '');
+    const source = readStored('cachedSource', '');
     return Boolean(cached && source)
       && String(cached.sha256 || '') === String(manifest?.sha256 || '')
       && String(cached.version || '') === String(manifest?.version || '')
@@ -1088,10 +987,7 @@
   }
 
   function currentUserIdFromStatus(status) {
-    return status?.control?.currentUserId
-      || status?.self?.id
-      || status?.lastDecision?.self?.id
-      || 0;
+    return status?.control?.currentUserId || status?.self?.id || status?.lastDecision?.self?.id || 0;
   }
 
   function statusLooksInGame(status) {
@@ -1115,8 +1011,8 @@
       error: ''
     };
     try {
-      if (typeof unsafeWindow.leave === 'function') {
-        const result = detail.userId ? unsafeWindow.leave(detail.userId) : unsafeWindow.leave();
+      if (typeof window.leave === 'function') {
+        const result = detail.userId ? window.leave(detail.userId) : window.leave();
         detail.attempted = true;
         detail.method = detail.userId ? 'leave(userId)' : 'leave';
         if (result && typeof result.then === 'function') await withTimeout(result, 1200, 'leave before cached update restart');
@@ -1157,13 +1053,13 @@
       return false;
     }
     try {
-      unsafeWindow.__graspRatBot?.stop?.(`cached update restart: ${manifest?.version || manifest?.sha256 || reason || 'remote update'}`);
+      window.__graspRatBot?.stop?.(`cached update restart: ${manifest?.version || manifest?.sha256 || reason || 'remote update'}`);
     } catch (err) {
       detail.stopError = err?.message || String(err);
     }
     state.lastInstallStatus = `cached update restart scheduled for ${manifest?.version || manifest?.sha256 || 'remote update'}`;
     postDebug('cached-update-restart', detail, { force: true });
-    setTimeout(() => {
+    setSafeTimeout('cached update reload', () => {
       try {
         location.reload();
       } catch (err) {
@@ -1182,60 +1078,58 @@
       state.lastDebugAt = t;
       const payload = {
         at: new Date(t).toISOString(),
-        type: `bootstrap:${type}`,
+        type: `extension-bootstrap:${type}`,
+        version: BOOTSTRAP_VERSION,
+        owner: BOOTSTRAP_OWNER,
+        bootId: state.bootId,
         url: location.href,
         title: document.title,
         detail,
         status: getBotStatus()
       };
-      gmRequest('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
+      requestText('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
     } catch (_) {}
   }
 
-  unsafeWindow.__graspRatBotDebugPost = function (payload) {
+  function recordBootstrapException(label, err, detail = {}) {
+    const message = noteBootstrapError(label, err, detail);
+    try {
+      postDebug('exception', {
+        label,
+        message,
+        error: err?.message || String(err),
+        stack: String(err?.stack || ''),
+        ...detail
+      }, { force: true });
+    } catch (_) {}
+    try {
+      renderBootstrapPanelError(message);
+    } catch (_) {}
+    return message;
+  }
+
+  window.__graspRatBotDebugPost = function (payload) {
     try {
       if (!cfg.debug || !cfg.debugEndpoint) return;
-      gmRequest('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
+      requestText('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
     } catch (_) {}
   };
 
   async function runInPage(source, sourceUrl) {
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
     try {
-      if (typeof GM_addElement === 'function') {
-        logBootstrap('inject attempt', { method: 'GM_addElement(script)', sourceUrl });
-        const script = GM_addElement(document.documentElement || document.head || document.body, 'script', {
-          textContent: labeledSource,
-          type: 'text/javascript',
-          'data-grasp-rat-injected': 'true'
-        });
-        try {
-          setTimeout(() => script?.remove?.(), 1000);
-        } catch (_) {}
-        return { method: 'GM_addElement(script)', timedOut: false };
-      }
-    } catch (gmErr) {
-      state.lastInstallStatus = 'GM_addElement injection failed: ' + (gmErr?.message || String(gmErr));
-      logBootstrap('inject method failed', { method: 'GM_addElement(script)', error: state.lastInstallStatus });
-    }
-    try {
-      logBootstrap('inject attempt', { method: 'unsafeWindow.eval', sourceUrl });
-      const result = unsafeWindow.eval(labeledSource);
-      if (result && typeof result.then === 'function') {
-        await withTimeout(result, cfg.scriptStartupTimeoutMs, 'remote bot startup');
-      }
-      return { method: 'unsafeWindow.eval', timedOut: false };
+      logBootstrap('inject attempt', { method: 'window.eval', sourceUrl });
+      const result = (0, eval)(labeledSource);
+      if (result && typeof result.then === 'function') await withTimeout(result, cfg.scriptStartupTimeoutMs, 'remote bot startup');
+      return { method: 'window.eval', timedOut: false };
     } catch (evalErr) {
       if (evalErr?.isBootstrapTimeout) {
         state.lastInstallStatus = evalErr.message;
-        logBootstrap('remote bot startup promise timed out; continuing confirmation', {
-          sourceUrl,
-          timeoutMs: cfg.scriptStartupTimeoutMs
-        });
-        return { method: 'unsafeWindow.eval', timedOut: true, error: evalErr.message || String(evalErr) };
+        logBootstrap('remote bot startup promise timed out; continuing confirmation', { sourceUrl, timeoutMs: cfg.scriptStartupTimeoutMs });
+        return { method: 'window.eval', timedOut: true, error: evalErr.message || String(evalErr) };
       }
       const evalError = evalErr?.message || String(evalErr);
-      state.lastInstallStatus = 'unsafeWindow.eval failed: ' + evalError;
+      state.lastInstallStatus = 'window.eval failed: ' + evalError;
       try {
         logBootstrap('inject attempt', { method: 'script-element', sourceUrl, evalError });
         const script = document.createElement('script');
@@ -1259,76 +1153,46 @@
     state.lastScriptStatus = `fetching ${manifest.version || manifest.sha256 || 'remote'}`;
     state.lastRemoteStatus = state.lastScriptStatus;
     updateBootstrapPanel(true);
-    logBootstrap('script fetch start', {
-      version: manifest.version,
-      sha256: manifest.sha256,
-      scriptUrl: manifest.scriptUrl,
-      urls: scriptUrls(manifest)
-    });
+    logBootstrap('script fetch start', { version: manifest.version, sha256: manifest.sha256, scriptUrl: manifest.scriptUrl, urls: scriptUrls(manifest) });
     const { text: source, url: sourceUrl, accepted } = await requestAcceptedTextWithFallback(
       'remote bot script',
       scriptUrls(manifest),
       async sourceText => {
         const sourceHash = await sha256Hex(sourceText);
-        if (sourceHash !== manifest.sha256) {
-          throw new Error(`script sha256 mismatch: expected ${manifest.sha256}, got ${sourceHash}`);
-        }
+        if (sourceHash !== manifest.sha256) throw new Error(`script sha256 mismatch: expected ${manifest.sha256}, got ${sourceHash}`);
         assertSafeRemoteSource(manifest, sourceText, sourceHash);
         return { hash: sourceHash };
       }
     );
-    logBootstrap('script fetch complete', {
-      version: manifest.version,
-      bytes: String(source || '').length,
-      sourceUrl
-    });
+    logBootstrap('script fetch complete', { version: manifest.version, bytes: String(source || '').length, sourceUrl });
     const hash = String(accepted?.hash || '');
     state.lastScriptStatus = `verified ${manifest.version || hash.slice(0, 8)}`;
     state.lastRemoteStatus = state.lastScriptStatus;
     updateBootstrapPanel(true);
     logBootstrap('script verified', { version: manifest.version, sha256: hash });
-    GM_setValue('cachedManifest', safeStringify(manifest));
-    GM_setValue('cachedSource', source);
+    writeStored({ cachedManifest: safeStringify(manifest), cachedSource: source });
     return { source, hash };
   }
 
   async function waitForInstallConfirmation(manifest, reason, injectResult) {
     const started = Date.now();
     let status = null;
-    logBootstrap('install confirm start', {
-      reason,
-      version: manifest.version,
-      sha256: manifest.sha256,
-      injectResult
-    });
+    logBootstrap('install confirm start', { reason, version: manifest.version, sha256: manifest.sha256, injectResult });
     while (Date.now() - started <= cfg.installConfirmMs) {
       status = getBotStatus();
       if (status?.running && String(status.sourceHash || '') === String(manifest.sha256 || '')) {
-        logBootstrap('install confirmed', {
-          reason,
-          elapsedMs: Date.now() - started,
-          status: shortStatus(status)
-        });
+        logBootstrap('install confirmed', { reason, elapsedMs: Date.now() - started, status: shortStatus(status) });
         return status;
       }
       state.lastInstallStatus = `confirming ${reason || 'install'}: ${safeStringify(status || null, 160)}`;
       await sleep(100);
     }
-    logBootstrap('install confirm failed', {
-      reason,
-      elapsedMs: Date.now() - started,
-      expectedHash: manifest.sha256,
-      status: shortStatus(status),
-      injectResult
-    });
-    throw new Error(`bot install did not confirm after ${cfg.installConfirmMs}ms: ${safeStringify({
-      status,
-      injectResult
-    }, 500)}`);
+    logBootstrap('install confirm failed', { reason, elapsedMs: Date.now() - started, expectedHash: manifest.sha256, status: shortStatus(status), injectResult });
+    throw new Error(`bot install did not confirm after ${cfg.installConfirmMs}ms: ${safeStringify({ status, injectResult }, 500)}`);
   }
 
   async function installSource(manifest, source, reason) {
-    if (!isGamePage()) return false;
+    if (!isGamePage() || !ensureNotBlocked()) return false;
     if (isPaused()) {
       syncPauseToPage();
       state.lastInstallStatus = `paused; install skipped for ${manifest.version || manifest.sha256 || 'remote'}`;
@@ -1337,14 +1201,8 @@
     }
     state.lastInstallAttemptAt = Date.now();
     state.lastInstallStatus = `injecting ${manifest.version || manifest.sha256 || 'remote'}`;
-    logBootstrap('install source start', {
-      reason,
-      version: manifest.version,
-      sha256: manifest.sha256,
-      sourceBytes: String(source || '').length,
-      currentStatus: shortStatus()
-    });
-    unsafeWindow.__graspRatBotRuntimeConfig = {
+    logBootstrap('install source start', { reason, version: manifest.version, sha256: manifest.sha256, sourceBytes: String(source || '').length, currentStatus: shortStatus() });
+    window.__graspRatBotRuntimeConfig = {
       ...(manifest.config || {}),
       debug: Boolean(manifest.debug ?? cfg.debug),
       debugEndpoint: String(manifest.debugEndpoint || cfg.debugEndpoint || ''),
@@ -1353,7 +1211,7 @@
       version: String(manifest.version || 'remote'),
       sourceHash: String(manifest.sha256 || ''),
       sourceUrl: String(manifest.scriptUrl || ''),
-      injectedBy: 'tampermonkey'
+      injectedBy: 'extension'
     };
     const injectResult = await runInPage(source, manifest.scriptUrl);
     state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
@@ -1363,27 +1221,16 @@
     state.lastInstallAt = Date.now();
     state.lastInstallReason = reason || '';
     state.lastInstallStatus = 'confirmed';
-    logBootstrap('install source done', {
-      reason,
-      version: manifest.version,
-      elapsedMs: state.lastInstallAt - state.lastInstallAttemptAt,
-      status: shortStatus(status)
-    });
+    logBootstrap('install source done', { reason, version: manifest.version, elapsedMs: state.lastInstallAt - state.lastInstallAttemptAt, status: shortStatus(status) });
     postDebug('install', { reason, version: manifest.version, sha256: manifest.sha256, injectResult, status }, { force: true });
     return true;
   }
 
   async function installCached(reason, options = {}) {
-    if (!isGamePage()) return false;
+    if (!isGamePage() || !ensureNotBlocked()) return false;
     const manifest = readCachedManifest();
-    const source = GM_getValue('cachedSource', '');
-    logBootstrap('cached install check', {
-      reason,
-      force: Boolean(options.force),
-      hasManifest: Boolean(manifest),
-      hasSource: Boolean(source),
-      currentStatus: shortStatus()
-    });
+    const source = readStored('cachedSource', '');
+    logBootstrap('cached install check', { reason, force: Boolean(options.force), hasManifest: Boolean(manifest), hasSource: Boolean(source), currentStatus: shortStatus() });
     if (!manifest || !source) return false;
     if (!options.force && !botNeedsInstall(manifest)) {
       logBootstrap('cached install skipped: bot current', { reason, manifestVersion: manifest.version, status: shortStatus() });
@@ -1411,7 +1258,7 @@
   }
 
   async function installCachedForFastStart(reason = 'startup-cache-first') {
-    if (!isGamePage()) return false;
+    if (!isGamePage() || !ensureNotBlocked()) return false;
     if (isPaused()) {
       syncPauseToPage();
       state.lastInstallStatus = 'paused; fast cache install skipped';
@@ -1419,7 +1266,7 @@
       return false;
     }
     const manifest = readCachedManifest();
-    const source = GM_getValue('cachedSource', '');
+    const source = readStored('cachedSource', '');
     const status = getBotStatus();
     const shouldInstall = shouldFastStartFromCache(manifest, source, status);
     logBootstrap('fast cache install check', {
@@ -1437,9 +1284,7 @@
     const busyToken = beginBusy(`fast-cache:${reason}`, { installing: true });
     try {
       const installed = await installCached(reason, { force: true });
-      if (installed) {
-        logBootstrap('fast cache install done', { reason, version: manifest.version, sha256: manifest.sha256 });
-      }
+      if (installed) logBootstrap('fast cache install done', { reason, version: manifest.version, sha256: manifest.sha256 });
       return installed;
     } catch (err) {
       state.lastError = err?.message || String(err);
@@ -1453,16 +1298,11 @@
   }
 
   async function installManifest(manifest, reason) {
-    if (!isGamePage()) return false;
+    if (!isGamePage() || !ensureNotBlocked()) return false;
     const current = getBotStatus();
     const cacheCurrent = cachedManifestMatches(manifest);
     if (!cacheCurrent) {
-      logBootstrap('remote update caching needed', {
-        reason,
-        version: manifest.version,
-        sha256: manifest.sha256,
-        status: shortStatus(current)
-      });
+      logBootstrap('remote update caching needed', { reason, version: manifest.version, sha256: manifest.sha256, status: shortStatus(current) });
       await fetchAndVerify(manifest);
     }
     if (isPaused()) {
@@ -1476,46 +1316,39 @@
     }
     const status = getBotStatus();
     if (status?.running && !botMatchesManifest(status, manifest)) {
-      logBootstrap('remote update cached; hot swapping running bot', {
-        reason,
-        version: manifest.version,
-        sha256: manifest.sha256,
-        cacheCurrent,
-        blockedCurrentStrategy: runningBotUsesBlockedStrategy(status),
-        status: shortStatus(status)
-      });
+      logBootstrap('remote update cached; hot swapping running bot', { reason, version: manifest.version, sha256: manifest.sha256, cacheCurrent, blockedCurrentStrategy: runningBotUsesBlockedStrategy(status), status: shortStatus(status) });
       await installCached(reason, { force: true });
       state.lastError = '';
       return true;
     }
     if (!status || !status.running || tickIsStale(status)) {
-      logBootstrap('installing cached bot after manifest sync', {
-        reason,
-        version: manifest.version,
-        sha256: manifest.sha256,
-        status: shortStatus(status)
-      });
+      logBootstrap('installing cached bot after manifest sync', { reason, version: manifest.version, sha256: manifest.sha256, status: shortStatus(status) });
       await installCached(reason, { force: true });
       state.lastError = '';
       return true;
     }
-    logBootstrap('manifest sync skipped: running bot and cache current', {
-      reason,
-      version: manifest.version,
-      sha256: manifest.sha256,
-      status: shortStatus(status),
-      cacheCurrent: cachedManifestMatches(manifest)
-    });
+    logBootstrap('manifest sync skipped: running bot and cache current', { reason, version: manifest.version, sha256: manifest.sha256, status: shortStatus(status), cacheCurrent: cachedManifestMatches(manifest) });
     state.lastError = '';
     return true;
   }
 
+  function keepRunningAfterRemoteFailure(error, reason, status = getBotStatus()) {
+    if (!status?.running || tickIsStale(status) || runningBotUsesBlockedStrategy(status) || isPaused()) return false;
+    const text = String(error || 'remote unavailable');
+    state.lastError = '';
+    state.lastManifestStatus = `remote unavailable; using running ${status.version || 'bot'}`;
+    state.lastRemoteStatus = state.lastManifestStatus;
+    state.lastInstallStatus = `kept running after ${reason || 'poll'} remote failure`;
+    logBootstrap('remote failure ignored while bot healthy', { reason, error: text, status: shortStatus(status) });
+    postDebug('remote-degraded', { reason, error: text, status: shortStatus(status) });
+    updateBootstrapPanel(true);
+    return true;
+  }
+
   async function pollOnce(reason = 'poll') {
-    if (!isGamePage()) return;
+    if (!isGamePage() || !ensureNotBlocked()) return;
     syncPauseToPage();
-    if (state.installing || state.polling) {
-      resetStaleBusy(reason);
-    }
+    if (state.installing || state.polling) resetStaleBusy(reason);
     if (state.installing || state.polling) {
       logBootstrap('poll skipped: busy', {
         reason,
@@ -1548,13 +1381,7 @@
       state.lastManifestVersion = String(manifest.version || '');
       state.lastManifestStatus = `ok ${manifest.version || String(manifest.sha256 || '').slice(0, 8)}`;
       updateBootstrapPanel(true);
-      logBootstrap('manifest fetch complete', {
-        reason,
-        version: manifest.version,
-        sha256: manifest.sha256,
-        scriptUrl: manifest.scriptUrl,
-        manifestUrl
-      });
+      logBootstrap('manifest fetch complete', { reason, version: manifest.version, sha256: manifest.sha256, scriptUrl: manifest.scriptUrl, manifestUrl });
       if (isPaused()) {
         if (!cachedManifestMatches(manifest)) {
           state.installing = true;
@@ -1616,8 +1443,7 @@
   function findGameLoginControl() {
     const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
     if (direct && visible(direct)) return direct;
-    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'))
-      .filter(visible);
+    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(visible);
     return candidates.find(el => {
       const text = controlText(el);
       if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
@@ -1631,7 +1457,7 @@
   }
 
   async function maybeStartGameLogin(reason = 'watchdog') {
-    if (!cfg.autoLogin || !isGamePage()) return false;
+    if (!cfg.autoLogin || !isGamePage() || !ensureNotBlocked()) return false;
     if (isPaused()) {
       syncPauseToPage();
       return false;
@@ -1645,11 +1471,7 @@
     if (t - state.lastLoginAt < cfg.loginCooldownMs) return false;
     const suppressRemainingMs = loginSuppressRemainingMs();
     if (suppressRemainingMs > 0) {
-      postDebug('login-suppressed', {
-        reason,
-        suppressReason: state.lastLoginSuppressReason || GM_getValue(LOGIN_SUPPRESS_REASON_KEY, ''),
-        remainingMs: Math.round(suppressRemainingMs)
-      });
+      postDebug('login-suppressed', { reason, suppressReason: state.lastLoginSuppressReason || readStored(LOGIN_SUPPRESS_REASON_KEY, ''), remainingMs: Math.round(suppressRemainingMs) });
       return false;
     }
     const status = getBotStatus();
@@ -1658,8 +1480,7 @@
     const decisionReason = String(status?.lastDecision?.reason || '');
     const loginControl = findGameLoginControl();
     const loginRequired = hasLoginRequiredText();
-    const shouldLogin = !hasToken
-      || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired);
+    const shouldLogin = !hasToken || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired);
     if (!shouldLogin) return false;
     state.lastLoginAt = t;
     const detail = {
@@ -1673,8 +1494,8 @@
       error: ''
     };
     try {
-      if (typeof unsafeWindow.startLinuxDoLogin === 'function') {
-        const result = unsafeWindow.startLinuxDoLogin();
+      if (typeof window.startLinuxDoLogin === 'function') {
+        const result = window.startLinuxDoLogin();
         if (result && typeof result.then === 'function') await result;
         detail.method = 'startLinuxDoLogin';
       } else if (loginControl) {
@@ -1692,8 +1513,7 @@
   }
 
   function findAuthorizeAllowControl() {
-    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'))
-      .filter(visible);
+    const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(visible);
     return candidates.find(el => {
       const text = controlText(el);
       return /^(allow|authorize|approve|continue|confirm|允许|同意|授权|确认|继续)$/i.test(text)
@@ -1702,7 +1522,7 @@
   }
 
   function maybeClickAuthorize(reason = 'watchdog') {
-    if (!cfg.autoLogin || !isAuthorizePage()) return false;
+    if (!cfg.autoLogin || !isAuthorizePage() || !ensureNotBlocked()) return false;
     const t = Date.now();
     if (t - state.lastAuthorizeAt < cfg.authorizeCooldownMs) return false;
     state.lastAuthorizeAt = t;
@@ -1730,6 +1550,7 @@
   }
 
   async function watchdogOnce(reason = 'watchdog') {
+    if (!ensureNotBlocked()) return;
     if (isAuthorizePage()) {
       maybeClickAuthorize(reason);
       return;
@@ -1749,9 +1570,7 @@
       return;
     }
     state.lastWatchdogAt = Date.now();
-    if (state.installing || state.polling) {
-      resetStaleBusy(reason);
-    }
+    if (state.installing || state.polling) resetStaleBusy(reason);
     if (state.installing || state.polling) {
       logBootstrap('watchdog skipped: busy', {
         reason,
@@ -1771,17 +1590,7 @@
     const mismatched = manifest && status && status.running
       && (String(status.sourceHash || '') !== String(manifest.sha256 || '') || String(status.version || '') !== String(manifest.version || ''));
     if (missing || stale || mismatched || blockedStrategy) {
-      logBootstrap('watchdog reinstall needed', {
-        reason,
-        missing,
-        stale,
-        mismatched,
-        blockedStrategy,
-        minVersion: MIN_REMOTE_BOT_VERSION,
-        manifestVersion: manifest?.version || '',
-        manifestHash: manifest?.sha256 || '',
-        status: shortStatus(status)
-      });
+      logBootstrap('watchdog reinstall needed', { reason, missing, stale, mismatched, blockedStrategy, minVersion: MIN_REMOTE_BOT_VERSION, manifestVersion: manifest?.version || '', manifestHash: manifest?.sha256 || '', status: shortStatus(status) });
     }
     if (!missing && !stale && !mismatched && !blockedStrategy) {
       logBootstrap('watchdog ok', { reason, status: shortStatus(status) });
@@ -1820,93 +1629,101 @@
     await maybeStartGameLogin(reason);
   }
 
-  unsafeWindow.__graspRatBotBootstrap = {
-    owner: BOOTSTRAP_OWNER,
-    injectedBy: BOOTSTRAP_OWNER,
-    version: BOOTSTRAP_VERSION,
-    config: cfg,
-    state,
-    pollOnce,
-    watchdogOnce,
-    maybeStartGameLogin,
-    maybeClickAuthorize,
-    isPaused,
-    setPaused,
-    pause(reason = 'api') {
-      return setPaused(true, reason);
-    },
-    resume(reason = 'api') {
-      return setPaused(false, reason);
-    },
-    updatePanel() {
-      updateBootstrapPanel(true);
-      return true;
-    },
-    setManifestUrl(url) {
-      cfg.manifestUrl = String(url || '');
-      GM_setValue('manifestUrl', cfg.manifestUrl);
-      return cfg.manifestUrl;
-    },
-    setDebugEndpoint(url) {
-      cfg.debugEndpoint = String(url || '');
-      GM_setValue('debugEndpoint', cfg.debugEndpoint);
-      return cfg.debugEndpoint;
-    }
-  };
-
-  if (isAuthorizePage()) {
-    suppressLogin('authorize page', cfg.authReturnGraceMs);
-    setSafeTimeout('authorize fallback timer', () => {
-      if (!isAuthorizePage()) return;
-      maybeClickAuthorize('fallback-delay');
-      setSafeInterval('authorize fallback interval', () => maybeClickAuthorize('fallback-interval'), Math.max(cfg.watchdogMs, cfg.authorizeCooldownMs));
-    }, cfg.authorizeFallbackDelayMs);
-    return;
-  }
-
-  if (!isGamePage()) return;
-  loginSuppressRemainingMs();
-  syncPauseToPage();
-  const renderPanelWhenReady = () => updateBootstrapPanel(true);
-  if (document.body) renderPanelWhenReady();
-  else document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded panel render', renderPanelWhenReady), { once: true });
-  setSafeInterval('panel interval', () => updateBootstrapPanel(), cfg.panelUpdateMs);
-
-  if (isGameAuthCallback()) {
-    suppressLogin('oauth callback', cfg.authReturnGraceMs);
-    setSafeInterval('callback watchdog interval', () => runAsyncSafely('callback watchdog interval', () => watchdogOnce('callback-interval')), cfg.watchdogMs);
-    return;
-  }
-
-  logBootstrap('bootstrap start', {
-    href: location.href,
-    readyState: document.readyState,
-    manifestUrl: cfg.manifestUrl,
-    pollMs: cfg.pollMs,
-    watchdogMs: cfg.watchdogMs,
-    currentStatus: shortStatus()
-  });
-
-  runAsyncSafely('startup sequence', async () => {
-    const cacheInstalled = await installCachedForFastStart('startup-cache-first');
-    try {
-      await pollOnce(cacheInstalled ? 'startup-after-cache' : 'startup');
-    } catch (err) {
-      logBootstrap('startup poll error', { error: err?.message || String(err) });
-      postDebug('startup-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
-    }
-    const status = getBotStatus();
-    if (!status || !status.running) {
-      try {
-        logBootstrap('startup fallback cache install', { status: shortStatus(status) });
-        await installCachedForFastStart('startup-fallback');
-      } catch (err) {
-        logBootstrap('startup fallback cache error', { error: err?.message || String(err), status: shortStatus() });
-        postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
+  function exposeApi() {
+    bootstrapApi = {
+      owner: BOOTSTRAP_OWNER,
+      injectedBy: BOOTSTRAP_OWNER,
+      extensionBootId: state.bootId,
+      version: BOOTSTRAP_VERSION,
+      config: cfg,
+      state,
+      pollOnce,
+      watchdogOnce,
+      maybeStartGameLogin,
+      maybeClickAuthorize,
+      isPaused,
+      setPaused,
+      pause(reason = 'api') {
+        return setPaused(true, reason);
+      },
+      resume(reason = 'api') {
+        return setPaused(false, reason);
+      },
+      updatePanel() {
+        updateBootstrapPanel(true);
+        return true;
+      },
+      setManifestUrl(url) {
+        cfg.manifestUrl = String(url || '');
+        writeStored({ manifestUrl: cfg.manifestUrl });
+        return cfg.manifestUrl;
+      },
+      setDebugEndpoint(url) {
+        cfg.debugEndpoint = String(url || '');
+        writeStored({ debugEndpoint: cfg.debugEndpoint });
+        return cfg.debugEndpoint;
       }
+    };
+    window.__graspRatBotBootstrap = bootstrapApi;
+  }
+
+  async function start() {
+    if (tampermonkeyDetected()) {
+      disableForTampermonkey('tampermonkey bootstrap detected before extension startup');
+      return;
     }
+    window.__graspRatBotExtensionBootstrapPresent = true;
+    if (!window.__graspRatBotBootstrapOwner) window.__graspRatBotBootstrapOwner = BOOTSTRAP_OWNER;
+    await loadStoredValues();
+    if (!ensureNotBlocked()) return;
+    exposeApi();
+    if (isAuthorizePage()) {
+      suppressLogin('authorize page', cfg.authReturnGraceMs);
+      setSafeTimeout('authorize fallback timer', () => {
+        if (!isAuthorizePage()) return;
+        maybeClickAuthorize('fallback-delay');
+        setSafeInterval('authorize fallback interval', () => maybeClickAuthorize('fallback-interval'), Math.max(cfg.watchdogMs, cfg.authorizeCooldownMs));
+      }, cfg.authorizeFallbackDelayMs);
+      return;
+    }
+    if (!isGamePage()) return;
+    loginSuppressRemainingMs();
+    syncPauseToPage();
+    const renderPanelWhenReady = () => updateBootstrapPanel(true);
+    if (document.body) renderPanelWhenReady();
+    else document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded panel render', renderPanelWhenReady), { once: true });
+    setSafeInterval('panel interval', () => updateBootstrapPanel(), cfg.panelUpdateMs);
+    if (isGameAuthCallback()) {
+      suppressLogin('oauth callback', cfg.authReturnGraceMs);
+      setSafeInterval('callback watchdog interval', () => runAsyncSafely('callback watchdog interval', () => watchdogOnce('callback-interval')), cfg.watchdogMs);
+      return;
+    }
+    logBootstrap('bootstrap start', { href: location.href, readyState: document.readyState, manifestUrl: cfg.manifestUrl, pollMs: cfg.pollMs, watchdogMs: cfg.watchdogMs, currentStatus: shortStatus() });
+    runAsyncSafely('startup sequence', async () => {
+      const cacheInstalled = await installCachedForFastStart('startup-cache-first');
+      try {
+        await pollOnce(cacheInstalled ? 'startup-after-cache' : 'startup');
+      } catch (err) {
+        logBootstrap('startup poll error', { error: err?.message || String(err) });
+        postDebug('startup-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
+      }
+      const status = getBotStatus();
+      if (!status || !status.running) {
+        try {
+          logBootstrap('startup fallback cache install', { status: shortStatus(status) });
+          await installCachedForFastStart('startup-fallback');
+        } catch (err) {
+          logBootstrap('startup fallback cache error', { error: err?.message || String(err), status: shortStatus() });
+          postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
+        }
+      }
+    });
+    runAsyncSafely('startup watchdog', () => watchdogOnce('startup'));
+    setSafeInterval('poll interval', () => runAsyncSafely('poll interval', () => pollOnce('interval')), cfg.pollMs);
+    setSafeInterval('watchdog interval', () => runAsyncSafely('watchdog interval', () => watchdogOnce('interval')), cfg.watchdogMs);
+  }
+
+  start().catch(err => {
+    recordBootstrapException('extension bootstrap startup', err);
   });
-  runAsyncSafely('startup watchdog', () => watchdogOnce('startup'));
-  setSafeInterval('poll interval', () => runAsyncSafely('poll interval', () => pollOnce('interval')), cfg.pollMs);
-  setSafeInterval('watchdog interval', () => runAsyncSafely('watchdog interval', () => watchdogOnce('interval')), cfg.watchdogMs);
 })();
