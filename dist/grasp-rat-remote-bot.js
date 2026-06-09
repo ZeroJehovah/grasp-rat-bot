@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.44","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.45","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -204,7 +204,7 @@
     serverPositionStallEnabled: true,
     serverPositionStallProbeMs: 1000,
     serverPositionStallMs: 2500,
-    serverPositionNoMoveStallMs: 6000,
+    serverPositionNoMoveStallMs: 0,
     serverPositionStallHoldMs: 6000,
     serverPositionCommandFreshMs: 900,
     serverPositionSnapshotMaxAgeMs: 2500,
@@ -2259,14 +2259,18 @@
     const movingMs = t - movingSince;
     const ageMs = t - Number(state.startedAt || t);
     const stallMs = Math.max(500, Number(cfg.serverPositionStallMs || 2500));
-    const noMoveStallMs = Math.max(stallMs, Number(cfg.serverPositionNoMoveStallMs || 6000));
+    const configuredNoMoveStallMs = Number(cfg.serverPositionNoMoveStallMs);
+    const noMoveStallMs = Number.isFinite(configuredNoMoveStallMs) && configuredNoMoveStallMs > 0
+      ? Math.max(stallMs, configuredNoMoveStallMs)
+      : 0;
     const clientDiverged = movingMs >= stallMs
       && ageMs >= stallMs
       && clientMoved >= Math.max(0, Number(cfg.serverPositionClientMoveMin || 300))
       && serverMoved <= serverMoveMax
       && (gap >= Math.max(0, Number(cfg.serverPositionGapMin || 400))
         || gapDelta >= Math.max(0, Number(cfg.serverPositionGapMin || 400)));
-    const noServerMove = movingMs >= noMoveStallMs
+    const noServerMove = noMoveStallMs > 0
+      && movingMs >= noMoveStallMs
       && ageMs >= noMoveStallMs
       && serverMoved <= serverMoveMax;
     const stalled = clientDiverged || noServerMove;
