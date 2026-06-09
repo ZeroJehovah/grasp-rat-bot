@@ -1014,12 +1014,10 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
           .sort((a, b) => a.distance - b.distance);
         const closeAny = others.find(entity => entity.distance <= 12000) || null;
         const activeUnsafe = activeThreats.find(entity => entity.distance <= entity.cautionRadius + activeCautionExitMargin) || null;
-        const lowStaminaUnsafe = lowStaminaThreats[0] || null;
-        const safetyUnsafe = Boolean(!own || activeUnsafe || lowStaminaUnsafe || closeAny);
+        const safetyUnsafe = Boolean(!own || activeUnsafe || closeAny);
         const safetyReason = !own ? 'no-self'
           : (activeUnsafe ? 'active threat in caution range'
-            : (lowStaminaUnsafe ? 'near non-full-stamina player'
-              : (closeAny ? 'near player' : 'clear')));
+            : (closeAny ? 'near player' : 'clear'));
 	        return {
 	          title: document.title,
 	          url: location.href,
