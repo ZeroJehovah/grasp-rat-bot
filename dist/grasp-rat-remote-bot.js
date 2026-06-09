@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.27","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.28","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1758,6 +1758,18 @@
     return { available: true, ids, aliveIds };
   }
 
+  function snapshotDataAgeMs() {
+    return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
+  }
+
+  function snapshotDataFreshEnough() {
+    return snapshotDataAgeMs() <= Number(cfg.snapshotCoinStaleMs || 0);
+  }
+
+  function entityFreshEnoughForOffense(entity) {
+    return Boolean(entity?.native || !entity?.snapshot || snapshotDataFreshEnough());
+  }
+
   function snapshotEntityAllowed(self, entity, nativeMeta) {
     if (!nativeMeta?.available) return true;
     const distance = self ? dist(self, entity) : Infinity;
@@ -1803,9 +1815,7 @@
   }
 
   function snapshotCoinFreshEnough() {
-    const refreshedAt = Number(bot.globalState.snapshotRefreshedAt || 0);
-    if (!refreshedAt) return false;
-    return Date.now() - refreshedAt <= Number(cfg.snapshotCoinStaleMs || 0);
+    return snapshotDataFreshEnough();
   }
 
   function getCoins(self = null) {
@@ -2642,11 +2652,12 @@
       });
     }
     const entities = Array.from(globalById.values());
+    const offensiveEntities = entities.filter(entityFreshEnoughForOffense);
     const activeThreats = entities
       .filter(e => isCurrentlyActive(e))
       .map(e => decorateActiveThreat(self, e))
       .sort((a, b) => a.distance - b.distance);
-    const inactiveTargets = entities
+    const inactiveTargets = offensiveEntities
       .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
       .filter(e => e.distance <= cfg.attackRange)
@@ -2671,7 +2682,7 @@
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
-    const globalTargets = entities
+    const globalTargets = offensiveEntities
       .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true }))
       .filter(e => e.distance <= cfg.globalAttackMaxDistance)
@@ -2679,7 +2690,7 @@
         if (b.drop !== a.drop) return b.drop - a.drop;
         return a.distance - b.distance;
       });
-    const minimapDropTargets = (bot.globalState.minimap?.points || [])
+    const minimapDropTargets = (snapshotDataFreshEnough() ? (bot.globalState.minimap?.points || []) : [])
       .filter(p => Number(p.u) !== Number(self.user_id))
       .map(p => ({
         user_id: p.u,
@@ -2719,7 +2730,7 @@
 	    const nearbyHumans = entities
 	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
 	      .sort((a, b) => a.distance - b.distance);
-    const combatTargets = entities
+    const combatTargets = offensiveEntities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
       .filter(e => !nativeMeta.available || e.native)
@@ -2917,6 +2928,7 @@
   function pickOpportunisticShotTarget(self, entities) {
     const candidates = (entities || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id))
+      .filter(entityFreshEnoughForOffense)
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
       .filter(e => e.distance <= cfg.attackRange)
@@ -3289,6 +3301,7 @@
     const id = String(attack?.id ?? '');
     const name = String(attack?.name || '');
     const target = (entities || []).find(entity => {
+      if (!entityFreshEnoughForOffense(entity)) return false;
       if (id && String(entity.user_id ?? entity.id ?? '') === id) return true;
       return name && String(entity.name || '') === name;
     });
