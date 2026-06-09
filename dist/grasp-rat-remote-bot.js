@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.34","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.35","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -131,7 +131,7 @@
     footCoinPriorityDistance: 1200,
     nearCoinPriorityDistance: 13500,
     activeReturnBlockCoinPassDistance: 900,
-    postAttackDropCoinPriorityMs: 12000,
+    postAttackDropCoinPriorityMs: 45000,
     postAttackDropCoinRadius: 3500,
     postAttackDropCoinMaxDistance: 22000,
     conserveCoinMaxDistance: 6000,
@@ -3618,29 +3618,36 @@
 
   function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
     const t = Date.now();
-    const attack = bot.attackHistory
+    const recentAttacks = bot.attackHistory
       .slice()
       .reverse()
-      .find(item => t - Number(item.at || 0) <= cfg.postAttackDropCoinPriorityMs
+      .filter(item => t - Number(item.at || 0) <= cfg.postAttackDropCoinPriorityMs
         && Number.isFinite(Number(item.x))
         && Number.isFinite(Number(item.y)));
-    if (!attack || recentAttackTargetStillAttackable(attack, entities)) return null;
+    const resolvedAttacks = recentAttacks.filter(attack => !recentAttackTargetStillAttackable(attack, entities));
+    if (!resolvedAttacks.length) return null;
     const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
-    const candidates = safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
+    const candidates = [];
+    for (const coin of safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
       .filter(coin => Number(coin.amount || 0) > minAmount)
-      .filter(coin => dist(coin, attack) <= cfg.postAttackDropCoinRadius)
-      .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
-    const coin = candidates[0] || null;
-    if (!coin) return null;
-    return {
-      ...coin,
-      postAttackTarget: {
-        id: attack.id,
-        name: attack.name || '',
-        drop: attack.drop,
-        ageMs: Math.max(0, Math.round(t - Number(attack.at || t)))
-      }
-    };
+      .filter(coin => Number.isFinite(Number(coin.distance)))) {
+      const attack = resolvedAttacks
+        .filter(item => dist(coin, item) <= cfg.postAttackDropCoinRadius)
+        .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(b.at || 0) - Number(a.at || 0))[0] || null;
+      if (!attack) continue;
+      candidates.push({
+        ...coin,
+        postAttackScore: scoreCoinOpportunity(coin),
+        postAttackTarget: {
+          id: attack.id,
+          name: attack.name || '',
+          drop: attack.drop,
+          ageMs: Math.max(0, Math.round(t - Number(attack.at || t)))
+        }
+      });
+    }
+    return candidates
+      .sort((a, b) => b.postAttackScore - a.postAttackScore || Number(b.amount || 0) - Number(a.amount || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
   }
 
   function enemyOpportunityCandidates(self, targets, activeThreats) {
