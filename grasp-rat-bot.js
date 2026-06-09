@@ -3310,6 +3310,7 @@ function browserBotSource(config) {
   }
 
   function snapshotEntityAllowed(self, entity, nativeMeta) {
+    if (!nativeMeta?.available) return true;
     const distance = self ? dist(self, entity) : Infinity;
     const authoritativeRadius = Math.max(
       Number(cfg.nativeEntityAuthoritativeRadius || 0),
@@ -3318,7 +3319,6 @@ function browserBotSource(config) {
       Number(cfg.globalAttackMaxDistance || 0)
     );
     if (Number.isFinite(distance) && distance <= authoritativeRadius) return false;
-    if (!nativeMeta?.available) return true;
     const key = entityIdKey(entity);
     if (key && nativeMeta.ids.has(key) && !nativeMeta.aliveIds.has(key)) return false;
     return true;

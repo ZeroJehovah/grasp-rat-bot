@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.26","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.27","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1759,6 +1759,7 @@
   }
 
   function snapshotEntityAllowed(self, entity, nativeMeta) {
+    if (!nativeMeta?.available) return true;
     const distance = self ? dist(self, entity) : Infinity;
     const authoritativeRadius = Math.max(
       Number(cfg.nativeEntityAuthoritativeRadius || 0),
@@ -1767,7 +1768,6 @@
       Number(cfg.globalAttackMaxDistance || 0)
     );
     if (Number.isFinite(distance) && distance <= authoritativeRadius) return false;
-    if (!nativeMeta?.available) return true;
     const key = entityIdKey(entity);
     if (key && nativeMeta.ids.has(key) && !nativeMeta.aliveIds.has(key)) return false;
     return true;
