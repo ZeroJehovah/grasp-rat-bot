@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.24","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.25","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -174,6 +174,7 @@
     offlineLeaveMs: 3000,
     offlineUnsafeLeaveMs: 0,
     offlineSafeLeaveMs: 3000,
+    offlinePassiveDangerRadius: 2500,
     offlineLeaveRetryMs: 600,
     leaveCommandTimeoutMs: 600,
     offlineLeaveCooldownMs: 60000,
@@ -2748,7 +2749,8 @@
     const cautionThreat = activeThreats.find(entity => entity.distance <= entity.cautionRadius + cfg.activeCautionExitMargin) || null;
     const returnBlockThreat = activeThreats.find(entity => entity.distance <= returnBlockRadius(entity)) || null;
     const combatThreat = combatTargets.find(entity => !isAfkTarget(entity) && entity.distance <= cfg.combatAttackRange) || null;
-    const closeHuman = nearbyHumans.find(entity => entity.distance <= cfg.passiveAvoidRadius) || null;
+    const passiveDangerRadius = Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0));
+    const closeHuman = nearbyHumans.find(entity => entity.distance <= passiveDangerRadius) || null;
     const injury = bot.pendingInjuryLeave;
     const recentInjury = injury && Date.now() - Number(injury.at || 0) <= Math.max(3000, cfg.combatStrafeLockMs * 4);
     const picked = dangerThreat || bullet || recentInjury || combatThreat || cautionThreat || returnBlockThreat || closeHuman || null;
@@ -2763,6 +2765,7 @@
     const safety = {
       unsafe: Boolean(picked),
       reason,
+      passiveDangerRadius,
       nearestActive: summarizeOfflineThreat(activeThreats[0]),
       nearestHuman: summarizeOfflineThreat(nearbyHumans[0]),
       threat: summarizeOfflineThreat(picked && picked.user_id !== undefined ? picked : null),

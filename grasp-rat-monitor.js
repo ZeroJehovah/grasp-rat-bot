@@ -1012,7 +1012,8 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
         const lowStaminaThreats = others
           .filter(entity => entity.staminaNotFull && entity.distance <= 60000)
           .sort((a, b) => a.distance - b.distance);
-        const closeAny = others.find(entity => entity.distance <= 12000) || null;
+        const passiveDangerRadius = 2500;
+        const closeAny = others.find(entity => entity.distance <= passiveDangerRadius) || null;
         const activeUnsafe = activeThreats.find(entity => entity.distance <= entity.cautionRadius + activeCautionExitMargin) || null;
         const safetyUnsafe = Boolean(!own || activeUnsafe || closeAny);
         const safetyReason = !own ? 'no-self'
@@ -1049,6 +1050,7 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
               unsafe: safetyUnsafe,
               reason: safetyReason,
               activeCautionExitMargin,
+              passiveDangerRadius,
               nearestActive: activeThreats[0] || null,
 	              nearestLowStamina: lowStaminaThreats[0] || null,
 	              nearestHuman: others[0] || null
