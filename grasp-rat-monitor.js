@@ -48,8 +48,13 @@ function parseArgs(args) {
     reinstallCooldownMs: 20000,
     leaveOfflineMs: 0,
     safeLeaveOfflineMs: 3000,
+    leaveCommandTimeoutMs: 600,
+    leaveRetryMs: 600,
     directReconnectCooldownMs: 1000,
     reloginCooldownMs: 30000,
+    exitReloginMinMs: 60000,
+    exitReloginMaxMs: 600000,
+    exitReloginJitterMs: 15000,
     reloadOfflineMs: 45000,
     reloadStuckMs: 45000,
     postLoginInstallWaitMs: 10000,
@@ -71,8 +76,13 @@ function parseArgs(args) {
     else if (arg === '--max-tick-age-ms') out.maxTickAgeMs = Number(args[++i] || out.maxTickAgeMs);
     else if (arg === '--leave-offline-ms') out.leaveOfflineMs = Number(args[++i] || out.leaveOfflineMs);
     else if (arg === '--safe-leave-offline-ms') out.safeLeaveOfflineMs = Number(args[++i] || out.safeLeaveOfflineMs);
+    else if (arg === '--leave-command-timeout-ms') out.leaveCommandTimeoutMs = Number(args[++i] || out.leaveCommandTimeoutMs);
+    else if (arg === '--leave-retry-ms') out.leaveRetryMs = Number(args[++i] || out.leaveRetryMs);
     else if (arg === '--direct-reconnect-cooldown-ms') out.directReconnectCooldownMs = Number(args[++i] || out.directReconnectCooldownMs);
     else if (arg === '--relogin-cooldown-ms') out.reloginCooldownMs = Number(args[++i] || out.reloginCooldownMs);
+    else if (arg === '--exit-relogin-min-ms') out.exitReloginMinMs = Number(args[++i] || out.exitReloginMinMs);
+    else if (arg === '--exit-relogin-max-ms') out.exitReloginMaxMs = Number(args[++i] || out.exitReloginMaxMs);
+    else if (arg === '--exit-relogin-jitter-ms') out.exitReloginJitterMs = Number(args[++i] || out.exitReloginJitterMs);
     else if (arg === '--post-login-install-wait-ms') out.postLoginInstallWaitMs = Number(args[++i] || out.postLoginInstallWaitMs);
     else if (arg === '--auth-poll-ms') out.authPollMs = Number(args[++i] || out.authPollMs);
     else if (arg === '--authorize-click-cooldown-ms') out.authorizeClickCooldownMs = Number(args[++i] || out.authorizeClickCooldownMs);
@@ -107,10 +117,19 @@ Options:
   --leave-offline-ms <ms> Leave immediately when offline in an unsafe area. Default: 0
   --safe-leave-offline-ms <ms>
                           Leave when offline in a safe area. Default: 3000
+  --leave-command-timeout-ms <ms>
+                          Bound in-page leave() waits. Default: 600
+  --leave-retry-ms <ms>   Short retry gap after failed/stuck leave. Default: 600
   --direct-reconnect-cooldown-ms <ms>
                           Minimum time between direct page reconnect nudges. Default: 1000
   --relogin-cooldown-ms <ms>
                           Minimum time between OAuth login attempts. Default: 30000
+  --exit-relogin-min-ms <ms>
+                          Minimum wait after leave before relogin. Default: 60000
+  --exit-relogin-max-ms <ms>
+                          Maximum low-HP wait after leave. Default: 600000
+  --exit-relogin-jitter-ms <ms>
+                          Random extra wait before relogin. Default: 15000
   --post-login-install-wait-ms <ms>
                           Poll for game return and inject after login. Default: 10000
   --auth-poll-ms <ms>     Fast poll interval after login/authorize. Default: 50
@@ -1009,6 +1028,8 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
 	            readyState: document.readyState,
 	            currentUserId,
 	            hasToken: Boolean(localStorage.getItem('tmpGameSessionToken') || after?.control?.hasToken || before?.control?.hasToken),
+              loginSuppressUntil: Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0,
+              loginSuppressReason: String(localStorage.getItem('graspRatLoginSuppressReason') || ''),
 	            wsOpen: Boolean(after?.control?.wsOpen || before?.control?.wsOpen || nativeWsOpen),
 	            wsReadyState: after?.control?.wsReadyState ?? before?.control?.wsReadyState ?? (nativeWs ? nativeWs.readyState : null),
 	            statusText: document.getElementById('status')?.textContent || '',
@@ -1019,6 +1040,7 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
 	              x: Math.round(Number(own.x) || 0),
 	              y: Math.round(Number(own.y) || 0),
 	              hp: Number(own.hp ?? 0),
+              maxHp: Number(own.max_hp ?? own.maxHp ?? 100),
 	              stamina5s: stamina5(own),
 	              stamina5sLimit: staminaLimit(own),
 	              drop: dropValue(own),
@@ -1094,6 +1116,29 @@ async function leaveGame(cdp, reason) {
     returnByValue: true,
     expression: `
       (async () => {
+        const leaveTimeoutMs = ${Math.max(100, Number(options.leaveCommandTimeoutMs) || 600)};
+        const waitWithTimeout = (promise, label) => new Promise((resolve, reject) => {
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            reject(new Error((label || 'operation') + ' timed out after ' + leaveTimeoutMs + 'ms'));
+          }, leaveTimeoutMs);
+          Promise.resolve(promise).then(
+            value => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              resolve(value);
+            },
+            err => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              reject(err);
+            }
+          );
+        });
         const out = { attempted: false, method: '', error: '' };
         try {
           const stopBotAfterLeave = () => {
@@ -1116,10 +1161,10 @@ async function leaveGame(cdp, reason) {
               || 0
             );
             const res = userId ? leave(userId) : leave();
-            if (res && typeof res.then === 'function') await res;
             out.attempted = true;
             out.method = userId ? 'leave(userId)' : 'leave';
             out.userId = userId || null;
+            if (res && typeof res.then === 'function') await waitWithTimeout(res, 'leave request');
             stopBotAfterLeave();
           } else {
             const btn = document.querySelector('#leaveBtn');
@@ -1138,7 +1183,7 @@ async function leaveGame(cdp, reason) {
         return out;
       })()
     `,
-  });
+  }, Math.max(1200, Number(options.leaveCommandTimeoutMs || 600) + 800));
   if (result.exceptionDetails) {
     throw new Error(`leave failed: ${result.exceptionDetails.text || JSON.stringify(result.exceptionDetails)}`);
   }
@@ -1290,6 +1335,9 @@ function createState() {
     lastDirectReconnectAt: 0,
     lastReloginAt: 0,
     lastLeaveAt: 0,
+    exitReloginUntil: 0,
+    exitReloginReason: '',
+    exitReloginHp: null,
     lastRateLimitAt: 0,
     lastLeaveRateLimitAt: 0,
     lastAuthorizeAt: 0,
@@ -1363,7 +1411,120 @@ function leaveRateLimitRemainingMs(state) {
   return Math.max(0, RATE_LIMIT_COOLDOWN_MS - elapsed);
 }
 
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function hpInfoForRelogin(sample) {
+  const own = sample?.page?.own || sample?.after?.self || sample?.before?.self || null;
+  const maxHpRaw = Number(own?.maxHp ?? own?.max_hp ?? own?.hpMax ?? own?.maxHealth ?? 100);
+  const maxHp = Number.isFinite(maxHpRaw) && maxHpRaw > 0 ? maxHpRaw : 100;
+  const hpRaw = Number(own?.hp ?? maxHp);
+  const hp = clampNumber(Number.isFinite(hpRaw) ? hpRaw : maxHp, 0, maxHp);
+  return {
+    hp,
+    maxHp,
+    ratio: maxHp > 0 ? clampNumber(hp / maxHp, 0, 1) : 1
+  };
+}
+
+function reloginDelayForHp(sample) {
+  const hp = hpInfoForRelogin(sample);
+  const minMs = Math.max(1000, Number(options.exitReloginMinMs) || 60000);
+  const maxMs = Math.max(minMs, Number(options.exitReloginMaxMs) || minMs);
+  const jitterMs = Math.max(0, Number(options.exitReloginJitterMs) || 0);
+  const dangerFactor = Math.pow(1 - hp.ratio, 1.35);
+  const jitter = Math.round(Math.random() * jitterMs);
+  return {
+    delayMs: clampNumber(Math.round(minMs + (maxMs - minMs) * dangerFactor + jitter), minMs, maxMs),
+    minMs,
+    maxMs,
+    hp
+  };
+}
+
+async function setPageLoginSuppress(cdp, reason, until) {
+  try {
+    await cdp.send('Runtime.evaluate', {
+      awaitPromise: false,
+      returnByValue: true,
+      expression: `
+        (() => {
+          try {
+            localStorage.setItem('graspRatLoginSuppressUntil', String(${Math.max(0, Number(until) || 0)}));
+            localStorage.setItem('graspRatLoginSuppressReason', ${JSON.stringify(String(reason || 'exit leave'))});
+            return true;
+          } catch (_) {
+            return false;
+          }
+        })()
+      `,
+    }, CDP_FAST_COMMAND_TIMEOUT_MS);
+  } catch (_) {}
+}
+
+async function setExitReloginHold(cdp, sample, state, reason) {
+  const current = Number(state.exitReloginUntil || 0);
+  if (current > Date.now()) {
+    return {
+      until: current,
+      remainingMs: Math.max(0, current - Date.now()),
+      reused: true,
+      reason: state.exitReloginReason || reason,
+      hp: state.exitReloginHp || hpInfoForRelogin(sample)
+    };
+  }
+  const delay = reloginDelayForHp(sample);
+  const until = Date.now() + delay.delayMs;
+  state.exitReloginUntil = until;
+  state.exitReloginReason = reason;
+  state.exitReloginHp = delay.hp;
+  await setPageLoginSuppress(cdp, reason, until);
+  return {
+    until,
+    remainingMs: delay.delayMs,
+    delayMs: delay.delayMs,
+    rangeMs: { min: delay.minMs, max: delay.maxMs },
+    reason,
+    hp: delay.hp
+  };
+}
+
+function syncExitReloginHoldFromSample(sample, state) {
+  const page = sample?.page || {};
+  const until = Number(page.loginSuppressUntil || 0) || 0;
+  const reason = String(page.loginSuppressReason || '');
+  if (!/enemy leave|offline leave|combat leave|pursuit leave/i.test(reason)) return null;
+  if (until <= Date.now()) return null;
+  if (until > Number(state.exitReloginUntil || 0)) {
+    state.exitReloginUntil = until;
+    state.exitReloginReason = reason;
+    state.exitReloginHp = state.exitReloginHp || hpInfoForRelogin(sample);
+  }
+  return {
+    until: state.exitReloginUntil,
+    remainingMs: Math.max(0, Number(state.exitReloginUntil || 0) - Date.now()),
+    reason: state.exitReloginReason,
+    hp: state.exitReloginHp || null
+  };
+}
+
 function reloginBlockedDetail(state, context = {}) {
+  const exitHoldMs = Math.max(0, Number(state.exitReloginUntil || 0) - Date.now());
+  if (exitHoldMs > 0) {
+    return {
+      reason: 'exit relogin wait',
+      exitReloginRemainingMs: exitHoldMs,
+      exitReloginUntil: state.exitReloginUntil,
+      exitReloginReason: state.exitReloginReason || '',
+      exitReloginHp: state.exitReloginHp || null
+    };
+  }
+  if (state.exitReloginUntil) {
+    state.exitReloginUntil = 0;
+    state.exitReloginReason = '';
+    state.exitReloginHp = null;
+  }
   const rateLimitMs = rateLimitRemainingMs(state);
   if (rateLimitMs > 0) {
     return {
@@ -1417,6 +1578,7 @@ function bypassReinstallCooldown(issue) {
 async function maybeStartRelogin(cdp, sample, issues, state, context) {
   const t = Date.now();
   const page = sample?.page || {};
+  const syncedExitHold = syncExitReloginHoldFromSample(sample, state);
   if (!context?.afterLeave && (page.hasToken || page.hasSelf || page.inGame)) {
     log('login-blocked', sample, issues, compactDetail({
       ...context,
@@ -1429,7 +1591,7 @@ async function maybeStartRelogin(cdp, sample, issues, state, context) {
   }
   const blocked = reloginBlockedDetail(state, context || {});
   if (blocked) {
-    if (context?.logBlocked !== false) log('login-wait', sample, issues, compactDetail({ ...context, ...blocked }));
+    if (context?.logBlocked !== false) log('login-wait', sample, issues, compactDetail({ ...context, syncedExitHold, ...blocked }));
     return false;
   }
   state.lastReloginAt = t;
@@ -1484,7 +1646,19 @@ async function handleOffline(cdp, sample, issues, state) {
       }));
       return true;
 	    }
-	    const leave = await leaveGame(cdp, context.safetyReason || safetyReason || 'websocket offline');
+    const leaveAttempts = [];
+    let leave = null;
+    const maxLeaveAttempts = 3;
+    for (let attempt = 0; attempt < maxLeaveAttempts; attempt += 1) {
+      try {
+        leave = await leaveGame(cdp, context.safetyReason || safetyReason || 'websocket offline');
+      } catch (err) {
+        leave = { attempted: false, method: '', error: err.message || String(err) };
+      }
+      leaveAttempts.push(leave);
+      if (isRateLimitError(leave?.error) || leaveWasIssued(leave)) break;
+      if (attempt + 1 < maxLeaveAttempts) await sleep(Math.max(100, Number(options.leaveRetryMs) || 600));
+    }
     state.lastLeaveAt = Date.now();
     if (isRateLimitError(leave?.error)) state.lastLeaveRateLimitAt = Date.now();
     const leaveIssued = leaveWasIssued(leave);
@@ -1494,16 +1668,24 @@ async function handleOffline(cdp, sample, issues, state) {
       offlineAge: context.offlineAge ?? offlineAge,
       directReconnect,
       leaveIssued,
-      leave
+      leave,
+      leaveAttempts: leaveAttempts.length > 1 ? leaveAttempts : undefined
     }));
     if (!leaveIssued) return true;
     state.leftForOffline = true;
+    const exitHold = await setExitReloginHold(
+      cdp,
+      leaveSample,
+      state,
+      context.unsafe ? 'offline unsafe leave' : 'offline leave'
+    );
     await sleep(120);
     const started = await maybeStartRelogin(cdp, leaveSample, leaveIssues, state, {
       afterLeave: true,
       unsafe: Boolean(context.unsafe),
       safetyReason: context.safetyReason || safetyReason,
-      forceRelogin: true
+      forceRelogin: true,
+      exitHold
     });
     if (started) {
       await injectWhenGameReturns(state, leaveSample, leaveIssues, 'after offline leave/login', cdp);
