@@ -158,6 +158,8 @@ function runSelfTest() {
     combatStrafeRandomJitterMs: 1100,
     combatStrafeCarryMs: 1600,
     combatEngageStickMs: 15000,
+    combatEngageGraceMs: 2500,
+    combatEngageGraceRange: 19000,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -1709,6 +1711,8 @@ function browserBotSource(config) {
     combatStrafeRandomJitterMs: 1100,
     combatStrafeCarryMs: 1600,
     combatEngageStickMs: 15000,
+    combatEngageGraceMs: 2500,
+    combatEngageGraceRange: 19000,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -3660,12 +3664,16 @@ function browserBotSource(config) {
     const previous = bot.combatTarget;
     const same = previous && String(previous.id ?? '') === String(id);
     const t = Date.now();
+    const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
     const currentHp = knownHpValue(target);
     const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
     const damaged = currentHp !== null && previousHp !== null && currentHp < previousHp - 0.01;
     const lastDamageAt = damaged
       ? t
       : (same ? Number(previous.lastDamageAt || previous.at || t) : t);
+    const lastInRangeAt = targetDistance <= Number(cfg.combatAttackRange || 0)
+      ? t
+      : (same ? Number(previous.lastInRangeAt || previous.at || t) : t);
     bot.combatTarget = {
       id,
       at: t,
@@ -3676,9 +3684,10 @@ function browserBotSource(config) {
       hp: currentHp,
       displayHp: Number.isFinite(Number(target.hp)) ? Number(target.hp) : null,
       drop: Number(target.drop || 0),
-      distance: Number(target.distance || 0),
+      distance: targetDistance,
       reason: action?.reason || '',
       lastDamageAt,
+      lastInRangeAt,
       lastDamageAmount: damaged ? Math.max(0, previousHp - currentHp) : Number(previous?.lastDamageAmount || 0),
       noDamageMs: Math.max(0, t - lastDamageAt),
       self: summarizeSelf(self)
@@ -4636,22 +4645,64 @@ function browserBotSource(config) {
     return null;
   }
 
-  function pickEngagedCombatTarget(combatTargets) {
+  function combatEngageGraceRange() {
+    return Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatEngageGraceRange || 0));
+  }
+
+  function combatEngagedCandidate(self, raw) {
+    if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isAfkTarget(raw) || isInvulnerable(raw)) return null;
+    return {
+      ...raw,
+      distance: dist(self, raw),
+      drop: dropValue(raw),
+      speed: speed(raw),
+      hp: combatHpValue(raw),
+      knownHp: knownHpValue(raw)
+    };
+  }
+
+  function pickEngagedCombatTarget(self, combatTargets, entities) {
     const engaged = bot.combatTarget;
     if (!engaged?.id) return null;
-    const ageMs = Math.max(0, Date.now() - Number(engaged.at || 0));
+    const t = Date.now();
+    const ageMs = Math.max(0, t - Number(engaged.at || 0));
     if (ageMs > Math.max(cfg.targetStickMs, cfg.combatEngageStickMs)) {
       clearCombatEngagement('expired');
       return null;
     }
     const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
-    if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return null;
+    if (target && !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target)) {
+      return {
+        ...target,
+        combatIntent: 'engaged',
+        combatEngagement: {
+          ageMs: Math.round(ageMs),
+          outOfRangeMs: 0,
+          lastReason: engaged.reason || ''
+        }
+      };
+    }
+    const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
+    const outOfRangeMs = Math.max(0, t - lastInRangeAt);
+    const graceMs = Math.max(0, Number(cfg.combatEngageGraceMs || 0));
+    if (!graceMs || outOfRangeMs > graceMs) {
+      clearCombatEngagement('range-grace-expired');
+      return null;
+    }
+    const raw = (entities || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
+    const reengageTarget = combatEngagedCandidate(self, raw);
+    const graceRange = combatEngageGraceRange();
+    if (!reengageTarget || reengageTarget.distance > graceRange) return null;
     return {
-      ...target,
-      combatIntent: 'engaged',
+      ...reengageTarget,
+      combatIntent: 'reengage',
       combatEngagement: {
         ageMs: Math.round(ageMs),
-        lastReason: engaged.reason || ''
+        outOfRangeMs: Math.round(outOfRangeMs),
+        graceRemainingMs: Math.max(0, Math.round(graceMs - outOfRangeMs)),
+        graceRange: Math.round(graceRange),
+        lastReason: engaged.reason || '',
+        reengage: true
       }
     };
   }
@@ -5033,6 +5084,7 @@ function browserBotSource(config) {
   function buildCombatAction(self, target, bullets) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
+    const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
     const baseTarget = {
       id: target.user_id,
       name: target.name,
@@ -5041,7 +5093,7 @@ function browserBotSource(config) {
       hp: targetHp,
       knownHp: knownHpValue(target),
       drop: target.drop,
-      distance: Math.round(Number(target.distance || dist(self, target))),
+      distance: Math.round(targetDistance),
       moving: speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved),
       combatIntent: target.combatIntent || '',
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
@@ -5074,6 +5126,30 @@ function browserBotSource(config) {
         dy: 0,
         target: baseTarget,
         combatState: { selfHp, targetHp, hpGap }
+      };
+    }
+    if (targetDistance > Number(cfg.combatAttackRange || 0)) {
+      const dir = directionTo(self, target);
+      return {
+        kind: 'seek-enemy',
+        reason: 'combat-reengage',
+        combat: true,
+        ignoreReturnBlock: true,
+        shoot: false,
+        forceShoot: false,
+        dx: dir.dx,
+        dy: dir.dy,
+        target: baseTarget,
+        combatState: {
+          selfHp,
+          targetHp,
+          reengage: {
+            distance: Math.round(targetDistance),
+            attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
+            outOfRangeMs: target.combatEngagement?.outOfRangeMs || 0,
+            graceRemainingMs: target.combatEngagement?.graceRemainingMs || 0
+          }
+        }
       };
     }
     const pressure = combatPressureThreat(self, target, bullets);
@@ -5781,7 +5857,7 @@ function browserBotSource(config) {
     const coinThreats = avoidanceThreats;
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
-    const engagedCombatTarget = pickEngagedCombatTarget(combatTargets);
+    const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities);
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -5790,7 +5866,9 @@ function browserBotSource(config) {
         name: engagedCombatTarget.name,
         distance: Math.round(engagedCombatTarget.distance),
         intent: engagedCombatTarget.combatIntent || '',
-        ageMs: engagedCombatTarget.combatEngagement?.ageMs || 0
+        ageMs: engagedCombatTarget.combatEngagement?.ageMs || 0,
+        outOfRangeMs: engagedCombatTarget.combatEngagement?.outOfRangeMs || 0,
+        graceRemainingMs: engagedCombatTarget.combatEngagement?.graceRemainingMs || 0
       } : null,
       nearestActive: activeThreats[0] ? {
         id: activeThreats[0].user_id,
@@ -6407,7 +6485,8 @@ function browserBotSource(config) {
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {
         setLastTarget('enemy', action.target.id);
-        rememberAttack(self, action.target, action.kind);
+        if (action.combat) rememberCombatEngagement(self, action.target, action);
+        else rememberAttack(self, action.target, action.kind);
       } else if (action.kind === 'flee') {
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
