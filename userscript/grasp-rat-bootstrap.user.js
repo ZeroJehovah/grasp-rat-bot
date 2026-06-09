@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.9
+// @version      0.4.10
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.9';
+  const BOOTSTRAP_VERSION = '0.4.10';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -161,6 +161,49 @@
     state.lastError = `${message}: ${error}`;
     logBootstrap(message, { ...detail, error });
     return state.lastError;
+  }
+
+  function recordBootstrapException(label, err, detail = {}) {
+    const message = noteBootstrapError(label, err, detail);
+    try {
+      postDebug('exception', {
+        label,
+        message,
+        error: err?.message || String(err),
+        stack: String(err?.stack || ''),
+        ...detail
+      }, { force: true });
+    } catch (_) {}
+    try {
+      renderBootstrapPanelError(message);
+    } catch (_) {}
+    return message;
+  }
+
+  function runSafely(label, fn) {
+    try {
+      return fn();
+    } catch (err) {
+      recordBootstrapException(label, err);
+      return null;
+    }
+  }
+
+  function runAsyncSafely(label, fn) {
+    return Promise.resolve()
+      .then(fn)
+      .catch(err => {
+        recordBootstrapException(label, err);
+        return null;
+      });
+  }
+
+  function setSafeTimeout(label, fn, ms) {
+    return setTimeout(() => runSafely(label, fn), ms);
+  }
+
+  function setSafeInterval(label, fn, ms) {
+    return setInterval(() => runSafely(label, fn), ms);
   }
 
   function beginBusy(reason, flags = {}) {
@@ -1653,10 +1696,10 @@
 
   if (isAuthorizePage()) {
     suppressLogin('authorize page', cfg.authReturnGraceMs);
-    setTimeout(() => {
+    setSafeTimeout('authorize fallback timer', () => {
       if (!isAuthorizePage()) return;
       maybeClickAuthorize('fallback-delay');
-      setInterval(() => maybeClickAuthorize('fallback-interval'), Math.max(cfg.watchdogMs, cfg.authorizeCooldownMs));
+      setSafeInterval('authorize fallback interval', () => maybeClickAuthorize('fallback-interval'), Math.max(cfg.watchdogMs, cfg.authorizeCooldownMs));
     }, cfg.authorizeFallbackDelayMs);
     return;
   }
@@ -1666,12 +1709,12 @@
   syncPauseToPage();
   const renderPanelWhenReady = () => updateBootstrapPanel(true);
   if (document.body) renderPanelWhenReady();
-  else document.addEventListener('DOMContentLoaded', renderPanelWhenReady, { once: true });
-  setInterval(() => updateBootstrapPanel(), cfg.panelUpdateMs);
+  else document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded panel render', renderPanelWhenReady), { once: true });
+  setSafeInterval('panel interval', () => updateBootstrapPanel(), cfg.panelUpdateMs);
 
   if (isGameAuthCallback()) {
     suppressLogin('oauth callback', cfg.authReturnGraceMs);
-    setInterval(() => watchdogOnce('callback-interval').catch(() => {}), cfg.watchdogMs);
+    setSafeInterval('callback watchdog interval', () => runAsyncSafely('callback watchdog interval', () => watchdogOnce('callback-interval')), cfg.watchdogMs);
     return;
   }
 
@@ -1684,7 +1727,7 @@
     currentStatus: shortStatus()
   });
 
-  (async () => {
+  runAsyncSafely('startup sequence', async () => {
     const cacheInstalled = await installCachedForFastStart('startup-cache-first');
     try {
       await pollOnce(cacheInstalled ? 'startup-after-cache' : 'startup');
@@ -1702,8 +1745,8 @@
         postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
       }
     }
-  })();
-  watchdogOnce('startup').catch(() => {});
-  setInterval(() => pollOnce('interval'), cfg.pollMs);
-  setInterval(() => watchdogOnce('interval').catch(() => {}), cfg.watchdogMs);
+  });
+  runAsyncSafely('startup watchdog', () => watchdogOnce('startup'));
+  setSafeInterval('poll interval', () => runAsyncSafely('poll interval', () => pollOnce('interval')), cfg.pollMs);
+  setSafeInterval('watchdog interval', () => runAsyncSafely('watchdog interval', () => watchdogOnce('interval')), cfg.watchdogMs);
 })();

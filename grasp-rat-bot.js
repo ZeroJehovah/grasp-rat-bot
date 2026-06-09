@@ -2025,6 +2025,32 @@ function browserBotSource(config) {
 		    } catch (_) {}
 		  }
 
+      function recordUnhandledTickError(source, err) {
+        const entry = {
+          at: Date.now(),
+          source,
+          message: err?.message || String(err),
+          stack: String(err?.stack || '')
+        };
+        bot.errors.push(entry);
+        if (bot.errors.length > 20) bot.errors.shift();
+        try {
+          console.error('[grasp-rat-bot:unhandled-tick]', err);
+        } catch (_) {}
+        try {
+          postDebugEvent('unhandled-tick-error', entry, { force: true });
+        } catch (_) {}
+        return entry;
+      }
+
+      function runTickSafely(source = 'timer') {
+        return Promise.resolve()
+          .then(() => tick(source))
+          .catch(err => {
+            recordUnhandledTickError(source, err);
+          });
+      }
+
 		  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
@@ -2553,10 +2579,7 @@ function browserBotSource(config) {
 	    const t = now();
 	    if (respectMinInterval && t - bot.lastNativeTickAt < cfg.nativeTickMinMs) return;
 	    bot.lastNativeTickAt = t;
-	    Promise.resolve(tick(source)).catch(err => {
-	      bot.errors.push({ at: Date.now(), message: err.message || String(err), stack: String(err.stack || '') });
-	      if (bot.errors.length > 20) bot.errors.shift();
-	    });
+	    runTickSafely(source);
 	  }
 
 	  function ensureNativeMessagePump(native = getNativeControl()) {
@@ -5000,7 +5023,7 @@ function browserBotSource(config) {
 	      bot.starting = false;
 	      if (!cfg.once && bot.running) {
 	        bot.timer = setInterval(() => {
-	          tick();
+	          runTickSafely('timer');
         }, cfg.tickMs);
       }
       logStatus(cfg.dryRun ? 'started dry-run' : 'started live control');
