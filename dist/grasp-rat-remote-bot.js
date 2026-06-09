@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.41","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.42","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -199,6 +199,15 @@
     offlineLeaveRetryMs: 600,
     leaveCommandTimeoutMs: 600,
     offlineLeaveCooldownMs: 60000,
+    serverPositionStallEnabled: true,
+    serverPositionStallProbeMs: 1000,
+    serverPositionStallMs: 2500,
+    serverPositionStallHoldMs: 6000,
+    serverPositionCommandFreshMs: 900,
+    serverPositionSnapshotMaxAgeMs: 2500,
+    serverPositionClientMoveMin: 300,
+    serverPositionServerMoveMax: 80,
+    serverPositionGapMin: 400,
     sessionResetMissingMs: 10000,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
@@ -254,6 +263,8 @@
     lastOfflineLeaveResult: null,
     offlineReloginUntil: 0,
     lastOfflineSafety: null,
+    serverPositionStall: null,
+    serverPositionProbeAt: 0,
     lastPursuitLeaveAt: 0,
     lastPursuitLeaveResult: null,
     lastCombatLeaveAt: 0,
@@ -326,7 +337,9 @@
 	      lastMessageAt: 0,
 	      lastError: '',
 	      lastVelocity: '',
-	      lastVelocityAt: 0
+	      lastVelocityAt: 0,
+	      nonZeroVelocitySince: 0,
+	      lastNonZeroVelocityAt: 0
 	    },
     attackHistory: preserved.attackHistory,
     killHistory: preserved.killHistory,
@@ -464,6 +477,7 @@
 	          error: this.globalState.error
 	        },
         control: summarizeControl(),
+        serverPositionStall: summarizeServerPositionStall(),
         login: {
           lastAt: this.lastLoginAt || 0,
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
@@ -722,6 +736,7 @@
 	      'control-ws-offline': 'WebSocket 离线',
 	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
 	      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+	      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
 	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'offline-leave-wait': 'WebSocket 离线退出后等待，继续补发退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
@@ -1693,6 +1708,8 @@
 	    const native = getNativeControl();
 	    if (native) syncNativeControl(native);
 	    const nativeState = native?.state || null;
+    const serverPositionStall = summarizeServerPositionStall();
+    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStall?.stalled);
 	    const nativeCurrentVel = nativeState?.currentVel
 	      ? (Number(nativeState.currentVel.dx || 0) + ' ' + Number(nativeState.currentVel.dy || 0))
 	      : '';
@@ -1702,7 +1719,8 @@
 	    return {
 	      currentUserId: control.currentUserId || getCurrentUserId(),
 	      hasToken: Boolean(getSessionToken()),
-	      wsOpen: Boolean(control.wsOpen),
+	      wsOpen: effectiveWsOpen,
+      rawWsOpen: Boolean(control.wsOpen),
 	      wsReadyState: native ? native.wsReadyState : (control.ws ? control.ws.readyState : control.wsReadyState),
 	      connecting: Boolean(control.connecting),
 	      transport: control.transport || (native ? 'native-page' : 'none'),
@@ -1712,11 +1730,14 @@
 	      nativeWsReadyState: native ? native.wsReadyState : null,
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
-	      lastError: control.lastError || '',
+	      lastError: serverPositionStall?.stalled ? 'server position stalled' : (control.lastError || ''),
 	      lastVelocity: control.lastVelocity || '',
+      nonZeroVelocityAgeMs: control.lastNonZeroVelocityAt ? Date.now() - Number(control.lastNonZeroVelocityAt || 0) : null,
+      nonZeroVelocityDurationMs: control.nonZeroVelocitySince ? Date.now() - Number(control.nonZeroVelocitySince || 0) : null,
 	      nativeCurrentVel,
 	      nativeLastVel: nativeState?.lastVel || '',
-	      nativeKeys
+	      nativeKeys,
+      serverPositionStall
 	    };
 	  }
 	
@@ -1982,6 +2003,168 @@
     };
   }
 
+  function entityPoint(entity) {
+    if (!entity) return null;
+    const x = Number(entity.x);
+    const y = Number(entity.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x, y };
+  }
+
+  function pointDistance(a, b) {
+    if (!a || !b) return Infinity;
+    return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+  }
+
+  function getSnapshotSelf() {
+    const id = getCurrentUserId();
+    if (!id) return null;
+    return (bot.globalState.entities || []).find(entity => Number(entity.user_id) === Number(id)) || null;
+  }
+
+  function currentVelocityCommandActive() {
+    const t = Date.now();
+    const lastAt = Number(bot.control.lastNonZeroVelocityAt || 0);
+    const since = Number(bot.control.nonZeroVelocitySince || 0);
+    return Boolean(since && lastAt && t - lastAt <= Math.max(100, Number(cfg.serverPositionCommandFreshMs || 900)));
+  }
+
+  function summarizeServerPositionStall(state = bot.serverPositionStall) {
+    if (!state) return null;
+    return {
+      active: Boolean(state.active),
+      stalled: Boolean(state.stalled),
+      reason: state.reason || '',
+      stalledAt: state.stalledAt || 0,
+      holdRemainingMs: state.stalledUntil ? Math.max(0, Math.round(Number(state.stalledUntil || 0) - Date.now())) : 0,
+      ageMs: state.startedAt ? Math.max(0, Date.now() - Number(state.startedAt || 0)) : 0,
+      movingMs: state.movingSince ? Math.max(0, Date.now() - Number(state.movingSince || 0)) : 0,
+      clientMoved: Number.isFinite(Number(state.clientMoved)) ? Math.round(Number(state.clientMoved)) : null,
+      serverMoved: Number.isFinite(Number(state.serverMoved)) ? Math.round(Number(state.serverMoved)) : null,
+      gap: Number.isFinite(Number(state.gap)) ? Math.round(Number(state.gap)) : null,
+      gapDelta: Number.isFinite(Number(state.gapDelta)) ? Math.round(Number(state.gapDelta)) : null,
+      snapshotAgeMs: Number.isFinite(Number(state.snapshotAgeMs)) ? Math.round(Number(state.snapshotAgeMs)) : null,
+      client: state.client ? { x: Math.round(Number(state.client.x) || 0), y: Math.round(Number(state.client.y) || 0) } : null,
+      server: state.server ? { x: Math.round(Number(state.server.x) || 0), y: Math.round(Number(state.server.y) || 0) } : null
+    };
+  }
+
+  function resetServerPositionStall(reason = '') {
+    if (bot.serverPositionStall) bot.serverPositionStall.reason = reason || 'reset';
+    bot.serverPositionStall = null;
+  }
+
+  async function refreshServerPositionProbeIfNeeded() {
+    if (!cfg.serverPositionStallEnabled || !currentVelocityCommandActive()) return;
+    const t = Date.now();
+    const probeMs = Math.max(250, Number(cfg.serverPositionStallProbeMs || 1000));
+    if (t - Number(bot.serverPositionProbeAt || 0) < probeMs) return;
+    bot.serverPositionProbeAt = t;
+    try {
+      await refreshGlobalState(true);
+    } catch (err) {
+      bot.globalState.error = err.message || String(err);
+    }
+  }
+
+  function assessServerPositionStall(self) {
+    if (!cfg.serverPositionStallEnabled) {
+      resetServerPositionStall('disabled');
+      return null;
+    }
+    const t = Date.now();
+    if (bot.serverPositionStall?.stalled && t < Number(bot.serverPositionStall.stalledUntil || 0)) {
+      return summarizeServerPositionStall(bot.serverPositionStall);
+    }
+    const movingSince = Number(bot.control.nonZeroVelocitySince || 0);
+    const commandActive = currentVelocityCommandActive();
+    const client = entityPoint(self);
+    const serverSelf = getSnapshotSelf();
+    const server = entityPoint(serverSelf);
+    const snapshotAgeMs = bot.globalState.snapshotRefreshedAt
+      ? t - Number(bot.globalState.snapshotRefreshedAt || 0)
+      : Infinity;
+    const snapshotFresh = snapshotAgeMs <= Math.max(500, Number(cfg.serverPositionSnapshotMaxAgeMs || 2500));
+    if (!commandActive || !client || !server || !snapshotFresh || !bot.control.wsOpen) {
+      if (!commandActive || !bot.control.wsOpen) resetServerPositionStall(commandActive ? 'ws-offline' : 'not-moving');
+      return summarizeServerPositionStall();
+    }
+
+    let state = bot.serverPositionStall;
+    if (!state || !state.active || Number(state.movingSince || 0) !== movingSince) {
+      state = {
+        active: true,
+        stalled: false,
+        reason: 'tracking',
+        startedAt: t,
+        movingSince,
+        clientOrigin: client,
+        serverOrigin: server,
+        baseGap: pointDistance(client, server),
+        client,
+        server,
+        clientMoved: 0,
+        serverMoved: 0,
+        gap: pointDistance(client, server),
+        gapDelta: 0,
+        snapshotAgeMs
+      };
+      bot.serverPositionStall = state;
+      return summarizeServerPositionStall(state);
+    }
+
+    const serverMoved = pointDistance(server, state.serverOrigin);
+    const serverMoveMax = Math.max(0, Number(cfg.serverPositionServerMoveMax || 80));
+    if (serverMoved > serverMoveMax) {
+      state = {
+        active: true,
+        stalled: false,
+        reason: 'server-moved',
+        startedAt: t,
+        movingSince,
+        clientOrigin: client,
+        serverOrigin: server,
+        baseGap: pointDistance(client, server),
+        client,
+        server,
+        clientMoved: 0,
+        serverMoved: 0,
+        gap: pointDistance(client, server),
+        gapDelta: 0,
+        snapshotAgeMs
+      };
+      bot.serverPositionStall = state;
+      return summarizeServerPositionStall(state);
+    }
+
+    const clientMoved = pointDistance(client, state.clientOrigin);
+    const gap = pointDistance(client, server);
+    const gapDelta = Math.max(0, gap - Number(state.baseGap || 0));
+    const movingMs = t - movingSince;
+    const ageMs = t - Number(state.startedAt || t);
+    const stalled = movingMs >= Math.max(500, Number(cfg.serverPositionStallMs || 2500))
+      && ageMs >= Math.max(500, Number(cfg.serverPositionStallMs || 2500))
+      && clientMoved >= Math.max(0, Number(cfg.serverPositionClientMoveMin || 300))
+      && serverMoved <= serverMoveMax
+      && (gap >= Math.max(0, Number(cfg.serverPositionGapMin || 400))
+        || gapDelta >= Math.max(0, Number(cfg.serverPositionGapMin || 400)));
+    Object.assign(state, {
+      stalled,
+      reason: stalled ? 'server-position-stalled' : 'tracking',
+      stalledAt: stalled ? (state.stalledAt || t) : 0,
+      stalledUntil: stalled ? Math.max(Number(state.stalledUntil || 0), t + Math.max(1000, Number(cfg.serverPositionStallHoldMs || 6000))) : 0,
+      client,
+      server,
+      clientMoved,
+      serverMoved,
+      gap,
+      gapDelta,
+      snapshotAgeMs
+    });
+    if (stalled) bot.control.lastError = 'server position stalled';
+    return summarizeServerPositionStall(state);
+  }
+
   function updateSessionStats(selfSummary) {
     const t = Date.now();
     const session = bot.session || (bot.session = {});
@@ -2224,6 +2407,9 @@
     }
     bot.control.lastVelocity = '0 0';
     bot.control.lastVelocityAt = now();
+    bot.control.nonZeroVelocitySince = 0;
+    bot.control.lastNonZeroVelocityAt = 0;
+    if (reason !== 'server-position-stalled') resetServerPositionStall(reason || 'local-stop');
     if (reason) bot.control.lastLocalStopReason = reason;
     return true;
   }
@@ -2266,6 +2452,15 @@
 	    if (!force && vel === bot.control.lastVelocity && t - bot.control.lastVelocityAt < 100) return true;
 	    bot.control.lastVelocity = vel;
 	    bot.control.lastVelocityAt = t;
+    if (dx || dy) {
+      const dt = Date.now();
+      if (!bot.control.nonZeroVelocitySince) bot.control.nonZeroVelocitySince = dt;
+      bot.control.lastNonZeroVelocityAt = dt;
+    } else {
+      bot.control.nonZeroVelocitySince = 0;
+      bot.control.lastNonZeroVelocityAt = 0;
+      if (!bot.serverPositionStall?.stalled) resetServerPositionStall('zero-velocity');
+    }
 	    if (sendNativeVelocity(dx, dy, force)) return true;
 	    return wsSend('vel ' + vel);
 	  }
@@ -4801,9 +4996,12 @@
         };
       }
 	      ensureControlWs();
-	      if (!cfg.dryRun && !bot.control.wsOpen) {
+      await refreshServerPositionProbeIfNeeded();
+      const serverPositionStall = assessServerPositionStall(self);
+      const controlOffline = !bot.control.wsOpen || Boolean(serverPositionStall?.stalled);
+	      if (!cfg.dryRun && controlOffline) {
 	        bot.pursuit = null;
-	        stopMotionSafely('control-ws-offline');
+	        stopMotionSafely(serverPositionStall?.stalled ? 'server-position-stalled' : 'control-ws-offline');
 	        if (!bot.offlineSince) bot.offlineSince = Date.now();
 	        const offlineAgeMs = Date.now() - bot.offlineSince;
         const offlineSafety = assessOfflineSafety(self);
@@ -4811,18 +5009,21 @@
         const unsafeLeaveMs = Math.max(0, Number(cfg.offlineUnsafeLeaveMs ?? 0));
         const leaveDelayMs = offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs;
 	        const leaveResult = offlineAgeMs >= leaveDelayMs
-	          ? await leaveOffline('websocket offline', currentSummary, offlineSafety)
+	          ? await leaveOffline(serverPositionStall?.stalled ? 'server position stalled' : 'websocket offline', currentSummary, offlineSafety)
 	          : null;
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: leaveResult?.attempted && !leaveResult?.error
               ? 'offline-leave'
-              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait'),
+              : (serverPositionStall?.stalled
+                ? 'control-ws-server-position-stalled'
+                : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')),
 	          control: summarizeControl(),
 	          self: summarizeSelf(self),
 	          offlineAgeMs,
           leaveDelayMs,
           offlineSafety,
+          serverPositionStall,
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
@@ -4833,6 +5034,7 @@
         return;
       }
       bot.offlineSince = 0;
+      if (!serverPositionStall?.active) resetServerPositionStall('online');
       refreshGlobalState(false).catch(err => {
         bot.globalState.error = err.message || String(err);
       });
