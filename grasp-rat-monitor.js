@@ -1494,7 +1494,7 @@ function syncExitReloginHoldFromSample(sample, state) {
   const page = sample?.page || {};
   const until = Number(page.loginSuppressUntil || 0) || 0;
   const reason = String(page.loginSuppressReason || '');
-  if (!/enemy leave|offline leave|combat leave|pursuit leave/i.test(reason)) return null;
+  if (!/enemy leave|offline.*leave|combat leave|pursuit leave/i.test(reason)) return null;
   if (until <= Date.now()) return null;
   if (until > Number(state.exitReloginUntil || 0)) {
     state.exitReloginUntil = until;

@@ -92,7 +92,20 @@ function writeStdoutSync(text) {
   const buffer = Buffer.from(String(text));
   let offset = 0;
   while (offset < buffer.length) {
-    offset += fs.writeSync(process.stdout.fd, buffer, offset, buffer.length - offset);
+    try {
+      const written = fs.writeSync(process.stdout.fd, buffer, offset, Math.min(buffer.length - offset, 65536));
+      if (written > 0) {
+        offset += written;
+      } else {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+    } catch (err) {
+      if (err?.code === 'EAGAIN' || err?.code === 'EWOULDBLOCK') {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        continue;
+      }
+      throw err;
+    }
   }
 }
 
@@ -2055,6 +2068,7 @@ function browserBotSource(config) {
 	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
 	      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
 	      'offline-leave': 'WebSocket 离线，正在退出',
+	      'offline-leave-wait': 'WebSocket 离线退出后等待，继续补发退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
 	      'pursuit-leave-wait': '追击退出后等待重新登录',
 	      'auto-login': '自动触发登录/加入',
@@ -2434,6 +2448,21 @@ function browserBotSource(config) {
     } catch (_) {}
     const remaining = Math.max(0, until - Date.now());
     if (!remaining && bot.pursuitReloginUntil) bot.pursuitReloginUntil = 0;
+    return Math.round(remaining);
+  }
+
+  function offlineReloginHoldRemainingMs() {
+    let until = Number(bot.offlineReloginUntil || 0);
+    try {
+      const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+      const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+      if (/offline.*leave/i.test(suppressReason) && suppressUntil > until) {
+        until = suppressUntil;
+        bot.offlineReloginUntil = suppressUntil;
+      }
+    } catch (_) {}
+    const remaining = Math.max(0, until - Date.now());
+    if (!remaining && bot.offlineReloginUntil) bot.offlineReloginUntil = 0;
     return Math.round(remaining);
   }
 
@@ -5270,6 +5299,36 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
 	      }
+      const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+      if (offlineHoldRemainingMs > 0) {
+        bot.pursuit = null;
+        stopMotionSafely('offline-leave-wait');
+        const currentSummary = summarizeSelf(self);
+        const offlineSafety = bot.lastOfflineSafety || assessOfflineSafety(self);
+        const leaveResult = await leaveOffline('offline leave wait', currentSummary, offlineSafety);
+        refreshGlobalState(false).catch(err => {
+          bot.globalState.error = err.message || String(err);
+        });
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'offline-leave-wait',
+          dx: 0,
+          dy: 0,
+          self: currentSummary,
+          currentUserId: getCurrentUserId(),
+          control: summarizeControl(),
+          holdRemainingMs: offlineReloginHoldRemainingMs(),
+          offlineSafety,
+          leave: leaveResult,
+          offlineLeave: {
+            lastResult: bot.lastOfflineLeaveResult,
+            lastRetryResult: leaveResult
+          }
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
 	      bot.waitSince = 0;
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
