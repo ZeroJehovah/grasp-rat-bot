@@ -168,6 +168,8 @@ function runSelfTest() {
     opportunityInRangeBonus: 300000,
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
+    opportunitySwitchMargin: 120000,
+    opportunitySwitchHoldMs: 7000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
@@ -1579,6 +1581,7 @@ function browserBotSource(config) {
 	    seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
 	    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
 	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
+	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
 	    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
 	  };
 	  const cfg = {
@@ -1655,6 +1658,8 @@ function browserBotSource(config) {
     opportunityInRangeBonus: 300000,
     opportunityNearBonus: 30000,
     opportunityStickBonus: 35000,
+    opportunitySwitchMargin: 120000,
+    opportunitySwitchHoldMs: 7000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
@@ -1817,6 +1822,7 @@ function browserBotSource(config) {
     lastSelf: null,
     lastSafety: null,
     actionThreats: [],
+    opportunityChoice: preserved.opportunityChoice,
     returnBlockLock: null,
     returnBlockScan: null,
     returnBlockCooldownUntil: 0,
@@ -1965,6 +1971,7 @@ function browserBotSource(config) {
 	        lastDecision: this.lastDecision,
 	        lastTarget: this.lastTarget,
 	        combatTarget: this.combatTarget,
+	        opportunityChoice: this.opportunityChoice,
 	        self: displaySelf,
         session,
         safety: this.lastSafety,
@@ -5121,6 +5128,58 @@ function browserBotSource(config) {
     };
   }
 
+  function opportunityKey(item) {
+    if (!item) return '';
+    return String(item.type || '') + ':' + String(item.id ?? '');
+  }
+
+  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
+    if (!item) return action;
+    const t = now();
+    const key = opportunityKey(item);
+    const same = previous && String(previous.key || '') === key;
+    bot.opportunityChoice = {
+      key,
+      type: item.type || '',
+      id: item.id ?? '',
+      at: same ? Number(previous.at || t) : t,
+      lastSeenAt: t,
+      until: t + Math.max(0, Number(cfg.opportunitySwitchHoldMs) || 0),
+      score: Math.round(Number(item.score || 0)),
+      reason: action?.reason || ''
+    };
+    return {
+      ...action,
+      opportunityChoice: {
+        type: bot.opportunityChoice.type,
+        id: bot.opportunityChoice.id,
+        score: bot.opportunityChoice.score,
+        held: Boolean(item.held),
+        competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
+        holdRemainingMs: Math.max(0, Math.round(Number(bot.opportunityChoice.until || 0) - t))
+      }
+    };
+  }
+
+  function chooseStableOpportunity(opportunities) {
+    const sorted = opportunities
+      .slice()
+      .sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
+    const best = sorted[0] || null;
+    if (!best) return null;
+    const current = bot.opportunityChoice;
+    if (current?.key && now() < Number(current.until || 0)) {
+      const held = sorted.find(item => opportunityKey(item) === String(current.key || ''));
+      if (held && opportunityKey(best) !== opportunityKey(held)) {
+        const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
+        if (Number(best.score || 0) <= Number(held.score || 0) + margin) {
+          return { ...held, held: true, competingScore: best.score };
+        }
+      }
+    }
+    return best;
+  }
+
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups) {
     const opportunities = [];
     const coinById = new Map();
@@ -5139,6 +5198,7 @@ function browserBotSource(config) {
         : (coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin');
       opportunities.push({
         type: 'coin',
+        id: coin.drop_id,
         distance: coin.distance,
         score: scoreCoinOpportunity(coin),
         action: () => buildCoinAction(
@@ -5155,14 +5215,15 @@ function browserBotSource(config) {
       if (score === null) continue;
       opportunities.push({
         type: 'enemy',
+        id: target.user_id,
         distance: target.distance,
         score,
         action: () => buildEnemyAction(self, target)
       });
     }
 
-    const best = opportunities.sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance)[0] || null;
-    return best ? best.action() : null;
+    const best = chooseStableOpportunity(opportunities);
+    return best ? rememberOpportunityChoice(best, best.action()) : null;
   }
 
   function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
