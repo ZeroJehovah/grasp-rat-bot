@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.40","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.41","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -106,7 +106,7 @@
     targetWhitelistIds: [],
     coinOpportunityValue: 60000,
     dropOpportunityValue: 100000,
-    opportunityDistanceFloor: 500,
+    opportunityDistanceFloor: 50,
     opportunityDistanceScoreScale: 10000,
     opportunityStickBonus: 35000,
     opportunitySwitchMargin: 120000,

@@ -174,7 +174,7 @@ function runSelfTest() {
     targetWhitelistIds: [],
     coinOpportunityValue: 60000,
     dropOpportunityValue: 100000,
-    opportunityDistanceFloor: 500,
+    opportunityDistanceFloor: 50,
     opportunityDistanceScoreScale: 10000,
     opportunityStickBonus: 35000,
     opportunitySwitchMargin: 120000,
@@ -963,6 +963,11 @@ function runSelfTest() {
         ]
       }).id,
       want: 1
+    },
+    {
+      name: 'same-value coin score distinguishes 150m from 227m',
+      got: scoreCoinOpportunity({ amount: 1, distance: 150 }) > scoreCoinOpportunity({ amount: 1, distance: 227 }),
+      want: true
     },
     {
       name: 'richer far coin can beat near coin when yield is higher',
@@ -1767,7 +1772,7 @@ function browserBotSource(config) {
     targetWhitelistIds: [],
     coinOpportunityValue: 60000,
     dropOpportunityValue: 100000,
-    opportunityDistanceFloor: 500,
+    opportunityDistanceFloor: 50,
     opportunityDistanceScoreScale: 10000,
     opportunityStickBonus: 35000,
     opportunitySwitchMargin: 120000,
