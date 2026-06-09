@@ -3353,12 +3353,19 @@ function browserBotSource(config) {
     return !(Number.isFinite(distance) && distance <= Number(cfg.nativeCoinAuthoritativeRadius || 0));
   }
 
+  function snapshotCoinFreshEnough() {
+    const refreshedAt = Number(bot.globalState.snapshotRefreshedAt || 0);
+    if (!refreshedAt) return false;
+    return Date.now() - refreshedAt <= Number(cfg.snapshotCoinStaleMs || 0);
+  }
+
   function getCoins(self = null) {
     const nativeCoinList = getNativeCoinList();
     const nativeCoins = Array.isArray(nativeCoinList)
       ? nativeCoinList.map(coin => normalizeCoinDrop(coin, 'native')).filter(Boolean)
       : [];
     const snapshotCoins = Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : [];
+    const useSnapshotCoins = snapshotCoinFreshEnough();
     const byKey = new Map();
     const add = (raw, source) => {
       const coin = normalizeCoinDrop(raw, source);
@@ -3367,10 +3374,12 @@ function browserBotSource(config) {
       const previous = byKey.get(key);
       byKey.set(key, previous ? { ...previous, ...coin, snapshot: Boolean(previous.snapshot || coin.snapshot), native: Boolean(previous.native || coin.native) } : coin);
     };
-    for (const coin of snapshotCoins) {
-      const normalized = normalizeCoinDrop(coin, 'snapshot');
-      if (!normalized || !snapshotCoinAllowed(self, normalized)) continue;
-      add(normalized, 'snapshot');
+    if (useSnapshotCoins) {
+      for (const coin of snapshotCoins) {
+        const normalized = normalizeCoinDrop(coin, 'snapshot');
+        if (!normalized || !snapshotCoinAllowed(self, normalized)) continue;
+        add(normalized, 'snapshot');
+      }
     }
     for (const coin of nativeCoins) add(coin, 'native');
     return Array.from(byKey.values());
