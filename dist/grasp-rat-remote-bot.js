@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.19","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.20","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -675,6 +675,7 @@
 	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'offline-leave-wait': 'WebSocket 离线退出后等待，继续补发退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
+	      'pursuit-leave-retry': '追击退出失败，等待补发退出',
 	      'pursuit-leave-wait': '追击退出后等待重新登录',
 	      'auto-login': '自动触发登录/加入',
 	      'login-cooldown': '登录已触发，等待页面跳转',
@@ -4194,8 +4195,8 @@
       const pursuitSummary = summarizePursuit(pursuit);
       if (pursuitSummary && pursuitSummary.durationMs >= cfg.pursuitLeaveMs) {
         const leaveResult = await leaveForPursuit(pursuit, currentSummary);
+        stopMotionSafely('pursuit-leave');
         if (leaveResult?.attempted && !leaveResult?.error) {
-          stopMotionSafely('pursuit-leave');
           bot.lastDecision = {
             kind: 'wait',
             reason: 'pursuit-leave',
@@ -4211,11 +4212,19 @@
           if (cfg.once) bot.stop('once');
           return;
         }
-        action = {
-          ...action,
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'pursuit-leave-retry',
+          dx: 0,
+          dy: 0,
+          self: summarizeSelf(self),
           pursuit: pursuitSummary,
-          pursuitLeave: leaveResult
+          leave: leaveResult,
+          holdRemainingMs: enemyReloginHoldRemainingMs()
         };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
       } else if (pursuitSummary) {
         action = {
           ...action,
