@@ -50,7 +50,6 @@ function parseArgs(args) {
     safeLeaveOfflineMs: 3000,
     leaveCommandTimeoutMs: 600,
     leaveRetryMs: 600,
-    directReconnectCooldownMs: 1000,
     reloginCooldownMs: 30000,
     exitReloginMinMs: 60000,
     exitReloginMaxMs: 600000,
@@ -78,7 +77,7 @@ function parseArgs(args) {
     else if (arg === '--safe-leave-offline-ms') out.safeLeaveOfflineMs = Number(args[++i] || out.safeLeaveOfflineMs);
     else if (arg === '--leave-command-timeout-ms') out.leaveCommandTimeoutMs = Number(args[++i] || out.leaveCommandTimeoutMs);
     else if (arg === '--leave-retry-ms') out.leaveRetryMs = Number(args[++i] || out.leaveRetryMs);
-    else if (arg === '--direct-reconnect-cooldown-ms') out.directReconnectCooldownMs = Number(args[++i] || out.directReconnectCooldownMs);
+    else if (arg === '--direct-reconnect-cooldown-ms') i += 1;
     else if (arg === '--relogin-cooldown-ms') out.reloginCooldownMs = Number(args[++i] || out.reloginCooldownMs);
     else if (arg === '--exit-relogin-min-ms') out.exitReloginMinMs = Number(args[++i] || out.exitReloginMinMs);
     else if (arg === '--exit-relogin-max-ms') out.exitReloginMaxMs = Number(args[++i] || out.exitReloginMaxMs);
@@ -121,7 +120,7 @@ Options:
                           Bound in-page leave() waits. Default: 600
   --leave-retry-ms <ms>   Short retry gap after failed/stuck leave. Default: 600
   --direct-reconnect-cooldown-ms <ms>
-                          Minimum time between direct page reconnect nudges. Default: 1000
+                          Deprecated no-op; the page owns WebSocket reconnects
   --relogin-cooldown-ms <ms>
                           Minimum time between OAuth login attempts. Default: 30000
   --exit-relogin-min-ms <ms>
@@ -1071,45 +1070,6 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
   return result.result.value;
 }
 
-async function requestDirectReconnect(cdp, timeoutMs = CDP_FAST_COMMAND_TIMEOUT_MS) {
-  const result = await cdp.send('Runtime.evaluate', {
-    awaitPromise: true,
-    returnByValue: true,
-    expression: `
-      (async () => {
-        const id = Number(localStorage.getItem('tmpGameUserId') || document.getElementById('userId')?.value || window.__graspRatBot?.status?.()?.control?.currentUserId || 0);
-        const out = { id, attempted: false, method: '', error: '' };
-        try {
-          if (window.__graspRatBot?.step) {
-            try {
-              const step = window.__graspRatBot.step('direct-reconnect');
-              if (step && typeof step.then === 'function') await step;
-            } catch (_) {}
-          }
-          if (typeof connectWs === 'function' && id) {
-            connectWs(id);
-            out.attempted = true;
-            out.method = 'connectWs';
-          } else if (typeof scheduleReconnect === 'function') {
-            scheduleReconnect();
-            out.attempted = true;
-            out.method = 'scheduleReconnect';
-          } else {
-            out.error = 'no reconnect function';
-          }
-        } catch (err) {
-          out.error = err?.message || String(err);
-        }
-        return out;
-      })()
-    `,
-  }, Math.max(100, timeoutMs));
-  if (result.exceptionDetails) {
-    throw new Error(`direct reconnect failed: ${result.exceptionDetails.text || JSON.stringify(result.exceptionDetails)}`);
-  }
-  return result.result.value;
-}
-
 async function leaveGame(cdp, reason) {
   const result = await cdp.send('Runtime.evaluate', {
     awaitPromise: true,
@@ -1332,7 +1292,6 @@ function createState() {
     lastCoinTarget: '',
     movementWindow: [],
     lastBotErrorKey: '',
-    lastDirectReconnectAt: 0,
     lastReloginAt: 0,
     lastLeaveAt: 0,
     exitReloginUntil: 0,
@@ -1617,11 +1576,10 @@ async function handleOffline(cdp, sample, issues, state) {
   const unsafe = Boolean(inGame && page.safety?.unsafe);
   const safetyReason = page.safety?.reason || '';
   const safeLeaveMs = Math.min(options.safeLeaveOfflineMs, MAX_SAFE_OFFLINE_MS);
-  const baseLeaveDelay = unsafe ? options.leaveOfflineMs : safeLeaveMs;
   const loginRecoveryState = isLoginRecoveryState(sample, issues);
   let currentSample = sample;
   let currentIssues = issues;
-  let directReconnect = null;
+  const pageReconnect = { attempted: false, method: 'page-owned-websocket-reconnect' };
 
   if (isPostLoginSyncState(sample, state)) {
     log('post-login-sync-wait', sample, issues, compactDetail({
@@ -1642,7 +1600,7 @@ async function handleOffline(cdp, sample, issues, state) {
         safetyReason: context.safetyReason || safetyReason,
         offlineAge: context.offlineAge ?? offlineAge,
         cooldownRemainingMs: leaveCooldownMs,
-        directReconnect
+        pageReconnect
       }));
       return true;
 	    }
@@ -1666,7 +1624,7 @@ async function handleOffline(cdp, sample, issues, state) {
       unsafe: Boolean(context.unsafe),
       safetyReason: context.safetyReason || safetyReason,
       offlineAge: context.offlineAge ?? offlineAge,
-      directReconnect,
+      pageReconnect,
       leaveIssued,
       leave,
       leaveAttempts: leaveAttempts.length > 1 ? leaveAttempts : undefined
@@ -1721,41 +1679,6 @@ async function handleOffline(cdp, sample, issues, state) {
     }
   }
 
-  const directReconnectDeadline = offlineStartedAt + Math.max(0, baseLeaveDelay);
-  const directReconnectRemainingMs = Math.max(0, directReconnectDeadline - Date.now());
-
-  if (t - Number(state.lastDirectReconnectAt || 0) >= options.directReconnectCooldownMs
-    && directReconnectRemainingMs > 150) {
-    state.lastDirectReconnectAt = t;
-    try {
-      directReconnect = await requestDirectReconnect(
-        cdp,
-        Math.min(CDP_FAST_COMMAND_TIMEOUT_MS, Math.max(100, directReconnectRemainingMs - 50))
-      );
-      const remainingSafeWait = Math.max(0, directReconnectDeadline - Date.now());
-      if (remainingSafeWait > 0) await sleep(Math.min(200, Math.max(25, remainingSafeWait)));
-      const remainingSampleMs = Math.max(0, directReconnectDeadline - Date.now());
-      if (remainingSampleMs > 100) {
-        currentSample = await samplePage(cdp, Math.min(CDP_FAST_COMMAND_TIMEOUT_MS, Math.max(100, remainingSampleMs)));
-        currentIssues = analyze(currentSample, state);
-        if (currentSample.page?.wsOpen) {
-          state.leftForOffline = false;
-          log('direct-reconnect', currentSample, currentIssues, compactDetail({
-            recovered: true,
-            unsafe,
-            safetyReason,
-            offlineAge,
-            directReconnect
-          }));
-          return true;
-        }
-      }
-    } catch (err) {
-      directReconnect = { attempted: true, error: err.message || String(err) };
-      currentIssues = currentIssues.concat({ severity: 'warn', reason: `direct reconnect probe failed: ${directReconnect.error}` });
-    }
-  }
-
   const currentPage = currentSample.page || {};
   const currentInGame = Boolean(currentPage.inGame);
   const currentUnsafe = Boolean(currentInGame && currentPage.safety?.unsafe);
@@ -1788,12 +1711,12 @@ async function handleOffline(cdp, sample, issues, state) {
     const loopPage = currentSample.page || {};
     if (loopPage.wsOpen) {
       state.leftForOffline = false;
-      log('direct-reconnect', currentSample, currentIssues, compactDetail({
+      log('page-reconnect', currentSample, currentIssues, compactDetail({
         recovered: true,
         unsafe: Boolean(loopPage.safety?.unsafe),
         safetyReason: loopPage.safety?.reason || currentSafetyReason,
         offlineAge: Math.max(0, Date.now() - offlineStartedAt),
-        directReconnect
+        pageReconnect
       }));
       return true;
     }
@@ -1824,7 +1747,7 @@ async function handleOffline(cdp, sample, issues, state) {
     const forceRelogin = isLoginRecoveryState(currentSample, currentIssues);
     const started = await maybeStartRelogin(cdp, currentSample, currentIssues, state, {
       reason: 'offline not in game',
-      directReconnect,
+      pageReconnect,
       forceRelogin
     });
     if (started) {
@@ -1836,19 +1759,7 @@ async function handleOffline(cdp, sample, issues, state) {
     log('login-wait', currentSample, currentIssues, compactDetail({
       reason: 'offline not in game',
       reloginCooldownRemainingMs: Math.max(0, options.reloginCooldownMs - (Date.now() - Number(state.lastReloginAt || 0))),
-      directReconnect
-    }));
-    return true;
-  }
-
-  if (directReconnect && finalInGame && !finalPage.wsOpen && finalOfflineAge < leaveDelay) {
-    log('direct-reconnect', currentSample, currentIssues, compactDetail({
-      recovered: false,
-      unsafe: currentUnsafe,
-      safetyReason: currentSafetyReason,
-      offlineAge: finalOfflineAge,
-      leaveDelay,
-      directReconnect
+      pageReconnect
     }));
     return true;
   }
@@ -1860,7 +1771,7 @@ async function handleOffline(cdp, sample, issues, state) {
       safetyReason: finalSafetyReason,
       offlineAge: finalOfflineAge,
       leaveDelay,
-      directReconnect
+      pageReconnect
     }));
     return true;
   }
