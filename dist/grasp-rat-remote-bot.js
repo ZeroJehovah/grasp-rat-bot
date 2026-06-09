@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.11","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.12","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -455,6 +455,14 @@
   const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
+  const truthyFlag = value => value === true || value === 1 || value === '1' || value === 'true';
+  const isInvulnerable = e => Number(e?.invulnerable_remaining_ticks ?? e?.invincible_remaining_ticks ?? e?.invulnerability_remaining_ticks ?? e?.invulnerableTicks ?? 0) > 0
+    || truthyFlag(e?.invulnerable)
+    || truthyFlag(e?.is_invulnerable)
+    || truthyFlag(e?.isInvulnerable)
+    || truthyFlag(e?.immune)
+    || truthyFlag(e?.is_immune);
+  const isInvulnerableActive = e => e?.current_join_mode === 'Active' && isInvulnerable(e);
   const hasMoveStamina = e => Number(e?.stamina_5s_remaining_milli || 0) > 250;
   const hasAttackStamina = e => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina;
   const staminaLimit = e => Number(e?.stamina_5s_limit_milli || 10000);
@@ -463,8 +471,15 @@
     const stamina = Number(e?.stamina_5s_remaining_milli ?? NaN);
     return Number.isFinite(stamina) && limit > 0 && stamina >= limit * cfg.staminaFullRatio;
   };
+  const isFiringEntity = e => truthyFlag(e?.shooting)
+    || truthyFlag(e?.is_shooting)
+    || truthyFlag(e?.isShooting)
+    || truthyFlag(e?.firing)
+    || truthyFlag(e?.is_firing)
+    || truthyFlag(e?.attacking)
+    || truthyFlag(e?.is_attacking);
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
-  const isCurrentlyActive = e => isMovingThreat(e) || (e.current_join_mode === 'Active' && !hasFullStamina(e));
+  const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (e.current_join_mode === 'Active' && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
   const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
   const hpValue = e => Number(e?.hp ?? 0) || 0;
@@ -2243,7 +2258,7 @@
 
   function blockThreatReturnAction(self, activeThreats, action) {
     if (action?.ignoreReturnBlock || action?.combat || action?.kind === 'leave') return action;
-    if (isFullHp(self)) return action;
+    if (isFullHp(self) && !(activeThreats || []).some(isInvulnerableActive)) return action;
     if (!action || action.kind === 'flee' || action.kind === 'recover' || action.kind === 'wait' || action.kind === 'idle') return action;
     const picked = pickReturnBlockThreat(self, activeThreats, action);
     if (!picked) return action;
@@ -2343,7 +2358,7 @@
       .map(e => decorateActiveThreat(self, e))
       .sort((a, b) => a.distance - b.distance);
     const inactiveTargets = entities
-      .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && Number(e.invulnerable_remaining_ticks || 0) <= 0)
+      .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
       .filter(e => e.distance <= cfg.attackRange)
       .sort((a, b) => {
@@ -2368,7 +2383,7 @@
         return b.amount - a.amount;
       });
     const globalTargets = entities
-      .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && Number(e.invulnerable_remaining_ticks || 0) <= 0)
+      .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true }))
       .filter(e => e.distance <= cfg.globalAttackMaxDistance)
       .sort((a, b) => {
@@ -2417,6 +2432,7 @@
 	      .sort((a, b) => a.distance - b.distance);
     const combatTargets = entities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => !isInvulnerable(e))
       .filter(e => !nativeMeta.available || e.native)
       .filter(e => e.distance <= cfg.combatAttackRange)
       .sort((a, b) => {
@@ -2482,10 +2498,10 @@
     if (!combatTargets.length) return null;
     const incoming = incomingBulletThreat(self, null, bullets);
     if (incoming?.ownerId !== null && incoming?.ownerId !== undefined) {
-      const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId));
+      const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isInvulnerable(target));
       if (shooter) return { ...shooter, incomingBullet: incoming };
     }
-    const eligibleTargets = combatTargets.filter(target => !isAfkTarget(target));
+    const eligibleTargets = combatTargets.filter(target => !isAfkTarget(target) && !isInvulnerable(target));
     if (!eligibleTargets.length) return null;
     const sticky = bot.lastTarget?.kind === 'enemy' && now() - bot.lastTargetAt < cfg.targetStickMs
       ? eligibleTargets.find(target => String(target.user_id) === String(bot.lastTarget.id))
@@ -2499,7 +2515,7 @@
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
       .filter(e => e.distance <= cfg.attackRange)
-      .filter(e => Number(e.drop || 0) > 0 && Number(e.invulnerable_remaining_ticks || 0) <= 0)
+      .filter(e => Number(e.drop || 0) > 0 && !isInvulnerable(e))
       .filter(isAfkTarget)
       .sort((a, b) => {
         const stickyA = bot.attackHistory.some(item => String(item.id) === String(a.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
@@ -2611,6 +2627,31 @@
     return { dx, dy, locked: Boolean(bot.combatStrafe && bot.combatStrafe.key === key), sign };
   }
 
+  function combatPressureThreat(self, target, bullets) {
+    const bullet = target.incomingBullet || incomingBulletThreat(self, target, bullets) || incomingBulletThreat(self, null, bullets);
+    if (bullet) return { ...bullet, reason: 'incoming-bullet' };
+    const injury = bot.pendingInjuryLeave;
+    const recentlyInjured = injury && Date.now() - Number(injury.at || 0) <= cfg.combatStrafeLockMs * 3;
+    const pressure = recentlyInjured || isFiringEntity(target) || isCurrentlyActive(target);
+    if (!pressure) return null;
+    const vx = Number(self.x) - Number(target.x);
+    const vy = Number(self.y) - Number(target.y);
+    const distance = Math.hypot(vx, vy);
+    return {
+      id: 'pressure:' + (target.user_id ?? target.id ?? ''),
+      ownerId: target.user_id ?? null,
+      x: Number(target.x),
+      y: Number(target.y),
+      vx,
+      vy,
+      distance,
+      projection: distance,
+      laneDistance: 0,
+      synthetic: true,
+      reason: recentlyInjured ? 'recent-injury' : 'target-pressure'
+    };
+  }
+
   function combatAimJitterLimit(distance) {
     const maxJitter = Math.max(0, Number(cfg.combatAimJitterMaxRadians || cfg.combatAimJitterRadians || 0));
     const minJitter = clamp(Number(cfg.combatAimJitterMinRadians ?? maxJitter), 0, maxJitter);
@@ -2676,19 +2717,19 @@
         combatState: { selfHp, targetHp }
       };
     }
-    const bullet = target.incomingBullet || incomingBulletThreat(self, target, bullets) || incomingBulletThreat(self, null, bullets);
-    const strafe = tangentMoveForBullet(self, target, bullet);
+    const pressure = combatPressureThreat(self, target, bullets);
+    const strafe = tangentMoveForBullet(self, target, pressure);
     const aim = combatAimTarget(self, target);
     return {
       kind: 'attack',
-      reason: bullet ? 'combat-tangent-dodge' : 'combat-attack',
+      reason: pressure ? 'combat-tangent-dodge' : 'combat-attack',
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
       forceShoot: true,
       shootEveryMs: cfg.combatShootEveryMs,
-      dx: bullet ? strafe.dx : 0,
-      dy: bullet ? strafe.dy : 0,
+      dx: pressure ? strafe.dx : 0,
+      dy: pressure ? strafe.dy : 0,
       target: baseTarget,
       aimTarget: {
         x: aim.x,
@@ -2697,16 +2738,18 @@
         angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
         jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0
       },
-      incomingBullet: bullet ? {
-        id: bullet.id,
-        ownerId: bullet.ownerId,
-        distance: Math.round(bullet.distance),
-        laneDistance: Math.round(bullet.laneDistance)
+      incomingBullet: pressure ? {
+        id: pressure.id,
+        ownerId: pressure.ownerId,
+        distance: Math.round(Number(pressure.distance || 0)),
+        laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        synthetic: Boolean(pressure.synthetic),
+        reason: pressure.reason || ''
       } : null,
       combatState: {
         selfHp,
         targetHp,
-        strafe: bullet ? { dx: strafe.dx, dy: strafe.dy, sign: strafe.sign } : null
+        strafe: pressure ? { dx: strafe.dx, dy: strafe.dy, sign: strafe.sign } : null
       }
     };
   }
@@ -2790,7 +2833,7 @@
     });
     if (!target || !isAlive(target)) return false;
     if (isCurrentlyActive(target)) return false;
-    if (Number(target.invulnerable_remaining_ticks || 0) > 0) return false;
+    if (isInvulnerable(target)) return false;
     return dropValue(target) > 0;
   }
 
@@ -2828,7 +2871,7 @@
       const drop = Number(raw.drop ?? dropValue(raw) ?? 0);
       const distance = Number(raw.distance ?? Infinity);
       if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
-      if (Number(raw.invulnerable_remaining_ticks || 0) > 0) continue;
+      if (isInvulnerable(raw)) continue;
       if (!attackWorthTaking(self, { ...raw, drop })) continue;
       if (activeThreats.some(t => dist(raw, t) <= cfg.attackDangerRadius)) continue;
       const item = { ...raw, drop, distance };
@@ -3237,11 +3280,13 @@
   function chooseAction(self) {
     const { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets } = classify(self);
     bot.lastActionEntities = entities;
-    bot.actionThreats = activeThreats;
     const fullHp = isFullHp(self);
+    const avoidanceThreats = fullHp ? activeThreats.filter(isInvulnerableActive) : activeThreats;
+    bot.actionThreats = avoidanceThreats;
     const recovery = !fullHp && isRecovering(self);
-    const coinThreats = fullHp ? [] : activeThreats;
-    const combatTarget = pickCombatTarget(self, combatTargets, bullets);
+    const coinThreats = avoidanceThreats;
+    const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
+    const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -3264,14 +3309,43 @@
         mode: nearbyHumans[0].current_join_mode
       } : null,
       recovery,
+      avoidanceThreats: avoidanceThreats.length,
+      nearestAvoidance: avoidanceThreats[0] ? {
+        id: avoidanceThreats[0].user_id,
+        name: avoidanceThreats[0].name,
+        distance: Math.round(avoidanceThreats[0].distance),
+        invulnerable: isInvulnerable(avoidanceThreats[0])
+      } : null,
       conservingStamina: isConservingStamina(self)
     };
+    if (fullHp && closeThreats.length) {
+      const flee = lockedFleeDirection(self, closeThreats, 'active-threat-before-bullet-range');
+      return {
+        kind: 'flee',
+        reason: 'active-threat-before-bullet-range',
+        dx: flee.dx,
+        dy: flee.dy,
+        locked: flee.locked,
+        threats: closeThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.threatRadius) }))
+      };
+    }
+    if (fullHp && cautionThreats.length) {
+      const flee = lockedFleeDirection(self, cautionThreats, 'active-threat-caution-migration');
+      return {
+        kind: 'flee',
+        reason: 'active-threat-caution-migration',
+        dx: flee.dx,
+        dy: flee.dy,
+        locked: flee.locked,
+        threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
+      };
+    }
+    const combatTarget = pickCombatTarget(self, combatTargets, bullets);
     if (combatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, combatTarget, bullets);
     }
-    const closeThreats = activeThreats.filter(e => e.distance <= e.threatRadius);
     if (!fullHp && closeThreats.length) {
       const flee = lockedFleeDirection(self, closeThreats, 'active-threat-before-bullet-range');
       return {
@@ -3283,8 +3357,6 @@
         threats: closeThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), r: Math.round(e.threatRadius) }))
       };
     }
-    const cautionThreats = activeThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
-
     const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
@@ -3443,9 +3515,9 @@
       }, self, entities, { recovery });
     }
 
-    if (!fullHp && hasReturnBlockThreat(activeThreats)) {
+    if (hasReturnBlockThreat(avoidanceThreats)) {
       bot.fleeLock = null;
-      return buildReturnBlockScanAction(self, activeThreats, nearbyHumans);
+      return buildReturnBlockScanAction(self, avoidanceThreats, nearbyHumans);
     }
 
     const snapshotCoin = pickSnapshotCoinDestination(snapshotCoins, coinThreats);
@@ -3575,6 +3647,7 @@
 	      updateKillHistory(self);
       if (hadPreviousSelf && Number.isFinite(previousHp) && Number.isFinite(currentHp) && currentHp > 0 && previousHp > currentHp) {
         bot.pendingInjuryLeave = {
+          at: Date.now(),
           previousHp,
           currentHp,
           lostHp: Math.max(0, previousHp - currentHp),
@@ -3582,29 +3655,6 @@
           nearestActive: bot.lastSafety?.nearestActive || null,
           nearestHuman: bot.lastSafety?.nearestHuman || null
         };
-      }
-      if (bot.pendingInjuryLeave) {
-        bot.pursuit = null;
-        stopMotionSafely('injury-leave');
-        const injury = {
-          ...bot.pendingInjuryLeave,
-          self: currentSummary,
-          currentHp
-        };
-        const leaveResult = await leaveForInjury(injury);
-        bot.lastDecision = {
-          kind: 'wait',
-          reason: 'injury-leave',
-          dx: 0,
-          dy: 0,
-          self: currentSummary,
-          injury,
-          leave: leaveResult,
-          holdRemainingMs: enemyReloginHoldRemainingMs()
-        };
-        updateBotPanel(bot.lastDecision);
-        if (cfg.once) bot.stop('once');
-        return;
       }
 	      ensureControlWs();
 	      if (!cfg.dryRun && !bot.control.wsOpen) {
@@ -3637,6 +3687,18 @@
 
 	      let action = chooseAction(self);
 	      action = blockThreatReturnAction(self, bot.actionThreats || [], action);
+      if (bot.pendingInjuryLeave && action.combat) {
+        action = {
+          ...action,
+          injury: {
+            ...bot.pendingInjuryLeave,
+            self: currentSummary,
+            currentHp,
+            suppressedByCombat: true
+          }
+        };
+        bot.pendingInjuryLeave = null;
+      }
       if (action.kind === 'leave' && action.reason === 'combat-low-hp-leave') {
         stopMotionSafely('combat-low-hp-leave');
         const leaveResult = await leaveForCombat(action);
@@ -3645,6 +3707,31 @@
           leave: leaveResult,
           source,
           self: summarizeSelf(self)
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
+      if (bot.pendingInjuryLeave) {
+        bot.pursuit = null;
+        stopMotionSafely('injury-leave');
+        const injury = {
+          ...bot.pendingInjuryLeave,
+          self: currentSummary,
+          currentHp,
+          nearestActive: bot.lastSafety?.nearestAvoidance || bot.lastSafety?.nearestActive || bot.pendingInjuryLeave.nearestActive || null,
+          nearestHuman: bot.lastSafety?.nearestHuman || bot.pendingInjuryLeave.nearestHuman || null
+        };
+        const leaveResult = await leaveForInjury(injury);
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'injury-leave',
+          dx: 0,
+          dy: 0,
+          self: currentSummary,
+          injury,
+          leave: leaveResult,
+          holdRemainingMs: enemyReloginHoldRemainingMs()
         };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');

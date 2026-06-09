@@ -937,6 +937,20 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
         const stamina5 = entity => Number(entity.stamina_5s_remaining_milli ?? 0);
         const staminaLimit = entity => Number(entity.stamina_5s_limit_milli || 10000);
         const dropValue = entity => Number(entity?.death_reward_preview ?? entity?.death_drop_coins ?? entity?.drop ?? 0) || 0;
+        const truthyFlag = value => value === true || value === 1 || value === '1' || value === 'true';
+        const isInvulnerable = entity => Number(entity?.invulnerable_remaining_ticks ?? entity?.invincible_remaining_ticks ?? entity?.invulnerability_remaining_ticks ?? entity?.invulnerableTicks ?? 0) > 0
+          || truthyFlag(entity?.invulnerable)
+          || truthyFlag(entity?.is_invulnerable)
+          || truthyFlag(entity?.isInvulnerable)
+          || truthyFlag(entity?.immune)
+          || truthyFlag(entity?.is_immune);
+        const isFiring = entity => truthyFlag(entity?.shooting)
+          || truthyFlag(entity?.is_shooting)
+          || truthyFlag(entity?.isShooting)
+          || truthyFlag(entity?.firing)
+          || truthyFlag(entity?.is_firing)
+          || truthyFlag(entity?.attacking)
+          || truthyFlag(entity?.is_attacking);
         const others = own ? entities
           .filter(entity => Number(entity.user_id) !== currentUserId && isAlive(entity))
           .map(entity => {
@@ -946,7 +960,9 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
             const sta = stamina5(entity);
             const staminaNotFull = limit > 0 && sta > 0 && sta < limit * 0.98;
             const staminaFull = limit > 0 && sta >= limit * 0.98;
-            const active = moving || (entity.current_join_mode === 'Active' && !staminaFull);
+            const invulnerable = isInvulnerable(entity);
+            const firing = isFiring(entity);
+            const active = moving || firing || (entity.current_join_mode === 'Active' && (!staminaFull || invulnerable));
             const threatRadius = moving ? 28000 : 18000;
             const cautionRadius = moving ? 38000 : 22000;
             return {
@@ -958,6 +974,8 @@ async function samplePage(cdp, commandTimeoutMs = 5000) {
               stamina5sLimit: limit,
               staminaNotFull,
               staminaFull,
+              invulnerable,
+              firing,
               mode: entity.current_join_mode || '',
               active,
               moving,
