@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.22","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.23","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -3233,7 +3233,7 @@
     return dropValue(target) > 0;
   }
 
-  function pickPostAttackDropCoin(self, coins, activeThreats, entities) {
+  function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
     const t = Date.now();
     const attack = bot.attackHistory
       .slice()
@@ -3242,8 +3242,9 @@
         && Number.isFinite(Number(item.x))
         && Number.isFinite(Number(item.y)));
     if (!attack || recentAttackTargetStillAttackable(attack, entities)) return null;
+    const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
     const candidates = safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
-      .filter(coin => Number(coin.amount || 0) > cfg.postAttackDropCoinMinAmount)
+      .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => dist(coin, attack) <= cfg.postAttackDropCoinRadius)
       .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
     const coin = candidates[0] || null;
@@ -3771,7 +3772,7 @@
       : cfg.nearCoinPriorityDistance;
     const nearCoin = pickCoin(coins, coinThreats, nearCoinLimit);
     const footCoin = pickCoin(coins, coinThreats, cfg.footCoinPriorityDistance);
-    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities);
+    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities, { includeSingle: !recovery });
     if (postAttackCoin) {
       bot.fleeLock = null;
       if (bot.lastTarget?.kind === 'enemy') {

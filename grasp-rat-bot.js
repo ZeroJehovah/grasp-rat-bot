@@ -534,7 +534,7 @@ function runSelfTest() {
     };
   }
 
-  function pickPostAttackDropCoin(self, coins, activeThreats, attacks, entities) {
+  function pickPostAttackDropCoin(self, coins, activeThreats, attacks, entities, options = {}) {
     const t = Date.now();
     const attack = (attacks || [])
       .slice()
@@ -543,9 +543,10 @@ function runSelfTest() {
     if (!attack) return null;
     const stillAlive = (entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(attack.id) && isAlive(e));
     if (stillAlive) return null;
+    const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
     return coins
       .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
-      .filter(c => c.amount > cfg.postAttackDropCoinMinAmount)
+      .filter(c => c.amount > minAmount)
       .filter(c => c.distance <= cfg.postAttackDropCoinMaxDistance)
       .filter(c => dist(c, attack) <= cfg.postAttackDropCoinRadius)
       .filter(c => !activeThreats.some(threat => dist(c, threat) <= threat.coinDangerRadius))
@@ -726,7 +727,7 @@ function runSelfTest() {
         && c.distance <= cfg.footCoinPriorityDistance
         && !coinThreats.some(t => dist(c, t) <= t.coinDangerRadius))
       .sort((a, b) => (a.distance - b.distance) || (b.amount - a.amount))[0];
-    const postAttackCoin = pickPostAttackDropCoin(self, coins, coinThreats, attacks, entities);
+    const postAttackCoin = pickPostAttackDropCoin(self, coins, coinThreats, attacks, entities, { includeSingle: !recovery });
     if (postAttackCoin) return { kind: 'coin', reason: 'post-attack-drop-coin', id: postAttackCoin.drop_id, amount: postAttackCoin.amount };
     if (recovery && nearCoin) return { kind: 'coin', id: nearCoin.drop_id, amount: nearCoin.amount };
     const nearbyHumans = entities
@@ -1119,6 +1120,15 @@ function runSelfTest() {
         coins: [{ drop_id: 8, x: 1000, y: 0, amount: 1 }]
       }).kind,
       want: 'recover'
+    },
+    {
+      name: 'full hp post combat single coin is collected',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+        attacks: [{ id: 7, x: 0, y: 0, at: Date.now(), drop: 1 }],
+        coins: [{ drop_id: 8, x: 1000, y: 0, amount: 1 }]
+      }).reason,
+      want: 'post-attack-drop-coin'
     },
     {
       name: 'combat incoming fire uses tangent dodge',
@@ -4774,7 +4784,7 @@ function browserBotSource(config) {
     return dropValue(target) > 0;
   }
 
-  function pickPostAttackDropCoin(self, coins, activeThreats, entities) {
+  function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
     const t = Date.now();
     const attack = bot.attackHistory
       .slice()
@@ -4783,8 +4793,9 @@ function browserBotSource(config) {
         && Number.isFinite(Number(item.x))
         && Number.isFinite(Number(item.y)));
     if (!attack || recentAttackTargetStillAttackable(attack, entities)) return null;
+    const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
     const candidates = safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
-      .filter(coin => Number(coin.amount || 0) > cfg.postAttackDropCoinMinAmount)
+      .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => dist(coin, attack) <= cfg.postAttackDropCoinRadius)
       .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
     const coin = candidates[0] || null;
@@ -5312,7 +5323,7 @@ function browserBotSource(config) {
       : cfg.nearCoinPriorityDistance;
     const nearCoin = pickCoin(coins, coinThreats, nearCoinLimit);
     const footCoin = pickCoin(coins, coinThreats, cfg.footCoinPriorityDistance);
-    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities);
+    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities, { includeSingle: !recovery });
     if (postAttackCoin) {
       bot.fleeLock = null;
       if (bot.lastTarget?.kind === 'enemy') {
