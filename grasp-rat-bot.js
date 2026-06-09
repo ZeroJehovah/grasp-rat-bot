@@ -436,6 +436,21 @@ function runSelfTest() {
   function isProfitableCombatTarget(target) {
     return Boolean(target && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
   }
+  function combatHpGapDisadvantaged(self, target) {
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    if (knownSelfHp === null || knownTargetHp === null) return false;
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    return Number(knownSelfHp) > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap;
+  }
+  function profitCombatDisadvantaged(self, target) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    return (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp)
+      || combatHpGapDisadvantaged(self, target);
+  }
   function pickCombatTarget(self, entities, bullets = [], options = {}) {
     const candidates = entities
       .filter(e => Number(e.user_id) !== Number(self.user_id))
@@ -457,6 +472,7 @@ function runSelfTest() {
     if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
     const profitableTargets = eligibleTargets
       .filter(isProfitableCombatTarget)
+      .filter(target => options.mode !== 'profit' || !profitCombatDisadvantaged(self, target))
       .sort((a, b) => {
         const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
         const scoreB = scoreEnemyOpportunity(b) ?? -Infinity;
@@ -807,6 +823,15 @@ function runSelfTest() {
         coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
       }).kind,
       want: 'attack'
+    },
+    {
+      name: 'profit combat hp disadvantage falls back to coin',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 70, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 91, death_reward_preview: 30 }],
+        coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'coin'
     },
     {
       name: 'far snapshot cluster beats lower profitable active combat',
@@ -4293,6 +4318,21 @@ function browserBotSource(config) {
   function isProfitableCombatTarget(target) {
     return Boolean(target && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
   }
+  function combatHpGapDisadvantaged(self, target) {
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    if (knownSelfHp === null || knownTargetHp === null) return false;
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    return Number(knownSelfHp) > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap;
+  }
+  function profitCombatDisadvantaged(self, target) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    return (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp)
+      || combatHpGapDisadvantaged(self, target);
+  }
 
   function pickCombatTarget(self, combatTargets, bullets, options = {}) {
     if (!combatTargets.length) return null;
@@ -4311,6 +4351,7 @@ function browserBotSource(config) {
     if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
     const profitableTargets = eligibleTargets
       .filter(isProfitableCombatTarget)
+      .filter(target => options.mode !== 'profit' || !profitCombatDisadvantaged(self, target))
       .sort((a, b) => {
         const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
         const scoreB = scoreEnemyOpportunity(b) ?? -Infinity;

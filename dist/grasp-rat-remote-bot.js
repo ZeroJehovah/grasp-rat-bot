@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.18","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.19","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2777,6 +2777,21 @@
   function isProfitableCombatTarget(target) {
     return Boolean(target && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
   }
+  function combatHpGapDisadvantaged(self, target) {
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    if (knownSelfHp === null || knownTargetHp === null) return false;
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    return Number(knownSelfHp) > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap;
+  }
+  function profitCombatDisadvantaged(self, target) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    return (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp)
+      || combatHpGapDisadvantaged(self, target);
+  }
 
   function pickCombatTarget(self, combatTargets, bullets, options = {}) {
     if (!combatTargets.length) return null;
@@ -2795,6 +2810,7 @@
     if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
     const profitableTargets = eligibleTargets
       .filter(isProfitableCombatTarget)
+      .filter(target => options.mode !== 'profit' || !profitCombatDisadvantaged(self, target))
       .sort((a, b) => {
         const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
         const scoreB = scoreEnemyOpportunity(b) ?? -Infinity;
