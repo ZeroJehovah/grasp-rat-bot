@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.15
+// @version      0.4.16
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.15';
+  const BOOTSTRAP_VERSION = '0.4.16';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -1088,6 +1088,18 @@
       || 0;
   }
 
+  function statusLooksInGame(status) {
+    const self = status?.self || status?.lastDecision?.self || null;
+    if (!self) return false;
+    const life = String(self.life || '');
+    if (/dead|waitingrevive/i.test(life) || self.waiting_revive) return false;
+    return true;
+  }
+
+  function leaveWasIssued(detail) {
+    return Boolean(detail?.attempted && !detail?.error);
+  }
+
   async function leaveGameForCachedUpdate(reason, status) {
     const detail = {
       attempted: false,
@@ -1099,9 +1111,9 @@
     try {
       if (typeof unsafeWindow.leave === 'function') {
         const result = detail.userId ? unsafeWindow.leave(detail.userId) : unsafeWindow.leave();
-        if (result && typeof result.then === 'function') await withTimeout(result, 1200, 'leave before cached update restart');
         detail.attempted = true;
         detail.method = detail.userId ? 'leave(userId)' : 'leave';
+        if (result && typeof result.then === 'function') await withTimeout(result, 1200, 'leave before cached update restart');
       } else {
         const leaveBtn = document.querySelector('#leaveBtn');
         if (leaveBtn && visible(leaveBtn)) {
@@ -1129,6 +1141,15 @@
     };
     logBootstrap('cached update restart start', detail);
     detail.leave = await leaveGameForCachedUpdate(reason, status);
+    if (statusLooksInGame(status) && !leaveWasIssued(detail.leave)) {
+      detail.restartDeferred = true;
+      detail.error = detail.leave?.error || 'leave before cached update was not confirmed';
+      state.lastInstallStatus = `cached update restart waiting for leave before ${manifest?.version || manifest?.sha256 || 'remote update'}`;
+      state.lastError = detail.error;
+      logBootstrap('cached update restart deferred', detail);
+      postDebug('cached-update-restart-deferred', detail, { force: true });
+      return false;
+    }
     try {
       unsafeWindow.__graspRatBot?.stop?.(`cached update restart: ${manifest?.version || manifest?.sha256 || reason || 'remote update'}`);
     } catch (err) {
