@@ -41,6 +41,8 @@ Version `0.4.1` changes script B strategy and overlay only. AFK `Drop=x` targets
 
 Version `0.4.7` moves the top-right overlay to script A. The panel is visible on game pages even before the remote bot is injected, shows manifest/script fetch and install/cache status, and includes a pause/resume button. While paused, script A still fetches and verifies remote updates into cache but does not inject/reinstall the bot or start login, and script B stops sending movement/attack control so manual control is possible. Injury, combat disadvantage, and sustained-pursuit exits now suppress relogin for a random 1-3 minute enemy-leave wait before normal login resumes.
 
+Version `0.4.8` fixes pause synchronization. Script A no longer calls script B's pause handler repeatedly when the desired pause state is already active, and script B only sends the stop-motion command on the transition into paused state. Reading `status()` is now side-effect free for pause sync, so the panel can refresh without interfering with manual control.
+
 When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap waits 10 seconds before clicking the allow/authorize control, so it acts only as a fallback behind the user's primary authorization script.
 
 After login starts or the OAuth authorize/callback page is seen, the bootstrap suppresses another login attempt for 45 seconds. This prevents a just-authorized page from bouncing back into LinuxDO before the game writes token/self state. If the bot is already in game but page WebSocket control stays offline for more than 3 seconds, the remote bot attempts `leave(userId)` or `#leaveBtn` before any reload fallback.

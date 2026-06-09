@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.7
+// @version      0.4.8
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.7';
+  const BOOTSTRAP_VERSION = '0.4.8';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -359,12 +359,16 @@
     return String(GM_getValue(PAUSE_REASON_KEY, reason || '') || reason || '');
   }
 
+  function storedBoolean(value) {
+    return value === true || value === 'true' || value === 1 || value === '1';
+  }
+
   function isPaused() {
     let localPaused = false;
     try {
       localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
     } catch (_) {}
-    const paused = Boolean(GM_getValue(PAUSED_KEY, false) || localPaused || unsafeWindow.__graspRatBotPaused === true);
+    const paused = Boolean(storedBoolean(GM_getValue(PAUSED_KEY, false)) || localPaused || unsafeWindow.__graspRatBotPaused === true);
     state.paused = paused;
     state.pauseReason = paused ? (readPauseReason() || state.pauseReason || 'manual') : '';
     return paused;
@@ -382,7 +386,12 @@
     const bot = unsafeWindow.__graspRatBot || null;
     try {
       if (bot?.setPaused) {
-        bot.setPaused(paused, paused ? (state.pauseReason || 'bootstrap') : 'bootstrap resume');
+        const reason = paused ? (state.pauseReason || 'bootstrap') : 'bootstrap resume';
+        const botPaused = Boolean(bot.paused);
+        const botReason = String(bot.pauseReason || '');
+        if (botPaused !== paused || (paused && botReason !== reason)) {
+          bot.setPaused(paused, reason);
+        }
       } else if (paused && bot?.stop) {
         bot.stop('paused by bootstrap');
       }

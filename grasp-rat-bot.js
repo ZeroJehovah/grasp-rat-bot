@@ -1607,9 +1607,11 @@ function browserBotSource(config) {
 	    },
 	    setPaused(paused, reason = 'external') {
 	      const next = Boolean(paused);
+	      const previousReason = this.pauseReason || '';
 	      const changed = this.paused !== next;
 	      this.paused = next;
 	      this.pauseReason = next ? String(reason || 'manual') : '';
+	      const reasonChanged = previousReason !== this.pauseReason;
 	      if (changed) this.pauseChangedAt = Date.now();
 	      window.__graspRatBotPaused = next;
 	      window.__graspRatBotPauseReason = this.pauseReason;
@@ -1618,8 +1620,10 @@ function browserBotSource(config) {
 	        if (next) localStorage.setItem(PAUSE_REASON_KEY, this.pauseReason || 'manual');
 	        else localStorage.removeItem(PAUSE_REASON_KEY);
 	      } catch (_) {}
-	      if (next) {
+	      if (changed && next) {
 	        stopMotionSafely('paused');
+	      }
+	      if (next) {
 	        this.lastDecision = {
 	          kind: 'idle',
 	          reason: 'paused',
@@ -1630,7 +1634,7 @@ function browserBotSource(config) {
 	          pauseReason: this.pauseReason || 'manual'
 	        };
 	      }
-	      postDebugEvent(next ? 'paused' : 'resumed', { reason: this.pauseReason || reason }, { force: true });
+	      if (changed || reasonChanged) postDebugEvent(next ? 'paused' : 'resumed', { reason: this.pauseReason || reason }, { force: true });
 	      return this.status();
 	    },
     step(source = 'external') {
@@ -1638,7 +1642,7 @@ function browserBotSource(config) {
     },
     status() {
       try {
-        if (!this.ticking) syncPausedFromPage();
+        if (!this.ticking) syncPausedFromPage(false);
       } catch (_) {}
       if (this.running && !this.ticking && this.lastTickAt && Date.now() - this.lastTickAt > Math.max(3000, cfg.tickMs * 10)) {
         triggerNativeTick('status-watchdog', false);
@@ -2097,7 +2101,7 @@ function browserBotSource(config) {
     return String(window.__graspRatBotPauseReason || reason || '');
   }
 
-  function syncPausedFromPage() {
+  function syncPausedFromPage(stopOnPause = true) {
     let localPaused = false;
     try {
       localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
@@ -2106,7 +2110,7 @@ function browserBotSource(config) {
     if (paused !== bot.paused) {
       bot.paused = paused;
       bot.pauseChangedAt = Date.now();
-      if (paused) stopMotionSafely('paused');
+      if (paused && stopOnPause) stopMotionSafely('paused');
     }
     bot.pauseReason = paused ? (readPauseReason() || bot.pauseReason || 'manual') : '';
     return paused;
