@@ -143,12 +143,15 @@ function runSelfTest() {
     combatAimJitterMaxRadians: 0.16,
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
-    combatBulletDetectRadius: 26000,
-    combatBulletLaneRadius: 2400,
-    combatBulletLookaheadDistance: 36000,
+    combatBulletDetectRadius: 30000,
+    combatBulletLaneRadius: 3000,
+    combatBulletLookaheadDistance: 42000,
     snapshotBulletStaleMs: 1500,
     snapshotSelfStaleMs: 6500,
     combatStrafeLockMs: 700,
+    combatStrafeDirectionLockMs: 2200,
+    combatStrafeRandomJitterMs: 1100,
+    combatStrafeCarryMs: 1600,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -1627,12 +1630,15 @@ function browserBotSource(config) {
     combatAimJitterMaxRadians: 0.16,
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
-    combatBulletDetectRadius: 26000,
-    combatBulletLaneRadius: 2400,
-    combatBulletLookaheadDistance: 36000,
+    combatBulletDetectRadius: 30000,
+    combatBulletLaneRadius: 3000,
+    combatBulletLookaheadDistance: 42000,
     snapshotBulletStaleMs: 1500,
     snapshotSelfStaleMs: 6500,
     combatStrafeLockMs: 700,
+    combatStrafeDirectionLockMs: 2200,
+    combatStrafeRandomJitterMs: 1100,
+    combatStrafeCarryMs: 1600,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -4584,33 +4590,114 @@ function browserBotSource(config) {
     return best;
   }
 
-  function tangentMoveForBullet(self, target, bullet) {
-    if (!bullet) return { dx: 0, dy: 0, locked: false };
-    const t = now();
-    const key = String(bullet.id ?? bullet.ownerId ?? target?.user_id ?? 'bullet');
-    let sign = 0;
-    if (bot.combatStrafe && bot.combatStrafe.key === key && t < Number(bot.combatStrafe.until || 0)) {
-      sign = Number(bot.combatStrafe.sign || 0);
-    }
-    if (!sign) {
-      sign = Math.random() < 0.5 ? -1 : 1;
-      bot.combatStrafe = { key, sign, until: t + cfg.combatStrafeLockMs };
-    }
-    let baseX = Number(bullet.vx) || 0;
-    let baseY = Number(bullet.vy) || 0;
+  function combatStrafeHoldMs() {
+    const base = Math.max(300, Number(cfg.combatStrafeDirectionLockMs ?? cfg.combatStrafeLockMs) || 700);
+    const jitter = Math.max(0, Number(cfg.combatStrafeRandomJitterMs) || 0);
+    return base + (jitter ? Math.floor(Math.random() * jitter) : 0);
+  }
+
+  function combatStrafeKey(target, pressure) {
+    const ownerId = pressure?.ownerId;
+    if (ownerId !== null && ownerId !== undefined) return 'owner:' + ownerId;
+    const targetId = target?.user_id ?? target?.id;
+    if (targetId !== null && targetId !== undefined) return 'target:' + targetId;
+    return 'combat';
+  }
+
+  function combatStrafeMatchesTarget(strafe, target) {
+    if (!strafe) return false;
+    const targetId = target?.user_id ?? target?.id;
+    if (targetId === null || targetId === undefined) return true;
+    const key = String(targetId);
+    return strafe.targetId === key || strafe.key === 'target:' + key || strafe.key === 'owner:' + key;
+  }
+
+  function combatStrafeVector(self, target, pressure, sign) {
+    let baseX = Number(pressure?.vx) || 0;
+    let baseY = Number(pressure?.vy) || 0;
     if (!(baseX || baseY) && target) {
       baseX = Number(target.x) - Number(self.x);
       baseY = Number(target.y) - Number(self.y);
     }
-    let tangentX = -baseY * sign;
-    let tangentY = baseX * sign;
+    const tangentX = -baseY * sign;
+    const tangentY = baseX * sign;
     let dx = Math.sign(tangentX || 0);
     let dy = Math.sign(tangentY || 0);
+    if (target) {
+      const awayX = Math.sign(Number(self.x) - Number(target.x)) || 0;
+      const awayY = Math.sign(Number(self.y) - Number(target.y)) || 0;
+      if (dx && !dy && awayY) dy = awayY;
+      else if (dy && !dx && awayX) dx = awayX;
+    }
     if (!(dx || dy) && target) {
       dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
       dy = Math.sign(Number(target.x) - Number(self.x)) || 0;
     }
-    return { dx, dy, locked: Boolean(bot.combatStrafe && bot.combatStrafe.key === key), sign };
+    return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1) };
+  }
+
+  function tangentMoveForBullet(self, target, pressure) {
+    const t = now();
+    const existing = bot.combatStrafe;
+    if (!pressure) {
+      if (combatStrafeMatchesTarget(existing, target)
+        && t < Number(existing?.carryUntil || 0)
+        && (existing.dx || existing.dy)) {
+        return {
+          dx: clamp(Math.round(Number(existing.dx) || 0), -1, 1),
+          dy: clamp(Math.round(Number(existing.dy) || 0), -1, 1),
+          locked: true,
+          carried: true,
+          active: true,
+          sign: Number(existing.sign || 0),
+          key: existing.key,
+          holdRemainingMs: Math.max(0, Math.round(Number(existing.until || 0) - t)),
+          carryRemainingMs: Math.max(0, Math.round(Number(existing.carryUntil || 0) - t))
+        };
+      }
+      return { dx: 0, dy: 0, locked: false, carried: false, active: false };
+    }
+
+    const key = combatStrafeKey(target, pressure);
+    let sign = 0;
+    let until = 0;
+    if (existing && existing.key === key && t < Number(existing.until || 0)) {
+      sign = Number(existing.sign || 0);
+      until = Number(existing.until || 0);
+    }
+    if (!sign) {
+      sign = Math.random() < 0.5 ? -1 : 1;
+      until = t + combatStrafeHoldMs();
+    }
+
+    let { dx, dy } = combatStrafeVector(self, target, pressure, sign);
+    if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
+      dx = clamp(Math.round(Number(existing.dx) || 0), -1, 1);
+      dy = clamp(Math.round(Number(existing.dy) || 0), -1, 1);
+    }
+    const carryMs = Math.max(0, Number(cfg.combatStrafeCarryMs) || 0);
+    const targetId = target?.user_id ?? target?.id;
+    bot.combatStrafe = {
+      key,
+      targetId: targetId !== null && targetId !== undefined ? String(targetId) : '',
+      ownerId: pressure.ownerId !== null && pressure.ownerId !== undefined ? String(pressure.ownerId) : '',
+      sign,
+      dx,
+      dy,
+      until,
+      carryUntil: t + carryMs
+    };
+    return {
+      dx,
+      dy,
+      locked: Boolean(existing && existing.key === key && t < Number(existing.until || 0)),
+      carried: false,
+      active: true,
+      sign,
+      key,
+      holdRemainingMs: Math.max(0, Math.round(until - t)),
+      carryRemainingMs: carryMs
+    };
   }
 
   function combatPressureThreat(self, target, bullets) {
@@ -4725,17 +4812,18 @@ function browserBotSource(config) {
     }
     const pressure = combatPressureThreat(self, target, bullets);
     const strafe = tangentMoveForBullet(self, target, pressure);
+    const dodging = Boolean(pressure || strafe.active);
     const aim = combatAimTarget(self, target);
     return {
       kind: 'attack',
-      reason: pressure ? 'combat-tangent-dodge' : 'combat-attack',
+      reason: dodging ? 'combat-tangent-dodge' : 'combat-attack',
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
       forceShoot: true,
       shootEveryMs: cfg.combatShootEveryMs,
-      dx: pressure ? strafe.dx : 0,
-      dy: pressure ? strafe.dy : 0,
+      dx: dodging ? strafe.dx : 0,
+      dy: dodging ? strafe.dy : 0,
       target: baseTarget,
       aimTarget: {
         x: aim.x,
@@ -4755,7 +4843,15 @@ function browserBotSource(config) {
       combatState: {
         selfHp,
         targetHp,
-        strafe: pressure ? { dx: strafe.dx, dy: strafe.dy, sign: strafe.sign } : null
+        strafe: dodging ? {
+          dx: strafe.dx,
+          dy: strafe.dy,
+          sign: strafe.sign,
+          locked: Boolean(strafe.locked),
+          carried: Boolean(strafe.carried),
+          holdRemainingMs: strafe.holdRemainingMs || 0,
+          carryRemainingMs: strafe.carryRemainingMs || 0
+        } : null
       }
     };
   }
