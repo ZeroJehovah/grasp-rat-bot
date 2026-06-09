@@ -147,6 +147,7 @@ function runSelfTest() {
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
     snapshotBulletStaleMs: 1500,
+    snapshotSelfStaleMs: 6500,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -1630,6 +1631,7 @@ function browserBotSource(config) {
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
     snapshotBulletStaleMs: 1500,
+    snapshotSelfStaleMs: 6500,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -3272,8 +3274,11 @@ function browserBotSource(config) {
 	    const nativeSelf = typeof getOwnEntity === 'function' ? getOwnEntity() : null;
 	    if (nativeSelf && Number(nativeSelf.user_id) === id) return nativeSelf;
 	    const nativeState = getNativeState();
-	    const nativeEntity = (nativeState?.entities || []).find(e => Number(e.user_id) === id);
+	    const nativeEntities = Array.isArray(nativeState?.entities) ? nativeState.entities : null;
+	    const nativeEntity = (nativeEntities || []).find(e => Number(e.user_id) === id);
 	    if (nativeEntity) return nativeEntity;
+	    if (nativeEntities) return null;
+	    if (!snapshotSelfFreshEnough()) return null;
 	    return (bot.globalState.entities || []).find(e => Number(e.user_id) === id) || null;
 	  }
 	
@@ -3321,6 +3326,10 @@ function browserBotSource(config) {
 
   function snapshotBulletFreshEnough() {
     return snapshotDataAgeMs() <= Number(cfg.snapshotBulletStaleMs || 0);
+  }
+
+  function snapshotSelfFreshEnough() {
+    return snapshotDataAgeMs() <= Number(cfg.snapshotSelfStaleMs || 0);
   }
 
   function entityFreshEnoughForOffense(entity) {

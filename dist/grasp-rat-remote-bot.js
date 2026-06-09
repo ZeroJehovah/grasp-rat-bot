@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.29","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.30","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -78,6 +78,7 @@
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
     snapshotBulletStaleMs: 1500,
+    snapshotSelfStaleMs: 6500,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -1720,8 +1721,11 @@
 	    const nativeSelf = typeof getOwnEntity === 'function' ? getOwnEntity() : null;
 	    if (nativeSelf && Number(nativeSelf.user_id) === id) return nativeSelf;
 	    const nativeState = getNativeState();
-	    const nativeEntity = (nativeState?.entities || []).find(e => Number(e.user_id) === id);
+	    const nativeEntities = Array.isArray(nativeState?.entities) ? nativeState.entities : null;
+	    const nativeEntity = (nativeEntities || []).find(e => Number(e.user_id) === id);
 	    if (nativeEntity) return nativeEntity;
+	    if (nativeEntities) return null;
+	    if (!snapshotSelfFreshEnough()) return null;
 	    return (bot.globalState.entities || []).find(e => Number(e.user_id) === id) || null;
 	  }
 	
@@ -1769,6 +1773,10 @@
 
   function snapshotBulletFreshEnough() {
     return snapshotDataAgeMs() <= Number(cfg.snapshotBulletStaleMs || 0);
+  }
+
+  function snapshotSelfFreshEnough() {
+    return snapshotDataAgeMs() <= Number(cfg.snapshotSelfStaleMs || 0);
   }
 
   function entityFreshEnoughForOffense(entity) {
