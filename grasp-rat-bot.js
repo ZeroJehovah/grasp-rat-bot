@@ -134,6 +134,7 @@ function runSelfTest() {
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
+    combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatHighHpDisadvantageGap: 20,
     combatShootEveryMs: 80,
@@ -616,6 +617,9 @@ function runSelfTest() {
   function chooseCombatAction(self, target, bullets = []) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
+    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
+      return { kind: 'leave', reason: 'combat-critical-hp-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) }, combatState: { selfHp, targetHp } };
+    }
     if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
       return { kind: 'leave', reason: 'combat-low-hp-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) } };
     }
@@ -1121,6 +1125,14 @@ function runSelfTest() {
         bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
       }).kind,
       want: 'leave'
+    },
+    {
+      name: 'critical hp combat leaves even when target hp is lower',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 19, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true }]
+      }).reason,
+      want: 'combat-critical-hp-leave'
     },
     {
       name: 'high hp combat gap over threshold leaves immediately',
@@ -1717,6 +1729,7 @@ function browserBotSource(config) {
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
+    combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatHighHpDisadvantageGap: 20,
     combatShootEveryMs: 80,
@@ -2362,6 +2375,7 @@ function browserBotSource(config) {
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
+	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
 	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'combat-leave': '战斗劣势退出后等待',
@@ -3178,9 +3192,11 @@ function browserBotSource(config) {
       rememberPendingCombatLeave(action, selfSummary, detail);
       return detail;
     }
-    const reason = action?.reason === 'combat-hp-disadvantage-leave'
-      ? 'combat hp disadvantage'
-      : 'combat low hp disadvantage';
+    const reason = action?.reason === 'combat-critical-hp-leave'
+      ? 'combat critical hp'
+      : action?.reason === 'combat-hp-disadvantage-leave'
+        ? 'combat hp disadvantage'
+        : 'combat low hp disadvantage';
     const detail = {
       attempted: false,
       method: '',
@@ -5164,6 +5180,18 @@ function browserBotSource(config) {
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
       competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
     };
+    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
+      return {
+        kind: 'leave',
+        reason: 'combat-critical-hp-leave',
+        combat: true,
+        ignoreReturnBlock: true,
+        dx: 0,
+        dy: 0,
+        target: baseTarget,
+        combatState: { selfHp, targetHp }
+      };
+    }
     if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
       return {
         kind: 'leave',

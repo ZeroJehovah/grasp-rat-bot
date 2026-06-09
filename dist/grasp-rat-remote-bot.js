@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.39","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.40","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -68,6 +68,7 @@
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
+    combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatHighHpDisadvantageGap: 20,
     combatShootEveryMs: 80,
@@ -713,6 +714,7 @@
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
+	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
 	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'combat-leave': '战斗劣势退出后等待',
@@ -1529,9 +1531,11 @@
       rememberPendingCombatLeave(action, selfSummary, detail);
       return detail;
     }
-    const reason = action?.reason === 'combat-hp-disadvantage-leave'
-      ? 'combat hp disadvantage'
-      : 'combat low hp disadvantage';
+    const reason = action?.reason === 'combat-critical-hp-leave'
+      ? 'combat critical hp'
+      : action?.reason === 'combat-hp-disadvantage-leave'
+        ? 'combat hp disadvantage'
+        : 'combat low hp disadvantage';
     const detail = {
       attempted: false,
       method: '',
@@ -3515,6 +3519,18 @@
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
       competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
     };
+    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
+      return {
+        kind: 'leave',
+        reason: 'combat-critical-hp-leave',
+        combat: true,
+        ignoreReturnBlock: true,
+        dx: 0,
+        dy: 0,
+        target: baseTarget,
+        combatState: { selfHp, targetHp }
+      };
+    }
     if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
       return {
         kind: 'leave',
