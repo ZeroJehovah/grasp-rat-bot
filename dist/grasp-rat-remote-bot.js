@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.12","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.13","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -65,6 +65,7 @@
     nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
     combatLowHpLeaveThreshold: 50,
+    combatHighHpDisadvantageGap: 20,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
@@ -484,6 +485,12 @@
   const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
   const hpValue = e => Number(e?.hp ?? 0) || 0;
   const combatHpValue = e => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
+  const knownHpValue = e => {
+    if (e && Object.prototype.hasOwnProperty.call(e, 'knownHp')) {
+      return Number.isFinite(Number(e.knownHp)) ? Number(e.knownHp) : null;
+    }
+    return e?.hp !== undefined && e?.hp !== null && Number.isFinite(Number(e.hp)) ? Number(e.hp) : null;
+  };
   const maxHpValue = e => Number(e?.max_hp ?? e?.maxHp ?? 0) || 0;
   const isFullHp = self => {
     const hp = hpValue(self);
@@ -636,6 +643,7 @@
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
+	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
@@ -1256,10 +1264,13 @@
         target: action?.target || null
       };
     }
+    const reason = action?.reason === 'combat-hp-disadvantage-leave'
+      ? 'combat hp disadvantage'
+      : 'combat low hp disadvantage';
     const detail = {
       attempted: false,
       method: '',
-      reason: 'combat low hp disadvantage',
+      reason,
       userId: getCurrentUserId() || null,
       target: action?.target || null,
       combat: action?.combatState || null,
@@ -1268,7 +1279,7 @@
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      setEnemyLeaveSuppress('combat low hp disadvantage', detail);
+      setEnemyLeaveSuppress(reason, detail);
     }
     bot.lastCombatLeaveResult = detail;
     postDebugEvent(detail.error ? 'combat-leave-error' : 'combat-leave', detail, { force: true });
@@ -2431,7 +2442,7 @@
 	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
 	      .sort((a, b) => a.distance - b.distance);
     const combatTargets = entities
-      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
       .filter(e => !nativeMeta.available || e.native)
       .filter(e => e.distance <= cfg.combatAttackRange)
@@ -2715,6 +2726,23 @@
         dy: 0,
         target: baseTarget,
         combatState: { selfHp, targetHp }
+      };
+    }
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      return {
+        kind: 'leave',
+        reason: 'combat-hp-disadvantage-leave',
+        combat: true,
+        ignoreReturnBlock: true,
+        dx: 0,
+        dy: 0,
+        target: baseTarget,
+        combatState: { selfHp, targetHp, hpGap }
       };
     }
     const pressure = combatPressureThreat(self, target, bullets);
@@ -3699,8 +3727,8 @@
         };
         bot.pendingInjuryLeave = null;
       }
-      if (action.kind === 'leave' && action.reason === 'combat-low-hp-leave') {
-        stopMotionSafely('combat-low-hp-leave');
+      if (action.kind === 'leave' && action.combat) {
+        stopMotionSafely(action.reason || 'combat-leave');
         const leaveResult = await leaveForCombat(action);
         bot.lastDecision = {
           ...action,

@@ -2,6 +2,7 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -87,6 +88,14 @@ Options:
 `);
 }
 
+function writeStdoutSync(text) {
+  const buffer = Buffer.from(String(text));
+  let offset = 0;
+  while (offset < buffer.length) {
+    offset += fs.writeSync(process.stdout.fd, buffer, offset, buffer.length - offset);
+  }
+}
+
 function runSelfTest() {
   const cfg = {
     dangerRadius: 17000,
@@ -113,6 +122,7 @@ function runSelfTest() {
     nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
     combatLowHpLeaveThreshold: 50,
+    combatHighHpDisadvantageGap: 20,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
@@ -227,6 +237,12 @@ function runSelfTest() {
   };
   const hpValue = e => Number(e?.hp ?? 0) || 0;
   const combatHpValue = e => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
+  const knownHpValue = e => {
+    if (e && Object.prototype.hasOwnProperty.call(e, 'knownHp')) {
+      return Number.isFinite(Number(e.knownHp)) ? Number(e.knownHp) : null;
+    }
+    return e?.hp !== undefined && e?.hp !== null && Number.isFinite(Number(e.hp)) ? Number(e.hp) : null;
+  };
   const maxHpValue = e => Number(e?.max_hp ?? e?.maxHp ?? 0) || 0;
   const clampValue = (v, min, max) => Math.max(min, Math.min(max, v));
   const isFullHp = self => {
@@ -360,7 +376,7 @@ function runSelfTest() {
     const candidates = entities
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
-      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
       .filter(e => e.distance <= cfg.combatAttackRange);
     const incoming = (bullets || []).find(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) !== Number(self.user_id));
@@ -445,8 +461,18 @@ function runSelfTest() {
   }
 
   function chooseCombatAction(self, target, bullets = []) {
-    if (hpValue(self) < cfg.combatLowHpLeaveThreshold && hpValue(self) < combatHpValue(target)) {
-      return { kind: 'leave', reason: 'combat-low-hp-leave', combat: true, target: { id: target.user_id, hp: combatHpValue(target), distance: Math.round(target.distance) } };
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
+      return { kind: 'leave', reason: 'combat-low-hp-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) } };
+    }
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      return { kind: 'leave', reason: 'combat-hp-disadvantage-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) }, combatState: { selfHp, targetHp, hpGap } };
     }
     const moving = speed(target) >= cfg.combatStationarySpeed;
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
@@ -852,6 +878,22 @@ function runSelfTest() {
         bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
       }).kind,
       want: 'leave'
+    },
+    {
+      name: 'high hp combat gap over threshold leaves immediately',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 91, firing: true }]
+      }).reason,
+      want: 'combat-hp-disadvantage-leave'
+    },
+    {
+      name: 'high hp combat gap at threshold keeps fighting',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 90, firing: true }]
+      }).kind,
+      want: 'attack'
     },
     {
       name: 'recovering still fights moving enemy already in range',
@@ -1404,6 +1446,7 @@ function browserBotSource(config) {
     nativeCoinAuthoritativeRadius: 45000,
     combatAttackRange: 14500,
     combatLowHpLeaveThreshold: 50,
+    combatHighHpDisadvantageGap: 20,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
@@ -1823,6 +1866,12 @@ function browserBotSource(config) {
   const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
   const hpValue = e => Number(e?.hp ?? 0) || 0;
   const combatHpValue = e => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
+  const knownHpValue = e => {
+    if (e && Object.prototype.hasOwnProperty.call(e, 'knownHp')) {
+      return Number.isFinite(Number(e.knownHp)) ? Number(e.knownHp) : null;
+    }
+    return e?.hp !== undefined && e?.hp !== null && Number.isFinite(Number(e.hp)) ? Number(e.hp) : null;
+  };
   const maxHpValue = e => Number(e?.max_hp ?? e?.maxHp ?? 0) || 0;
   const isFullHp = self => {
     const hp = hpValue(self);
@@ -1975,6 +2024,7 @@ function browserBotSource(config) {
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
+	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
@@ -2595,10 +2645,13 @@ function browserBotSource(config) {
         target: action?.target || null
       };
     }
+    const reason = action?.reason === 'combat-hp-disadvantage-leave'
+      ? 'combat hp disadvantage'
+      : 'combat low hp disadvantage';
     const detail = {
       attempted: false,
       method: '',
-      reason: 'combat low hp disadvantage',
+      reason,
       userId: getCurrentUserId() || null,
       target: action?.target || null,
       combat: action?.combatState || null,
@@ -2607,7 +2660,7 @@ function browserBotSource(config) {
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      setEnemyLeaveSuppress('combat low hp disadvantage', detail);
+      setEnemyLeaveSuppress(reason, detail);
     }
     bot.lastCombatLeaveResult = detail;
     postDebugEvent(detail.error ? 'combat-leave-error' : 'combat-leave', detail, { force: true });
@@ -3770,7 +3823,7 @@ function browserBotSource(config) {
 	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
 	      .sort((a, b) => a.distance - b.distance);
     const combatTargets = entities
-      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
       .filter(e => !nativeMeta.available || e.native)
       .filter(e => e.distance <= cfg.combatAttackRange)
@@ -4054,6 +4107,23 @@ function browserBotSource(config) {
         dy: 0,
         target: baseTarget,
         combatState: { selfHp, targetHp }
+      };
+    }
+    const knownSelfHp = knownHpValue(self);
+    const knownTargetHp = knownHpValue(target);
+    const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      return {
+        kind: 'leave',
+        reason: 'combat-hp-disadvantage-leave',
+        combat: true,
+        ignoreReturnBlock: true,
+        dx: 0,
+        dy: 0,
+        target: baseTarget,
+        combatState: { selfHp, targetHp, hpGap }
       };
     }
     const pressure = combatPressureThreat(self, target, bullets);
@@ -5038,8 +5108,8 @@ function browserBotSource(config) {
         };
         bot.pendingInjuryLeave = null;
       }
-      if (action.kind === 'leave' && action.reason === 'combat-low-hp-leave') {
-        stopMotionSafely('combat-low-hp-leave');
+      if (action.kind === 'leave' && action.combat) {
+        stopMotionSafely(action.reason || 'combat-leave');
         const leaveResult = await leaveForCombat(action);
         bot.lastDecision = {
           ...action,
@@ -5376,7 +5446,7 @@ if (options.selfTest) {
 }
 
 if (options.printSource) {
-  process.stdout.write(browserBotSource({
+  writeStdoutSync(browserBotSource({
     dryRun: options.dryRun,
     once: options.once,
     statusEvery: options.statusEvery,
