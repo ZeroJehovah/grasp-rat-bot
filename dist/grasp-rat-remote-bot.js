@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.31","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.32","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -16,13 +16,14 @@
 		  const PAUSED_KEY = 'graspRatBotPaused';
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
 		  const previousBot = window[BOT_KEY] || null;
-  const preserved = {
-    attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
-    killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
-    seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
-    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
-    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
-  };
+	  const preserved = {
+	    attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
+	    killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
+	    seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
+	    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
+	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
+	    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
+	  };
 	  const cfg = {
 	    dryRun: Boolean(config.dryRun),
 	    once: Boolean(config.once),
@@ -83,6 +84,7 @@
     combatStrafeDirectionLockMs: 2200,
     combatStrafeRandomJitterMs: 1100,
     combatStrafeCarryMs: 1600,
+    combatEngageStickMs: 15000,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -251,6 +253,7 @@
     pursuitReloginUntil: 0,
     pursuit: null,
     combatStrafe: null,
+    combatTarget: preserved.combatTarget,
     reloadRequestedAt: 0,
     lastTarget: null,
     lastTargetAt: 0,
@@ -402,9 +405,10 @@
         lastTickAgeMs: this.lastTickAt ? Date.now() - this.lastTickAt : null,
         lastNativeTickAgeMs: this.lastNativeTickAt ? now() - this.lastNativeTickAt : null,
         lastAction: this.lastAction,
-        lastDecision: this.lastDecision,
-        lastTarget: this.lastTarget,
-        self: displaySelf,
+	        lastDecision: this.lastDecision,
+	        lastTarget: this.lastTarget,
+	        combatTarget: this.combatTarget,
+	        self: displaySelf,
         session,
         safety: this.lastSafety,
         attackHistory: this.attackHistory.slice(-10),
@@ -2002,6 +2006,30 @@
     }, 80);
   }
 
+  function rememberCombatEngagement(self, target, action) {
+    if (!target) return;
+    const id = target.id ?? target.user_id;
+    if (id === null || id === undefined) return;
+    bot.combatTarget = {
+      id,
+      at: Date.now(),
+      name: target.name || '',
+      x: Math.round(Number(target.x) || 0),
+      y: Math.round(Number(target.y) || 0),
+      hp: Number.isFinite(Number(target.hp)) ? Number(target.hp) : null,
+      drop: Number(target.drop || 0),
+      distance: Number(target.distance || 0),
+      reason: action?.reason || '',
+      self: summarizeSelf(self)
+    };
+  }
+
+  function clearCombatEngagement(reason = '') {
+    if (!bot.combatTarget) return;
+    bot.lastCombatTargetClear = { at: Date.now(), reason };
+    bot.combatTarget = null;
+  }
+
   function updateKillHistory(self) {
     const ownName = self?.name || '';
     if (!ownName || !document?.body) return;
@@ -2944,6 +2972,26 @@
     return null;
   }
 
+  function pickEngagedCombatTarget(combatTargets) {
+    const engaged = bot.combatTarget;
+    if (!engaged?.id) return null;
+    const ageMs = Math.max(0, Date.now() - Number(engaged.at || 0));
+    if (ageMs > Math.max(cfg.targetStickMs, cfg.combatEngageStickMs)) {
+      clearCombatEngagement('expired');
+      return null;
+    }
+    const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
+    if (!target || isAfkTarget(target) || isInvulnerable(target)) return null;
+    return {
+      ...target,
+      combatIntent: 'engaged',
+      combatEngagement: {
+        ageMs: Math.round(ageMs),
+        lastReason: engaged.reason || ''
+      }
+    };
+  }
+
   function pickOpportunisticShotTarget(self, entities) {
     const candidates = (entities || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id))
@@ -3786,8 +3834,8 @@
     if (!id && id !== 0) return;
     if (!bot.lastTarget || bot.lastTarget.kind !== kind || String(bot.lastTarget.id) !== String(id)) {
       bot.lastTarget = { kind, id };
-      bot.lastTargetAt = now();
     }
+    bot.lastTargetAt = now();
   }
 
   function clearCoinTracking(reason = '') {
@@ -3883,9 +3931,17 @@
     const coinThreats = avoidanceThreats;
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
+    const engagedCombatTarget = pickEngagedCombatTarget(combatTargets);
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
+      engagedCombat: engagedCombatTarget ? {
+        id: engagedCombatTarget.user_id,
+        name: engagedCombatTarget.name,
+        distance: Math.round(engagedCombatTarget.distance),
+        intent: engagedCombatTarget.combatIntent || '',
+        ageMs: engagedCombatTarget.combatEngagement?.ageMs || 0
+      } : null,
       nearestActive: activeThreats[0] ? {
         id: activeThreats[0].user_id,
         name: activeThreats[0].name,
@@ -3914,6 +3970,11 @@
       } : null,
       conservingStamina: isConservingStamina(self)
     };
+    if (engagedCombatTarget) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      return buildCombatAction(self, engagedCombatTarget, bullets);
+    }
     if (fullHp && closeThreats.length) {
       const flee = lockedFleeDirection(self, closeThreats, 'active-threat-before-bullet-range');
       return {
@@ -4490,6 +4551,7 @@
       if (action.kind === 'attack' && action.shoot && action.target) {
         shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
         setLastTarget('enemy', action.target.id);
+        if (action.combat) rememberCombatEngagement(self, action.target, action);
 	        rememberAttack(self, action.target, action.kind);
       } else if ((action.kind === 'coin' || action.kind === 'seek-coin') && action.target) {
         setLastTarget('coin', action.target.id);
@@ -4499,6 +4561,7 @@
       } else if (action.kind === 'flee') {
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
+        clearCombatEngagement(action.reason || 'flee');
       }
       bot.lastDecision = {
         ...action,
