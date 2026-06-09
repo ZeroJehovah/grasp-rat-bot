@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.37","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.38","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -304,6 +304,8 @@
       userId: preserved.session?.userId ?? null,
       baseCoins: Number.isFinite(Number(preserved.session?.baseCoins)) ? Number(preserved.session.baseCoins) : null,
       coinsGained: Math.max(0, Number(preserved.session?.coinsGained || 0) || 0),
+      coinPickupTotal: Math.max(0, Number(preserved.session?.coinPickupTotal || 0) || 0),
+      coinPickupKeys: Array.isArray(preserved.session?.coinPickupKeys) ? preserved.session.coinPickupKeys.slice(-80) : [],
       kills: Math.max(0, Number(preserved.session?.kills || 0) || 0),
       missingSince: Number(preserved.session?.missingSince || 0) || 0
     },
@@ -1994,14 +1996,24 @@
       session.userId = userId;
       session.baseCoins = Number.isFinite(coins) ? coins : 0;
       session.coinsGained = 0;
+      session.coinPickupTotal = 0;
+      session.coinPickupKeys = [];
       session.kills = 0;
     } else if (session.userId === null && userId !== null) {
       session.userId = userId;
     }
     session.missingSince = 0;
     if (!Number.isFinite(Number(session.baseCoins))) session.baseCoins = Number.isFinite(coins) ? coins : 0;
-    session.coinsGained = Math.max(0, Math.round((Number.isFinite(coins) ? coins : 0) - Number(session.baseCoins || 0)));
-    session.kills = bot.killHistory.filter(item => Number(item?.at || 0) >= Number(session.startedAt || 0)).length;
+    if (!Number.isFinite(Number(session.coinPickupTotal))) session.coinPickupTotal = 0;
+    if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
+    const coinDiff = Math.max(0, Math.round((Number.isFinite(coins) ? coins : 0) - Number(session.baseCoins || 0)));
+    session.coinsGained = Math.max(
+      Math.max(0, Number(session.coinsGained || 0) || 0),
+      Math.max(0, Number(session.coinPickupTotal || 0) || 0),
+      coinDiff
+    );
+    const killCount = bot.killHistory.filter(item => Number(item?.at || 0) >= Number(session.startedAt || 0)).length;
+    session.kills = Math.max(Math.max(0, Number(session.kills || 0) || 0), killCount);
   }
 
   function summarizeSessionStats(selfSummary) {
@@ -2013,6 +2025,7 @@
       baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
       coins: Number(selfSummary?.coins || 0),
       coinsGained: Math.max(0, Number(session.coinsGained || 0) || 0),
+      coinPickupTotal: Math.max(0, Number(session.coinPickupTotal || 0) || 0),
       kills: Math.max(0, Number(session.kills || 0) || 0),
       userId: session.userId ?? null
     };
@@ -4008,15 +4021,24 @@
 
     const id = String(action.target.id);
     const distance = Number(action.target.distance ?? Infinity);
+    const amount = Math.max(0, Number(action.target.amount || 0) || 0);
+    const targetX = Number(action.target.x);
+    const targetY = Number(action.target.y);
     const attempt = bot.coinAttempts.get(id) || {
       id,
       startedAt: t,
       lastImprovedAt: t,
       bestDistance: distance,
       lastDistance: distance,
+      amount,
+      x: Number.isFinite(targetX) ? targetX : null,
+      y: Number.isFinite(targetY) ? targetY : null,
       closeStartedAt: distance <= cfg.closeCoinStuckDistance ? t : 0,
       nearStartedAt: distance <= cfg.nearCoinStuckDistance ? t : 0
     };
+    attempt.amount = amount || Number(attempt.amount || 0) || 0;
+    if (Number.isFinite(targetX)) attempt.x = targetX;
+    if (Number.isFinite(targetY)) attempt.y = targetY;
     attempt.lastSeenAt = t;
     const previousDistance = Number(attempt.lastDistance ?? distance);
     const attemptImproved = distance + cfg.coinProgressMinGain < Number(attempt.bestDistance);
@@ -4085,7 +4107,10 @@
         startedAt: t,
         lastImprovedAt: t,
         bestDistance: distance,
-        lastDistance: distance
+        lastDistance: distance,
+        amount: attempt.amount,
+        x: attempt.x,
+        y: attempt.y
       };
       return action;
     }
@@ -4095,13 +4120,19 @@
         ...previous,
         lastImprovedAt: t,
         bestDistance: distance,
-        lastDistance: distance
+        lastDistance: distance,
+        amount: attempt.amount,
+        x: attempt.x,
+        y: attempt.y
       };
       return action;
     }
     bot.coinProgress = {
       ...previous,
-      lastDistance: distance
+      lastDistance: distance,
+      amount: attempt.amount,
+      x: attempt.x,
+      y: attempt.y
     };
     if (t - Number(previous.lastImprovedAt || previous.startedAt || t) < cfg.coinNoProgressMs) {
       return action;
@@ -4175,16 +4206,79 @@
     if (bot.lastTarget?.kind === 'coin') {
       return {
         id: bot.lastTarget.id,
-        distance: bot.coinProgress?.lastDistance
+        distance: bot.coinProgress?.lastDistance,
+        amount: bot.coinProgress?.amount,
+        x: bot.coinProgress?.x,
+        y: bot.coinProgress?.y
       };
     }
     if (bot.coinProgress?.id) {
       return {
         id: bot.coinProgress.id,
-        distance: bot.coinProgress.lastDistance
+        distance: bot.coinProgress.lastDistance,
+        amount: bot.coinProgress.amount,
+        x: bot.coinProgress.x,
+        y: bot.coinProgress.y
       };
     }
     return null;
+  }
+
+  function coinTargetKey(target) {
+    const id = target?.id ?? target?.drop_id ?? target?.coin_id;
+    if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
+    const x = Number(target?.x);
+    const y = Number(target?.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      return 'xy:' + Math.round(x) + ':' + Math.round(y) + ':' + Math.round(Number(target?.amount || 0));
+    }
+    return '';
+  }
+
+  function coinMatchesTrackedTarget(coin, target) {
+    const targetId = target?.id ?? target?.drop_id ?? target?.coin_id;
+    const coinId = coin?.drop_id ?? coin?.id ?? coin?.coin_id;
+    if (targetId !== undefined && targetId !== null && targetId !== '' && coinId !== undefined && coinId !== null && coinId !== '') {
+      if (String(targetId) === String(coinId)) return true;
+    }
+    const targetPoint = { x: Number(target?.x), y: Number(target?.y) };
+    const coinPoint = { x: Number(coin?.x), y: Number(coin?.y) };
+    if (!Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y) || !Number.isFinite(coinPoint.x) || !Number.isFinite(coinPoint.y)) return false;
+    return dist(targetPoint, coinPoint) <= Number(cfg.coinCollectedPruneRadius || 0);
+  }
+
+  function trackedCoinStillVisible(target) {
+    const nativeCoinList = getNativeCoinList();
+    if (!Array.isArray(nativeCoinList)) return null;
+    return nativeCoinList
+      .map(coin => normalizeCoinDrop(coin, 'native'))
+      .filter(Boolean)
+      .some(coin => coinMatchesTrackedTarget(coin, target));
+  }
+
+  function recordSessionCoinPickup(target, amount, currentSummary, previousCoins, reason) {
+    const value = Math.max(0, Math.round(Number(amount || 0)));
+    if (!value) return false;
+    updateSessionStats(currentSummary);
+    const session = bot.session || (bot.session = {});
+    const t = Date.now();
+    const key = coinTargetKey(target);
+    if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
+    session.coinPickupKeys = session.coinPickupKeys
+      .filter(item => item && t - Number(item.at || 0) <= 60000)
+      .slice(-80);
+    if (key && session.coinPickupKeys.some(item => String(item.key || '') === key && t - Number(item.at || 0) <= 5000)) {
+      return false;
+    }
+    if (key) pushBounded(session.coinPickupKeys, { key, at: t, amount: value, reason: reason || '' }, 80);
+    session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + value;
+    const coinDiff = Math.max(0, Math.round(Number(currentSummary?.coins || 0) - Number(previousCoins || 0)));
+    session.coinsGained = Math.max(
+      Math.max(0, Number(session.coinsGained || 0) || 0),
+      Math.max(0, Number(session.coinPickupTotal || 0) || 0),
+      coinDiff
+    );
+    return true;
   }
 
   function pruneCollectedSnapshotCoin(target) {
@@ -4210,21 +4304,33 @@
     const id = target.id === undefined || target.id === null ? '' : String(target.id);
     const distance = Number(target.distance);
     if (Number.isFinite(distance) && distance > Number(cfg.coinCollectedConfirmDistance || 0)) return false;
+    const currentCoins = Number(currentSummary?.coins || 0);
+    const coinDelta = Math.max(0, Math.round(currentCoins - Number(previousCoins || 0)));
+    const visible = trackedCoinStillVisible(target);
+    const confirmed = coinDelta > 0 || visible === false;
+    if (!confirmed) return false;
+    const amount = Math.max(0, Math.round(Number(target.amount || 0))) || coinDelta;
+    if (!amount) return false;
     const t = now();
     if (id) {
       bot.ignoredCoins.set(id, t + Number(cfg.coinCollectedIgnoreMs || 0));
       bot.coinAttempts.delete(id);
     }
     const pruned = pruneCollectedSnapshotCoin(target);
+    const confirmReason = coinDelta > 0 ? 'coins-increased' : 'coin-disappeared';
+    const sessionRecorded = recordSessionCoinPickup(target, amount, currentSummary, previousCoins, confirmReason);
     bot.lastCoinCollected = {
       id,
+      amount,
       distance: Number.isFinite(distance) ? Math.round(distance) : null,
       previousCoins,
-      currentCoins: Number(currentSummary?.coins || 0),
+      currentCoins,
       pruned,
+      confirmReason,
+      sessionRecorded,
       at: Date.now()
     };
-    clearCoinTracking('coins-increased');
+    clearCoinTracking(confirmReason);
     return true;
   }
 
@@ -4643,9 +4749,7 @@
 	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
       const currentHp = Number(currentSummary.hp ?? NaN);
-      const coinMarked = hadPreviousSelf
-        && Number(currentSummary.coins || 0) > previousCoins
-        && markCoinCollected(self, currentSummary, previousCoins);
+      const coinMarked = hadPreviousSelf && markCoinCollected(self, currentSummary, previousCoins);
 	      if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
 	        clearCoinTracking('drop-increased');
 	      }
