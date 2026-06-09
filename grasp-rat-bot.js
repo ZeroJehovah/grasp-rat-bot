@@ -167,6 +167,8 @@ function runSelfTest() {
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
+    targetWhitelistNames: ['文月'],
+    targetWhitelistIds: [],
     coinOpportunityValue: 60000,
     dropOpportunityValue: 100000,
     opportunityDistancePenalty: 1,
@@ -249,6 +251,20 @@ function runSelfTest() {
   const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (e.current_join_mode === 'Active' && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isActive(e);
   const isAfkTarget = e => !isActive(e) && !isMovingThreat(e);
+  const normalizeTargetText = value => String(value ?? '').trim();
+  const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
+    .map(normalizeTargetText)
+    .filter(Boolean));
+  const targetWhitelistIds = new Set((Array.isArray(cfg.targetWhitelistIds) ? cfg.targetWhitelistIds : [])
+    .map(normalizeTargetText)
+    .filter(Boolean));
+  const isWhitelistedTarget = e => {
+    if (!e) return false;
+    const id = e.user_id ?? e.id;
+    if (id !== null && id !== undefined && targetWhitelistIds.has(String(id))) return true;
+    const name = normalizeTargetText(e.name);
+    return Boolean(name && targetWhitelistNames.has(name));
+  };
   const decorateThreat = (self, e) => {
     const moving = isMovingThreat(e);
     return {
@@ -289,6 +305,7 @@ function runSelfTest() {
     return stamina < cfg.conserveStaminaThreshold;
   };
   const attackWorthTaking = (self, target) => {
+    if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
     if (isAfkTarget(target)) return targetDrop > 0;
     const ownDrop = dropValue(self);
@@ -390,6 +407,7 @@ function runSelfTest() {
   }
 
   function scoreEnemyOpportunity(target) {
+    if (isWhitelistedTarget(target)) return null;
     const afk = isAfkTarget(target);
     const inRange = target.distance <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
@@ -441,13 +459,13 @@ function runSelfTest() {
       - Number(target.distance || 0);
   }
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
-    if (!target || isAfkTarget(target) || isInvulnerable(target)) return false;
+    if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
     if (isFiringEntity(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
   }
   function isProfitableCombatTarget(target) {
-    return Boolean(target && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
+    return Boolean(target && !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -469,6 +487,7 @@ function runSelfTest() {
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
+      .filter(e => !isWhitelistedTarget(e))
       .filter(e => !isInvulnerable(e))
       .filter(e => e.distance <= cfg.combatAttackRange);
     const incoming = (bullets || []).find(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) !== Number(self.user_id));
@@ -503,6 +522,7 @@ function runSelfTest() {
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => !isWhitelistedTarget(e))
       .filter(e => e.distance <= cfg.attackRange)
       .filter(e => Number(e.drop || 0) > 0 && isAfkTarget(e))
       .sort((a, b) => (b.drop - a.drop) || a.distance - b.distance)[0] || null;
@@ -1253,6 +1273,22 @@ function runSelfTest() {
       want: 'wait'
     },
     {
+      name: 'whitelisted afk drop target is not attacked',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 9, name: '文月', x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 100 }]
+      }).kind,
+      want: 'wait'
+    },
+    {
+      name: 'whitelisted firing target is not shot defensively',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 9, name: '文月', x: 10000, y: 0, current_join_mode: 'Passive', firing: true, hp: 100, death_reward_preview: 100 }]
+      }).kind,
+      want: 'wait'
+    },
+    {
       name: 'safe near coin beats active caution migration',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -1680,6 +1716,8 @@ function browserBotSource(config) {
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
+    targetWhitelistNames: ['文月'],
+    targetWhitelistIds: [],
     coinOpportunityValue: 60000,
     dropOpportunityValue: 100000,
     opportunityDistancePenalty: 1,
@@ -2114,6 +2152,20 @@ function browserBotSource(config) {
   const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (e.current_join_mode === 'Active' && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
   const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
+  const normalizeTargetText = value => String(value ?? '').trim();
+  const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
+    .map(normalizeTargetText)
+    .filter(Boolean));
+  const targetWhitelistIds = new Set((Array.isArray(cfg.targetWhitelistIds) ? cfg.targetWhitelistIds : [])
+    .map(normalizeTargetText)
+    .filter(Boolean));
+  const isWhitelistedTarget = e => {
+    if (!e) return false;
+    const id = e.user_id ?? e.id;
+    if (id !== null && id !== undefined && targetWhitelistIds.has(String(id))) return true;
+    const name = normalizeTargetText(e.name);
+    return Boolean(name && targetWhitelistNames.has(name));
+  };
   const hpValue = e => Number(e?.hp ?? 0) || 0;
   const combatHpValue = e => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
   const knownHpValue = e => {
@@ -2142,23 +2194,24 @@ function browserBotSource(config) {
       coinDangerRadius: moving ? cfg.coinDangerRadius : cfg.stationaryActiveCoinDangerRadius
     };
   };
-	  const isRecovering = self => {
-	    if (!self) return false;
-	    const maxHp = maxHpValue(self);
-	    if (maxHp > 0) return hpValue(self) < maxHp;
-	    return hpValue(self) < cfg.recoverHpThreshold;
-	  };
+  const isRecovering = self => {
+    if (!self) return false;
+    const maxHp = maxHpValue(self);
+    if (maxHp > 0) return hpValue(self) < maxHp;
+    return hpValue(self) < cfg.recoverHpThreshold;
+  };
   const isConservingStamina = self => {
     const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
     return stamina < cfg.conserveStaminaThreshold;
   };
-	  const attackWorthTaking = (self, target) => {
-	    const targetDrop = dropValue(target);
-	    if (isAfkTarget(target)) return targetDrop > 0;
-	    const ownDrop = dropValue(self);
-	    return targetDrop >= cfg.attackMinDrop
-	      && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
-	  };
+  const attackWorthTaking = (self, target) => {
+    if (isWhitelistedTarget(target)) return false;
+    const targetDrop = dropValue(target);
+    if (isAfkTarget(target)) return targetDrop > 0;
+    const ownDrop = dropValue(self);
+    return targetDrop >= cfg.attackMinDrop
+      && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
+  };
 
 	  function ensureBotPanel() {
 	    return null;
@@ -4309,11 +4362,12 @@ function browserBotSource(config) {
     }
     const entities = Array.from(globalById.values());
     const offensiveEntities = entities.filter(entityFreshEnoughForOffense);
+    const attackableEntities = offensiveEntities.filter(e => !isWhitelistedTarget(e));
     const activeThreats = entities
       .filter(e => isCurrentlyActive(e))
       .map(e => decorateActiveThreat(self, e))
       .sort((a, b) => a.distance - b.distance);
-    const inactiveTargets = offensiveEntities
+    const inactiveTargets = attackableEntities
       .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
       .filter(e => e.distance <= cfg.attackRange)
@@ -4338,7 +4392,7 @@ function browserBotSource(config) {
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
-    const globalTargets = offensiveEntities
+    const globalTargets = attackableEntities
       .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true }))
       .filter(e => e.distance <= cfg.globalAttackMaxDistance)
@@ -4357,6 +4411,7 @@ function browserBotSource(config) {
         global: true,
         minimapOnly: true
       }))
+      .filter(p => !isWhitelistedTarget(p))
       .filter(p => p.drop > 0 && p.distance <= cfg.globalAttackMaxDistance)
       .sort((a, b) => {
         if (b.drop !== a.drop) return b.drop - a.drop;
@@ -4386,7 +4441,7 @@ function browserBotSource(config) {
 	    const nearbyHumans = entities
 	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
 	      .sort((a, b) => a.distance - b.distance);
-    const combatTargets = offensiveEntities
+    const combatTargets = attackableEntities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
       .filter(e => !nativeMeta.available || e.native)
@@ -4521,7 +4576,7 @@ function browserBotSource(config) {
   }
 
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
-    if (!target || isAfkTarget(target) || isInvulnerable(target)) return false;
+    if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
     if (isFiringEntity(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
@@ -4529,7 +4584,7 @@ function browserBotSource(config) {
   }
 
   function isProfitableCombatTarget(target) {
-    return Boolean(target && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
+    return Boolean(target && !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -4553,10 +4608,10 @@ function browserBotSource(config) {
     const incomingOwnerId = incoming?.ownerId;
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
     if (incoming?.ownerId !== null && incoming?.ownerId !== undefined) {
-      const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isInvulnerable(target));
+      const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isWhitelistedTarget(target) && !isInvulnerable(target));
       if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
     }
-    const eligibleTargets = combatTargets.filter(target => !isAfkTarget(target) && !isInvulnerable(target));
+    const eligibleTargets = combatTargets.filter(target => !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target));
     if (!eligibleTargets.length) return null;
     const defensiveTargets = eligibleTargets
       .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
@@ -4590,7 +4645,7 @@ function browserBotSource(config) {
       return null;
     }
     const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
-    if (!target || isAfkTarget(target) || isInvulnerable(target)) return null;
+    if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return null;
     return {
       ...target,
       combatIntent: 'engaged',
@@ -4607,6 +4662,7 @@ function browserBotSource(config) {
       .filter(entityFreshEnoughForOffense)
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
+      .filter(e => !isWhitelistedTarget(e))
       .filter(e => e.distance <= cfg.attackRange)
       .filter(e => Number(e.drop || 0) > 0 && !isInvulnerable(e))
       .filter(isAfkTarget)
@@ -5140,6 +5196,7 @@ function browserBotSource(config) {
   }
 
   function scoreEnemyOpportunity(target) {
+    if (isWhitelistedTarget(target)) return null;
     const afk = isAfkTarget(target);
     const inRange = Number(target.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
@@ -5192,6 +5249,7 @@ function browserBotSource(config) {
       return name && String(entity.name || '') === name;
     });
     if (!target || !isAlive(target)) return false;
+    if (isWhitelistedTarget(target)) return false;
     if (isCurrentlyActive(target)) return false;
     if (isInvulnerable(target)) return false;
     return dropValue(target) > 0;
@@ -5239,6 +5297,7 @@ function browserBotSource(config) {
       const drop = Number(raw.drop ?? dropValue(raw) ?? 0);
       const distance = Number(raw.distance ?? Infinity);
       if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
+      if (isWhitelistedTarget(raw)) continue;
       if (isInvulnerable(raw)) continue;
       if (!attackWorthTaking(self, { ...raw, drop })) continue;
       if (activeThreats.some(t => dist(raw, t) <= cfg.attackDangerRadius)) continue;
@@ -5274,6 +5333,7 @@ function browserBotSource(config) {
   }
 
   function buildEnemyAction(self, target, reason = '') {
+    if (isWhitelistedTarget(target)) return { kind: 'wait', reason: 'target-whitelisted', dx: 0, dy: 0 };
     const dir = directionTo(self, target);
     const afk = isAfkTarget(target);
     const inRange = Number(dir.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
