@@ -146,6 +146,7 @@ function runSelfTest() {
     combatBulletDetectRadius: 26000,
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
+    snapshotBulletStaleMs: 1500,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -1628,6 +1629,7 @@ function browserBotSource(config) {
     combatBulletDetectRadius: 26000,
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
+    snapshotBulletStaleMs: 1500,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -3317,6 +3319,10 @@ function browserBotSource(config) {
     return snapshotDataAgeMs() <= Number(cfg.snapshotCoinStaleMs || 0);
   }
 
+  function snapshotBulletFreshEnough() {
+    return snapshotDataAgeMs() <= Number(cfg.snapshotBulletStaleMs || 0);
+  }
+
   function entityFreshEnoughForOffense(entity) {
     return Boolean(entity?.native || !entity?.snapshot || snapshotDataFreshEnough());
   }
@@ -3421,6 +3427,7 @@ function browserBotSource(config) {
     const nativeState = getNativeState();
     const nativeBullets = Array.isArray(nativeState?.bullets) ? nativeState.bullets : [];
     const snapshotBullets = Array.isArray(bot.globalState.bullets) ? bot.globalState.bullets : [];
+    const useSnapshotBullets = snapshotBulletFreshEnough();
     const byKey = new Map();
     const add = (raw, source) => {
       const bullet = normalizeBullet(raw, source);
@@ -3429,7 +3436,9 @@ function browserBotSource(config) {
       const previous = byKey.get(key);
       byKey.set(key, previous ? { ...previous, ...bullet, snapshot: Boolean(previous.snapshot || bullet.snapshot), native: Boolean(previous.native || bullet.native) } : bullet);
     };
-    for (const bullet of snapshotBullets) add(bullet, 'snapshot');
+    if (useSnapshotBullets) {
+      for (const bullet of snapshotBullets) add(bullet, 'snapshot');
+    }
     for (const bullet of nativeBullets) add(bullet, 'native');
     return Array.from(byKey.values());
   }

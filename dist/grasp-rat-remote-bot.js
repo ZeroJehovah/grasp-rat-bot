@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.28","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.29","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -77,6 +77,7 @@
     combatBulletDetectRadius: 26000,
     combatBulletLaneRadius: 2400,
     combatBulletLookaheadDistance: 36000,
+    snapshotBulletStaleMs: 1500,
     combatStrafeLockMs: 700,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -1766,6 +1767,10 @@
     return snapshotDataAgeMs() <= Number(cfg.snapshotCoinStaleMs || 0);
   }
 
+  function snapshotBulletFreshEnough() {
+    return snapshotDataAgeMs() <= Number(cfg.snapshotBulletStaleMs || 0);
+  }
+
   function entityFreshEnoughForOffense(entity) {
     return Boolean(entity?.native || !entity?.snapshot || snapshotDataFreshEnough());
   }
@@ -1870,6 +1875,7 @@
     const nativeState = getNativeState();
     const nativeBullets = Array.isArray(nativeState?.bullets) ? nativeState.bullets : [];
     const snapshotBullets = Array.isArray(bot.globalState.bullets) ? bot.globalState.bullets : [];
+    const useSnapshotBullets = snapshotBulletFreshEnough();
     const byKey = new Map();
     const add = (raw, source) => {
       const bullet = normalizeBullet(raw, source);
@@ -1878,7 +1884,9 @@
       const previous = byKey.get(key);
       byKey.set(key, previous ? { ...previous, ...bullet, snapshot: Boolean(previous.snapshot || bullet.snapshot), native: Boolean(previous.native || bullet.native) } : bullet);
     };
-    for (const bullet of snapshotBullets) add(bullet, 'snapshot');
+    if (useSnapshotBullets) {
+      for (const bullet of snapshotBullets) add(bullet, 'snapshot');
+    }
     for (const bullet of nativeBullets) add(bullet, 'native');
     return Array.from(byKey.values());
   }
