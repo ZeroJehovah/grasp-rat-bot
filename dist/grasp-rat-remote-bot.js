@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.13","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.14","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -20,6 +20,7 @@
     attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
     killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
     seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
+    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
     coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
   };
 	  const cfg = {
@@ -171,6 +172,7 @@
     pursuitClosingMinDistance: 250,
     offlineLeaveMs: 3000,
     offlineLeaveCooldownMs: 60000,
+    sessionResetMissingMs: 10000,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
     globalRefreshTimeoutMs: 1500,
@@ -265,6 +267,14 @@
     nativeErrorHandler: null,
     lastNativeTickAt: 0,
     seenEntities: new Map(),
+    session: {
+      startedAt: Number(preserved.session?.startedAt || 0) || 0,
+      userId: preserved.session?.userId ?? null,
+      baseCoins: Number.isFinite(Number(preserved.session?.baseCoins)) ? Number(preserved.session.baseCoins) : null,
+      coinsGained: Math.max(0, Number(preserved.session?.coinsGained || 0) || 0),
+      kills: Math.max(0, Number(preserved.session?.kills || 0) || 0),
+      missingSince: Number(preserved.session?.missingSince || 0) || 0
+    },
 	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], bullets: [], coinDrops: [], messages: [], minimap: null, error: '' },
 	    control: {
 	      ws: null,
@@ -354,7 +364,11 @@
         triggerNativeTick('status-watchdog', false);
       }
       const self = getSelf();
+      const currentSelfSummary = self ? summarizeSelf(self) : null;
+      const displaySelf = currentSelfSummary || this.lastSelf;
       if (self) updateKillHistory(self);
+      updateSessionStats(currentSelfSummary);
+      const session = summarizeSessionStats(displaySelf);
 	      return {
 	        version: cfg.version,
 	        sourceHash: cfg.sourceHash,
@@ -376,7 +390,8 @@
         lastAction: this.lastAction,
         lastDecision: this.lastDecision,
         lastTarget: this.lastTarget,
-        self: self ? summarizeSelf(self) : this.lastSelf,
+        self: displaySelf,
+        session,
         safety: this.lastSafety,
         attackHistory: this.attackHistory.slice(-10),
         killHistory: this.killHistory.slice(-10),
@@ -1672,6 +1687,48 @@
       coins: Number(self.coins || 0),
       life: self.life,
       mode: self.current_join_mode
+    };
+  }
+
+  function updateSessionStats(selfSummary) {
+    const t = Date.now();
+    const session = bot.session || (bot.session = {});
+    if (!selfSummary || selfSummary.life === 'Dead' || selfSummary.life === 'WaitingRevive') {
+      if (session.startedAt && !session.missingSince) session.missingSince = t;
+      return;
+    }
+    const userId = selfSummary.id ?? null;
+    const coins = Number(selfSummary.coins || 0);
+    const missingMs = session.missingSince ? t - Number(session.missingSince || 0) : 0;
+    const reset = !session.startedAt
+      || (userId !== null && session.userId !== null && String(session.userId) !== String(userId))
+      || missingMs > Math.max(1000, Number(cfg.sessionResetMissingMs || 10000));
+    if (reset) {
+      session.startedAt = t;
+      session.userId = userId;
+      session.baseCoins = Number.isFinite(coins) ? coins : 0;
+      session.coinsGained = 0;
+      session.kills = 0;
+    } else if (session.userId === null && userId !== null) {
+      session.userId = userId;
+    }
+    session.missingSince = 0;
+    if (!Number.isFinite(Number(session.baseCoins))) session.baseCoins = Number.isFinite(coins) ? coins : 0;
+    session.coinsGained = Math.max(0, Math.round((Number.isFinite(coins) ? coins : 0) - Number(session.baseCoins || 0)));
+    session.kills = bot.killHistory.filter(item => Number(item?.at || 0) >= Number(session.startedAt || 0)).length;
+  }
+
+  function summarizeSessionStats(selfSummary) {
+    const session = bot.session || {};
+    const startedAt = Number(session.startedAt || 0);
+    return {
+      startedAt,
+      uptimeMs: startedAt ? Math.max(0, Date.now() - startedAt) : 0,
+      baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
+      coins: Number(selfSummary?.coins || 0),
+      coinsGained: Math.max(0, Number(session.coinsGained || 0) || 0),
+      kills: Math.max(0, Number(session.kills || 0) || 0),
+      userId: session.userId ?? null
     };
   }
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.11
+// @version      0.4.14
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.11';
+  const BOOTSTRAP_VERSION = '0.4.14';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -301,13 +301,22 @@
 
   function formatDistance(value) {
     const n = Number(value);
-    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+    if (!Number.isFinite(n)) return '-';
+    const meters = n / 100;
+    if (Math.abs(meters) < 10) return `${Number(meters.toFixed(1))}米`;
+    return `${Math.round(meters)}米`;
   }
 
   function formatDuration(ms) {
     const n = Math.max(0, Math.round(Number(ms) || 0));
+    if (n >= 3600000) return `${Math.floor(n / 3600000)}h${String(Math.floor((n % 3600000) / 60000)).padStart(2, '0')}m`;
     if (n >= 60000) return `${Math.floor(n / 60000)}m${String(Math.floor((n % 60000) / 1000)).padStart(2, '0')}s`;
     return `${Math.ceil(n / 1000)}s`;
+  }
+
+  function formatNumber(value, fallback = '-') {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n)) : fallback;
   }
 
   function formatAge(at) {
@@ -341,6 +350,7 @@
       'combat-attack': '战斗：持续开火',
       'combat-tangent-dodge': '战斗：切线规避并开火',
       'combat-low-hp-leave': '战斗低血劣势，立即退出',
+      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
       'injury-leave': '受伤后立即退出',
       'enemy-leave-wait': '敌方行为退出后等待',
       'pursuit-leave': '被同一玩家持续追击，退出等待',
@@ -588,12 +598,11 @@
     const control = status?.control || {};
     const manifest = readCachedManifest();
     const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
-    const bHash = String(status?.sourceHash || manifest?.sha256 || state.lastManifestHash || '').slice(0, 8) || '-';
     const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
-    const remoteStatus = state.lastRemoteStatus || state.lastScriptStatus || state.lastManifestStatus || state.lastInstallStatus || 'waiting';
+    const session = status?.session || {};
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     const panelLines = [
@@ -601,18 +610,14 @@
       '<div style="font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">BOT ' + escapeHtml(actionText(decision, status)) + '</div>',
       '<button type="button" data-grasp-rat-pause="1" title="' + escapeHtml(buttonTitle) + '" style="flex:0 0 auto;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:' + (paused ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.18)') + ';color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer">' + escapeHtml(buttonText) + '</button>',
       '</div>',
-      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">A ' + escapeHtml(BOOTSTRAP_VERSION) + ' / B ' + escapeHtml(bVersion) + ' / ' + escapeHtml(bHash) + '</div>',
-      '<div>获取：' + escapeHtml(remoteStatus) + '</div>',
-      '<div>Manifest：' + escapeHtml(state.lastManifestStatus || '-') + ' / ' + escapeHtml(formatAge(state.lastManifestFetchAt)) + '</div>',
-      '<div>脚本：' + escapeHtml(state.lastScriptStatus || '-') + ' / ' + escapeHtml(formatAge(state.lastScriptFetchAt)) + '</div>',
-      '<div>注入：' + escapeHtml(state.lastInstallStatus || '-') + '</div>',
+      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">版本：' + escapeHtml(bVersion) + '</div>',
       '<div>状态：' + escapeHtml(paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + escapeHtml(state.pauseReason) : '') + '</div>'
     ];
-    if (state.lastError) panelLines.push('<div style="color:#fca5a5">错误：' + escapeHtml(state.lastError) + '</div>');
     if (status?.running) {
+      panelLines.push('<div>本次登录：' + escapeHtml(formatDuration(session.uptimeMs ?? status.uptimeMs)) + ' / 收获金币 +' + escapeHtml(formatNumber(session.coinsGained, '0')) + ' / 击杀 ' + escapeHtml(formatNumber(session.kills, '0')) + '</div>');
       panelLines.push('<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>');
       panelLines.push('<div>HP ' + escapeHtml(self?.hp ?? '-') + ' / 体力 ' + escapeHtml(self?.stamina5s ?? self?.stamina_5s_remaining_milli ?? '-') + ' / Drop ' + escapeHtml(self?.drop ?? '-') + '</div>');
-      panelLines.push('<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / WS ' + escapeHtml(wsLabel) + ' / Active ' + escapeHtml(nearestActive) + '</div>');
+      panelLines.push('<div>WS ' + escapeHtml(wsLabel) + ' / Active ' + escapeHtml(nearestActive) + '</div>');
       if (decision?.target) {
         const target = decision.target;
         panelLines.push('<div>目标：' + escapeHtml(target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(target.distance)) + ' 金币 ' + escapeHtml(target.amount ?? '-') + ' Drop ' + escapeHtml(target.drop ?? '-') + '</div>');
