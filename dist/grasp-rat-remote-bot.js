@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.21","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.22","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -898,10 +898,21 @@
   }
 
   function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {
-    const until = Date.now() + Math.max(1000, Number(ms) || cfg.postLoginGraceMs);
+    const requestedUntil = Date.now() + Math.max(1000, Number(ms) || cfg.postLoginGraceMs);
+    let existingUntil = 0;
+    let existingReason = '';
+    try {
+      existingUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+      existingReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+    } catch (_) {}
+    const reuseExisting = existingUntil > requestedUntil;
+    const until = reuseExisting ? existingUntil : requestedUntil;
+    const suppressReason = reuseExisting
+      ? String(existingReason || reason || 'login flow')
+      : String(reason || 'login flow');
     try {
       localStorage.setItem('graspRatLoginSuppressUntil', String(until));
-      localStorage.setItem('graspRatLoginSuppressReason', String(reason || 'login flow'));
+      localStorage.setItem('graspRatLoginSuppressReason', suppressReason);
     } catch (_) {}
     return until;
   }

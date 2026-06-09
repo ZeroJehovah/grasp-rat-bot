@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.14
+// @version      0.4.15
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.14';
+  const BOOTSTRAP_VERSION = '0.4.15';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -401,10 +401,39 @@
     return isGamePage() && location.pathname.startsWith('/auth/linuxdo/callback');
   }
 
+  function readLocalSuppress() {
+    try {
+      return {
+        until: Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0,
+        reason: String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '')
+      };
+    } catch (_) {
+      return { until: 0, reason: '' };
+    }
+  }
+
+  function currentSuppressEntry() {
+    const gm = {
+      until: Number(GM_getValue(LOGIN_SUPPRESS_KEY, 0)) || 0,
+      reason: String(GM_getValue(LOGIN_SUPPRESS_REASON_KEY, '') || '')
+    };
+    const memory = {
+      until: Number(state.lastLoginSuppressUntil || 0) || 0,
+      reason: String(state.lastLoginSuppressReason || '')
+    };
+    const local = readLocalSuppress();
+    return [gm, memory, local].sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || { until: 0, reason: '' };
+  }
+
   function suppressLogin(reason, ms) {
-    const until = Date.now() + Math.max(1000, Number(ms || cfg.postLoginGraceMs) || cfg.postLoginGraceMs);
+    const requestedUntil = Date.now() + Math.max(1000, Number(ms || cfg.postLoginGraceMs) || cfg.postLoginGraceMs);
+    const existing = currentSuppressEntry();
+    const reuseExisting = Number(existing.until || 0) > requestedUntil;
+    const until = reuseExisting ? Number(existing.until || 0) : requestedUntil;
+    state.lastLoginSuppressReason = reuseExisting
+      ? String(existing.reason || reason || 'login flow')
+      : String(reason || 'login flow');
     state.lastLoginSuppressUntil = until;
-    state.lastLoginSuppressReason = String(reason || 'login flow');
     GM_setValue(LOGIN_SUPPRESS_KEY, until);
     GM_setValue(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);
     try {
@@ -415,11 +444,8 @@
   }
 
   function loginSuppressRemainingMs() {
-    let localUntil = 0;
-    try {
-      localUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-    } catch (_) {}
-    const until = Math.max(Number(GM_getValue(LOGIN_SUPPRESS_KEY, 0)) || 0, Number(state.lastLoginSuppressUntil || 0), localUntil);
+    const entry = currentSuppressEntry();
+    const until = Number(entry.until || 0) || 0;
     const remaining = Math.max(0, until - Date.now());
     if (!remaining && until) {
       GM_setValue(LOGIN_SUPPRESS_KEY, 0);
@@ -432,7 +458,7 @@
       } catch (_) {}
     } else if (remaining) {
       state.lastLoginSuppressUntil = until;
-      state.lastLoginSuppressReason = String(GM_getValue(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason || '') || 'login flow');
+      state.lastLoginSuppressReason = String(entry.reason || state.lastLoginSuppressReason || 'login flow');
       try {
         localStorage.setItem(LOGIN_SUPPRESS_KEY, String(until));
         localStorage.setItem(LOGIN_SUPPRESS_REASON_KEY, state.lastLoginSuppressReason);

@@ -2439,10 +2439,21 @@ function browserBotSource(config) {
   }
 
   function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {
-    const until = Date.now() + Math.max(1000, Number(ms) || cfg.postLoginGraceMs);
+    const requestedUntil = Date.now() + Math.max(1000, Number(ms) || cfg.postLoginGraceMs);
+    let existingUntil = 0;
+    let existingReason = '';
+    try {
+      existingUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+      existingReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+    } catch (_) {}
+    const reuseExisting = existingUntil > requestedUntil;
+    const until = reuseExisting ? existingUntil : requestedUntil;
+    const suppressReason = reuseExisting
+      ? String(existingReason || reason || 'login flow')
+      : String(reason || 'login flow');
     try {
       localStorage.setItem('graspRatLoginSuppressUntil', String(until));
-      localStorage.setItem('graspRatLoginSuppressReason', String(reason || 'login flow'));
+      localStorage.setItem('graspRatLoginSuppressReason', suppressReason);
     } catch (_) {}
     return until;
   }
