@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.10","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.11","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -403,9 +403,9 @@
 		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
 		          snapshotAgeMs: this.globalState.snapshotRefreshedAt ? Date.now() - this.globalState.snapshotRefreshedAt : null,
 		          tick: this.globalState.tick,
-	          entities: this.globalState.entities.length,
-	          bullets: this.globalState.bullets.length,
-	          coinDrops: this.globalState.coinDrops.length,
+	          entities: arrayCount(this.globalState.entities),
+	          bullets: arrayCount(this.globalState.bullets),
+	          coinDrops: arrayCount(this.globalState.coinDrops),
 	          minimapPoints: this.globalState.minimap?.points?.length || 0,
 	          error: this.globalState.error
 	        },
@@ -681,52 +681,79 @@
 	    panel.innerHTML = panelLines.join('');
 	  }
 
-		  function logStatus(text, detail) {
-		    bot.lastAction = text;
-		    if (detail) bot.lastDecision = detail;
-		    if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: 'wait', reason: text, self: bot.lastSelf });
-		    if (typeof log === 'function') log('[bot] ' + text, 'info');
-		    console.log('[grasp-rat-bot]', text, detail || '');
-		    postDebugEvent('status', { text, detail }, { force: true });
-		  }
+			  function logStatus(text, detail) {
+			    bot.lastAction = text;
+			    if (detail) bot.lastDecision = detail;
+			    if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: 'wait', reason: text, self: bot.lastSelf });
+			    if (typeof log === 'function') log('[bot] ' + text, 'info');
+			    console.log('[grasp-rat-bot]', text, detail || '');
+			    postDebugEvent('status', { text, detail }, { force: true });
+			  }
+
+      function safeStringify(value) {
+        const seen = new WeakSet();
+        try {
+          const text = JSON.stringify(value, function (_key, item) {
+            if (typeof item === 'bigint') return String(item);
+            if (item && typeof item === 'object') {
+              if (seen.has(item)) return '[Circular]';
+              seen.add(item);
+            }
+            return item;
+          });
+          return String(text || '');
+        } catch (err) {
+          try {
+            return JSON.stringify({ error: err?.message || String(err) });
+          } catch (_) {
+            return '{"error":"stringify failed"}';
+          }
+        }
+      }
+
+      function arrayCount(value) {
+        return Array.isArray(value) ? value.length : 0;
+      }
 
 		  function postDebugEvent(type, detail = {}, options = {}) {
-		    if (!cfg.debug || !cfg.debugEndpoint) return;
-		    const t = Date.now();
-		    if (!options.force && t - Number(bot.lastDebugAt || 0) < cfg.debugEveryMs) return;
-		    bot.lastDebugAt = t;
-		    let status = null;
 		    try {
-		      status = bot.status ? bot.status() : null;
-		    } catch (err) {
-		      status = { error: err?.message || String(err) };
-		    }
-		    const payload = {
-		      at: new Date(t).toISOString(),
-		      type,
-		      version: cfg.version,
-		      sourceHash: cfg.sourceHash,
-		      sourceUrl: cfg.sourceUrl,
-		      injectedBy: cfg.injectedBy,
-		      url: location.href,
-		      title: document.title,
-		      detail,
-		      status
-		    };
-		    try {
-		      if (typeof window.__graspRatBotDebugPost === 'function') {
-		        window.__graspRatBotDebugPost(payload);
-		        return;
+		      if (!cfg.debug || !cfg.debugEndpoint) return;
+		      const t = Date.now();
+		      if (!options.force && t - Number(bot.lastDebugAt || 0) < cfg.debugEveryMs) return;
+		      bot.lastDebugAt = t;
+		      let status = null;
+		      try {
+		        status = bot.status ? bot.status() : null;
+		      } catch (err) {
+		        status = { error: err?.message || String(err) };
 		      }
-		    } catch (_) {}
-		    try {
-		      fetch(cfg.debugEndpoint, {
-		        method: 'POST',
-		        mode: 'no-cors',
-		        keepalive: true,
-		        headers: { 'Content-Type': 'text/plain' },
-		        body: JSON.stringify(payload)
-		      }).catch(() => {});
+		      const payload = {
+		        at: new Date(t).toISOString(),
+		        type,
+		        version: cfg.version,
+		        sourceHash: cfg.sourceHash,
+		        sourceUrl: cfg.sourceUrl,
+		        injectedBy: cfg.injectedBy,
+		        url: location.href,
+		        title: document.title,
+		        detail,
+		        status
+		      };
+		      try {
+		        if (typeof window.__graspRatBotDebugPost === 'function') {
+		          window.__graspRatBotDebugPost(payload);
+		          return;
+		        }
+		      } catch (_) {}
+		      try {
+		        fetch(cfg.debugEndpoint, {
+		          method: 'POST',
+		          mode: 'no-cors',
+		          keepalive: true,
+		          headers: { 'Content-Type': 'text/plain' },
+		          body: safeStringify(payload)
+		        }).catch(() => {});
+		      } catch (_) {}
 		    } catch (_) {}
 		  }
 
@@ -737,8 +764,11 @@
           message: err?.message || String(err),
           stack: String(err?.stack || '')
         };
-        bot.errors.push(entry);
-        if (bot.errors.length > 20) bot.errors.shift();
+        try {
+          if (!Array.isArray(bot.errors)) bot.errors = [];
+          bot.errors.push(entry);
+          if (bot.errors.length > 20) bot.errors.splice(0, bot.errors.length - 20);
+        } catch (_) {}
         try {
           console.error('[grasp-rat-bot:unhandled-tick]', err);
         } catch (_) {}
@@ -756,7 +786,22 @@
           });
       }
 
-		  function requestReload(reason) {
+      function runCallbackSafely(label, fn) {
+        return function (...args) {
+          try {
+            const result = fn.apply(this, args);
+            if (result && typeof result.then === 'function') {
+              result.catch(err => recordUnhandledTickError(label, err));
+            }
+            return result;
+          } catch (err) {
+            recordUnhandledTickError(label, err);
+            return undefined;
+          }
+        };
+      }
+
+			  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
 	    bot.reloadRequestedAt = Date.now();
@@ -1292,23 +1337,23 @@
 	    if (bot.nativeMessageWs === native.ws && bot.nativeMessageHandler) return true;
 	    detachNativeMessagePump();
 	    bot.nativeMessageWs = native.ws;
-	    bot.nativeMessageHandler = () => {
+	    bot.nativeMessageHandler = runCallbackSafely('native-ws-message', () => {
 	      triggerNativeTick('native-ws', true);
-	    };
-	    bot.nativeOpenHandler = () => {
+	    });
+	    bot.nativeOpenHandler = runCallbackSafely('native-ws-open', () => {
 	      bot.control.lastOpenAt = Date.now();
 	      bot.control.lastError = '';
 	      triggerNativeTick('native-ws-open', false);
-	    };
-	    bot.nativeCloseHandler = () => {
+	    });
+	    bot.nativeCloseHandler = runCallbackSafely('native-ws-close', () => {
 	      bot.control.wsOpen = false;
 	      bot.control.nativeWsOpen = false;
 	      bot.control.wsReadyState = native.ws.readyState;
 	      bot.control.nativeWsReadyState = native.ws.readyState;
-	    };
-	    bot.nativeErrorHandler = () => {
+	    });
+	    bot.nativeErrorHandler = runCallbackSafely('native-ws-error', () => {
 	      bot.control.lastError = 'native websocket error';
-	    };
+	    });
 	    try {
 	      native.ws.addEventListener('message', bot.nativeMessageHandler);
 	      native.ws.addEventListener('open', bot.nativeOpenHandler);
@@ -1811,9 +1856,13 @@
 	      && (action?.kind === 'coin' || action?.kind === 'seek-coin');
 	    if (canPulse) {
 	      bot.velocityStopTimer = setTimeout(() => {
-	        if (bot.velocityPulseToken !== token) return;
-	        bot.velocityStopTimer = 0;
-	        stopMotionSafely('precision-pulse');
+	        try {
+	          if (bot.velocityPulseToken !== token) return;
+	          bot.velocityStopTimer = 0;
+	          stopMotionSafely('precision-pulse');
+	        } catch (err) {
+	          recordUnhandledTickError('precision-pulse', err);
+	        }
 	      }, clamp(Math.round(pulseMs), 20, 110));
 	    }
 	    return sent;
@@ -3150,15 +3199,15 @@
     const y = Number(target?.y);
     const hasPoint = Number.isFinite(x) && Number.isFinite(y);
     if (!id && !hasPoint) return 0;
-    const before = bot.globalState.coinDrops.length;
-    bot.globalState.coinDrops = (bot.globalState.coinDrops || []).filter(raw => {
+	    const before = arrayCount(bot.globalState.coinDrops);
+	    bot.globalState.coinDrops = (Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : []).filter(raw => {
       const coin = normalizeCoinDrop(raw, 'snapshot');
       if (!coin) return false;
       if (id && String(coin.drop_id) === id) return false;
       if (hasPoint && dist({ x, y }, coin) <= Number(cfg.coinCollectedPruneRadius || 0)) return false;
       return true;
     });
-    return before - bot.globalState.coinDrops.length;
+	    return before - arrayCount(bot.globalState.coinDrops);
   }
 
   function markCoinCollected(self, currentSummary, previousCoins) {
@@ -3424,7 +3473,7 @@
       dx: 0,
       dy: 0,
       snapshot: {
-        coinDrops: bot.globalState.coinDrops.length,
+	        coinDrops: arrayCount(bot.globalState.coinDrops),
         ageMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
         error: bot.globalState.error || ''
       }
@@ -3497,7 +3546,7 @@
 	          reason: login?.attempted ? 'auto-login' : (login?.needed ? (login?.error ? 'login-control-missing' : 'login-cooldown') : (self ? 'not-alive' : 'no-self')),
 	          currentUserId: getCurrentUserId(),
 	          control: summarizeControl(),
-	          visibleEntities: bot.globalState.entities.length,
+		          visibleEntities: arrayCount(bot.globalState.entities),
 	          self,
           login
 	        };
@@ -3683,32 +3732,50 @@
       };
       updateBotPanel(bot.lastDecision);
 
-      if (Date.now() - bot.lastStatusAt >= cfg.statusEvery) {
-        bot.lastStatusAt = Date.now();
-        console.log('[grasp-rat-bot:status]', JSON.stringify(bot.lastDecision));
-      }
+	      if (Date.now() - bot.lastStatusAt >= cfg.statusEvery) {
+	        bot.lastStatusAt = Date.now();
+	        console.log('[grasp-rat-bot:status]', safeStringify(bot.lastDecision));
+	      }
 
-      if (cfg.once) bot.stop('once');
-	    } catch (err) {
-	      bot.errors.push({ at: Date.now(), message: err.message, stack: String(err.stack || '') });
-      if (bot.errors.length > 20) bot.errors.shift();
-      stopMotionSafely('bot-error');
-      bot.lastDecision = {
-        kind: 'wait',
-        reason: 'bot-error',
-        dx: 0,
-        dy: 0,
-        self: bot.lastSelf,
-        error: err.message || String(err)
-      };
-	      updateBotPanel(bot.lastDecision);
-	      console.error('[grasp-rat-bot:error]', err);
-	      postDebugEvent('error', { source, message: err.message || String(err), stack: String(err.stack || '') }, { force: true });
-	    } finally {
-	      if (bot.lastDecision) postDebugEvent('tick', { source, decision: bot.lastDecision });
-	      bot.ticking = false;
-	    }
-	  }
+	      if (cfg.once) bot.stop('once');
+		    } catch (err) {
+		      recordUnhandledTickError(source, err);
+		      try {
+		        stopMotionSafely('bot-error');
+		      } catch (stopErr) {
+		        recordUnhandledTickError(source + ':stop-motion', stopErr);
+		      }
+		      bot.lastDecision = {
+		        kind: 'wait',
+		        reason: 'bot-error',
+		        dx: 0,
+		        dy: 0,
+		        self: bot.lastSelf,
+		        error: err?.message || String(err)
+		      };
+		      try {
+		        updateBotPanel(bot.lastDecision);
+		      } catch (panelErr) {
+		        recordUnhandledTickError(source + ':error-panel', panelErr);
+		      }
+		      try {
+		        console.error('[grasp-rat-bot:error]', err);
+		      } catch (_) {}
+		      try {
+		        postDebugEvent('error', { source, message: err?.message || String(err), stack: String(err?.stack || '') }, { force: true });
+		      } catch (debugErr) {
+		        recordUnhandledTickError(source + ':error-debug', debugErr);
+		      }
+		    } finally {
+		      bot.ticking = false;
+		      const decision = bot.lastDecision;
+		      try {
+		        if (decision) postDebugEvent('tick', { source, decision });
+		      } catch (err) {
+		        recordUnhandledTickError(source + ':finalize', err);
+		      }
+		    }
+		  }
 
 	  window[BOT_KEY] = bot;
 	  if (previousBot && previousBot !== bot && previousBot.stop) {
@@ -3719,19 +3786,60 @@
 	    }
 	  }
 
-	  return refreshGlobalState(true)
-	    .catch(err => {
-	      bot.globalState.error = err.message || String(err);
-	    })
-	    .then(() => tick('startup'))
-	    .then(() => {
-	      bot.starting = false;
-	      if (!cfg.once && bot.running) {
-	        bot.timer = setInterval(() => {
-	          runTickSafely('timer');
-        }, cfg.tickMs);
-      }
-      logStatus(cfg.dryRun ? 'started dry-run' : 'started live control');
-      return bot.status();
-    });
-})()
+		  return refreshGlobalState(true)
+		    .catch(err => {
+		      bot.globalState.error = err?.message || String(err);
+		      recordUnhandledTickError('startup-refresh', err);
+		    })
+		    .then(() => tick('startup'))
+		    .then(() => {
+		      bot.starting = false;
+		      if (!cfg.once && bot.running) {
+		        bot.timer = setInterval(() => {
+		          runTickSafely('timer');
+		        }, cfg.tickMs);
+		      }
+		      logStatus(cfg.dryRun ? 'started dry-run' : 'started live control');
+		      return bot.status();
+		    })
+		    .catch(err => {
+		      recordUnhandledTickError('startup-finalize', err);
+		      bot.starting = false;
+		      bot.ticking = false;
+		      try {
+		        stopMotionSafely('startup-error');
+		      } catch (stopErr) {
+		        recordUnhandledTickError('startup-finalize:stop-motion', stopErr);
+		      }
+		      if (!bot.lastDecision) {
+		        bot.lastDecision = {
+		          kind: 'wait',
+		          reason: 'startup-error',
+		          dx: 0,
+		          dy: 0,
+		          self: bot.lastSelf,
+		          error: err?.message || String(err)
+		        };
+		      }
+		      try {
+		        updateBotPanel(bot.lastDecision);
+		      } catch (panelErr) {
+		        recordUnhandledTickError('startup-finalize:panel', panelErr);
+		      }
+		      try {
+		        if (!cfg.once && bot.running && !bot.timer) {
+		          bot.timer = setInterval(() => {
+		            runTickSafely('timer');
+		          }, cfg.tickMs);
+		        }
+		      } catch (timerErr) {
+		        recordUnhandledTickError('startup-finalize:timer', timerErr);
+		      }
+		      try {
+		        return bot.status();
+		      } catch (statusErr) {
+		        recordUnhandledTickError('startup-finalize:status', statusErr);
+		        return { running: Boolean(bot.running), starting: Boolean(bot.starting), error: err?.message || String(err) };
+		      }
+		    });
+	})()

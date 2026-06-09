@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.10
+// @version      0.4.11
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.10';
+  const BOOTSTRAP_VERSION = '0.4.11';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -52,7 +52,7 @@
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
     debug: true,
     debugEndpoint: 'http://127.0.0.1:18777/events',
-    pollMs: 1000,
+    pollMs: 5000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
     requestTimeoutMs: 7000,
@@ -77,7 +77,7 @@
     manifestUrl: String(GM_getValue('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
     debug: Boolean(GM_getValue('debug', DEFAULTS.debug)),
     debugEndpoint: String(GM_getValue('debugEndpoint', DEFAULTS.debugEndpoint) || DEFAULTS.debugEndpoint),
-    pollMs: Math.max(250, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
+    pollMs: Math.max(5000, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
     watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
     busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
     requestTimeoutMs: Math.max(3000, Number(GM_getValue('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
@@ -150,6 +150,26 @@
     ]).finally(() => clearTimeout(timer));
   }
 
+  function safeStringify(value, maxLength = 0) {
+    const seen = new WeakSet();
+    let text = '';
+    try {
+      text = JSON.stringify(value, (key, item) => {
+        if (typeof item === 'bigint') return String(item);
+        if (item && typeof item === 'object') {
+          if (seen.has(item)) return '[Circular]';
+          seen.add(item);
+        }
+        return item;
+      });
+    } catch (err) {
+      text = JSON.stringify({ error: err?.message || String(err) });
+    }
+    text = String(text ?? '');
+    if (maxLength > 0 && text.length > maxLength) return text.slice(0, maxLength);
+    return text;
+  }
+
   function logBootstrap(message, detail) {
     try {
       console.log('[grasp-rat-bootstrap]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
@@ -182,7 +202,13 @@
 
   function runSafely(label, fn) {
     try {
-      return fn();
+      const result = fn();
+      if (result && typeof result.then === 'function') {
+        result.catch(err => {
+          recordBootstrapException(label, err);
+        });
+      }
+      return result;
     } catch (err) {
       recordBootstrapException(label, err);
       return null;
@@ -245,18 +271,22 @@
   }
 
   function shortStatus(status = getBotStatus()) {
-    return status ? {
-      running: Boolean(status.running),
-      starting: Boolean(status.starting),
-      ticking: Boolean(status.ticking),
-      timerActive: Boolean(status.timerActive),
-      version: status.version || '',
-      sourceHash: status.sourceHash || '',
-      paused: Boolean(status.paused),
-      lastTickAgeMs: status.lastTickAgeMs ?? null,
-      reason: status.lastDecision?.reason || '',
-      message: status.message || ''
-    } : null;
+    try {
+      return status ? {
+        running: Boolean(status.running),
+        starting: Boolean(status.starting),
+        ticking: Boolean(status.ticking),
+        timerActive: Boolean(status.timerActive),
+        version: status.version || '',
+        sourceHash: status.sourceHash || '',
+        paused: Boolean(status.paused),
+        lastTickAgeMs: status.lastTickAgeMs ?? null,
+        reason: status.lastDecision?.reason || '',
+        message: status.message || ''
+      } : null;
+    } catch (err) {
+      return { running: false, message: 'status summary failed: ' + (err?.message || String(err)) };
+    }
   }
 
   function escapeHtml(value) {
@@ -413,27 +443,39 @@
     return value === true || value === 'true' || value === 1 || value === '1';
   }
 
-  function isPaused() {
+  function isPaused(options = {}) {
     let localPaused = false;
     try {
       localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
     } catch (_) {}
-    const paused = Boolean(storedBoolean(GM_getValue(PAUSED_KEY, false)) || localPaused || unsafeWindow.__graspRatBotPaused === true);
+    const includePageFlag = options.includePageFlag !== false;
+    const paused = Boolean(storedBoolean(GM_getValue(PAUSED_KEY, false)) || localPaused || (includePageFlag && unsafeWindow.__graspRatBotPaused === true));
     state.paused = paused;
     state.pauseReason = paused ? (readPauseReason() || state.pauseReason || 'manual') : '';
     return paused;
   }
 
-  function syncPauseToPage() {
+  function writePauseState(paused, reason = '') {
+    const next = Boolean(paused);
+    const text = next ? String(reason || state.pauseReason || 'manual') : '';
+    state.paused = next;
+    state.pauseReason = text;
+    GM_setValue(PAUSED_KEY, next);
+    GM_setValue(PAUSE_REASON_KEY, text);
+    unsafeWindow.__graspRatBotPaused = next;
+    unsafeWindow.__graspRatBotPauseReason = text;
     try {
-      const paused = isPaused();
-      unsafeWindow.__graspRatBotPaused = paused;
-      unsafeWindow.__graspRatBotPauseReason = paused ? (state.pauseReason || 'manual') : '';
-      try {
-        localStorage.setItem(PAUSED_KEY, paused ? 'true' : 'false');
-        if (paused) localStorage.setItem(PAUSE_REASON_KEY, state.pauseReason || 'manual');
-        else localStorage.removeItem(PAUSE_REASON_KEY);
-      } catch (_) {}
+      localStorage.setItem(PAUSED_KEY, next ? 'true' : 'false');
+      if (next) localStorage.setItem(PAUSE_REASON_KEY, text || 'manual');
+      else localStorage.removeItem(PAUSE_REASON_KEY);
+    } catch (_) {}
+    return next;
+  }
+
+  function syncPauseToPage(forcedPaused = null) {
+    try {
+      const paused = forcedPaused === null ? isPaused() : Boolean(forcedPaused);
+      writePauseState(paused, paused ? (state.pauseReason || readPauseReason() || 'manual') : '');
       const bot = unsafeWindow.__graspRatBot || null;
       try {
         if (bot?.setPaused) {
@@ -460,9 +502,8 @@
     state.paused = Boolean(paused);
     state.pauseReason = state.paused ? String(reason || 'manual') : '';
     state.pauseChangedAt = Date.now();
-    GM_setValue(PAUSED_KEY, state.paused);
-    GM_setValue(PAUSE_REASON_KEY, state.pauseReason);
-    syncPauseToPage();
+    writePauseState(state.paused, state.pauseReason);
+    syncPauseToPage(state.paused);
     state.lastInstallStatus = state.paused ? 'paused by user' : 'resumed by user';
     logBootstrap(state.paused ? 'paused' : 'resumed', { reason: state.pauseReason || reason });
     postDebug(state.paused ? 'paused' : 'resumed', { reason: state.pauseReason || reason }, { force: true });
@@ -872,6 +913,54 @@
     }
   }
 
+  function knownRemoteManifests() {
+    const known = [];
+    const cached = readCachedManifest();
+    if (cached?.version) {
+      known.push({ source: 'cache', version: String(cached.version || ''), sha256: String(cached.sha256 || '') });
+    }
+    const status = getBotStatus();
+    if (status?.running && status.version) {
+      known.push({ source: 'running', version: String(status.version || ''), sha256: String(status.sourceHash || '') });
+    }
+    return known;
+  }
+
+  function assertManifestNotOlderThanKnown(manifest, url = '') {
+    const version = String(manifest?.version || '');
+    const sha256 = String(manifest?.sha256 || '');
+    for (const known of knownRemoteManifests()) {
+      const cmp = compareRemoteBotVersion(version, known.version);
+      if (cmp !== null && cmp < 0) {
+        throw new Error(`stale manifest from ${url || 'remote'}: ${version || '(unknown version)'} is older than ${known.source} ${known.version}`);
+      }
+      if (cmp === 0 && sha256 && known.sha256 && sha256 !== known.sha256) {
+        throw new Error(`conflicting manifest from ${url || 'remote'}: ${version} hash ${sha256.slice(0, 8)} differs from ${known.source} ${known.sha256.slice(0, 8)}`);
+      }
+    }
+  }
+
+  function keepRunningAfterRemoteFailure(error, reason, status = getBotStatus()) {
+    if (!status?.running || tickIsStale(status) || runningBotUsesBlockedStrategy(status) || isPaused()) return false;
+    const text = String(error || 'remote unavailable');
+    state.lastError = '';
+    state.lastManifestStatus = `remote unavailable; using running ${status.version || 'bot'}`;
+    state.lastRemoteStatus = state.lastManifestStatus;
+    state.lastInstallStatus = `kept running after ${reason || 'poll'} remote failure`;
+    logBootstrap('remote failure ignored while bot healthy', {
+      reason,
+      error: text,
+      status: shortStatus(status)
+    });
+    postDebug('remote-degraded', {
+      reason,
+      error: text,
+      status: shortStatus(status)
+    });
+    updateBootstrapPanel(true);
+    return true;
+  }
+
   function clearCachedBot(reason) {
     GM_setValue('cachedManifest', '');
     GM_setValue('cachedSource', '');
@@ -1028,24 +1117,28 @@
   }
 
   function postDebug(type, detail = {}, options = {}) {
-    if (!cfg.debug || !cfg.debugEndpoint) return;
-    const t = Date.now();
-    if (!options.force && t - state.lastDebugAt < cfg.debugEveryMs) return;
-    state.lastDebugAt = t;
-    const payload = {
-      at: new Date(t).toISOString(),
-      type: `bootstrap:${type}`,
-      url: location.href,
-      title: document.title,
-      detail,
-      status: getBotStatus()
-    };
-    gmRequest('POST', cfg.debugEndpoint, JSON.stringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
+    try {
+      if (!cfg.debug || !cfg.debugEndpoint) return;
+      const t = Date.now();
+      if (!options.force && t - state.lastDebugAt < cfg.debugEveryMs) return;
+      state.lastDebugAt = t;
+      const payload = {
+        at: new Date(t).toISOString(),
+        type: `bootstrap:${type}`,
+        url: location.href,
+        title: document.title,
+        detail,
+        status: getBotStatus()
+      };
+      gmRequest('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
+    } catch (_) {}
   }
 
   unsafeWindow.__graspRatBotDebugPost = function (payload) {
-    if (!cfg.debug || !cfg.debugEndpoint) return;
-    gmRequest('POST', cfg.debugEndpoint, JSON.stringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
+    try {
+      if (!cfg.debug || !cfg.debugEndpoint) return;
+      gmRequest('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
+    } catch (_) {}
   };
 
   async function runInPage(source, sourceUrl) {
@@ -1136,7 +1229,7 @@
     state.lastRemoteStatus = state.lastScriptStatus;
     updateBootstrapPanel(true);
     logBootstrap('script verified', { version: manifest.version, sha256: hash });
-    GM_setValue('cachedManifest', JSON.stringify(manifest));
+    GM_setValue('cachedManifest', safeStringify(manifest));
     GM_setValue('cachedSource', source);
     return { source, hash };
   }
@@ -1160,7 +1253,7 @@
         });
         return status;
       }
-      state.lastInstallStatus = `confirming ${reason || 'install'}: ${JSON.stringify(status || null).slice(0, 160)}`;
+      state.lastInstallStatus = `confirming ${reason || 'install'}: ${safeStringify(status || null, 160)}`;
       await sleep(100);
     }
     logBootstrap('install confirm failed', {
@@ -1170,10 +1263,10 @@
       status: shortStatus(status),
       injectResult
     });
-    throw new Error(`bot install did not confirm after ${cfg.installConfirmMs}ms: ${JSON.stringify({
+    throw new Error(`bot install did not confirm after ${cfg.installConfirmMs}ms: ${safeStringify({
       status,
       injectResult
-    }).slice(0, 500)}`);
+    }, 500)}`);
   }
 
   async function installSource(manifest, source, reason) {
@@ -1385,7 +1478,12 @@
       const { accepted, url: manifestUrl } = await requestAcceptedTextWithFallback(
         'manifest',
         urls,
-        manifestText => ({ manifest: parseManifest(manifestText) })
+        (manifestText, url) => {
+          const manifest = parseManifest(manifestText);
+          assertRemoteBotVersionAllowed(manifest);
+          assertManifestNotOlderThanKnown(manifest, url);
+          return { manifest };
+        }
       );
       const manifest = accepted.manifest;
       state.lastManifestHash = String(manifest.sha256 || '');
@@ -1423,10 +1521,12 @@
       state.busyStartedAt = Date.now();
       await installManifest(manifest, reason);
     } catch (err) {
-      state.lastError = err?.message || String(err);
-      logBootstrap('poll error', { reason, error: state.lastError, status: shortStatus() });
-      postDebug('error', { reason, error: state.lastError }, { force: true });
+      const error = err?.message || String(err);
       const status = getBotStatus();
+      if (keepRunningAfterRemoteFailure(error, reason, status)) return;
+      state.lastError = error;
+      logBootstrap('poll error', { reason, error: state.lastError, status: shortStatus(status) });
+      postDebug('error', { reason, error: state.lastError }, { force: true });
       if ((!status || !status.running) && !isPaused()) {
         try {
           logBootstrap('poll falling back to cache', { reason, error: state.lastError });
