@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.16
+// @version      0.4.17
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.16';
+  const BOOTSTRAP_VERSION = '0.4.17';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -1470,7 +1470,7 @@
     }
     const status = getBotStatus();
     if (status?.running && !botMatchesManifest(status, manifest)) {
-      logBootstrap('remote update cached; restarting instead of hot executing', {
+      logBootstrap('remote update cached; hot swapping running bot', {
         reason,
         version: manifest.version,
         sha256: manifest.sha256,
@@ -1478,7 +1478,7 @@
         blockedCurrentStrategy: runningBotUsesBlockedStrategy(status),
         status: shortStatus(status)
       });
-      await restartForCachedUpdate(manifest, reason, status);
+      await installCached(reason, { force: true });
       state.lastError = '';
       return true;
     }
