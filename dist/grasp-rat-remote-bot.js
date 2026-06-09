@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.16","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.17","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2751,19 +2751,64 @@
     return candidates[0];
   }
 
-  function pickCombatTarget(self, combatTargets, bullets) {
+  function recentCombatInjuryActive() {
+    const injury = bot.pendingInjuryLeave;
+    return injury && Date.now() - Number(injury.at || 0) <= Math.max(1000, cfg.combatStrafeLockMs * 3);
+  }
+
+  function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
+    const incomingMatch = incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId);
+    return (incomingMatch ? 1000000000 : 0)
+      + (isFiringEntity(target) ? 500000000 : 0)
+      + (unknownIncoming && isCurrentlyActive(target) ? 200000000 : 0)
+      + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 100000000 : 0)
+      + Number(target.drop || 0) * 1000000
+      - Number(target.distance || 0);
+  }
+
+  function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!target || isAfkTarget(target) || isInvulnerable(target)) return false;
+    if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
+    if (isFiringEntity(target)) return true;
+    if (unknownIncoming && isCurrentlyActive(target)) return true;
+    return Boolean(recentCombatInjuryActive() && isCurrentlyActive(target));
+  }
+
+  function isProfitableCombatTarget(target) {
+    return Boolean(target && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
+  }
+
+  function pickCombatTarget(self, combatTargets, bullets, options = {}) {
     if (!combatTargets.length) return null;
     const incoming = incomingBulletThreat(self, null, bullets);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
     if (incoming?.ownerId !== null && incoming?.ownerId !== undefined) {
       const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isInvulnerable(target));
-      if (shooter) return { ...shooter, incomingBullet: incoming };
+      if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
     }
     const eligibleTargets = combatTargets.filter(target => !isAfkTarget(target) && !isInvulnerable(target));
     if (!eligibleTargets.length) return null;
+    const defensiveTargets = eligibleTargets
+      .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
+      .sort((a, b) => combatTargetPriority(b, incomingOwnerId, unknownIncoming) - combatTargetPriority(a, incomingOwnerId, unknownIncoming));
+    if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
+    const profitableTargets = eligibleTargets
+      .filter(isProfitableCombatTarget)
+      .sort((a, b) => {
+        const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
+        const scoreB = scoreEnemyOpportunity(b) ?? -Infinity;
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return a.distance - b.distance;
+      });
+    if (options.mode === 'profit') return profitableTargets[0] ? { ...profitableTargets[0], combatIntent: 'profit' } : null;
     const sticky = bot.lastTarget?.kind === 'enemy' && now() - bot.lastTargetAt < cfg.targetStickMs
-      ? eligibleTargets.find(target => String(target.user_id) === String(bot.lastTarget.id))
+      ? [...defensiveTargets, ...profitableTargets].find(target => String(target.user_id) === String(bot.lastTarget.id))
       : null;
-    return sticky || eligibleTargets[0] || null;
+    if (sticky) return sticky;
+    if (defensiveTargets[0]) return { ...defensiveTargets[0], combatIntent: 'defensive' };
+    if (isFullHp(self) && profitableTargets[0]) return { ...profitableTargets[0], combatIntent: 'profit' };
+    return null;
   }
 
   function pickOpportunisticShotTarget(self, entities) {
@@ -2960,7 +3005,10 @@
       hp: targetHp,
       drop: target.drop,
       distance: Math.round(Number(target.distance || dist(self, target))),
-      moving: speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved)
+      moving: speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved),
+      combatIntent: target.combatIntent || '',
+      score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
+      competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
     };
     if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
       return {
@@ -3096,6 +3144,33 @@
       + (afk ? closeBonus : (inRange ? cfg.opportunityInRangeBonus : 0))
       + nearBonus
       + (sticky ? cfg.opportunityStickBonus : 0);
+  }
+
+  function bestCoinOpportunityScore(coinGroups, activeThreats) {
+    let best = -Infinity;
+    for (const { coins: groupCoins, maxDistance } of coinGroups) {
+      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance)) {
+        const score = scoreCoinOpportunity(coin);
+        if (score > best) best = score;
+      }
+    }
+    return best;
+  }
+
+  function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
+    if (!isFullHp(self)) return null;
+    const target = pickCombatTarget(self, combatTargets, bullets, { mode: 'profit' });
+    if (!target) return null;
+    const targetScore = scoreEnemyOpportunity(target);
+    if (targetScore === null) return null;
+    const coinScore = bestCoinOpportunityScore(coinGroups, activeThreats);
+    if (targetScore < coinScore) return null;
+    return {
+      ...target,
+      combatIntent: 'profit',
+      combatOpportunityScore: Math.round(targetScore),
+      competingCoinScore: Number.isFinite(coinScore) ? Math.round(coinScore) : null
+    };
   }
 
   function recentAttackTargetStillAttackable(attack, entities) {
@@ -3614,11 +3689,11 @@
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
       };
     }
-    const combatTarget = pickCombatTarget(self, combatTargets, bullets);
-    if (combatTarget) {
+    const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
+    if (defensiveCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
-      return buildCombatAction(self, combatTarget, bullets);
+      return buildCombatAction(self, defensiveCombatTarget, bullets);
     }
     if (!fullHp && closeThreats.length) {
       const flee = lockedFleeDirection(self, closeThreats, 'active-threat-before-bullet-range');
@@ -3730,6 +3805,18 @@
       }, self, entities, { recovery });
     }
 
+    const opportunityCoinGroups = [
+      { coins, maxDistance: cfg.coinMaxDistance },
+      { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
+      { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance }
+    ];
+    const profitableCombatTarget = pickProfitableCombatTarget(self, combatTargets, bullets, opportunityCoinGroups, coinThreats);
+    if (profitableCombatTarget) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      return buildCombatAction(self, profitableCombatTarget, bullets);
+    }
+
     const opportunityEnemyGroups = fullHp
       ? [
         inactiveTargets.filter(isAfkTarget),
@@ -3739,11 +3826,7 @@
     const opportunity = pickBestOpportunity(
       self,
       coinThreats,
-      [
-        { coins, maxDistance: cfg.coinMaxDistance },
-        { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
-        { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance }
-      ],
+      opportunityCoinGroups,
       opportunityEnemyGroups
     );
     if (opportunity) {
