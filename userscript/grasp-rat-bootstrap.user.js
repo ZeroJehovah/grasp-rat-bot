@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.18
+// @version      0.4.20
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.18';
+  const BOOTSTRAP_VERSION = '0.4.20';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -325,6 +325,23 @@
     return Number.isFinite(n) ? String(Math.round(n)) : fallback;
   }
 
+  function formatStamina(self) {
+    if (!self) return '-';
+    const stamina = self.stamina || {};
+    const valueText = (remaining, limit) => {
+      const r = Number(remaining);
+      if (!Number.isFinite(r)) return '-';
+      const l = Number(limit);
+      return Math.floor(r / 1000) + '/' + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1000) : '-');
+    };
+    const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
+    const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
+    return '5s ' + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
+      + ' 1h ' + valueText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
+      + ' 1d ' + valueText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
+      + suffix;
+  }
+
   function formatAge(at) {
     const t = Number(at || 0);
     return t ? formatDuration(Date.now() - t) : '-';
@@ -365,6 +382,8 @@
       'auto-login': '自动触发登录/加入',
       'login-cooldown': '登录已触发，等待页面跳转',
       'control-ws-offline': 'WebSocket 离线',
+      'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
+      'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
       'offline-leave': 'WebSocket 离线，正在退出',
       'no-self': '未读到自身实体',
       'not-alive': '不在存活状态',
@@ -648,7 +667,7 @@
     if (status?.running) {
       panelLines.push('<div>本次登录：' + escapeHtml(formatDuration(session.uptimeMs ?? status.uptimeMs)) + ' / 收获金币 +' + escapeHtml(formatNumber(session.coinsGained, '0')) + ' / 击杀 ' + escapeHtml(formatNumber(session.kills, '0')) + '</div>');
       panelLines.push('<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>');
-      panelLines.push('<div>HP ' + escapeHtml(self?.hp ?? '-') + ' / 体力 ' + escapeHtml(self?.stamina5s ?? self?.stamina_5s_remaining_milli ?? '-') + ' / Drop ' + escapeHtml(self?.drop ?? '-') + '</div>');
+      panelLines.push('<div>HP ' + escapeHtml(self?.hp ?? '-') + ' / 体力 ' + escapeHtml(formatStamina(self)) + ' / Drop ' + escapeHtml(self?.drop ?? '-') + '</div>');
       panelLines.push('<div>WS ' + escapeHtml(wsLabel) + ' / Active ' + escapeHtml(nearestActive) + '</div>');
       if (decision?.target) {
         const target = decision.target;
@@ -665,7 +684,7 @@
       if (pursuit) {
         panelLines.push('<div>追击：' + escapeHtml(pursuit.name || ('#' + pursuit.id)) + ' ' + escapeHtml(formatDistance(pursuit.distance)) + ' / ' + escapeHtml(Math.round((pursuit.durationMs || 0) / 1000)) + 's</div>');
       }
-      const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || 0;
+      const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || 0;
       if (hold > 0) panelLines.push('<div>等待重连：' + escapeHtml(formatDuration(hold)) + '</div>');
       if (Array.isArray(status.errors) && status.errors.length) {
         panelLines.push('<div style="color:#fca5a5">BOT错误：' + escapeHtml(status.errors[status.errors.length - 1]?.message || '') + '</div>');

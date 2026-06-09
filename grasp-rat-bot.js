@@ -1848,6 +1848,8 @@ function browserBotSource(config) {
     lowHpThreshold: 60,
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
+    staminaExhaustedThresholdMs: 1000,
+    staminaResetGraceMs: 10000,
     autoLogin: true,
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
@@ -2202,8 +2204,22 @@ function browserBotSource(config) {
     || truthyFlag(e?.immune)
     || truthyFlag(e?.is_immune);
   const isInvulnerableActive = e => e?.current_join_mode === 'Active' && isInvulnerable(e);
-  const hasMoveStamina = e => Number(e?.stamina_5s_remaining_milli || 0) > 250;
-  const hasAttackStamina = e => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina;
+  const staminaRemaining = (e, windowName) => {
+    const value = Number(e?.['stamina_' + windowName + '_remaining_milli'] ?? NaN);
+    return Number.isFinite(value) ? value : null;
+  };
+  const staminaLimitValue = (e, windowName, fallback) => {
+    const value = Number(e?.['stamina_' + windowName + '_limit_milli'] ?? fallback);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  const staminaExhaustedThreshold = () => Math.max(0, Number(cfg.staminaExhaustedThresholdMs ?? 1000));
+  const isStaminaWindowExhausted = (e, windowName) => {
+    const value = staminaRemaining(e, windowName);
+    return value !== null && value < staminaExhaustedThreshold();
+  };
+  const hasLongWindowStamina = e => !isStaminaWindowExhausted(e, '1h') && !isStaminaWindowExhausted(e, '1d');
+  const hasMoveStamina = e => Number(e?.stamina_5s_remaining_milli || 0) > 250 && hasLongWindowStamina(e);
+  const hasAttackStamina = e => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina && hasLongWindowStamina(e);
   const staminaLimit = e => Number(e?.stamina_5s_limit_milli || 10000);
   const hasFullStamina = e => {
     const limit = staminaLimit(e);
@@ -2273,6 +2289,65 @@ function browserBotSource(config) {
     const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
     return stamina < cfg.conserveStaminaThreshold;
   };
+  function summarizeStamina(self) {
+    const windows = [
+      { key: '5s', fallback: 10000 },
+      { key: '1h', fallback: 3000000 },
+      { key: '1d', fallback: 20000000 }
+    ];
+    const thresholdMs = staminaExhaustedThreshold();
+    const items = windows.map(item => {
+      const remaining = staminaRemaining(self, item.key);
+      const limit = staminaLimitValue(self, item.key, item.fallback);
+      return {
+        key: item.key,
+        remaining,
+        limit,
+        exhausted: remaining !== null && remaining < thresholdMs
+      };
+    });
+    const exhausted = items.filter(item => item.exhausted).map(item => item.key);
+    const longExhausted = exhausted.filter(key => key === '1h' || key === '1d');
+    const byKey = Object.fromEntries(items.map(item => [item.key, item]));
+    return {
+      thresholdMs,
+      stamina5s: byKey['5s'].remaining,
+      stamina5sLimit: byKey['5s'].limit,
+      stamina1h: byKey['1h'].remaining,
+      stamina1hLimit: byKey['1h'].limit,
+      stamina1d: byKey['1d'].remaining,
+      stamina1dLimit: byKey['1d'].limit,
+      exhausted,
+      longExhausted,
+      movementBlocked: exhausted.length > 0,
+      mustLeave: longExhausted.length > 0
+    };
+  }
+  function nextHourlyStaminaResetAt(t = Date.now()) {
+    const hourMs = 60 * 60 * 1000;
+    return (Math.floor(t / hourMs) + 1) * hourMs;
+  }
+  function nextDailyStaminaResetAt(t = Date.now()) {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const utc8OffsetMs = 8 * 60 * 60 * 1000;
+    return (Math.floor((t + utc8OffsetMs) / dayMs) + 1) * dayMs - utc8OffsetMs;
+  }
+  function staminaResetHoldUntil(staminaState, t = Date.now()) {
+    const exhausted = Array.isArray(staminaState?.longExhausted)
+      ? staminaState.longExhausted
+      : [];
+    let until = 0;
+    if (exhausted.includes('1h')) until = Math.max(until, nextHourlyStaminaResetAt(t));
+    if (exhausted.includes('1d')) until = Math.max(until, nextDailyStaminaResetAt(t));
+    if (!until) return null;
+    const graceMs = Math.max(0, Number(cfg.staminaResetGraceMs || 0));
+    return {
+      until: until + graceMs,
+      resetAt: until,
+      graceMs,
+      exhausted
+    };
+  }
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
@@ -2333,6 +2408,23 @@ function browserBotSource(config) {
 	    const n = Number(value);
 	    return Number.isFinite(n) ? String(Math.round(n)) : '-';
 	  }
+
+  function formatStaminaDisplay(self) {
+    if (!self) return '-';
+    const stamina = self.stamina || {};
+    const valueText = (remaining, limit) => {
+      const r = Number(remaining);
+      if (!Number.isFinite(r)) return '-';
+      const l = Number(limit);
+      return Math.floor(r / 1000) + '/' + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1000) : '-');
+    };
+    const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
+    const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
+    return '5s ' + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
+      + ' 1h ' + valueText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
+      + ' 1d ' + valueText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
+      + suffix;
+  }
 
 	  function actionText(decision) {
 	    const kind = decision?.kind || 'wait';
@@ -2402,8 +2494,10 @@ function browserBotSource(config) {
 	      'combat-leave-retry': '战斗退出失败，等待补发退出',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
-	      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
-	      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
+		      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+		      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
+		      'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
+		      'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
 	      'offline-leave': 'WebSocket 离线，正在退出',
 	      'offline-leave-wait': 'WebSocket 离线退出后等待，继续补发退出',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
@@ -2425,7 +2519,7 @@ function browserBotSource(config) {
 	    if (!panel) return;
 	    const self = decision?.self || bot.lastSelf || null;
 	    const hp = self?.hp ?? '-';
-	    const stamina5s = self?.stamina5s ?? self?.stamina_5s_remaining_milli ?? '-';
+	    const staminaText = formatStaminaDisplay(self);
 	    const selfDrop = self ? (self.drop ?? dropValue(self)) : '-';
 	    const control = summarizeControl();
 	    const safety = bot.lastSafety || {};
@@ -2440,7 +2534,7 @@ function browserBotSource(config) {
 	      '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + '</div>',
 	      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">远端 ' + escapeHtml(version) + ' / ' + escapeHtml(sourceHash) + '</div>',
 	      '<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>',
-	      '<div>HP ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(stamina5s) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
+	      '<div>HP ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(staminaText) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
 	      '<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / 速度 ' + escapeHtml(velocity) + '</div>',
 	      '<div>WS ' + escapeHtml(wsLabel) + ' / 最近 Active ' + escapeHtml(nearestActive) + '</div>'
 	    ];
@@ -2740,6 +2834,7 @@ function browserBotSource(config) {
   function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
     let existingUntil = Number(options.existingUntil || 0);
     let existingReason = '';
+    const minimumUntil = Math.max(0, Number(options.minimumUntil || 0) || 0);
     try {
       const storedReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
       const storedUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
@@ -2748,7 +2843,8 @@ function browserBotSource(config) {
         existingReason = storedReason;
       }
     } catch (_) {}
-    if (existingUntil > Date.now()) {
+    const t = Date.now();
+    if (existingUntil > t && existingUntil >= minimumUntil) {
       const holdReason = existingReason || storageReason;
       if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
       if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
@@ -2762,20 +2858,28 @@ function browserBotSource(config) {
       return existingUntil;
     }
     const delay = reloginDelayForHp(selfLike, detail);
-    const reloginUntil = setLoginSuppress(storageReason, delay.delayMs);
+    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
+    const reloginDelayMs = Math.max(delay.delayMs, minimumDelayMs);
+    const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
     if (storageReason === 'enemy leave') {
       bot.pursuitReloginUntil = reloginUntil;
-      bot.lastEnemyLeaveWaitMs = delay.delayMs;
+      bot.lastEnemyLeaveWaitMs = reloginDelayMs;
     } else if (storageReason === 'offline leave') {
       bot.offlineReloginUntil = reloginUntil;
-      bot.lastOfflineLeaveWaitMs = delay.delayMs;
+      bot.lastOfflineLeaveWaitMs = reloginDelayMs;
     }
     if (detail) {
-      detail.reloginDelayMs = delay.delayMs;
+      detail.reloginDelayMs = reloginDelayMs;
+      detail.reloginHpDelayMs = delay.delayMs;
       detail.reloginDelayRangeMs = {
         min: delay.minMs,
         max: delay.maxMs
       };
+      if (minimumDelayMs) {
+        detail.reloginMinimumDelayMs = minimumDelayMs;
+        detail.reloginMinimumUntil = minimumUntil;
+        detail.reloginMinimumReason = options.minimumReason || '';
+      }
       detail.reloginHp = delay.hp;
       detail.reloginUntil = reloginUntil;
       detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
@@ -2790,8 +2894,12 @@ function browserBotSource(config) {
   }
 
   function setOfflineLeaveSuppress(reason, detail, selfLike = null) {
+    const staminaReset = staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted);
+    if (staminaReset && detail) detail.staminaReset = staminaReset;
     return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
-      existingUntil: bot.offlineReloginUntil
+      existingUntil: bot.offlineReloginUntil,
+      minimumUntil: staminaReset?.until || 0,
+      minimumReason: staminaReset ? 'stamina reset' : ''
     });
   }
 
@@ -3131,7 +3239,7 @@ function browserBotSource(config) {
     };
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) setOfflineLeaveSuppress('websocket offline', detail, selfSummary);
+    if (detail.attempted && !detail.error) setOfflineLeaveSuppress(reason || 'websocket offline', detail, selfSummary);
     bot.lastOfflineLeaveResult = detail;
     postDebugEvent(detail.error ? 'leave-error' : 'leave-offline', detail, { force: true });
     return detail;
@@ -3654,6 +3762,7 @@ function browserBotSource(config) {
   }
 
   function summarizeSelf(self) {
+    const stamina = summarizeStamina(self);
     return {
       id: self.user_id,
       name: self.name,
@@ -3661,8 +3770,13 @@ function browserBotSource(config) {
       y: Math.round(Number(self.y) || 0),
       hp: self.hp,
       maxHp: Number(self.max_hp ?? self.maxHp ?? 0) || null,
-      stamina5s: self.stamina_5s_remaining_milli,
-      stamina1h: self.stamina_1h_remaining_milli,
+      stamina5s: stamina.stamina5s,
+      stamina5sLimit: stamina.stamina5sLimit,
+      stamina1h: stamina.stamina1h,
+      stamina1hLimit: stamina.stamina1hLimit,
+      stamina1d: stamina.stamina1d,
+      stamina1dLimit: stamina.stamina1dLimit,
+      stamina,
       drop: dropValue(self),
       coins: Number(self.coins || 0),
       life: self.life,
@@ -6650,9 +6764,44 @@ function browserBotSource(config) {
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
-	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
-	      const currentSummary = summarizeSelf(self);
-      const currentHp = Number(currentSummary.hp ?? NaN);
+      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
+      const currentSummary = summarizeSelf(self);
+	      const currentHp = Number(currentSummary.hp ?? NaN);
+      const staminaState = currentSummary.stamina || summarizeStamina(self);
+      if (staminaState.mustLeave) {
+        bot.pursuit = null;
+        bot.lastSelf = currentSummary;
+        updateKillHistory(self);
+        updateSessionStats(currentSummary);
+        stopMotionSafely('stamina-exhausted');
+        if (!bot.offlineSince) bot.offlineSince = Date.now();
+        const offlineAgeMs = Date.now() - bot.offlineSince;
+        const offlineSafety = {
+          ...assessOfflineSafety(self),
+          staminaExhausted: staminaState
+        };
+        bot.lastOfflineSafety = offlineSafety;
+        const leaveResult = await leaveOffline('stamina exhausted', currentSummary, offlineSafety);
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: leaveResult?.attempted && !leaveResult?.error ? 'stamina-exhausted-leave' : 'control-stamina-exhausted',
+          dx: 0,
+          dy: 0,
+          control: summarizeControl(),
+          self: currentSummary,
+          offlineAgeMs,
+          leaveDelayMs: 0,
+          stamina: staminaState,
+          offlineSafety,
+          leave: leaveResult
+        };
+        updateBotPanel(bot.lastDecision);
+        if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
+          requestReload('stamina exhausted too long');
+        }
+        if (cfg.once) bot.stop('once');
+        return;
+      }
       const coinMarked = hadPreviousSelf && markCoinCollected(self, currentSummary, previousCoins);
 	      if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
 	        clearCoinTracking('drop-increased');
