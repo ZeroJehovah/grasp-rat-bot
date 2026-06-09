@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.23","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.24","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -236,6 +236,7 @@
     lastPursuitLeaveResult: null,
     lastCombatLeaveAt: 0,
     lastCombatLeaveResult: null,
+    pendingCombatLeave: null,
     lastInjuryLeaveAt: 0,
     lastInjuryLeaveResult: null,
     pendingInjuryLeave: null,
@@ -466,7 +467,8 @@
 	        combatLeave: {
 	          lastAt: this.lastCombatLeaveAt || 0,
 	          lastAgeMs: this.lastCombatLeaveAt ? Date.now() - this.lastCombatLeaveAt : null,
-	          lastResult: this.lastCombatLeaveResult
+	          lastResult: this.lastCombatLeaveResult,
+	          pending: summarizePendingCombatLeave(this.pendingCombatLeave)
 	        },
 	        stopReason: this.stopReason,
 	        errors: this.errors.slice(-5)
@@ -669,6 +671,8 @@
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
 	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
+	      'combat-leave': '战斗劣势退出后等待',
+	      'combat-leave-retry': '战斗退出失败，等待补发退出',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
 	      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
@@ -1113,6 +1117,49 @@
     };
   }
 
+  function summarizePendingCombatLeave(pending = bot.pendingCombatLeave) {
+    if (!pending) return null;
+    return {
+      reason: pending.reason || '',
+      at: pending.at || 0,
+      ageMs: pending.at ? Math.max(0, Math.round(Date.now() - Number(pending.at || Date.now()))) : 0,
+      retryCount: Number(pending.retryCount || 0),
+      target: pending.target || null,
+      combatState: pending.combatState || null,
+      lastResult: pending.lastResult || null
+    };
+  }
+
+  function rememberPendingCombatLeave(action, selfSummary, leaveResult) {
+    const previous = bot.pendingCombatLeave || {};
+    const retryCount = Number(previous.retryCount || 0) + (leaveResult?.attempted || !previous.at ? 1 : 0);
+    bot.pendingCombatLeave = {
+      at: previous.at || Date.now(),
+      lastRetryAt: Date.now(),
+      retryCount,
+      reason: action?.reason || previous.reason || 'combat-leave-retry',
+      target: action?.target || previous.target || null,
+      combatState: action?.combatState || previous.combatState || null,
+      self: selfSummary || previous.self || null,
+      lastResult: leaveResult || previous.lastResult || null
+    };
+    return bot.pendingCombatLeave;
+  }
+
+  function pendingCombatLeaveAction(pending = bot.pendingCombatLeave) {
+    if (!pending) return null;
+    return {
+      kind: 'leave',
+      reason: pending.reason || 'combat-leave-retry',
+      combat: true,
+      ignoreReturnBlock: true,
+      dx: 0,
+      dy: 0,
+      target: pending.target || null,
+      combatState: pending.combatState || null
+    };
+  }
+
   function actionThreatId(action) {
     const threat = Array.isArray(action?.threats) ? action.threats[0] : null;
     return threat ? String(threat.id ?? threat.user_id ?? '') : '';
@@ -1428,13 +1475,15 @@
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
     if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
-      return {
+      const detail = {
         attempted: false,
         reason: 'cooldown',
         cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastCombatLeaveAt || 0)))),
         combat: action?.combatState || null,
         target: action?.target || null
       };
+      rememberPendingCombatLeave(action, selfSummary, detail);
+      return detail;
     }
     const reason = action?.reason === 'combat-hp-disadvantage-leave'
       ? 'combat hp disadvantage'
@@ -1453,6 +1502,9 @@
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
       setEnemyLeaveSuppress(reason, detail, selfSummary);
+      bot.pendingCombatLeave = null;
+    } else {
+      rememberPendingCombatLeave(action, selfSummary, detail);
     }
     bot.lastCombatLeaveResult = detail;
     postDebugEvent(detail.error ? 'combat-leave-error' : 'combat-leave', detail, { force: true });
@@ -1481,6 +1533,7 @@
     };
     bot.lastEnemyLeaveRetryAt = t;
     await issueLeaveCommand(detail);
+    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
     detail.holdRemainingMs = enemyReloginHoldRemainingMs();
     bot.lastEnemyLeaveRetryResult = detail;
     postDebugEvent(detail.error ? 'enemy-leave-retry-error' : 'enemy-leave-retry', detail, { force: true });
@@ -4142,7 +4195,31 @@
         bot.globalState.error = err.message || String(err);
       });
 
-	      let action = chooseAction(self);
+      const pendingCombatLeave = pendingCombatLeaveAction();
+      if (pendingCombatLeave) {
+        bot.pursuit = null;
+        stopMotionSafely('combat-leave-retry');
+        const leaveResult = await leaveForCombat(pendingCombatLeave, currentSummary);
+        const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: leaveIssued ? 'combat-leave' : 'combat-leave-retry',
+          dx: 0,
+          dy: 0,
+          self: currentSummary,
+          target: pendingCombatLeave.target || null,
+          combat: true,
+          combatState: pendingCombatLeave.combatState || null,
+          pendingCombatLeave: summarizePendingCombatLeave(),
+          leave: leaveResult,
+          holdRemainingMs: enemyReloginHoldRemainingMs()
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
+
+      let action = chooseAction(self);
 	      action = blockThreatReturnAction(self, bot.actionThreats || [], action);
       if (bot.pendingInjuryLeave && action.combat) {
         action = {
@@ -4159,12 +4236,28 @@
       if (action.kind === 'leave' && action.combat) {
         stopMotionSafely(action.reason || 'combat-leave');
         const leaveResult = await leaveForCombat(action, currentSummary);
-        bot.lastDecision = {
-          ...action,
-          leave: leaveResult,
-          source,
-          self: summarizeSelf(self)
-        };
+        const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
+        bot.lastDecision = leaveIssued
+          ? {
+            ...action,
+            leave: leaveResult,
+            source,
+            self: summarizeSelf(self)
+          }
+          : {
+            kind: 'wait',
+            reason: 'combat-leave-retry',
+            dx: 0,
+            dy: 0,
+            self: currentSummary,
+            source,
+            target: action.target || null,
+            combat: true,
+            combatState: action.combatState || null,
+            pendingCombatLeave: summarizePendingCombatLeave(),
+            leave: leaveResult,
+            holdRemainingMs: enemyReloginHoldRemainingMs()
+          };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
         return;
