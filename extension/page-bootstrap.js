@@ -3,8 +3,9 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.7';
+  const BOOTSTRAP_VERSION = '0.1.8';
   const BOOTSTRAP_OWNER = 'extension';
+  const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -34,7 +35,9 @@
 
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
+    loaderUpdateUrl: LOADER_UPDATE_URL,
     pollMs: 5000,
+    loaderVersionCheckMs: 300000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
     requestTimeoutMs: 7000,
@@ -72,6 +75,13 @@
     lastScriptFetchAt: 0,
     lastManifestHash: '',
     lastManifestVersion: '',
+    checkingLoaderVersion: false,
+    lastLoaderVersionCheckAt: 0,
+    lastLoaderVersionStatus: '',
+    latestLoaderVersion: '',
+    latestLoaderUrl: '',
+    loaderUpdateAvailable: false,
+    loaderUpdateError: '',
     lastInstallAttemptAt: 0,
     lastInstallStatus: '',
     lastInstallAt: 0,
@@ -346,7 +356,9 @@
     storedValues = result.values || defaults;
     cfg = {
       manifestUrl: String(readStored('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
+      loaderUpdateUrl: String(readStored('loaderUpdateUrl', DEFAULTS.loaderUpdateUrl) || DEFAULTS.loaderUpdateUrl),
       pollMs: Math.max(5000, Number(readStored('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
+      loaderVersionCheckMs: Math.max(60000, Number(readStored('loaderVersionCheckMs', DEFAULTS.loaderVersionCheckMs)) || DEFAULTS.loaderVersionCheckMs),
       watchdogMs: Math.max(250, Number(readStored('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
       busyLeaseMs: Math.max(3000, Number(readStored('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
       requestTimeoutMs: Math.max(3000, Number(readStored('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
@@ -849,6 +861,7 @@
     const control = status?.control || {};
     const manifest = readCachedManifest();
     const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
+    const aVersion = BOOTSTRAP_VERSION;
     const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
@@ -908,7 +921,16 @@
     actions.appendChild(button);
     header.appendChild(actions);
     panel.appendChild(header);
-    appendLine('版本：' + bVersion + ' / 插件 A ' + BOOTSTRAP_VERSION, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    if (state.loaderUpdateAvailable) {
+      appendLine(
+        '加载器A（扩展）有新版本：当前 ' + aVersion + ' / 最新 ' + (state.latestLoaderVersion || '-') + '，请手动更新扩展',
+        'margin:0 0 6px;padding:6px 8px;border:1px solid rgba(248,113,113,.75);border-radius:6px;background:rgba(127,29,29,.72);color:#fee2e2;font-weight:700;word-break:break-all'
+      );
+    }
+    appendLine('版本：远程B ' + bVersion + ' / 加载器A：扩展 ' + aVersion, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    if (state.lastLoaderVersionStatus && !state.loaderUpdateAvailable) {
+      appendLine('A更新检查：' + state.lastLoaderVersionStatus, 'font-size:11px;margin:-2px 0 4px;color:#94a3b8;word-break:break-all');
+    }
     appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
     if (state.cloudflareError) {
       appendLine('原因：' + reasonDetail);
@@ -955,7 +977,8 @@
 
   function noteFetchStatus(label, text, forcePanel = false) {
     const value = String(text || '');
-    if (/manifest/i.test(label)) state.lastManifestStatus = value;
+    if (/loader|extension bootstrap/i.test(label)) state.lastLoaderVersionStatus = value;
+    else if (/manifest/i.test(label)) state.lastManifestStatus = value;
     else if (/script|bot/i.test(label)) state.lastScriptStatus = value;
     state.lastRemoteStatus = `${label}: ${value}`;
     updateBootstrapPanel(forcePanel);
@@ -991,6 +1014,10 @@
 
   function scriptUrls(manifest) {
     return uniqueUrls([manifest?.scriptUrl, rawGithubToJsDelivr(manifest?.scriptUrl)]);
+  }
+
+  function loaderVersionUrls() {
+    return uniqueUrls([cfg.loaderUpdateUrl, rawGithubToJsDelivr(cfg.loaderUpdateUrl)]);
   }
 
   function requestText(method, url, body = null, headers = {}) {
@@ -1054,6 +1081,12 @@
     return manifest;
   }
 
+  function parseLoaderVersion(text) {
+    const match = String(text || '').match(/\bBOOTSTRAP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+    if (!match) throw new Error('extension BOOTSTRAP_VERSION missing');
+    return match[1];
+  }
+
   function parseRemoteBotVersion(value) {
     const match = String(value || '').match(/(\d+)\.(\d+)\.(\d+)/);
     if (!match) return null;
@@ -1068,6 +1101,76 @@
       if (left[i] !== right[i]) return left[i] - right[i];
     }
     return 0;
+  }
+
+  async function checkLoaderVersion(reason = 'interval', options = {}) {
+    const force = Boolean(options.force);
+    const t = Date.now();
+    if (state.checkingLoaderVersion) {
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest: state.latestLoaderVersion || '',
+        updateAvailable: Boolean(state.loaderUpdateAvailable),
+        skipped: 'busy'
+      };
+    }
+    if (!force && state.lastLoaderVersionCheckAt && t - Number(state.lastLoaderVersionCheckAt || 0) < cfg.loaderVersionCheckMs) {
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest: state.latestLoaderVersion || '',
+        updateAvailable: Boolean(state.loaderUpdateAvailable),
+        skipped: 'cooldown'
+      };
+    }
+    state.checkingLoaderVersion = true;
+    state.lastLoaderVersionCheckAt = t;
+    state.loaderUpdateError = '';
+    try {
+      const { accepted, url, transport } = await requestAcceptedTextWithFallback(
+        'loader version',
+        loaderVersionUrls(),
+        text => ({ version: parseLoaderVersion(text) })
+      );
+      const latest = String(accepted?.version || '');
+      const cmp = compareRemoteBotVersion(latest, BOOTSTRAP_VERSION);
+      state.latestLoaderVersion = latest;
+      state.latestLoaderUrl = url || '';
+      state.loaderUpdateAvailable = cmp !== null && cmp > 0;
+      state.lastLoaderVersionStatus = cmp === null
+        ? `无法比较 当前 ${BOOTSTRAP_VERSION} / 远端 ${latest || '-'}`
+        : (state.loaderUpdateAvailable
+          ? `发现新版本 ${latest}`
+          : `已是最新 ${BOOTSTRAP_VERSION}`);
+      logBootstrap('loader version check complete', {
+        reason,
+        current: BOOTSTRAP_VERSION,
+        latest,
+        updateAvailable: state.loaderUpdateAvailable,
+        url,
+        transport
+      });
+      updateBootstrapPanel(true);
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest,
+        updateAvailable: state.loaderUpdateAvailable,
+        url
+      };
+    } catch (err) {
+      const error = err?.message || String(err);
+      state.loaderUpdateError = error;
+      state.lastLoaderVersionStatus = '检查失败：' + error;
+      logBootstrap('loader version check failed', { reason, error });
+      updateBootstrapPanel(true);
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest: state.latestLoaderVersion || '',
+        updateAvailable: Boolean(state.loaderUpdateAvailable),
+        error
+      };
+    } finally {
+      state.checkingLoaderVersion = false;
+    }
   }
 
   function remoteBotVersionIsBlocked(version) {
@@ -1840,6 +1943,7 @@
       state,
       pollOnce,
       watchdogOnce,
+      checkLoaderVersion,
       maybeStartGameLogin,
       forceLoginNow,
       maybeClickAuthorize,
@@ -1890,6 +1994,8 @@
     if (document.body) renderPanelWhenReady();
     else document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded panel render', renderPanelWhenReady), { once: true });
     setSafeInterval('panel interval', () => updateBootstrapPanel(), cfg.panelUpdateMs);
+    runAsyncSafely('startup loader version check', () => checkLoaderVersion('startup', { force: true }));
+    setSafeInterval('loader version interval', () => runAsyncSafely('loader version interval', () => checkLoaderVersion('interval')), cfg.loaderVersionCheckMs);
     if (isGameAuthCallback()) {
       suppressLogin('oauth callback', cfg.authReturnGraceMs);
       setSafeInterval('callback watchdog interval', () => runAsyncSafely('callback watchdog interval', () => watchdogOnce('callback-interval')), cfg.watchdogMs);
