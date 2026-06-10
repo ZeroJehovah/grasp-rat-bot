@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.6';
+  const BOOTSTRAP_VERSION = '0.1.7';
   const BOOTSTRAP_OWNER = 'extension';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -538,6 +538,8 @@
       'migrate-to-known-field': '迁移到金币密集区域',
       'snapshot-coin-field': '快照金币区域导航',
       'snapshot-coin-target': '快照金币导航',
+      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
+      'wait-for-stamina-budget': '长期体力预算不足',
       'wait-for-snapshot-coin': '等待快照金币',
       'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
       'combat-attack': '战斗：持续开火',
