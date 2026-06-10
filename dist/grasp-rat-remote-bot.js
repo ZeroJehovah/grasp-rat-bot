@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.52"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.53"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -76,6 +76,10 @@
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
+    combatAimEvasionScale: 1.0,
+    combatTargetDodgeSpeedPerTick: 50,
+    combatBulletSpeedPerTick: 500,
+    combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.34,
@@ -3761,7 +3765,15 @@
     const rawDistance = Number(distance);
     const d = clamp(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
     const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
-    return minJitter + (maxJitter - minJitter) * nearFactor;
+    const interpolated = minJitter + (maxJitter - minJitter) * nearFactor;
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const dodgeSpeed = Math.max(0, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const evasionScale = Math.max(0, Number(cfg.combatAimEvasionScale ?? 1));
+    const travelTicks = d / bulletSpeed;
+    const evasionWidth = (dodgeSpeed * travelTicks + hitRadius) * evasionScale;
+    const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
+    return clamp(Math.max(interpolated, evasionAngle), minJitter, maxJitter);
   }
 
   function opportunityEffectiveStaminaCost(staminaCost) {
