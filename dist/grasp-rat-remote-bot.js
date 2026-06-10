@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.54"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.55"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -417,7 +417,6 @@
 	          pauseReason: this.pauseReason || 'manual'
 	        };
 	      }
-	      if (changed || reasonChanged) postDebugEvent(next ? 'paused' : 'resumed', { reason: this.pauseReason || reason }, { force: true });
 	      return this.status();
 	    },
     step(source = 'external') {
@@ -915,7 +914,6 @@
 			    if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: 'wait', reason: text, self: bot.lastSelf });
 			    if (typeof log === 'function') log('[bot] ' + text, 'info');
 			    console.log('[grasp-rat-bot]', text, detail || '');
-			    postDebugEvent('status', { text, detail }, { force: true });
 			  }
 
       function safeStringify(value) {
@@ -943,8 +941,6 @@
         return Array.isArray(value) ? value.length : 0;
       }
 
-		  function postDebugEvent() {}
-
       function recordUnhandledTickError(source, err) {
         const entry = {
           at: Date.now(),
@@ -959,9 +955,6 @@
         } catch (_) {}
         try {
           console.error('[grasp-rat-bot:unhandled-tick]', err);
-        } catch (_) {}
-        try {
-          postDebugEvent('unhandled-tick-error', entry, { force: true });
         } catch (_) {}
         return entry;
       }
@@ -1522,7 +1515,6 @@
     }
     if (detail.attempted && !detail.error) setLoginSuppress('bot login started', cfg.postLoginGraceMs);
     bot.lastLoginResult = detail;
-    postDebugEvent(detail.error ? 'login-error' : 'login', detail, { force: true });
     return detail;
   }
 
@@ -1551,7 +1543,6 @@
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) setOfflineLeaveSuppress(reason || 'websocket offline', detail, selfSummary);
     bot.lastOfflineLeaveResult = detail;
-    postDebugEvent(detail.error ? 'leave-error' : 'leave-offline', detail, { force: true });
     return detail;
   }
 
@@ -1581,7 +1572,6 @@
       bot.pendingInjuryLeave = null;
     }
     bot.lastInjuryLeaveResult = detail;
-    postDebugEvent(detail.error ? 'injury-leave-error' : 'injury-leave', detail, { force: true });
     return detail;
   }
 
@@ -1613,7 +1603,6 @@
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
     }
     bot.lastPursuitLeaveResult = detail;
-    postDebugEvent(detail.error ? 'pursuit-leave-error' : 'pursuit-leave', detail, { force: true });
     return detail;
   }
 
@@ -1655,7 +1644,6 @@
       rememberPendingCombatLeave(action, selfSummary, detail);
     }
     bot.lastCombatLeaveResult = detail;
-    postDebugEvent(detail.error ? 'combat-leave-error' : 'combat-leave', detail, { force: true });
     return detail;
   }
 
@@ -1684,7 +1672,6 @@
     if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
     detail.holdRemainingMs = enemyReloginHoldRemainingMs();
     bot.lastEnemyLeaveRetryResult = detail;
-    postDebugEvent(detail.error ? 'enemy-leave-retry-error' : 'enemy-leave-retry', detail, { force: true });
     return detail;
   }
 

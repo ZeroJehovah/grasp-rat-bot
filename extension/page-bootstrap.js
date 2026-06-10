@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.2';
+  const BOOTSTRAP_VERSION = '0.1.3';
   const BOOTSTRAP_OWNER = 'extension';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -612,7 +612,6 @@
     syncPauseToPage(state.paused);
     state.lastInstallStatus = state.paused ? 'paused by user' : 'resumed by user';
     logBootstrap(state.paused ? 'paused' : 'resumed', { reason: state.pauseReason || reason });
-    postDebug(state.paused ? 'paused' : 'resumed', { reason: state.pauseReason || reason }, { force: true });
     updateBootstrapPanel(true);
     return state.paused;
   }
@@ -1061,7 +1060,6 @@
       state.lastInstallStatus = `cached update restart waiting for leave before ${manifest?.version || manifest?.sha256 || 'remote update'}`;
       state.lastError = detail.error;
       logBootstrap('cached update restart deferred', detail);
-      postDebug('cached-update-restart-deferred', detail, { force: true });
       return false;
     }
     try {
@@ -1070,7 +1068,6 @@
       detail.stopError = err?.message || String(err);
     }
     state.lastInstallStatus = `cached update restart scheduled for ${manifest?.version || manifest?.sha256 || 'remote update'}`;
-    postDebug('cached-update-restart', detail, { force: true });
     setSafeTimeout('cached update reload', () => {
       try {
         location.reload();
@@ -1082,26 +1079,13 @@
     return true;
   }
 
-  function postDebug() {}
-
   function recordBootstrapException(label, err, detail = {}) {
     const message = noteBootstrapError(label, err, detail);
-    try {
-      postDebug('exception', {
-        label,
-        message,
-        error: err?.message || String(err),
-        stack: String(err?.stack || ''),
-        ...detail
-      }, { force: true });
-    } catch (_) {}
     try {
       renderBootstrapPanelError(message);
     } catch (_) {}
     return message;
   }
-
-  window.__graspRatBotDebugPost = function () {};
 
   async function runInPage(source, sourceUrl) {
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
@@ -1207,7 +1191,6 @@
     state.lastInstallReason = reason || '';
     state.lastInstallStatus = 'confirmed';
     logBootstrap('install source done', { reason, version: manifest.version, elapsedMs: state.lastInstallAt - state.lastInstallAttemptAt, status: shortStatus(status) });
-    postDebug('install', { reason, version: manifest.version, sha256: manifest.sha256, injectResult, status }, { force: true });
     return true;
   }
 
@@ -1230,7 +1213,6 @@
       throw err;
     }
     await installSource(manifest, source, reason);
-    postDebug('cached-install', { reason, version: manifest.version, sha256: manifest.sha256 }, { force: true });
     return true;
   }
 
@@ -1274,7 +1256,6 @@
     } catch (err) {
       state.lastError = err?.message || String(err);
       logBootstrap('fast cache install error', { reason, error: state.lastError });
-      postDebug('cached-error', { reason, error: state.lastError }, { force: true });
       stopBlockedRunningBot(`${reason}:cache-error`, status);
       return false;
     } finally {
@@ -1325,7 +1306,6 @@
     state.lastRemoteStatus = state.lastManifestStatus;
     state.lastInstallStatus = `kept running after ${reason || 'poll'} remote failure`;
     logBootstrap('remote failure ignored while bot healthy', { reason, error: text, status: shortStatus(status) });
-    postDebug('remote-degraded', { reason, error: text, status: shortStatus(status) });
     updateBootstrapPanel(true);
     return true;
   }
@@ -1383,7 +1363,6 @@
       }
       if (!botNeedsInstall(manifest) && cachedManifestMatches(manifest)) {
         logBootstrap('poll ok: bot current', { reason, version: manifest.version, status: shortStatus() });
-        postDebug('ok', { reason, version: manifest.version, sha256: manifest.sha256 });
         return;
       }
       state.installing = true;
@@ -1396,7 +1375,6 @@
       if (keepRunningAfterRemoteFailure(error, reason, status)) return;
       state.lastError = error;
       logBootstrap('poll error', { reason, error: state.lastError, status: shortStatus(status) });
-      postDebug('error', { reason, error: state.lastError }, { force: true });
       if ((!status || !status.running) && !isPaused()) {
         try {
           logBootstrap('poll falling back to cache', { reason, error: state.lastError });
@@ -1406,7 +1384,6 @@
           await installCached(state.lastError, { force: true });
         } catch (cacheErr) {
           logBootstrap('cached fallback error', { reason, error: cacheErr?.message || String(cacheErr) });
-          postDebug('cached-error', { error: cacheErr?.message || String(cacheErr) }, { force: true });
         }
       }
     } finally {
@@ -1449,14 +1426,12 @@
     }
     if (isGameAuthCallback()) {
       suppressLogin('oauth callback', cfg.authReturnGraceMs);
-      postDebug('login-suppressed', { reason, suppressReason: 'oauth callback', remainingMs: loginSuppressRemainingMs() });
       return false;
     }
     const t = Date.now();
     if (t - state.lastLoginAt < cfg.loginCooldownMs) return false;
     const suppressRemainingMs = loginSuppressRemainingMs();
     if (suppressRemainingMs > 0) {
-      postDebug('login-suppressed', { reason, suppressReason: state.lastLoginSuppressReason || readStored(LOGIN_SUPPRESS_REASON_KEY, ''), remainingMs: Math.round(suppressRemainingMs) });
       return false;
     }
     const status = getBotStatus();
@@ -1493,7 +1468,6 @@
       detail.error = err?.message || String(err);
     }
     if (detail.method && !detail.error) suppressLogin('login started', cfg.postLoginGraceMs);
-    postDebug(detail.error ? 'login-error' : 'login', detail, { force: true });
     return Boolean(detail.method && !detail.error);
   }
 
@@ -1530,7 +1504,6 @@
       detail.error = err?.message || String(err);
     }
     if (detail.method && !detail.error) suppressLogin('authorize clicked', cfg.authReturnGraceMs);
-    postDebug(detail.error ? 'authorize-error' : 'authorize', detail, { force: true });
     return Boolean(detail.method && !detail.error);
   }
 
@@ -1544,7 +1517,6 @@
     updateBootstrapPanel();
     if (isGameAuthCallback()) {
       suppressLogin('oauth callback', cfg.authReturnGraceMs);
-      postDebug('callback-wait', { reason, remainingMs: loginSuppressRemainingMs() });
       return;
     }
     if (isPaused()) {
@@ -1602,7 +1574,6 @@
     } catch (err) {
       state.lastError = err?.message || String(err);
       logBootstrap('watchdog error', { reason, error: state.lastError, missing, stale, mismatched, blockedStrategy });
-      postDebug('watchdog-error', { reason, error: state.lastError, missing, stale, mismatched, blockedStrategy }, { force: true });
       if (blockedStrategy) {
         clearBusy(state.busyToken);
         stopBlockedRunningBot(`watchdog:${reason}:error`, status);
@@ -1685,7 +1656,6 @@
         await pollOnce(cacheInstalled ? 'startup-after-cache' : 'startup');
       } catch (err) {
         logBootstrap('startup poll error', { error: err?.message || String(err) });
-        postDebug('startup-error', { reason: 'startup', error: err?.message || String(err) }, { force: true });
       }
       const status = getBotStatus();
       if (!status || !status.running) {
@@ -1694,7 +1664,6 @@
           await installCachedForFastStart('startup-fallback');
         } catch (err) {
           logBootstrap('startup fallback cache error', { error: err?.message || String(err), status: shortStatus() });
-          postDebug('cached-error', { reason: 'startup-fallback', error: err?.message || String(err) }, { force: true });
         }
       }
     });
