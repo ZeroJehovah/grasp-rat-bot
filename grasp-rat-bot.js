@@ -139,6 +139,10 @@ function runSelfTest() {
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
+    combatAimEvasionScale: 1.0,
+    combatTargetDodgeSpeedPerTick: 50,
+    combatBulletSpeedPerTick: 500,
+    combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.34,
@@ -332,7 +336,15 @@ function runSelfTest() {
     const rawDistance = Number(distance);
     const d = clampValue(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
     const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
-    return minJitter + (maxJitter - minJitter) * nearFactor;
+    const interpolated = minJitter + (maxJitter - minJitter) * nearFactor;
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const dodgeSpeed = Math.max(0, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const evasionScale = Math.max(0, Number(cfg.combatAimEvasionScale ?? 1));
+    const travelTicks = d / bulletSpeed;
+    const evasionWidth = (dodgeSpeed * travelTicks + hitRadius) * evasionScale;
+    const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
+    return clampValue(Math.max(interpolated, evasionAngle), minJitter, maxJitter);
   }
   function opportunityEffectiveStaminaCost(staminaCost) {
     const floor = Math.max(1, Number(cfg.opportunityDistanceFloor || 1));
@@ -1403,6 +1415,11 @@ function runSelfTest() {
       want: true
     },
     {
+      name: 'combat far target jitter covers measured dodge window',
+      got: combatAimJitterLimit(14500) >= 0.1,
+      want: true
+    },
+    {
       name: 'stationary active outside caution allows foot coin only',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -1944,6 +1961,10 @@ function browserBotSource(config) {
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
+    combatAimEvasionScale: 1.0,
+    combatTargetDodgeSpeedPerTick: 50,
+    combatBulletSpeedPerTick: 500,
+    combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.34,
@@ -5629,7 +5650,15 @@ function browserBotSource(config) {
     const rawDistance = Number(distance);
     const d = clamp(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
     const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
-    return minJitter + (maxJitter - minJitter) * nearFactor;
+    const interpolated = minJitter + (maxJitter - minJitter) * nearFactor;
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const dodgeSpeed = Math.max(0, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const evasionScale = Math.max(0, Number(cfg.combatAimEvasionScale ?? 1));
+    const travelTicks = d / bulletSpeed;
+    const evasionWidth = (dodgeSpeed * travelTicks + hitRadius) * evasionScale;
+    const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
+    return clamp(Math.max(interpolated, evasionAngle), minJitter, maxJitter);
   }
 
   function opportunityEffectiveStaminaCost(staminaCost) {
