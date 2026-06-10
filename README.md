@@ -8,7 +8,6 @@ The primary runtime uses a small bootstrap script A plus the shared remote bot s
 - `extension/` is the Chrome extension version of script A. Load this directory as an unpacked extension in Chrome.
 - `dist/grasp-rat-remote-bot.js` is script B. It contains the game strategy and native page WebSocket control.
 - `dist/manifest.json` points A at B and includes the SHA-256 hash A must verify before injection.
-- `grasp-rat-debug-api.js` is a local WSL debug/development API. It receives browser debug events and can serve local `dist/` files for development.
 
 The older CDP entry points remain available in `grasp-rat-bot.js` as a fallback, but normal use should prefer bootstrap injection through Tampermonkey or the extension.
 
@@ -56,7 +55,7 @@ Version `0.4.1` changes script B strategy and overlay only. AFK `Drop=x` targets
 
 Version `0.4.7` moves the top-right overlay to script A. The panel is visible on game pages even before the remote bot is injected, shows manifest/script fetch and install/cache status, and includes a pause/resume button. While paused, script A still fetches and verifies remote updates into cache but does not inject/reinstall the bot or start login, and script B stops sending movement/attack control so manual control is possible. Injury, combat disadvantage, and sustained-pursuit exits now suppress relogin for a random 1-3 minute enemy-leave wait before normal login resumes.
 
-Version `0.4.10` hardens the remaining bootstrap and remote tick entry points. Script A wraps startup, watchdog, polling, callback, authorize, and panel timers so unexpected errors are recorded instead of becoming uncaught userscript interval errors. Script B routes timer/native tick scheduling through a safe promise wrapper, so edge failures in tick finalization or status reporting are retained in `bot.errors` and debug events instead of surfacing as unhandled promise rejections. Version `0.4.8` fixed pause synchronization so panel refreshes no longer repeatedly call script B's pause handler or interfere with manual control.
+Version `0.4.10` hardens the remaining bootstrap and remote tick entry points. Script A wraps startup, watchdog, polling, callback, authorize, and panel timers so unexpected errors are recorded instead of becoming uncaught userscript interval errors. Script B routes timer/native tick scheduling through a safe promise wrapper, so edge failures in tick finalization or status reporting are retained in `bot.errors` and visible status instead of surfacing as unhandled promise rejections. Version `0.4.8` fixed pause synchronization so panel refreshes no longer repeatedly call script B's pause handler or interfere with manual control.
 
 When the game page is not logged in, the bootstrap and remote bot try `startLinuxDoLogin()` or the visible login/join control. On the LinuxDO OAuth authorize page, the bootstrap waits 10 seconds before clicking the allow/authorize control, so it acts only as a fallback behind the user's primary authorization script.
 
@@ -86,26 +85,9 @@ Then commit and push `dist/grasp-rat-remote-bot.js` and `dist/manifest.json`. In
 
 When changing script A behavior, update both `userscript/grasp-rat-bootstrap.user.js` and the Chrome extension bootstrap files under `extension/` unless the change is explicitly Tampermonkey-only or extension-only.
 
-## Local Debug API
-
-Start the debug API from WSL:
-
-```bash
-node grasp-rat-debug-api.js
-```
-
-It listens on `0.0.0.0:18777` and provides:
-
-- `POST /events` for bot/debug events.
-- `GET /events` for recent events.
-- `GET /health` for status.
-- `GET /bot/manifest.json` and `GET /bot/grasp-rat-remote-bot.js` for local development files.
-
-Events are written to `grasp-rat-debug-events.log`, which is ignored by git.
-
 ## Local Development Loader
 
-To temporarily load from the WSL debug API instead of GitHub, run this in the game page console:
+Script-side debug event posting has been removed. Use CDP for runtime inspection. If you deliberately serve a local `dist/` manifest from your own static server, switch the bootstrap manifest URL through the page API:
 
 ```js
 window.__graspRatBotBootstrap.setManifestUrl('http://127.0.0.1:18777/bot/manifest.json')
@@ -125,7 +107,6 @@ Run these checks before pushing strategy changes:
 
 ```bash
 node --check grasp-rat-bot.js
-node --check grasp-rat-debug-api.js
 node --check scripts/build-remote-bot.js
 node --check scripts/render-extension-icons.js
 node --check userscript/grasp-rat-bootstrap.user.js

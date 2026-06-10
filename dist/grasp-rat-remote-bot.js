@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.46","debug":true,"debugEndpoint":"http://127.0.0.1:18777/events","debugEveryMs":1000};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.47"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -33,9 +33,6 @@
 	    sourceHash: String(config.sourceHash || ''),
 	    sourceUrl: String(config.sourceUrl || ''),
 	    injectedBy: String(config.injectedBy || 'cdp'),
-	    debug: Boolean(config.debug),
-	    debugEndpoint: String(config.debugEndpoint || ''),
-    debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
     tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
     dangerRadius: 17000,
@@ -933,47 +930,7 @@
         return Array.isArray(value) ? value.length : 0;
       }
 
-		  function postDebugEvent(type, detail = {}, options = {}) {
-		    try {
-		      if (!cfg.debug || !cfg.debugEndpoint) return;
-		      const t = Date.now();
-		      if (!options.force && t - Number(bot.lastDebugAt || 0) < cfg.debugEveryMs) return;
-		      bot.lastDebugAt = t;
-		      let status = null;
-		      try {
-		        status = bot.status ? bot.status() : null;
-		      } catch (err) {
-		        status = { error: err?.message || String(err) };
-		      }
-		      const payload = {
-		        at: new Date(t).toISOString(),
-		        type,
-		        version: cfg.version,
-		        sourceHash: cfg.sourceHash,
-		        sourceUrl: cfg.sourceUrl,
-		        injectedBy: cfg.injectedBy,
-		        url: location.href,
-		        title: document.title,
-		        detail,
-		        status
-		      };
-		      try {
-		        if (typeof window.__graspRatBotDebugPost === 'function') {
-		          window.__graspRatBotDebugPost(payload);
-		          return;
-		        }
-		      } catch (_) {}
-		      try {
-		        fetch(cfg.debugEndpoint, {
-		          method: 'POST',
-		          mode: 'no-cors',
-		          keepalive: true,
-		          headers: { 'Content-Type': 'text/plain' },
-		          body: safeStringify(payload)
-		        }).catch(() => {});
-		      } catch (_) {}
-		    } catch (_) {}
-		  }
+		  function postDebugEvent() {}
 
       function recordUnhandledTickError(source, err) {
         const entry = {
@@ -5494,19 +5451,8 @@
 		      try {
 		        console.error('[grasp-rat-bot:error]', err);
 		      } catch (_) {}
-		      try {
-		        postDebugEvent('error', { source, message: err?.message || String(err), stack: String(err?.stack || '') }, { force: true });
-		      } catch (debugErr) {
-		        recordUnhandledTickError(source + ':error-debug', debugErr);
-		      }
 		    } finally {
 		      bot.ticking = false;
-		      const decision = bot.lastDecision;
-		      try {
-		        if (decision) postDebugEvent('tick', { source, decision });
-		      } catch (err) {
-		        recordUnhandledTickError(source + ':finalize', err);
-		      }
 		    }
 		  }
 

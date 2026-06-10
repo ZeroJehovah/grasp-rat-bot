@@ -15,8 +15,6 @@ function parseArgs(args) {
     fileName: 'grasp-rat-remote-bot.js',
     version: process.env.GRASP_RAT_BOT_VERSION || buildVersion(),
     scriptUrl: process.env.GRASP_RAT_SCRIPT_URL || 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/grasp-rat-remote-bot.js',
-    debugEndpoint: process.env.GRASP_RAT_DEBUG_ENDPOINT || 'http://127.0.0.1:18777/events',
-    debugEveryMs: 1000,
     statusEvery: 1000,
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -25,8 +23,6 @@ function parseArgs(args) {
     else if (arg === '--file-name') out.fileName = args[++i] || out.fileName;
     else if (arg === '--version') out.version = args[++i] || out.version;
     else if (arg === '--script-url') out.scriptUrl = args[++i] || out.scriptUrl;
-    else if (arg === '--debug-endpoint') out.debugEndpoint = args[++i] || out.debugEndpoint;
-    else if (arg === '--debug-every-ms') out.debugEveryMs = Number(args[++i] || out.debugEveryMs);
     else if (arg === '--status-every') out.statusEvery = Number(args[++i] || out.statusEvery);
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -61,8 +57,6 @@ Options:
   --file-name <name>       Remote bot file name. Default: grasp-rat-remote-bot.js
   --version <value>        Version label. Default: UTC timestamp
   --script-url <url>       Public URL for the generated bot file
-  --debug-endpoint <url>   Debug event endpoint injected into manifest
-  --debug-every-ms <ms>    Browser bot debug tick interval. Default: 1000
   --status-every <ms>      Browser console status interval. Default: 1000
 `);
 }
@@ -79,9 +73,6 @@ function main() {
     BOT_SCRIPT,
     '--print-source',
     '--bot-version', options.version,
-    '--debug',
-    '--debug-endpoint', options.debugEndpoint,
-    '--debug-every-ms', String(options.debugEveryMs),
     '--status-every', String(options.statusEvery),
   ], {
     cwd: ROOT,
@@ -97,9 +88,6 @@ function main() {
     builtAt: new Date().toISOString(),
     scriptUrl: options.scriptUrl,
     sha256: hash,
-    debug: true,
-    debugEndpoint: options.debugEndpoint,
-    debugEveryMs: options.debugEveryMs,
     statusEvery: options.statusEvery,
     config: {}
   };
