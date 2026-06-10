@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.1';
+  const BOOTSTRAP_VERSION = '0.1.2';
   const BOOTSTRAP_OWNER = 'extension';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -31,15 +31,12 @@
 
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
-    debug: true,
-    debugEndpoint: 'http://127.0.0.1:18777/events',
     pollMs: 5000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
     requestTimeoutMs: 7000,
     fallbackStaggerMs: 1200,
     staleTickMs: 3000,
-    debugEveryMs: 1000,
     statusEvery: 1000,
     scriptStartupTimeoutMs: 2500,
     installConfirmMs: 3500,
@@ -81,7 +78,6 @@
     lastLoginSuppressReason: '',
     lastAuthorizeAt: 0,
     lastError: '',
-    lastDebugAt: 0,
     lastManifestStatus: '',
     lastScriptStatus: '',
     lastRemoteStatus: '',
@@ -344,15 +340,12 @@
     storedValues = result.values || defaults;
     cfg = {
       manifestUrl: String(readStored('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
-      debug: Boolean(storedBoolean(readStored('debug', DEFAULTS.debug))),
-      debugEndpoint: String(readStored('debugEndpoint', DEFAULTS.debugEndpoint) || DEFAULTS.debugEndpoint),
       pollMs: Math.max(5000, Number(readStored('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
       watchdogMs: Math.max(250, Number(readStored('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
       busyLeaseMs: Math.max(3000, Number(readStored('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
       requestTimeoutMs: Math.max(3000, Number(readStored('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
       fallbackStaggerMs: Math.max(0, Number(readStored('fallbackStaggerMs', DEFAULTS.fallbackStaggerMs)) || DEFAULTS.fallbackStaggerMs),
       staleTickMs: Math.max(1000, Number(readStored('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
-      debugEveryMs: Math.max(250, Number(readStored('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
       statusEvery: Math.max(250, Number(readStored('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
       scriptStartupTimeoutMs: Math.max(500, Number(readStored('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
       installConfirmMs: Math.max(1000, Number(readStored('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
@@ -1089,26 +1082,7 @@
     return true;
   }
 
-  function postDebug(type, detail = {}, options = {}) {
-    try {
-      if (!cfg.debug || !cfg.debugEndpoint) return;
-      const t = Date.now();
-      if (!options.force && t - state.lastDebugAt < cfg.debugEveryMs) return;
-      state.lastDebugAt = t;
-      const payload = {
-        at: new Date(t).toISOString(),
-        type: `extension-bootstrap:${type}`,
-        version: BOOTSTRAP_VERSION,
-        owner: BOOTSTRAP_OWNER,
-        bootId: state.bootId,
-        url: location.href,
-        title: document.title,
-        detail,
-        status: getBotStatus()
-      };
-      requestText('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
-    } catch (_) {}
-  }
+  function postDebug() {}
 
   function recordBootstrapException(label, err, detail = {}) {
     const message = noteBootstrapError(label, err, detail);
@@ -1127,12 +1101,7 @@
     return message;
   }
 
-  window.__graspRatBotDebugPost = function (payload) {
-    try {
-      if (!cfg.debug || !cfg.debugEndpoint) return;
-      requestText('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
-    } catch (_) {}
-  };
+  window.__graspRatBotDebugPost = function () {};
 
   async function runInPage(source, sourceUrl) {
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
@@ -1223,9 +1192,6 @@
     logBootstrap('install source start', { reason, version: manifest.version, sha256: manifest.sha256, sourceBytes: String(source || '').length, currentStatus: shortStatus() });
     window.__graspRatBotRuntimeConfig = {
       ...(manifest.config || {}),
-      debug: Boolean(manifest.debug ?? cfg.debug),
-      debugEndpoint: String(manifest.debugEndpoint || cfg.debugEndpoint || ''),
-      debugEveryMs: Math.max(250, Number(manifest.debugEveryMs || cfg.debugEveryMs) || 1000),
       statusEvery: Math.max(250, Number(manifest.statusEvery || cfg.statusEvery) || 1000),
       version: String(manifest.version || 'remote'),
       sourceHash: String(manifest.sha256 || ''),
@@ -1676,11 +1642,6 @@
         cfg.manifestUrl = String(url || '');
         writeStored({ manifestUrl: cfg.manifestUrl });
         return cfg.manifestUrl;
-      },
-      setDebugEndpoint(url) {
-        cfg.debugEndpoint = String(url || '');
-        writeStored({ debugEndpoint: cfg.debugEndpoint });
-        return cfg.debugEndpoint;
       }
     };
     window.__graspRatBotBootstrap = bootstrapApi;

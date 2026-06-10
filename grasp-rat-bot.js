@@ -39,9 +39,6 @@ function parseArgs(args) {
     else if (arg === '--page-ws') out.pageWs = args[++i] || '';
     else if (arg === '--status-every') out.statusEvery = Number(args[++i] || out.statusEvery);
     else if (arg === '--bot-version') out.overrides.version = args[++i] || '';
-    else if (arg === '--debug') out.overrides.debug = true;
-    else if (arg === '--debug-endpoint') out.overrides.debugEndpoint = args[++i] || '';
-    else if (arg === '--debug-every-ms') out.overrides.debugEveryMs = Number(args[++i] || 0);
     else if (arg === '--danger-radius') out.overrides.dangerRadius = Number(args[++i]);
     else if (arg === '--global-attack-max') out.overrides.globalAttackMaxDistance = Number(args[++i]);
     else if (arg === '--global-coin-max') out.overrides.globalCoinMaxDistance = Number(args[++i]);
@@ -76,9 +73,6 @@ Options:
   --page-ws <url>         Attach directly to a page WebSocketDebuggerUrl
   --status-every <ms>     Browser console status interval. Default: 1000
   --bot-version <value>   Version label exposed in browser bot status
-  --debug                 Enable browser bot debug event posting
-  --debug-endpoint <url>  Browser debug event POST endpoint
-  --debug-every-ms <ms>   Minimum interval between debug tick events. Default: 1000
   --danger-radius <cm>    Flee from active local units within this range
   --global-attack-max <cm>  Max distance for far Drop targets
   --global-coin-max <cm>  Max distance for far coins
@@ -1784,9 +1778,6 @@ function browserBotSource(config) {
 	    sourceHash: String(config.sourceHash || ''),
 	    sourceUrl: String(config.sourceUrl || ''),
 	    injectedBy: String(config.injectedBy || 'cdp'),
-	    debug: Boolean(config.debug),
-	    debugEndpoint: String(config.debugEndpoint || ''),
-    debugEveryMs: Math.max(250, Number(config.debugEveryMs) || 1000),
     tickMs: 120,
     statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
     dangerRadius: 17000,
@@ -2684,47 +2675,7 @@ function browserBotSource(config) {
         return Array.isArray(value) ? value.length : 0;
       }
 
-		  function postDebugEvent(type, detail = {}, options = {}) {
-		    try {
-		      if (!cfg.debug || !cfg.debugEndpoint) return;
-		      const t = Date.now();
-		      if (!options.force && t - Number(bot.lastDebugAt || 0) < cfg.debugEveryMs) return;
-		      bot.lastDebugAt = t;
-		      let status = null;
-		      try {
-		        status = bot.status ? bot.status() : null;
-		      } catch (err) {
-		        status = { error: err?.message || String(err) };
-		      }
-		      const payload = {
-		        at: new Date(t).toISOString(),
-		        type,
-		        version: cfg.version,
-		        sourceHash: cfg.sourceHash,
-		        sourceUrl: cfg.sourceUrl,
-		        injectedBy: cfg.injectedBy,
-		        url: location.href,
-		        title: document.title,
-		        detail,
-		        status
-		      };
-		      try {
-		        if (typeof window.__graspRatBotDebugPost === 'function') {
-		          window.__graspRatBotDebugPost(payload);
-		          return;
-		        }
-		      } catch (_) {}
-		      try {
-		        fetch(cfg.debugEndpoint, {
-		          method: 'POST',
-		          mode: 'no-cors',
-		          keepalive: true,
-		          headers: { 'Content-Type': 'text/plain' },
-		          body: safeStringify(payload)
-		        }).catch(() => {});
-		      } catch (_) {}
-		    } catch (_) {}
-		  }
+		  function postDebugEvent() {}
 
       function recordUnhandledTickError(source, err) {
         const entry = {
@@ -7245,19 +7196,8 @@ function browserBotSource(config) {
 		      try {
 		        console.error('[grasp-rat-bot:error]', err);
 		      } catch (_) {}
-		      try {
-		        postDebugEvent('error', { source, message: err?.message || String(err), stack: String(err?.stack || '') }, { force: true });
-		      } catch (debugErr) {
-		        recordUnhandledTickError(source + ':error-debug', debugErr);
-		      }
 		    } finally {
 		      bot.ticking = false;
-		      const decision = bot.lastDecision;
-		      try {
-		        if (decision) postDebugEvent('tick', { source, decision });
-		      } catch (err) {
-		        recordUnhandledTickError(source + ':finalize', err);
-		      }
 		    }
 		  }
 

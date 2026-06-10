@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.20
+// @version      0.4.21
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.20';
+  const BOOTSTRAP_VERSION = '0.4.21';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -51,15 +51,12 @@
 
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
-    debug: true,
-    debugEndpoint: 'http://127.0.0.1:18777/events',
     pollMs: 5000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
     requestTimeoutMs: 7000,
     fallbackStaggerMs: 1200,
     staleTickMs: 3000,
-    debugEveryMs: 1000,
     statusEvery: 1000,
     scriptStartupTimeoutMs: 2500,
     installConfirmMs: 3500,
@@ -81,15 +78,12 @@
 
   const cfg = {
     manifestUrl: String(GM_getValue('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
-    debug: Boolean(GM_getValue('debug', DEFAULTS.debug)),
-    debugEndpoint: String(GM_getValue('debugEndpoint', DEFAULTS.debugEndpoint) || DEFAULTS.debugEndpoint),
     pollMs: Math.max(5000, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
     watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
     busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
     requestTimeoutMs: Math.max(3000, Number(GM_getValue('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
     fallbackStaggerMs: Math.max(0, Number(GM_getValue('fallbackStaggerMs', DEFAULTS.fallbackStaggerMs)) || DEFAULTS.fallbackStaggerMs),
     staleTickMs: Math.max(1000, Number(GM_getValue('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
-    debugEveryMs: Math.max(250, Number(GM_getValue('debugEveryMs', DEFAULTS.debugEveryMs)) || DEFAULTS.debugEveryMs),
     statusEvery: Math.max(250, Number(GM_getValue('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
     scriptStartupTimeoutMs: Math.max(500, Number(GM_getValue('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
     installConfirmMs: Math.max(1000, Number(GM_getValue('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
@@ -123,7 +117,6 @@
     lastLoginSuppressReason: '',
     lastAuthorizeAt: 0,
     lastError: '',
-    lastDebugAt: 0,
     lastManifestStatus: '',
     lastScriptStatus: '',
     lastRemoteStatus: '',
@@ -1193,30 +1186,9 @@
     return true;
   }
 
-  function postDebug(type, detail = {}, options = {}) {
-    try {
-      if (!cfg.debug || !cfg.debugEndpoint) return;
-      const t = Date.now();
-      if (!options.force && t - state.lastDebugAt < cfg.debugEveryMs) return;
-      state.lastDebugAt = t;
-      const payload = {
-        at: new Date(t).toISOString(),
-        type: `bootstrap:${type}`,
-        url: location.href,
-        title: document.title,
-        detail,
-        status: getBotStatus()
-      };
-      gmRequest('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
-    } catch (_) {}
-  }
+  function postDebug() {}
 
-  unsafeWindow.__graspRatBotDebugPost = function (payload) {
-    try {
-      if (!cfg.debug || !cfg.debugEndpoint) return;
-      gmRequest('POST', cfg.debugEndpoint, safeStringify(payload), { 'Content-Type': 'application/json' }).catch(() => {});
-    } catch (_) {}
-  };
+  unsafeWindow.__graspRatBotDebugPost = function () {};
 
   async function runInPage(source, sourceUrl) {
     const labeledSource = `${source}\n//# sourceURL=${sourceUrl || 'grasp-rat-remote-bot.js'}`;
@@ -1365,9 +1337,6 @@
     });
     unsafeWindow.__graspRatBotRuntimeConfig = {
       ...(manifest.config || {}),
-      debug: Boolean(manifest.debug ?? cfg.debug),
-      debugEndpoint: String(manifest.debugEndpoint || cfg.debugEndpoint || ''),
-      debugEveryMs: Math.max(250, Number(manifest.debugEveryMs || cfg.debugEveryMs) || 1000),
       statusEvery: Math.max(250, Number(manifest.statusEvery || cfg.statusEvery) || 1000),
       version: String(manifest.version || 'remote'),
       sourceHash: String(manifest.sha256 || ''),
@@ -1865,11 +1834,6 @@
       cfg.manifestUrl = String(url || '');
       GM_setValue('manifestUrl', cfg.manifestUrl);
       return cfg.manifestUrl;
-    },
-    setDebugEndpoint(url) {
-      cfg.debugEndpoint = String(url || '');
-      GM_setValue('debugEndpoint', cfg.debugEndpoint);
-      return cfg.debugEndpoint;
     }
   };
 
