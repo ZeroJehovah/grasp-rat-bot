@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.71"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.72"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -4622,20 +4622,32 @@
       .filter(c => c.distance >= cfg.fieldMigrationMinDistance)
       .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
     if (!candidates.length) return null;
-    let best = null;
-    for (const coin of candidates.slice(0, 80)) {
+    const buildFieldItem = coin => {
       const members = candidates.filter(other => dist(coin, other) <= cfg.fieldMigrationClusterRadius);
-      if (members.length < cfg.fieldMigrationMinCoins) continue;
+      if (members.length < cfg.fieldMigrationMinCoins) return null;
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
       const staminaCost = opportunityCoinStaminaCost(coin);
       const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
-      const item = {
+      return {
         ...coin,
+        fieldMigration: true,
         fieldMembers: members.length,
         fieldAmount: totalAmount,
         fieldScore: score,
+        opportunityScore: score,
         opportunityStaminaCost: staminaCost
       };
+    };
+    const current = bot.opportunityChoice;
+    if (current?.key && current.reason === 'migrate-to-known-field' && now() < Number(current.until || 0)) {
+      const heldCoin = candidates.find(c => String(c.drop_id) === String(current.id));
+      const held = heldCoin ? buildFieldItem(heldCoin) : null;
+      if (held) return held;
+    }
+    let best = null;
+    for (const coin of candidates.slice(0, 80)) {
+      const item = buildFieldItem(coin);
+      if (!item) continue;
       if (!best || item.fieldScore > best.fieldScore) best = item;
     }
     return best;
@@ -5643,6 +5655,7 @@
 
 	  function snapshotCoinNavigationReason(coin) {
 	    if (coin?.snapshotIdleFallback) return 'snapshot-coin-idle-timeout';
+	    if (coin?.fieldMigration) return 'migrate-to-known-field';
 	    if (isSnapshotOnlyCoin(coin) && Number(coin?.snapshotMembers || 0) > 0) {
 	      return coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target';
 	    }
@@ -5650,7 +5663,7 @@
   }
 
   function scoreCoinOpportunity(coin) {
-    const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? NaN);
+    const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? coin?.fieldScore ?? NaN);
     if (Number.isFinite(override)) return override;
     const sticky = bot.lastTarget?.kind === 'coin'
       && String(bot.lastTarget.id) === String(coin.drop_id)
@@ -6556,10 +6569,14 @@
     }
 
     const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
+    const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
+      ? pickCoinField(self, allCoins, coinThreats)
+      : null;
     const opportunityCoinGroups = [
       { coins, maxDistance: cfg.coinMaxDistance },
       { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
       { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance },
+      ...(fieldCompetitionCoin ? [{ coins: [fieldCompetitionCoin], maxDistance: cfg.fieldMigrationMaxDistance }] : []),
       ...(snapshotCompetitionCoin ? [{ coins: [snapshotCompetitionCoin], maxDistance: cfg.snapshotCoinMaxDistance }] : [])
     ];
     const profitableCombatTarget = pickProfitableCombatTarget(self, combatTargets, bullets, opportunityCoinGroups, coinThreats);
@@ -6584,30 +6601,6 @@
     if (opportunity) {
       bot.fleeLock = null;
       return attachOpportunisticShot(opportunity, self, entities, { recovery });
-    }
-
-    const fieldTarget = stamina5s >= cfg.fieldMigrationStaminaThreshold
-      ? pickCoinField(self, allCoins, coinThreats)
-      : null;
-    if (fieldTarget) {
-      bot.fleeLock = null;
-      const dir = coinDirectionTo(self, fieldTarget);
-      return attachOpportunisticShot({
-        kind: 'seek-coin',
-        reason: 'migrate-to-known-field',
-        target: {
-          id: fieldTarget.drop_id,
-          x: fieldTarget.x,
-          y: fieldTarget.y,
-          amount: fieldTarget.amount,
-          distance: Math.round(dir.distance),
-          fieldMembers: fieldTarget.fieldMembers,
-          fieldAmount: fieldTarget.fieldAmount
-        },
-        dx: dir.dx,
-        dy: dir.dy,
-        ...coinMotionMeta(dir)
-      }, self, entities, { recovery });
     }
 
     const distantCoin = pickDistantCoin(self, allCoins, coinThreats);
