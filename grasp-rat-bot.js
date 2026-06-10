@@ -202,7 +202,6 @@ function runSelfTest() {
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
     snapshotCoinClusterMinCoins: 2,
-    snapshotCoinLocalFallbackMaxDistance: 22000,
     snapshotSingleCoinMaxDistance: 22000,
     snapshotSingleCoinDistancePerAmount: 30000,
     patrolHeadingMs: 26000,
@@ -485,8 +484,20 @@ function runSelfTest() {
       .sort(compareCoinOpportunity);
   }
 
+  function snapshotLocalCoinAllowed(self, coin) {
+    if (!coin?.snapshot || coin?.native) return true;
+    const distance = self ? dist(self, coin) : Infinity;
+    if (!Number.isFinite(distance)) return true;
+    const radius = Math.max(0, Number(cfg.nativeCoinAuthoritativeRadius || 0));
+    return distance > radius;
+  }
+
+  function filterLocalSnapshotCoins(self, coins) {
+    return (coins || []).filter(coin => snapshotLocalCoinAllowed(self, coin));
+  }
+
   function pickSnapshotCoinDestination(self, coins, activeThreats) {
-    const candidates = safeCoins(self, coins, activeThreats, cfg.snapshotCoinMaxDistance)
+    const candidates = safeCoins(self, filterLocalSnapshotCoins(self, coins), activeThreats, cfg.snapshotCoinMaxDistance)
       .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
     if (!candidates.length) return null;
     let best = null;
@@ -987,6 +998,7 @@ function runSelfTest() {
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const recovery = !fullHp && isRecovering(self);
     const coinThreats = avoidanceThreats;
+    const usableCoins = filterLocalSnapshotCoins(self, coins);
     if (fullHp && closeThreats.length) return { kind: 'flee' };
     if (fullHp && cautionThreats.length) return { kind: 'flee' };
     const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
@@ -994,19 +1006,19 @@ function runSelfTest() {
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
       : cfg.nearCoinPriorityDistance;
-    const nearCoin = coins
+    const nearCoin = usableCoins
       .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
       .filter(c => c.amount > 0
         && c.distance <= nearCoinLimit
         && !coinThreats.some(t => dist(c, t) <= t.coinDangerRadius))
       .sort((a, b) => (a.distance - b.distance) || (b.amount - a.amount))[0];
-    const footCoin = coins
+    const footCoin = usableCoins
       .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
       .filter(c => c.amount > 0
         && c.distance <= cfg.footCoinPriorityDistance
         && !coinThreats.some(t => dist(c, t) <= t.coinDangerRadius))
       .sort((a, b) => (a.distance - b.distance) || (b.amount - a.amount))[0];
-    const postAttackCoin = pickPostAttackDropCoin(self, coins, coinThreats, attacks, entities, { includeSingle: !recovery });
+    const postAttackCoin = pickPostAttackDropCoin(self, usableCoins, coinThreats, attacks, entities, { includeSingle: !recovery });
     if (postAttackCoin) return { kind: 'coin', reason: 'post-attack-drop-coin', id: postAttackCoin.drop_id, amount: postAttackCoin.amount };
     if (recovery && nearCoin) return { kind: 'coin', id: nearCoin.drop_id, amount: nearCoin.amount };
     const nearbyHumans = entities
@@ -1022,14 +1034,14 @@ function runSelfTest() {
     }
     const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
     if (footCoin) return attachOpportunisticShot({ kind: 'coin', reason: 'foot-coin-priority', id: footCoin.drop_id, amount: footCoin.amount }, self, entities, !recovery);
-    const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, coins, coinThreats);
-    const profitableCombatTarget = pickProfitableCombatTarget(self, entities, bullets, coins, coinThreats, snapshotCompetitionCoin);
+    const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, usableCoins, coinThreats);
+    const profitableCombatTarget = pickProfitableCombatTarget(self, entities, bullets, usableCoins, coinThreats, snapshotCompetitionCoin);
     if (profitableCombatTarget) return chooseCombatAction(self, profitableCombatTarget, bullets);
     const opportunityTargets = fullHp ? entities.filter(isAfkTarget) : entities;
-    const opportunity = pickBestOpportunity(self, opportunityTargets, coins, coinThreats, snapshotCompetitionCoin);
+    const opportunity = pickBestOpportunity(self, opportunityTargets, usableCoins, coinThreats, snapshotCompetitionCoin);
     if (opportunity) return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, opportunity), self, entities, !recovery);
     if (stamina5s >= cfg.fieldMigrationStaminaThreshold) {
-      const field = pickField(self, coins, coinThreats);
+      const field = pickField(self, usableCoins, coinThreats);
       if (field) {
         const dir = directionTo(self, field);
         return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, {
@@ -1043,7 +1055,7 @@ function runSelfTest() {
         }), self, entities, !recovery);
       }
     }
-    const distantCoin = pickDistantCoin(self, coins, coinThreats);
+    const distantCoin = pickDistantCoin(self, usableCoins, coinThreats);
     if (distantCoin) {
       const dir = directionTo(self, distantCoin);
       return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, {
@@ -1180,6 +1192,25 @@ function runSelfTest() {
       want: 1
     },
     {
+      name: 'local snapshot coin does not beat visible native coin',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        coins: [
+          { drop_id: 1, x: 5000, y: 0, amount: 1, native: true },
+          { drop_id: 1034, x: 18500, y: 0, amount: 50, snapshot: true }
+        ]
+      }).id,
+      want: 1
+    },
+    {
+      name: 'local snapshot-only coin is not chased',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        coins: [{ drop_id: 1034, x: 18500, y: 0, amount: 50, snapshot: true }]
+      }).reason,
+      want: 'wait-for-snapshot-coin'
+    },
+    {
       name: 'same-value coin score distinguishes 150m from 227m',
       got: scoreCoinOpportunity({ amount: 1, distance: 150 }) > scoreCoinOpportunity({ amount: 1, distance: 227 }),
       want: true
@@ -1301,9 +1332,9 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [
-          { drop_id: 2, x: 50000, y: 0, amount: 1 },
-          { drop_id: 3, x: 54000, y: 2000, amount: 1 },
-          { drop_id: 4, x: 57000, y: -1000, amount: 1 }
+          { drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true },
+          { drop_id: 3, x: 54000, y: 2000, amount: 1, snapshot: true },
+          { drop_id: 4, x: 57000, y: -1000, amount: 1, snapshot: true }
         ]
       }).kind,
       want: 'seek-coin'
@@ -1313,9 +1344,9 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [
-          { drop_id: 2, x: 50000, y: 0, amount: 1 },
-          { drop_id: 3, x: 54000, y: 2000, amount: 1 },
-          { drop_id: 4, x: 57000, y: -1000, amount: 1 }
+          { drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true },
+          { drop_id: 3, x: 54000, y: 2000, amount: 1, snapshot: true },
+          { drop_id: 4, x: 57000, y: -1000, amount: 1, snapshot: true }
         ]
       }).reason,
       want: 'snapshot-coin-field'
@@ -2155,7 +2186,6 @@ function browserBotSource(config) {
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
     snapshotCoinClusterMinCoins: 2,
-    snapshotCoinLocalFallbackMaxDistance: 22000,
     snapshotSingleCoinMaxDistance: 22000,
     snapshotSingleCoinDistancePerAmount: 30000,
     snapshotCoinStaleMs: 30000,
@@ -3991,30 +4021,33 @@ function browserBotSource(config) {
     return 'xy:' + Math.round(Number(coin.x) || 0) + ':' + Math.round(Number(coin.y) || 0) + ':' + (Number(coin.amount) || 0);
   }
 
-  function nativeCoinMatchesSnapshot(snapshotCoin, nativeCoins) {
-    if (!snapshotCoin || !Array.isArray(nativeCoins) || !nativeCoins.length) return false;
-    const snapshotId = snapshotCoin.drop_id ?? snapshotCoin.id ?? snapshotCoin.coin_id;
-    const snapshotPoint = { x: Number(snapshotCoin.x), y: Number(snapshotCoin.y) };
-    const matchRadius = Math.max(100, Number(cfg.coinCollectedPruneRadius || 900));
-    return nativeCoins.some(nativeCoin => {
-      const nativeId = nativeCoin?.drop_id ?? nativeCoin?.id ?? nativeCoin?.coin_id;
-      if (snapshotId !== undefined && snapshotId !== null && snapshotId !== ''
-        && nativeId !== undefined && nativeId !== null && nativeId !== ''
-        && String(snapshotId) === String(nativeId)) return true;
-      const nativePoint = { x: Number(nativeCoin?.x), y: Number(nativeCoin?.y) };
-      if (!Number.isFinite(snapshotPoint.x) || !Number.isFinite(snapshotPoint.y)
-        || !Number.isFinite(nativePoint.x) || !Number.isFinite(nativePoint.y)) return false;
-      return dist(snapshotPoint, nativePoint) <= matchRadius;
-    });
+  function nativeViewRadiusCm() {
+    const nativeState = getNativeState();
+    const values = [
+      nativeState?.viewRadiusCm,
+      nativeState?.view_radius_cm,
+      nativeState?.viewRadius,
+      nativeState?.view_radius
+    ];
+    for (const value of values) {
+      const radius = Number(value);
+      if (Number.isFinite(radius) && radius > 0) return radius;
+    }
+    return 0;
   }
 
-  function snapshotCoinAllowed(self, coin, nativeCoins = null) {
+  function snapshotCoinLocalSuppressRadius() {
+    return Math.max(
+      0,
+      Number(cfg.nativeCoinAuthoritativeRadius || 0),
+      nativeViewRadiusCm()
+    );
+  }
+
+  function snapshotCoinAllowed(self, coin) {
     const distance = self ? dist(self, coin) : Infinity;
-    const authoritativeRadius = Number(cfg.nativeCoinAuthoritativeRadius || 0);
-    if (!Number.isFinite(distance) || distance > authoritativeRadius) return true;
-    if (nativeCoinMatchesSnapshot(coin, nativeCoins)) return true;
-    const fallbackMax = Math.max(0, Number(cfg.snapshotCoinLocalFallbackMaxDistance || cfg.coinMaxDistance || 0));
-    return distance <= fallbackMax;
+    const suppressRadius = snapshotCoinLocalSuppressRadius();
+    return !Number.isFinite(distance) || distance > suppressRadius;
   }
 
   function snapshotCoinFreshEnough() {
@@ -4039,7 +4072,7 @@ function browserBotSource(config) {
     if (useSnapshotCoins) {
       for (const coin of snapshotCoins) {
         const normalized = normalizeCoinDrop(coin, 'snapshot');
-        if (!normalized || !snapshotCoinAllowed(self, normalized, nativeCoins)) continue;
+        if (!normalized || !snapshotCoinAllowed(self, normalized)) continue;
         add(normalized, 'snapshot');
       }
     }
