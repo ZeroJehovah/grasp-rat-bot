@@ -187,6 +187,7 @@ function runSelfTest() {
     opportunitySwitchMargin: 3000,
     opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
+    opportunityNearbyPriorityDistance: 18000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
@@ -576,6 +577,14 @@ function runSelfTest() {
     ) + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function opportunityPriorityTier(item) {
+    const distance = Number(item?.distance ?? Infinity);
+    const nearDistance = Math.max(0, Number(cfg.opportunityNearbyPriorityDistance || 0));
+    if (Number.isFinite(distance) && distance <= nearDistance) return 1;
+    if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
+    return 0;
+  }
+
   function bestCoinOpportunityScore(self, coins, activeThreats, snapshotCompetitionCoin = null) {
     let best = -Infinity;
     for (const coin of safeCoins(self, coins, activeThreats, cfg.globalCoinMaxDistance)) {
@@ -927,8 +936,9 @@ function runSelfTest() {
         score
       });
     }
+    for (const item of opportunities) item.priorityTier = opportunityPriorityTier(item);
     return opportunities
-      .sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance)[0] || null;
+      .sort((a, b) => b.priorityTier - a.priorityTier || b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance)[0] || null;
   }
 
   function actionMovesTowardThreat(self, threat, action) {
@@ -1203,6 +1213,17 @@ function runSelfTest() {
       want: 1
     },
     {
+      name: '150m coin beats richer 200m coin by nearby priority',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        coins: [
+          { drop_id: 1, x: 15000, y: 0, amount: 1 },
+          { drop_id: 2, x: 20000, y: 0, amount: 20 }
+        ]
+      }).id,
+      want: 1
+    },
+    {
       name: 'closer same-value coin beats sticky older far coin',
       got: (() => {
         bot.lastTarget = { kind: 'coin', id: 2 };
@@ -1263,6 +1284,15 @@ function runSelfTest() {
         coins: [{ drop_id: 1, x: 22000, y: 0, amount: 1 }]
       }).kind,
       want: 'attack'
+    },
+    {
+      name: 'drop three afk target in range beats 400m visible coin',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 33, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 3 }],
+        coins: [{ drop_id: 1, x: 40000, y: 0, amount: 50, native: true }]
+      }).reason,
+      want: 'best-opportunity-afk-drop-target'
     },
     {
       name: 'near high afk drop beats low coin by value',
@@ -2209,6 +2239,7 @@ function browserBotSource(config) {
     opportunitySwitchMargin: 3000,
     opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
+    opportunityNearbyPriorityDistance: 18000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
@@ -6395,6 +6426,14 @@ function browserBotSource(config) {
     ) + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function opportunityPriorityTier(item) {
+    const distance = Number(item?.distance ?? Infinity);
+    const nearDistance = Math.max(0, Number(cfg.opportunityNearbyPriorityDistance || 0));
+    if (Number.isFinite(distance) && distance <= nearDistance) return 1;
+    if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
+    return 0;
+  }
+
   function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
     let best = -Infinity;
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
@@ -6588,13 +6627,14 @@ function browserBotSource(config) {
   function chooseStableOpportunity(opportunities) {
     const sorted = opportunities
       .slice()
-      .sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
+      .sort((a, b) => b.priorityTier - a.priorityTier || b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
     const best = sorted[0] || null;
     if (!best) return null;
     const current = bot.opportunityChoice;
     if (current?.key && now() < Number(current.until || 0)) {
       const held = sorted.find(item => opportunityKey(item) === String(current.key || ''));
       if (held && opportunityKey(best) !== opportunityKey(held)) {
+        if (Number(best.priorityTier || 0) > Number(held.priorityTier || 0)) return best;
         const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
         const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
         const heldScore = Number(held.score || 0);
@@ -6635,6 +6675,7 @@ function browserBotSource(config) {
         distance: coin.distance,
         staminaCost: opportunityCoinStaminaCost(coin),
         score: Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin),
+        priorityTier: opportunityPriorityTier({ type: 'coin', distance: coin.distance }),
         action: () => buildCoinAction(
           self,
           coin,
@@ -6655,6 +6696,11 @@ function browserBotSource(config) {
         distance: target.distance,
         staminaCost,
         score,
+        priorityTier: opportunityPriorityTier({
+          type: 'enemy',
+          kind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
+          distance: target.distance
+        }),
         action: () => buildEnemyAction(self, target)
       });
     }
