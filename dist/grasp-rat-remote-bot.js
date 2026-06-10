@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.58"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.59"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -136,7 +136,6 @@
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
     snapshotCoinClusterMinCoins: 2,
-    snapshotCoinLocalFallbackMaxDistance: 22000,
     snapshotSingleCoinMaxDistance: 22000,
     snapshotSingleCoinDistancePerAmount: 30000,
     snapshotCoinStaleMs: 30000,
@@ -1972,30 +1971,33 @@
     return 'xy:' + Math.round(Number(coin.x) || 0) + ':' + Math.round(Number(coin.y) || 0) + ':' + (Number(coin.amount) || 0);
   }
 
-  function nativeCoinMatchesSnapshot(snapshotCoin, nativeCoins) {
-    if (!snapshotCoin || !Array.isArray(nativeCoins) || !nativeCoins.length) return false;
-    const snapshotId = snapshotCoin.drop_id ?? snapshotCoin.id ?? snapshotCoin.coin_id;
-    const snapshotPoint = { x: Number(snapshotCoin.x), y: Number(snapshotCoin.y) };
-    const matchRadius = Math.max(100, Number(cfg.coinCollectedPruneRadius || 900));
-    return nativeCoins.some(nativeCoin => {
-      const nativeId = nativeCoin?.drop_id ?? nativeCoin?.id ?? nativeCoin?.coin_id;
-      if (snapshotId !== undefined && snapshotId !== null && snapshotId !== ''
-        && nativeId !== undefined && nativeId !== null && nativeId !== ''
-        && String(snapshotId) === String(nativeId)) return true;
-      const nativePoint = { x: Number(nativeCoin?.x), y: Number(nativeCoin?.y) };
-      if (!Number.isFinite(snapshotPoint.x) || !Number.isFinite(snapshotPoint.y)
-        || !Number.isFinite(nativePoint.x) || !Number.isFinite(nativePoint.y)) return false;
-      return dist(snapshotPoint, nativePoint) <= matchRadius;
-    });
+  function nativeViewRadiusCm() {
+    const nativeState = getNativeState();
+    const values = [
+      nativeState?.viewRadiusCm,
+      nativeState?.view_radius_cm,
+      nativeState?.viewRadius,
+      nativeState?.view_radius
+    ];
+    for (const value of values) {
+      const radius = Number(value);
+      if (Number.isFinite(radius) && radius > 0) return radius;
+    }
+    return 0;
   }
 
-  function snapshotCoinAllowed(self, coin, nativeCoins = null) {
+  function snapshotCoinLocalSuppressRadius() {
+    return Math.max(
+      0,
+      Number(cfg.nativeCoinAuthoritativeRadius || 0),
+      nativeViewRadiusCm()
+    );
+  }
+
+  function snapshotCoinAllowed(self, coin) {
     const distance = self ? dist(self, coin) : Infinity;
-    const authoritativeRadius = Number(cfg.nativeCoinAuthoritativeRadius || 0);
-    if (!Number.isFinite(distance) || distance > authoritativeRadius) return true;
-    if (nativeCoinMatchesSnapshot(coin, nativeCoins)) return true;
-    const fallbackMax = Math.max(0, Number(cfg.snapshotCoinLocalFallbackMaxDistance || cfg.coinMaxDistance || 0));
-    return distance <= fallbackMax;
+    const suppressRadius = snapshotCoinLocalSuppressRadius();
+    return !Number.isFinite(distance) || distance > suppressRadius;
   }
 
   function snapshotCoinFreshEnough() {
@@ -2020,7 +2022,7 @@
     if (useSnapshotCoins) {
       for (const coin of snapshotCoins) {
         const normalized = normalizeCoinDrop(coin, 'snapshot');
-        if (!normalized || !snapshotCoinAllowed(self, normalized, nativeCoins)) continue;
+        if (!normalized || !snapshotCoinAllowed(self, normalized)) continue;
         add(normalized, 'snapshot');
       }
     }
