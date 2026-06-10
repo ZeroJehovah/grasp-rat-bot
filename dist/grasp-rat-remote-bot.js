@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.57"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.58"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -223,7 +223,6 @@
     offlineLeaveCooldownMs: 60000,
     serverPositionStallEnabled: true,
     serverPositionStallOfflineEnabled: false,
-    serverPositionStallProbeMs: 1000,
     serverPositionStallMs: 2500,
     serverPositionNoMoveStallMs: 0,
     serverPositionStallHoldMs: 6000,
@@ -288,7 +287,6 @@
     offlineReloginUntil: 0,
     lastOfflineSafety: null,
     serverPositionStall: null,
-    serverPositionProbeAt: 0,
     lastPursuitLeaveAt: 0,
     lastPursuitLeaveResult: null,
     lastCombatLeaveAt: 0,
@@ -2214,19 +2212,6 @@
   function resetServerPositionStall(reason = '') {
     if (bot.serverPositionStall) bot.serverPositionStall.reason = reason || 'reset';
     bot.serverPositionStall = null;
-  }
-
-  async function refreshServerPositionProbeIfNeeded() {
-    if (!cfg.serverPositionStallEnabled || !currentVelocityCommandActive()) return;
-    const t = Date.now();
-    const probeMs = Math.max(250, Number(cfg.serverPositionStallProbeMs || 1000));
-    if (t - Number(bot.serverPositionProbeAt || 0) < probeMs) return;
-    bot.serverPositionProbeAt = t;
-    try {
-      await refreshGlobalState(true);
-    } catch (err) {
-      bot.globalState.error = err.message || String(err);
-    }
   }
 
   function assessServerPositionStall(self) {
@@ -5461,7 +5446,6 @@
         };
       }
 	      ensureControlWs();
-      await refreshServerPositionProbeIfNeeded();
       const serverPositionStall = assessServerPositionStall(self);
       const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
       const controlOffline = !bot.control.wsOpen || serverPositionStallOffline;
