@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.64"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.65"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1160,10 +1160,12 @@
 	    const title = String(document.title || '');
 	    const text = String(document.body?.innerText || '').slice(0, 5000);
 	    const combined = title + '\n' + text;
-	    const isError = /Error\s*1033/i.test(combined)
+	    const isCloudflareError = /Error\s*1033/i.test(combined)
 	      || /Cloudflare\s+Tunnel\s+error/i.test(combined)
 	      || (/Cloudflare/i.test(combined) && /unable\s+to\s+resolve/i.test(combined));
-	    if (!isError) return null;
+	    const isBunkerWebError = /BunkerWeb/i.test(combined)
+	      && (/\b403\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\s+error/i.test(combined) || /Access\s+is\s+forbidden/i.test(combined));
+	    if (!isCloudflareError && !isBunkerWebError) return null;
 	    const t = Date.now();
 	    const intervalMs = Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
 	    let lastReloadAt = 0;
@@ -1172,12 +1174,13 @@
 	    } catch (_) {}
 	    const elapsedMs = lastReloadAt ? t - lastReloadAt : intervalMs;
 	    const remainingMs = Math.max(0, intervalMs - elapsedMs);
-	    const code = /Error\s*1033/i.test(combined) ? '1033' : '';
-	    const label = code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页';
+	    const code = /Error\s*1033/i.test(combined) ? '1033' : (isBunkerWebError ? '403' : '');
+	    const label = isBunkerWebError ? 'BunkerWeb 403 错误页' : (code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页');
 	    return {
 	      error: true,
 	      code,
 	      label,
+	      provider: isBunkerWebError ? 'bunkerweb' : 'cloudflare',
 	      intervalMs,
 	      lastReloadAt,
 	      remainingMs,

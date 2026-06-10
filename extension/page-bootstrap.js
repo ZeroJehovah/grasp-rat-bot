@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.4';
+  const BOOTSTRAP_VERSION = '0.1.5';
   const BOOTSTRAP_OWNER = 'extension';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -449,10 +449,12 @@
     const title = String(document.title || '');
     const text = String(document.body?.innerText || '').slice(0, 5000);
     const combined = title + '\n' + text;
-    const isError = /Error\s*1033/i.test(combined)
+    const isCloudflareError = /Error\s*1033/i.test(combined)
       || /Cloudflare\s+Tunnel\s+error/i.test(combined)
       || (/Cloudflare/i.test(combined) && /unable\s+to\s+resolve/i.test(combined));
-    if (!isError) {
+    const isBunkerWebError = /BunkerWeb/i.test(combined)
+      && (/\b403\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\s+error/i.test(combined) || /Access\s+is\s+forbidden/i.test(combined));
+    if (!isCloudflareError && !isBunkerWebError) {
       state.cloudflareError = null;
       return null;
     }
@@ -464,12 +466,13 @@
     } catch (_) {}
     const elapsedMs = lastReloadAt ? t - lastReloadAt : intervalMs;
     const remainingMs = Math.max(0, intervalMs - elapsedMs);
-    const code = /Error\s*1033/i.test(combined) ? '1033' : '';
-    const label = code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页';
+    const code = /Error\s*1033/i.test(combined) ? '1033' : (isBunkerWebError ? '403' : '');
+    const label = isBunkerWebError ? 'BunkerWeb 403 错误页' : (code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页');
     return {
       error: true,
       code,
       label,
+      provider: isBunkerWebError ? 'bunkerweb' : 'cloudflare',
       intervalMs,
       lastReloadAt,
       remainingMs,
@@ -797,55 +800,66 @@
     const session = status?.session || {};
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
-    const panelLines = [
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">',
-      '<div style="font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">BOT ' + escapeHtml(actionText(decision, status)) + '</div>',
-      '<button type="button" data-grasp-rat-pause="1" title="' + escapeHtml(buttonTitle) + '" style="flex:0 0 auto;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:' + (paused ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.18)') + ';color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer">' + escapeHtml(buttonText) + '</button>',
-      '</div>',
-      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">版本：' + escapeHtml(bVersion) + ' / 插件 A ' + escapeHtml(BOOTSTRAP_VERSION) + '</div>',
-      '<div>状态：' + escapeHtml(paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + escapeHtml(state.pauseReason) : '') + '</div>'
-    ];
+    while (panel.firstChild) panel.removeChild(panel.firstChild);
+    const appendLine = (text, style = '') => {
+      const line = document.createElement('div');
+      if (style) line.style.cssText = style;
+      line.textContent = String(text ?? '');
+      panel.appendChild(line);
+      return line;
+    };
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    title.textContent = 'BOT ' + actionText(decision, status);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.title = buttonTitle;
+    button.style.cssText = 'flex:0 0 auto;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:' + (paused ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.18)') + ';color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer';
+    button.textContent = buttonText;
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      setPaused(!isPaused(), 'panel button');
+    }, { once: true });
+    header.appendChild(title);
+    header.appendChild(button);
+    panel.appendChild(header);
+    appendLine('版本：' + bVersion + ' / 插件 A ' + BOOTSTRAP_VERSION, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
     if (state.cloudflareError) {
-      panelLines.push('<div>原因：' + escapeHtml(reasonDetail) + '</div>');
+      appendLine('原因：' + reasonDetail);
     } else if (status?.running) {
-      panelLines.push('<div>本次登录：' + escapeHtml(formatDuration(session.uptimeMs ?? status.uptimeMs)) + ' / 收获金币 +' + escapeHtml(formatNumber(session.coinsGained, '0')) + ' / 击杀 ' + escapeHtml(formatNumber(session.kills, '0')) + '</div>');
-      panelLines.push('<div>原因：' + escapeHtml(reasonDetail) + '</div>');
-      panelLines.push('<div>HP ' + escapeHtml(self?.hp ?? '-') + ' / 体力 ' + escapeHtml(formatStamina(self)) + ' / Drop ' + escapeHtml(self?.drop ?? '-') + '</div>');
-      panelLines.push('<div>WS ' + escapeHtml(wsLabel) + ' / Active ' + escapeHtml(nearestActive) + '</div>');
+      appendLine('本次登录：' + formatDuration(session.uptimeMs ?? status.uptimeMs) + ' / 收获金币 +' + formatNumber(session.coinsGained, '0') + ' / 击杀 ' + formatNumber(session.kills, '0'));
+      appendLine('原因：' + reasonDetail);
+      appendLine('HP ' + (self?.hp ?? '-') + ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-'));
+      appendLine('WS ' + wsLabel + ' / Active ' + nearestActive);
       if (decision?.target) {
         const target = decision.target;
-        panelLines.push('<div>目标：' + escapeHtml(target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(target.distance)) + ' 金币 ' + escapeHtml(target.amount ?? '-') + ' Drop ' + escapeHtml(target.drop ?? '-') + '</div>');
+        appendLine('目标：' + (target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + formatDistance(target.distance) + ' 金币 ' + (target.amount ?? '-') + ' Drop ' + (target.drop ?? '-'));
       }
       if (decision?.combat) {
-        panelLines.push('<div>战斗：瞄准 ' + escapeHtml(decision?.aimTarget?.mode || '-') + ' / 来弹 ' + escapeHtml(decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-') + '</div>');
+        appendLine('战斗：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
       }
       if (decision?.opportunisticShot) {
         const shot = decision.opportunisticShot;
-        panelLines.push('<div>顺手射击：' + escapeHtml(shot.name || ('#' + (shot.id ?? '-'))) + ' 距离 ' + escapeHtml(formatDistance(shot.distance)) + ' Drop ' + escapeHtml(shot.drop ?? '-') + '</div>');
+        appendLine('顺手射击：' + (shot.name || ('#' + (shot.id ?? '-'))) + ' 距离 ' + formatDistance(shot.distance) + ' Drop ' + (shot.drop ?? '-'));
       }
       const pursuit = decision?.pursuit || safety.pursuit || status?.pursuit;
       if (pursuit) {
-        panelLines.push('<div>追击：' + escapeHtml(pursuit.name || ('#' + pursuit.id)) + ' ' + escapeHtml(formatDistance(pursuit.distance)) + ' / ' + escapeHtml(Math.round((pursuit.durationMs || 0) / 1000)) + 's</div>');
+        appendLine('追击：' + (pursuit.name || ('#' + pursuit.id)) + ' ' + formatDistance(pursuit.distance) + ' / ' + Math.round((pursuit.durationMs || 0) / 1000) + 's');
       }
       const persistent = activePersistentExitDetail(status);
       const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
-      if (hold > 0) panelLines.push('<div>等待重连：' + escapeHtml(formatDuration(hold)) + '</div>');
+      if (hold > 0) appendLine('等待重连：' + formatDuration(hold));
       if (Array.isArray(status.errors) && status.errors.length) {
-        panelLines.push('<div style="color:#fca5a5">BOT错误：' + escapeHtml(status.errors[status.errors.length - 1]?.message || '') + '</div>');
+        appendLine('BOT错误：' + (status.errors[status.errors.length - 1]?.message || ''), 'color:#fca5a5');
       }
     } else if (state.lastRemoteStatus || state.lastInstallStatus || state.lastError) {
-      panelLines.push('<div>远端：' + escapeHtml(state.lastRemoteStatus || '- ') + '</div>');
-      panelLines.push('<div>安装：' + escapeHtml(state.lastInstallStatus || '-') + '</div>');
-      if (state.lastError) panelLines.push('<div style="color:#fca5a5">错误：' + escapeHtml(state.lastError) + '</div>');
-    }
-    panel.innerHTML = panelLines.join('');
-    const button = panel.querySelector('[data-grasp-rat-pause]');
-    if (button) {
-      button.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        setPaused(!isPaused(), 'panel button');
-      }, { once: true });
+      appendLine('远端：' + (state.lastRemoteStatus || '- '));
+      appendLine('安装：' + (state.lastInstallStatus || '-'));
+      if (state.lastError) appendLine('错误：' + state.lastError, 'color:#fca5a5');
     }
   }
 
