@@ -152,9 +152,9 @@ function runSelfTest() {
     combatStrafeDirectionLockMs: 2200,
     combatStrafeRandomJitterMs: 1100,
     combatStrafeCarryMs: 1600,
-    combatEngageStickMs: 15000,
-    combatEngageGraceMs: 2500,
-    combatEngageGraceRange: 19000,
+    combatEngageStickMs: 30000,
+    combatEngageGraceMs: 5000,
+    combatEngageGraceRange: 22000,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -1942,9 +1942,9 @@ function browserBotSource(config) {
     combatStrafeDirectionLockMs: 2200,
     combatStrafeRandomJitterMs: 1100,
     combatStrafeCarryMs: 1600,
-    combatEngageStickMs: 15000,
-    combatEngageGraceMs: 2500,
-    combatEngageGraceRange: 19000,
+    combatEngageStickMs: 30000,
+    combatEngageGraceMs: 5000,
+    combatEngageGraceRange: 22000,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -3856,11 +3856,56 @@ function browserBotSource(config) {
 
   function normalizeBullet(raw, source) {
     if (!raw || typeof raw !== 'object') return null;
-    const x = Number(raw.x ?? raw.pos_x ?? raw.start_x);
-    const y = Number(raw.y ?? raw.pos_y ?? raw.start_y);
+    let vx = Number(raw.vx ?? raw.velocity_x ?? raw.dx ?? NaN);
+    let vy = Number(raw.vy ?? raw.velocity_y ?? raw.dy ?? NaN);
+    if (!Number.isFinite(vx)) vx = 0;
+    if (!Number.isFinite(vy)) vy = 0;
+    const speedPerTick = Number(raw.speed_per_tick ?? raw.speedPerTick ?? raw.speed_per_server_tick ?? NaN);
+    if (!(vx || vy)) {
+      let dirX = Number(raw.dir_x_micros ?? raw.dirXMicros ?? raw.direction_x_micros ?? raw.dir_x ?? raw.dirX ?? NaN);
+      let dirY = Number(raw.dir_y_micros ?? raw.dirYMicros ?? raw.direction_y_micros ?? raw.dir_y ?? raw.dirY ?? NaN);
+      if (Number.isFinite(dirX) && Number.isFinite(dirY)) {
+        const scale = Math.max(Math.abs(dirX), Math.abs(dirY)) > 10 ? 1000000 : 1;
+        dirX /= scale;
+        dirY /= scale;
+        const speed = Number.isFinite(speedPerTick) && speedPerTick > 0 ? speedPerTick : 500;
+        vx = dirX * speed;
+        vy = dirY * speed;
+      }
+    }
+    const startX = Number(raw.start_x ?? raw.startX ?? raw.origin_x ?? raw.x ?? raw.pos_x);
+    const startY = Number(raw.start_y ?? raw.startY ?? raw.origin_y ?? raw.y ?? raw.pos_y);
+    if (!(vx || vy) && Number.isFinite(startX) && Number.isFinite(startY)) {
+      const targetX = Number(raw.target_x ?? raw.targetX ?? raw.aim_x ?? raw.aimX);
+      const targetY = Number(raw.target_y ?? raw.targetY ?? raw.aim_y ?? raw.aimY);
+      const dx = targetX - startX;
+      const dy = targetY - startY;
+      const distance = Math.hypot(dx, dy);
+      if (Number.isFinite(distance) && distance > 0.01) {
+        const speed = Number.isFinite(speedPerTick) && speedPerTick > 0 ? speedPerTick : 500;
+        vx = dx / distance * speed;
+        vy = dy / distance * speed;
+      }
+    }
+    let x = Number(raw.x ?? raw.pos_x ?? raw.head_x ?? raw.headX ?? NaN);
+    let y = Number(raw.y ?? raw.pos_y ?? raw.head_y ?? raw.headY ?? NaN);
+    const nowTick = Number(raw.local_now_tick ?? raw.now_tick ?? raw.tick ?? bot.globalState.tick ?? NaN);
+    const createdTick = Number(raw.created_tick ?? raw.createdTick ?? NaN);
+    if ((!Number.isFinite(x) || !Number.isFinite(y)) && Number.isFinite(startX) && Number.isFinite(startY)) {
+      x = startX;
+      y = startY;
+      const speedValue = hypot(vx, vy);
+      if (speedValue > 0.01 && Number.isFinite(nowTick) && Number.isFinite(createdTick)) {
+        const rangeCm = Number(raw.range_cm ?? raw.rangeCm ?? raw.range ?? 15000);
+        const ageTicks = Math.max(0, nowTick - createdTick);
+        const travelled = Math.min(Number.isFinite(rangeCm) && rangeCm > 0 ? rangeCm : 15000, ageTicks * speedValue);
+        x = startX + vx / speedValue * travelled;
+        y = startY + vy / speedValue * travelled;
+      }
+    }
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const vx = Number(raw.vx ?? raw.velocity_x ?? raw.dx ?? 0) || 0;
-    const vy = Number(raw.vy ?? raw.velocity_y ?? raw.dy ?? 0) || 0;
+    const expireTick = Number(raw.expire_tick ?? raw.expireTick ?? NaN);
+    if (Number.isFinite(nowTick) && Number.isFinite(expireTick) && nowTick > expireTick + 1) return null;
     const ownerId = raw.ownerId ?? raw.owner_id ?? raw.owner_user_id ?? raw.source_user_id ?? raw.shooter_user_id ?? raw.user_id ?? raw.from_user_id ?? null;
     const id = raw.bullet_id ?? raw.id ?? raw.entity_id ?? (Math.round(x) + ':' + Math.round(y) + ':' + Math.round(vx) + ':' + Math.round(vy));
     return {
@@ -3871,6 +3916,9 @@ function browserBotSource(config) {
       vx,
       vy,
       ownerId,
+      speedPerTick: Number.isFinite(speedPerTick) ? speedPerTick : hypot(vx, vy),
+      createdTick: Number.isFinite(createdTick) ? createdTick : null,
+      expireTick: Number.isFinite(expireTick) ? expireTick : null,
       snapshot: source === 'snapshot' || Boolean(raw.snapshot),
       native: source === 'native' || Boolean(raw.native)
     };
@@ -5364,9 +5412,13 @@ function browserBotSource(config) {
       if (distance > cfg.combatBulletDetectRadius) continue;
       const projection = (toSelfX * bullet.vx + toSelfY * bullet.vy) / speedValue;
       if (projection <= 0 || projection > cfg.combatBulletLookaheadDistance) continue;
-      const laneDistance = Math.abs(toSelfX * bullet.vy - toSelfY * bullet.vx) / speedValue;
+      const signedLaneDistance = (toSelfX * bullet.vy - toSelfY * bullet.vx) / speedValue;
+      const laneDistance = Math.abs(signedLaneDistance);
       if (laneDistance > cfg.combatBulletLaneRadius) continue;
-      const score = (cfg.combatBulletLaneRadius - laneDistance) * 1000 + (cfg.combatBulletDetectRadius - distance);
+      const timeToImpactMs = projection / speedValue * 50;
+      const score = (cfg.combatBulletLaneRadius - laneDistance) * 1000
+        + (cfg.combatBulletLookaheadDistance - projection)
+        + Math.max(0, 1500 - timeToImpactMs);
       const item = {
         id: bullet.id,
         ownerId: bullet.ownerId,
@@ -5377,6 +5429,8 @@ function browserBotSource(config) {
         distance,
         projection,
         laneDistance,
+        signedLaneDistance,
+        timeToImpactMs,
         score
       };
       if (!best || item.score > best.score) best = item;
@@ -5453,6 +5507,10 @@ function browserBotSource(config) {
     }
 
     const key = combatStrafeKey(target, pressure);
+    const signedLane = Number(pressure?.signedLaneDistance);
+    const preciseSign = !pressure?.synthetic && Number.isFinite(signedLane) && Math.abs(signedLane) > 1
+      ? -Math.sign(signedLane)
+      : 0;
     let sign = 0;
     let until = 0;
     if (existing && existing.key === key && t < Number(existing.until || 0)) {
@@ -5460,7 +5518,7 @@ function browserBotSource(config) {
       until = Number(existing.until || 0);
     }
     if (!sign) {
-      sign = Math.random() < 0.5 ? -1 : 1;
+      sign = preciseSign || (Math.random() < 0.5 ? -1 : 1);
       until = t + combatStrafeHoldMs();
     }
 
@@ -5488,6 +5546,7 @@ function browserBotSource(config) {
       carried: false,
       active: true,
       sign,
+      precise: Boolean(preciseSign),
       key,
       holdRemainingMs: Math.max(0, Math.round(until - t)),
       carryRemainingMs: carryMs
@@ -5844,6 +5903,8 @@ function browserBotSource(config) {
         ownerId: pressure.ownerId,
         distance: Math.round(Number(pressure.distance || 0)),
         laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
+        timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
         synthetic: Boolean(pressure.synthetic),
         reason: pressure.reason || ''
       } : null,
@@ -5861,6 +5922,7 @@ function browserBotSource(config) {
           dx: strafe.dx,
           dy: strafe.dy,
           sign: strafe.sign,
+          precise: Boolean(strafe.precise),
           locked: Boolean(strafe.locked),
           carried: Boolean(strafe.carried),
           holdRemainingMs: strafe.holdRemainingMs || 0,
