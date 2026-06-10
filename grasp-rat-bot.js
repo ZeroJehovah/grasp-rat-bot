@@ -2283,7 +2283,10 @@ function browserBotSource(config) {
 		  const PANEL_ID = 'grasp-rat-bot-panel';
 		  const PAUSED_KEY = 'graspRatBotPaused';
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
-      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
+	      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
+	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
+	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
+	      const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
 		  const previousBot = window[BOT_KEY] || null;
 	  const preserved = {
 	    attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
@@ -2509,9 +2512,10 @@ function browserBotSource(config) {
     serverPositionServerMoveMax: 80,
     serverPositionGapMin: 400,
     sessionResetMissingMs: 10000,
-    reloadAfterNoSelfMs: 45000,
-    reloadAfterOfflineMs: 20000,
-    globalRefreshTimeoutMs: 1500,
+	    reloadAfterNoSelfMs: 45000,
+	    reloadAfterOfflineMs: 20000,
+	    cloudflareErrorReloadMs: 5000,
+	    globalRefreshTimeoutMs: 1500,
     status: '',
     ...config,
     // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
@@ -2519,7 +2523,73 @@ function browserBotSource(config) {
     allowBotWebSocketFallback: false
   };
 
-  function restoredCoinFailures() {
+	  function readPersistentExitState(key, t = Date.now()) {
+	    let state = null;
+	    try {
+	      state = JSON.parse(localStorage.getItem(key) || 'null');
+	    } catch (_) {
+	      state = null;
+	    }
+	    if (!state || typeof state !== 'object') return null;
+	    const reloginUntil = Number(state.reloginUntil || 0);
+	    if (reloginUntil && reloginUntil <= t) {
+	      clearPersistentExitState(key);
+	      return null;
+	    }
+	    return refreshExitDetail({ ...state, restored: true }, t);
+	  }
+
+	  function writePersistentExitState(key, detail) {
+	    if (!detail || typeof detail !== 'object') return;
+	    const t = Date.now();
+	    const reloginUntil = Number(detail.reloginUntil || 0);
+	    if (reloginUntil && reloginUntil <= t) {
+	      clearPersistentExitState(key);
+	      return;
+	    }
+	    const state = refreshExitDetail({
+	      at: Number(detail.at || t),
+	      updatedAt: t,
+	      reason: detail.reason || '',
+	      summary: detail.summary || detail.exitSummary || detail.enemyLeaveSummary || '',
+	      reloginUntil,
+	      reloginDelayMs: Number(detail.reloginDelayMs || 0),
+	      reloginHpDelayMs: Number(detail.reloginHpDelayMs || 0),
+	      reloginDelayRangeMs: detail.reloginDelayRangeMs || null,
+	      reloginRepeatDelayMs: Number(detail.reloginRepeatDelayMs || 0),
+	      reloginRepeatCount: Number(detail.reloginRepeatCount || 0),
+	      reloginMinimumDelayMs: Number(detail.reloginMinimumDelayMs || 0),
+	      reloginMinimumReason: detail.reloginMinimumReason || '',
+	      enemyActor: detail.enemyActor || null,
+	      enemyLeaveStreak: detail.enemyLeaveStreak || null,
+	      enemyLeaveReason: detail.enemyLeaveReason || '',
+	      loginSuppressReason: detail.loginSuppressReason || '',
+	      target: detail.target || null,
+	      pursuit: detail.pursuit || null,
+	      injury: detail.injury || null,
+	      self: detail.self || null,
+	      offlineSafety: detail.offlineSafety || null,
+	      staminaReset: detail.staminaReset || null
+	    }, t);
+	    try {
+	      localStorage.setItem(key, JSON.stringify(state));
+	    } catch (_) {}
+	  }
+
+	  function clearPersistentExitState(key) {
+	    try {
+	      localStorage.removeItem(key);
+	    } catch (_) {}
+	  }
+
+	  function refreshExitDetail(detail, t = Date.now()) {
+	    if (!detail || typeof detail !== 'object') return detail;
+	    const reloginUntil = Number(detail.reloginUntil || 0);
+	    if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
+	    return finalizeLeaveDisplayReason(detail);
+	  }
+
+	  function restoredCoinFailures() {
     const t = performance.now();
     return (preserved.coinFailures || []).map(([id, item]) => {
       const next = { ...(item || {}) };
@@ -2542,7 +2612,9 @@ function browserBotSource(config) {
     }).filter(Boolean);
   }
 
-  const restoredFailures = restoredCoinFailures();
+	  const restoredFailures = restoredCoinFailures();
+	  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+	  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
 
 	  const bot = {
 	    running: true,
@@ -2560,8 +2632,9 @@ function browserBotSource(config) {
     lastLoginAt: 0,
     lastLoginResult: null,
     lastOfflineLeaveAt: 0,
-    lastOfflineLeaveResult: null,
-    offlineReloginUntil: 0,
+	    lastOfflineLeaveResult: restoredOfflineLeaveState,
+	    offlineReloginUntil: Math.max(0, Number(restoredOfflineLeaveState?.reloginUntil || 0)),
+	    lastOfflineLeaveWaitMs: Number(restoredOfflineLeaveState?.reloginDelayMs || restoredOfflineLeaveState?.holdRemainingMs || 0),
     lastOfflineSafety: null,
     serverPositionStall: null,
     lastPursuitLeaveAt: 0,
@@ -2569,12 +2642,14 @@ function browserBotSource(config) {
     lastCombatLeaveAt: 0,
     lastCombatLeaveResult: null,
     pendingCombatLeave: null,
-    lastInjuryLeaveAt: 0,
-    lastInjuryLeaveResult: null,
-    pendingInjuryLeave: null,
-    lastEnemyLeaveRetryAt: 0,
+	    lastInjuryLeaveAt: 0,
+	    lastInjuryLeaveResult: null,
+	    pendingInjuryLeave: null,
+	    lastEnemyLeaveResult: restoredEnemyLeaveState,
+	    lastEnemyLeaveWaitMs: Number(restoredEnemyLeaveState?.reloginDelayMs || restoredEnemyLeaveState?.holdRemainingMs || 0),
+	    lastEnemyLeaveRetryAt: 0,
     lastEnemyLeaveRetryResult: null,
-    pursuitReloginUntil: 0,
+	    pursuitReloginUntil: Math.max(0, Number(restoredEnemyLeaveState?.reloginUntil || 0)),
     enemyLeaveStreak: null,
     pursuit: null,
     combatStrafe: null,
@@ -2714,9 +2789,11 @@ function browserBotSource(config) {
       const currentSelfSummary = self ? summarizeSelf(self) : null;
       const displaySelf = currentSelfSummary || this.lastSelf;
       if (self) updateKillHistory(self);
-      updateSessionStats(currentSelfSummary);
-      const session = summarizeSessionStats(displaySelf);
-	      return {
+	      updateSessionStats(currentSelfSummary);
+	      const session = summarizeSessionStats(displaySelf);
+	      const enemyLeaveDetail = activeEnemyLeaveDetail();
+	      const offlineLeaveDetail = activeOfflineLeaveDetail();
+		      return {
 	        version: cfg.version,
 	        sourceHash: cfg.sourceHash,
 	        sourceUrl: cfg.sourceUrl,
@@ -2786,27 +2863,32 @@ function browserBotSource(config) {
           lastAt: this.lastOfflineLeaveAt || 0,
           lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
           holdUntil: this.offlineReloginUntil || 0,
-          holdRemainingMs: Math.max(0, Math.round(Number(this.offlineReloginUntil || 0) - Date.now())),
+          holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.offlineReloginUntil || 0) - Date.now())),
           safety: this.lastOfflineSafety,
+          summary: offlineLeaveDetail?.summary || '',
+          displayReason: offlineLeaveDetail?.displayReason || '',
+          lastWaitMs: this.lastOfflineLeaveWaitMs || offlineLeaveDetail?.reloginDelayMs || offlineLeaveDetail?.holdRemainingMs || 0,
           lastResult: this.lastOfflineLeaveResult
         },
         pursuit: summarizePursuit(this.pursuit),
 	        pursuitLeave: {
 	          lastAt: this.lastPursuitLeaveAt || 0,
 	          lastAgeMs: this.lastPursuitLeaveAt ? Date.now() - this.lastPursuitLeaveAt : null,
-	          holdUntil: this.pursuitReloginUntil || 0,
-	          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
-	          lastResult: this.lastPursuitLeaveResult
-	        },
-		        enemyLeave: {
 		          holdUntil: this.pursuitReloginUntil || 0,
-		          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
-		          reason: this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || '',
-          summary: latestEnemyLeaveSummary(),
-          displayReason: latestEnemyLeaveDisplayReason(),
-          streak: readEnemyLeaveStreak(),
-          lastWaitMs: this.lastEnemyLeaveWaitMs || 0,
-		          lastInjuryResult: this.lastInjuryLeaveResult,
+		          holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+		          lastResult: this.lastPursuitLeaveResult
+		        },
+			        enemyLeave: {
+			          holdUntil: this.pursuitReloginUntil || 0,
+			          holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+			          reason: enemyLeaveDetail?.reason || this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || '',
+	          summary: enemyLeaveDetail?.summary || latestEnemyLeaveSummary(),
+	          displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
+	          streak: readEnemyLeaveStreak(),
+	          lastWaitMs: this.lastEnemyLeaveWaitMs || enemyLeaveDetail?.reloginDelayMs || enemyLeaveDetail?.holdRemainingMs || 0,
+	          enemyActor: enemyLeaveDetail?.enemyActor || null,
+	          reloginRepeatCount: enemyLeaveDetail?.reloginRepeatCount || enemyLeaveDetail?.enemyLeaveStreak?.count || 0,
+			          lastInjuryResult: this.lastInjuryLeaveResult,
 		          lastPursuitResult: this.lastPursuitLeaveResult,
 		          lastCombatResult: this.lastCombatLeaveResult,
 	          lastRetryResult: this.lastEnemyLeaveRetryResult
@@ -3060,22 +3142,55 @@ function browserBotSource(config) {
       + suffix;
   }
 
-  function decisionReasonDetail(decision) {
-    return decision?.leave?.displayReason
-      || decision?.displayReason
+	  function decisionReasonDetail(decision) {
+	    return decision?.leave?.displayReason
+	      || decision?.displayReason
+	      || decision?.enemyLeave?.displayReason
+	      || decision?.offlineLeave?.displayReason
       || decision?.leave?.summary
       || decision?.exitSummary
       || decision?.leave?.exitSummary
       || decision?.leave?.enemyLeaveSummary
       || decision?.leave?.enemyLeaveReason
-      || '';
-  }
+	      || '';
+	  }
 
-  function latestEnemyLeaveResult() {
-    const candidates = [
-      { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
-      { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
-      { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
+	  function activeEnemyLeaveDetail(t = Date.now()) {
+	    const current = latestEnemyLeaveResult();
+	    const restored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
+	    const picked = current || restored || bot.lastEnemyLeaveResult || null;
+	    if (!picked) return null;
+	    const refreshed = refreshExitDetail(picked, t);
+	    if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
+	      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+	      if (bot.lastEnemyLeaveResult === picked) bot.lastEnemyLeaveResult = null;
+	      return null;
+	    }
+	    bot.lastEnemyLeaveResult = refreshed;
+	    if (Number(refreshed?.reloginUntil || 0) > 0) bot.pursuitReloginUntil = Math.max(Number(bot.pursuitReloginUntil || 0), Number(refreshed.reloginUntil));
+	    return refreshed;
+	  }
+
+	  function activeOfflineLeaveDetail(t = Date.now()) {
+	    const picked = bot.lastOfflineLeaveResult || readPersistentExitState(OFFLINE_LEAVE_STATE_KEY, t);
+	    if (!picked) return null;
+	    const refreshed = refreshExitDetail(picked, t);
+	    if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
+	      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+	      if (bot.lastOfflineLeaveResult === picked) bot.lastOfflineLeaveResult = null;
+	      return null;
+	    }
+	    bot.lastOfflineLeaveResult = refreshed;
+	    if (Number(refreshed?.reloginUntil || 0) > 0) bot.offlineReloginUntil = Math.max(Number(bot.offlineReloginUntil || 0), Number(refreshed.reloginUntil));
+	    return refreshed;
+	  }
+
+	  function latestEnemyLeaveResult() {
+	    const candidates = [
+	      { at: Number(bot.lastEnemyLeaveResult?.at || 0), result: bot.lastEnemyLeaveResult },
+	      { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
+	      { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
+	      { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
     ].filter(item => item.result);
     return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
   }
@@ -3300,15 +3415,57 @@ function browserBotSource(config) {
         };
       }
 
-			  function requestReload(reason) {
+		  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
 	    bot.reloadRequestedAt = Date.now();
 	    logStatus('reload: ' + reason);
 	    location.reload();
 	  }
-	
-	  function getCurrentUserId() {
+
+	  function cloudflareErrorInfo() {
+	    if (location.origin !== 'https://grasp-rat-game.h-e.top') return null;
+	    const title = String(document.title || '');
+	    const text = String(document.body?.innerText || '').slice(0, 5000);
+	    const combined = title + '\\n' + text;
+	    const isError = /Error\\s*1033/i.test(combined)
+	      || /Cloudflare\\s+Tunnel\\s+error/i.test(combined)
+	      || (/Cloudflare/i.test(combined) && /unable\\s+to\\s+resolve/i.test(combined));
+	    if (!isError) return null;
+	    const t = Date.now();
+	    const intervalMs = Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
+	    let lastReloadAt = 0;
+	    try {
+	      lastReloadAt = Number(localStorage.getItem(CLOUDFLARE_RELOAD_KEY) || 0) || 0;
+	    } catch (_) {}
+	    const elapsedMs = lastReloadAt ? t - lastReloadAt : intervalMs;
+	    const remainingMs = Math.max(0, intervalMs - elapsedMs);
+	    const code = /Error\\s*1033/i.test(combined) ? '1033' : '';
+	    const label = code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页';
+	    return {
+	      error: true,
+	      code,
+	      label,
+	      intervalMs,
+	      lastReloadAt,
+	      remainingMs,
+	      displayReason: label + '，每' + formatDurationMs(intervalMs) + '刷新一次' + (remainingMs > 0 ? '，下次刷新剩余' + formatDurationMs(remainingMs) : '，正在刷新')
+	    };
+	  }
+
+	  function maybeReloadCloudflareError(info) {
+	    if (!info || cfg.dryRun || cfg.once) return false;
+	    if (Number(info.remainingMs || 0) > 0) return false;
+	    try {
+	      localStorage.setItem(CLOUDFLARE_RELOAD_KEY, String(Date.now()));
+	    } catch (_) {}
+	    bot.cloudflareReloadAt = Date.now();
+	    logStatus('reload: cloudflare error', { kind: 'wait', reason: 'cloudflare-error-refresh', cloudflare: info, displayReason: info.displayReason });
+	    location.reload();
+	    return true;
+	  }
+
+		  function getCurrentUserId() {
 	    return Number(localStorage.getItem('tmpGameUserId') || document.getElementById('userId')?.value || bot.control.currentUserId || 0);
 	  }
 	
@@ -3615,15 +3772,23 @@ function browserBotSource(config) {
     return '被' + actorLabel(target) + '持续追击' + durationText + distanceText + '，退出等待重连';
   }
 
-  function injuryLeaveSummary(injury) {
-    const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
-    const previousHp = Number(injury?.previousHp ?? NaN);
+	  function injuryLeaveSummary(injury) {
+	    const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
+	    const previousHp = Number(injury?.previousHp ?? NaN);
     const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
     const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp)
       ? '，血量从' + hpDisplay(previousHp) + '降到' + hpDisplay(currentHp)
       : (Number.isFinite(currentHp) ? '，当前血量' + hpDisplay(currentHp) : '');
-    return (actor ? '受到' + actorLabel(actor) + '伤害/附近威胁' : '检测到血量下降') + hpText + '，退出等待重连';
-  }
+	    return (actor ? '受到' + actorLabel(actor) + '伤害/附近威胁' : '检测到血量下降') + hpText + '，退出等待重连';
+	  }
+
+	  function offlineLeaveSummary(reason, offlineSafety) {
+	    const text = String(reason || '').toLowerCase();
+	    if (text.includes('stamina')) return '长周期体力耗尽，退出等待重连';
+	    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
+	    if (offlineSafety?.unsafe) return 'WebSocket 离线且周围危险，退出等待重连';
+	    return 'WebSocket 离线，退出等待重连';
+	  }
 
 	  function reloginDelayForHp(selfLike, detail) {
 	    const info = hpInfoForRelogin(selfLike, detail);
@@ -3663,16 +3828,25 @@ function browserBotSource(config) {
 	      const holdReason = existingReason || storageReason;
 	      if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
 	      if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
-	      if (detail) {
-	        detail.reloginUntil = existingUntil;
-	        detail.holdRemainingMs = Math.max(0, Math.round(existingUntil - Date.now()));
-	        detail.enemyLeaveReason = reason;
-	        detail.loginSuppressReason = holdReason;
-	        detail.reusedExitSuppress = true;
-	        finalizeLeaveDisplayReason(detail);
-	      }
-	      return existingUntil;
-	    }
+		      if (detail) {
+		        detail.reloginUntil = existingUntil;
+		        detail.holdRemainingMs = Math.max(0, Math.round(existingUntil - Date.now()));
+		        detail.enemyLeaveReason = reason;
+		        detail.loginSuppressReason = holdReason;
+		        detail.reusedExitSuppress = true;
+		        finalizeLeaveDisplayReason(detail);
+		        if (storageReason === 'enemy leave') {
+		          bot.lastEnemyLeaveResult = detail;
+		          bot.lastEnemyLeaveWaitMs = Number(detail.reloginDelayMs || detail.holdRemainingMs || bot.lastEnemyLeaveWaitMs || 0);
+		          writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
+		        } else if (storageReason === 'offline leave') {
+		          bot.lastOfflineLeaveResult = detail;
+		          bot.lastOfflineLeaveWaitMs = Number(detail.reloginDelayMs || detail.holdRemainingMs || bot.lastOfflineLeaveWaitMs || 0);
+		          writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
+		        }
+		      }
+		      return existingUntil;
+		    }
 	    if (storageReason === 'enemy leave') updateEnemyLeaveStreak(detail, t);
 	    const delay = reloginDelayForHp(selfLike, detail);
 	    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
@@ -3702,10 +3876,17 @@ function browserBotSource(config) {
       detail.reloginHp = delay.hp;
 	      detail.reloginUntil = reloginUntil;
 	      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
-	      detail.enemyLeaveReason = reason;
-	      detail.loginSuppressReason = storageReason;
-	      finalizeLeaveDisplayReason(detail);
-	    }
+		      detail.enemyLeaveReason = reason;
+		      detail.loginSuppressReason = storageReason;
+		      finalizeLeaveDisplayReason(detail);
+		      if (storageReason === 'enemy leave') {
+		        bot.lastEnemyLeaveResult = detail;
+		        writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
+		      } else if (storageReason === 'offline leave') {
+		        bot.lastOfflineLeaveResult = detail;
+		        writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
+		      }
+		    }
     return reloginUntil;
   }
 
@@ -3725,6 +3906,12 @@ function browserBotSource(config) {
 
   function enemyReloginHoldRemainingMs() {
     let until = Number(bot.pursuitReloginUntil || 0);
+    const persistent = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+    if (Number(persistent?.reloginUntil || 0) > until) {
+      until = Number(persistent.reloginUntil);
+      bot.pursuitReloginUntil = until;
+      bot.lastEnemyLeaveResult = persistent;
+    }
     try {
       const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
       const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
@@ -3734,12 +3921,21 @@ function browserBotSource(config) {
       }
     } catch (_) {}
     const remaining = Math.max(0, until - Date.now());
-    if (!remaining && bot.pursuitReloginUntil) bot.pursuitReloginUntil = 0;
+    if (!remaining && bot.pursuitReloginUntil) {
+      bot.pursuitReloginUntil = 0;
+      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+    }
     return Math.round(remaining);
   }
 
   function offlineReloginHoldRemainingMs() {
     let until = Number(bot.offlineReloginUntil || 0);
+    const persistent = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+    if (Number(persistent?.reloginUntil || 0) > until) {
+      until = Number(persistent.reloginUntil);
+      bot.offlineReloginUntil = until;
+      bot.lastOfflineLeaveResult = persistent;
+    }
     try {
       const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
       const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
@@ -3749,7 +3945,10 @@ function browserBotSource(config) {
       }
     } catch (_) {}
     const remaining = Math.max(0, until - Date.now());
-    if (!remaining && bot.offlineReloginUntil) bot.offlineReloginUntil = 0;
+    if (!remaining && bot.offlineReloginUntil) {
+      bot.offlineReloginUntil = 0;
+      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+    }
     return Math.round(remaining);
   }
 
@@ -4046,12 +4245,17 @@ function browserBotSource(config) {
     if (cfg.dryRun || cfg.once) return null;
     const retryMs = Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
     if (t - Number(bot.lastOfflineLeaveAt || 0) < retryMs) {
-      return {
+      const active = activeOfflineLeaveDetail(t);
+      const detail = {
         attempted: false,
         reason: 'cooldown',
         cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastOfflineLeaveAt || 0)))),
-        offlineSafety
+        offlineSafety,
+        summary: active?.summary || offlineLeaveSummary(reason, offlineSafety),
+        reloginUntil: active?.reloginUntil || bot.offlineReloginUntil || 0,
+        reloginDelayMs: active?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || 0
       };
+      return finalizeLeaveDisplayReason(detail);
     }
 	    const detail = {
 	      attempted: false,
@@ -4061,11 +4265,13 @@ function browserBotSource(config) {
 	      userId: getCurrentUserId() || null,
 	      self: selfSummary,
 	      offlineSafety,
+      summary: offlineLeaveSummary(reason, offlineSafety),
       error: ''
     };
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) setOfflineLeaveSuppress(reason || 'websocket offline', detail, selfSummary);
+    finalizeLeaveDisplayReason(detail);
     bot.lastOfflineLeaveResult = detail;
     return detail;
   }
@@ -4188,13 +4394,16 @@ function browserBotSource(config) {
     const t = Date.now();
     const retryMs = Math.max(cfg.pursuitLeaveRetryMs, cfg.combatLeaveRetryMs);
     if (cfg.dryRun || cfg.once) return null;
+	    const active = activeEnemyLeaveDetail(t);
 	    if (t - Number(bot.lastEnemyLeaveRetryAt || 0) < retryMs) {
 	      const detail = {
 	        attempted: false,
 	        reason: 'cooldown',
 	        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastEnemyLeaveRetryAt || 0)))),
 	        holdRemainingMs: enemyReloginHoldRemainingMs(),
-        summary: bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || ''
+        summary: active?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || '',
+        reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
+        reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0
 	      };
       return finalizeLeaveDisplayReason(detail);
 	    }
@@ -4205,7 +4414,9 @@ function browserBotSource(config) {
       at: t,
 		      userId: getCurrentUserId() || null,
 		      holdRemainingMs: enemyReloginHoldRemainingMs(),
-      summary: bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || '',
+      summary: active?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || '',
+      reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
+      reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0,
 	      error: ''
 	    };
     bot.lastEnemyLeaveRetryAt = t;
@@ -7869,6 +8080,23 @@ function browserBotSource(config) {
     try {
       bot.tickCount += 1;
       bot.lastTickAt = Date.now();
+      const cloudflare = cloudflareErrorInfo();
+      if (cloudflare) {
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'cloudflare-error-refresh',
+          dx: 0,
+          dy: 0,
+          currentUserId: getCurrentUserId(),
+          cloudflare,
+          displayReason: cloudflare.displayReason,
+          holdRemainingMs: cloudflare.remainingMs
+        };
+        updateBotPanel(bot.lastDecision);
+        maybeReloadCloudflareError(cloudflare);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
       if (syncPausedFromPage()) {
         bot.lastDecision = {
           kind: 'idle',
@@ -7882,9 +8110,10 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
       }
-		      const self = getSelf();
+			      const self = getSelf();
       const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
       if (enemyHoldRemainingMs > 0) {
+        const enemyLeaveDetail = activeEnemyLeaveDetail();
         bot.pursuit = null;
         stopMotionSafely('enemy-leave-wait');
         const selfAlive = Boolean(self && isAlive(self));
@@ -7902,10 +8131,15 @@ function browserBotSource(config) {
           self: self ? summarizeSelf(self) : null,
           currentUserId: getCurrentUserId(),
           control: summarizeControl(),
-          holdRemainingMs: enemyReloginHoldRemainingMs(),
+          holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs(),
+          displayReason: enemyLeaveDetail?.displayReason || leaveResult?.displayReason || latestEnemyLeaveDisplayReason(),
           leave: leaveResult,
-          pursuit: bot.lastPursuitLeaveResult?.pursuit || null,
+          pursuit: enemyLeaveDetail?.pursuit || bot.lastPursuitLeaveResult?.pursuit || null,
           enemyLeave: {
+            displayReason: enemyLeaveDetail?.displayReason || '',
+            summary: enemyLeaveDetail?.summary || '',
+            enemyActor: enemyLeaveDetail?.enemyActor || null,
+            reloginRepeatCount: enemyLeaveDetail?.reloginRepeatCount || enemyLeaveDetail?.enemyLeaveStreak?.count || 0,
             lastPursuitResult: bot.lastPursuitLeaveResult,
             lastCombatResult: bot.lastCombatLeaveResult,
             lastRetryResult: bot.lastEnemyLeaveRetryResult
@@ -7915,8 +8149,44 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
       }
-		      if (!self || !isAlive(self)) {
-		        bot.pursuit = null;
+      const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+      if (offlineHoldRemainingMs > 0) {
+        const offlineLeaveDetail = activeOfflineLeaveDetail();
+        bot.pursuit = null;
+        stopMotionSafely('offline-leave-wait');
+        const currentSummary = self && isAlive(self) ? summarizeSelf(self) : (offlineLeaveDetail?.self || bot.lastSelf || null);
+        const offlineSafety = bot.lastOfflineSafety || offlineLeaveDetail?.offlineSafety || (self && isAlive(self) ? assessOfflineSafety(self) : null);
+        const leaveResult = self && isAlive(self)
+          ? await leaveOffline('offline leave wait', currentSummary, offlineSafety)
+          : null;
+        refreshGlobalState(false).catch(err => {
+          bot.globalState.error = err.message || String(err);
+        });
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'offline-leave-wait',
+          dx: 0,
+          dy: 0,
+          self: currentSummary,
+          currentUserId: getCurrentUserId(),
+          control: summarizeControl(),
+          holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs(),
+          displayReason: offlineLeaveDetail?.displayReason || leaveResult?.displayReason || '',
+          offlineSafety,
+          leave: leaveResult,
+          offlineLeave: {
+            displayReason: offlineLeaveDetail?.displayReason || '',
+            summary: offlineLeaveDetail?.summary || '',
+            lastResult: bot.lastOfflineLeaveResult,
+            lastRetryResult: leaveResult
+          }
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
+			      if (!self || !isAlive(self)) {
+			        bot.pursuit = null;
 	        stopMotionSafely('no-self');
 	        if (!bot.waitSince) bot.waitSince = Date.now();
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
@@ -7940,36 +8210,6 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
 	      }
-      const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
-      if (offlineHoldRemainingMs > 0) {
-        bot.pursuit = null;
-        stopMotionSafely('offline-leave-wait');
-        const currentSummary = summarizeSelf(self);
-        const offlineSafety = bot.lastOfflineSafety || assessOfflineSafety(self);
-        const leaveResult = await leaveOffline('offline leave wait', currentSummary, offlineSafety);
-        refreshGlobalState(false).catch(err => {
-          bot.globalState.error = err.message || String(err);
-        });
-        bot.lastDecision = {
-          kind: 'wait',
-          reason: 'offline-leave-wait',
-          dx: 0,
-          dy: 0,
-          self: currentSummary,
-          currentUserId: getCurrentUserId(),
-          control: summarizeControl(),
-          holdRemainingMs: offlineReloginHoldRemainingMs(),
-          offlineSafety,
-          leave: leaveResult,
-          offlineLeave: {
-            lastResult: bot.lastOfflineLeaveResult,
-            lastRetryResult: leaveResult
-          }
-        };
-        updateBotPanel(bot.lastDecision);
-        if (cfg.once) bot.stop('once');
-        return;
-      }
 	      bot.waitSince = 0;
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
@@ -7992,6 +8232,7 @@ function browserBotSource(config) {
         };
         bot.lastOfflineSafety = offlineSafety;
         const leaveResult = await leaveOffline('stamina exhausted', currentSummary, offlineSafety);
+        const offlineDetail = activeOfflineLeaveDetail();
         bot.lastDecision = {
           kind: 'wait',
           reason: leaveResult?.attempted && !leaveResult?.error ? 'stamina-exhausted-leave' : 'control-stamina-exhausted',
@@ -8003,6 +8244,7 @@ function browserBotSource(config) {
           leaveDelayMs: 0,
           stamina: staminaState,
           offlineSafety,
+          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '',
           leave: leaveResult
         };
         updateBotPanel(bot.lastDecision);
@@ -8042,9 +8284,10 @@ function browserBotSource(config) {
         const safeLeaveMs = Math.min(3000, Math.max(0, Number(cfg.offlineSafeLeaveMs ?? cfg.offlineLeaveMs ?? 3000)));
         const unsafeLeaveMs = Math.max(0, Number(cfg.offlineUnsafeLeaveMs ?? 0));
         const leaveDelayMs = offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs;
-		      const leaveResult = offlineAgeMs >= leaveDelayMs
-		        ? await leaveOffline(serverPositionStallOffline ? 'server position stalled' : 'websocket offline', currentSummary, offlineSafety)
-		        : null;
+			      const leaveResult = offlineAgeMs >= leaveDelayMs
+			        ? await leaveOffline(serverPositionStallOffline ? 'server position stalled' : 'websocket offline', currentSummary, offlineSafety)
+			        : null;
+        const offlineDetail = activeOfflineLeaveDetail();
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: leaveResult?.attempted && !leaveResult?.error
@@ -8058,6 +8301,7 @@ function browserBotSource(config) {
           leaveDelayMs,
           offlineSafety,
           serverPositionStall,
+          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '',
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
@@ -8079,6 +8323,7 @@ function browserBotSource(config) {
         stopMotionSafely('combat-leave-retry');
         const leaveResult = await leaveForCombat(pendingCombatLeave, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
+        const enemyDetail = activeEnemyLeaveDetail();
         bot.lastDecision = {
           kind: 'wait',
           reason: leaveIssued ? 'combat-leave' : 'combat-leave-retry',
@@ -8089,8 +8334,9 @@ function browserBotSource(config) {
           combat: true,
           combatState: pendingCombatLeave.combatState || null,
           pendingCombatLeave: summarizePendingCombatLeave(),
+          displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || pendingCombatLeave.displayReason || pendingCombatLeave.exitSummary || '',
           leave: leaveResult,
-          holdRemainingMs: enemyReloginHoldRemainingMs()
+          holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
         };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
@@ -8115,9 +8361,11 @@ function browserBotSource(config) {
         stopMotionSafely(action.reason || 'combat-leave');
         const leaveResult = await leaveForCombat(action, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
+        const enemyDetail = activeEnemyLeaveDetail();
         bot.lastDecision = leaveIssued
           ? {
             ...action,
+            displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || action.displayReason || action.exitSummary || '',
             leave: leaveResult,
             source,
             self: summarizeSelf(self)
@@ -8133,8 +8381,9 @@ function browserBotSource(config) {
             combat: true,
             combatState: action.combatState || null,
             pendingCombatLeave: summarizePendingCombatLeave(),
+            displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || action.displayReason || action.exitSummary || '',
             leave: leaveResult,
-            holdRemainingMs: enemyReloginHoldRemainingMs()
+            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
           };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
@@ -8151,6 +8400,7 @@ function browserBotSource(config) {
           nearestHuman: bot.lastSafety?.nearestHuman || bot.pendingInjuryLeave.nearestHuman || null
         };
         const leaveResult = await leaveForInjury(injury);
+        const enemyDetail = activeEnemyLeaveDetail();
         bot.lastDecision = {
           kind: 'wait',
           reason: 'injury-leave',
@@ -8158,8 +8408,9 @@ function browserBotSource(config) {
           dy: 0,
           self: currentSummary,
           injury,
+          displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || '',
           leave: leaveResult,
-          holdRemainingMs: enemyReloginHoldRemainingMs()
+          holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
         };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
@@ -8188,6 +8439,7 @@ function browserBotSource(config) {
       const pursuitSummary = summarizePursuit(pursuit);
       if (pursuitSummary && pursuitSummary.durationMs >= cfg.pursuitLeaveMs) {
         const leaveResult = await leaveForPursuit(pursuit, currentSummary);
+        const enemyDetail = activeEnemyLeaveDetail();
         stopMotionSafely('pursuit-leave');
         if (leaveResult?.attempted && !leaveResult?.error) {
           bot.lastDecision = {
@@ -8197,9 +8449,10 @@ function browserBotSource(config) {
             dy: 0,
             self: summarizeSelf(self),
             pursuit: pursuitSummary,
+            displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || '',
             leave: leaveResult,
             reloginDelayMs: leaveResult.reloginDelayMs,
-            holdRemainingMs: enemyReloginHoldRemainingMs()
+            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop('once');
@@ -8212,8 +8465,9 @@ function browserBotSource(config) {
           dy: 0,
           self: summarizeSelf(self),
           pursuit: pursuitSummary,
+          displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || '',
           leave: leaveResult,
-          holdRemainingMs: enemyReloginHoldRemainingMs()
+          holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
         };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
