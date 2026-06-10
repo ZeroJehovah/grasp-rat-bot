@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.60"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.61"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -121,6 +121,7 @@
     opportunitySwitchMargin: 3000,
     opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
+    opportunityNearbyPriorityDistance: 18000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     stationaryActiveCoinDangerRadius: 12000,
@@ -4307,6 +4308,14 @@
     ) + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function opportunityPriorityTier(item) {
+    const distance = Number(item?.distance ?? Infinity);
+    const nearDistance = Math.max(0, Number(cfg.opportunityNearbyPriorityDistance || 0));
+    if (Number.isFinite(distance) && distance <= nearDistance) return 1;
+    if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
+    return 0;
+  }
+
   function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
     let best = -Infinity;
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
@@ -4500,13 +4509,14 @@
   function chooseStableOpportunity(opportunities) {
     const sorted = opportunities
       .slice()
-      .sort((a, b) => b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
+      .sort((a, b) => b.priorityTier - a.priorityTier || b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
     const best = sorted[0] || null;
     if (!best) return null;
     const current = bot.opportunityChoice;
     if (current?.key && now() < Number(current.until || 0)) {
       const held = sorted.find(item => opportunityKey(item) === String(current.key || ''));
       if (held && opportunityKey(best) !== opportunityKey(held)) {
+        if (Number(best.priorityTier || 0) > Number(held.priorityTier || 0)) return best;
         const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
         const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
         const heldScore = Number(held.score || 0);
@@ -4547,6 +4557,7 @@
         distance: coin.distance,
         staminaCost: opportunityCoinStaminaCost(coin),
         score: Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin),
+        priorityTier: opportunityPriorityTier({ type: 'coin', distance: coin.distance }),
         action: () => buildCoinAction(
           self,
           coin,
@@ -4567,6 +4578,11 @@
         distance: target.distance,
         staminaCost,
         score,
+        priorityTier: opportunityPriorityTier({
+          type: 'enemy',
+          kind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
+          distance: target.distance
+        }),
         action: () => buildEnemyAction(self, target)
       });
     }
