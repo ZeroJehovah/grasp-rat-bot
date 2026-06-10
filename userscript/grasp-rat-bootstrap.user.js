@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.27
+// @version      0.4.28
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,8 +27,9 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.27';
+  const BOOTSTRAP_VERSION = '0.4.28';
   const BOOTSTRAP_OWNER = 'tampermonkey';
+  const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
   const PAUSED_KEY = 'graspRatBotPaused';
@@ -54,7 +55,9 @@
 
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
+    userscriptUpdateUrl: USERSCRIPT_UPDATE_URL,
     pollMs: 5000,
+    userscriptVersionCheckMs: 300000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
     requestTimeoutMs: 7000,
@@ -84,7 +87,9 @@
 
   const cfg = {
     manifestUrl: String(GM_getValue('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
+    userscriptUpdateUrl: String(GM_getValue('userscriptUpdateUrl', DEFAULTS.userscriptUpdateUrl) || DEFAULTS.userscriptUpdateUrl),
     pollMs: Math.max(5000, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
+    userscriptVersionCheckMs: Math.max(60000, Number(GM_getValue('userscriptVersionCheckMs', DEFAULTS.userscriptVersionCheckMs)) || DEFAULTS.userscriptVersionCheckMs),
     watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
     busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
     requestTimeoutMs: Math.max(3000, Number(GM_getValue('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
@@ -116,6 +121,13 @@
     lastScriptFetchAt: 0,
     lastManifestHash: '',
     lastManifestVersion: '',
+    checkingUserscriptVersion: false,
+    lastUserscriptVersionCheckAt: 0,
+    lastUserscriptVersionStatus: '',
+    latestUserscriptVersion: '',
+    latestUserscriptUrl: '',
+    userscriptUpdateAvailable: false,
+    userscriptUpdateError: '',
     lastInstallAttemptAt: 0,
     lastInstallStatus: '',
     lastInstallAt: 0,
@@ -814,6 +826,7 @@
     const control = status?.control || {};
     const manifest = readCachedManifest();
     const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
+    const aVersion = BOOTSTRAP_VERSION;
     const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
@@ -873,7 +886,16 @@
     actions.appendChild(button);
     header.appendChild(actions);
     panel.appendChild(header);
-    appendLine('版本：' + bVersion, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    if (state.userscriptUpdateAvailable) {
+      appendLine(
+        '加载器A（篡改猴）有新版本：当前 ' + aVersion + ' / 最新 ' + (state.latestUserscriptVersion || '-') + '，请手动更新',
+        'margin:0 0 6px;padding:6px 8px;border:1px solid rgba(248,113,113,.75);border-radius:6px;background:rgba(127,29,29,.72);color:#fee2e2;font-weight:700;word-break:break-all'
+      );
+    }
+    appendLine('版本：远程B ' + bVersion + ' / 加载器A：篡改猴 ' + aVersion, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    if (state.lastUserscriptVersionStatus && !state.userscriptUpdateAvailable) {
+      appendLine('A更新检查：' + state.lastUserscriptVersionStatus, 'font-size:11px;margin:-2px 0 4px;color:#94a3b8;word-break:break-all');
+    }
     appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
     const combatLogStatus = status?.combatLogging || {};
     appendLine(
@@ -922,7 +944,9 @@
 
   function noteFetchStatus(label, text, forcePanel = false) {
     const value = String(text || '');
-    if (/manifest/i.test(label)) {
+    if (/userscript|tampermonkey|bootstrap/i.test(label)) {
+      state.lastUserscriptVersionStatus = value;
+    } else if (/manifest/i.test(label)) {
       state.lastManifestStatus = value;
     } else if (/script|bot/i.test(label)) {
       state.lastScriptStatus = value;
@@ -966,6 +990,13 @@
     return uniqueUrls([
       manifest?.scriptUrl,
       rawGithubToJsDelivr(manifest?.scriptUrl)
+    ]);
+  }
+
+  function userscriptVersionUrls() {
+    return uniqueUrls([
+      cfg.userscriptUpdateUrl,
+      rawGithubToJsDelivr(cfg.userscriptUpdateUrl)
     ]);
   }
 
@@ -1141,6 +1172,12 @@
     return manifest;
   }
 
+  function parseUserscriptVersion(text) {
+    const match = String(text || '').match(/^\s*\/\/\s*@version\s+([^\s]+)/m);
+    if (!match) throw new Error('userscript @version missing');
+    return match[1];
+  }
+
   function parseRemoteBotVersion(value) {
     const match = String(value || '').match(/(\d+)\.(\d+)\.(\d+)/);
     if (!match) return null;
@@ -1155,6 +1192,76 @@
       if (left[i] !== right[i]) return left[i] - right[i];
     }
     return 0;
+  }
+
+  async function checkUserscriptVersion(reason = 'interval', options = {}) {
+    const force = Boolean(options.force);
+    const t = Date.now();
+    if (state.checkingUserscriptVersion) {
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest: state.latestUserscriptVersion || '',
+        updateAvailable: Boolean(state.userscriptUpdateAvailable),
+        skipped: 'busy'
+      };
+    }
+    if (!force && state.lastUserscriptVersionCheckAt && t - Number(state.lastUserscriptVersionCheckAt || 0) < cfg.userscriptVersionCheckMs) {
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest: state.latestUserscriptVersion || '',
+        updateAvailable: Boolean(state.userscriptUpdateAvailable),
+        skipped: 'cooldown'
+      };
+    }
+    state.checkingUserscriptVersion = true;
+    state.lastUserscriptVersionCheckAt = t;
+    state.userscriptUpdateError = '';
+    try {
+      const { accepted, url, transport } = await requestAcceptedTextWithFallback(
+        'userscript version',
+        userscriptVersionUrls(),
+        text => ({ version: parseUserscriptVersion(text) })
+      );
+      const latest = String(accepted?.version || '');
+      const cmp = compareRemoteBotVersion(latest, BOOTSTRAP_VERSION);
+      state.latestUserscriptVersion = latest;
+      state.latestUserscriptUrl = url || '';
+      state.userscriptUpdateAvailable = cmp !== null && cmp > 0;
+      state.lastUserscriptVersionStatus = cmp === null
+        ? `无法比较 当前 ${BOOTSTRAP_VERSION} / 远端 ${latest || '-'}`
+        : (state.userscriptUpdateAvailable
+          ? `发现新版本 ${latest}`
+          : `已是最新 ${BOOTSTRAP_VERSION}`);
+      logBootstrap('userscript version check complete', {
+        reason,
+        current: BOOTSTRAP_VERSION,
+        latest,
+        updateAvailable: state.userscriptUpdateAvailable,
+        url,
+        transport
+      });
+      updateBootstrapPanel(true);
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest,
+        updateAvailable: state.userscriptUpdateAvailable,
+        url
+      };
+    } catch (err) {
+      const error = err?.message || String(err);
+      state.userscriptUpdateError = error;
+      state.lastUserscriptVersionStatus = '检查失败：' + error;
+      logBootstrap('userscript version check failed', { reason, error });
+      updateBootstrapPanel(true);
+      return {
+        current: BOOTSTRAP_VERSION,
+        latest: state.latestUserscriptVersion || '',
+        updateAvailable: Boolean(state.userscriptUpdateAvailable),
+        error
+      };
+    } finally {
+      state.checkingUserscriptVersion = false;
+    }
   }
 
   function remoteBotVersionIsBlocked(version) {
@@ -2037,6 +2144,8 @@
     state,
     pollOnce,
     watchdogOnce,
+    checkLoaderVersion: checkUserscriptVersion,
+    checkUserscriptVersion,
     maybeStartGameLogin,
     forceLoginNow,
     maybeClickAuthorize,
@@ -2101,6 +2210,8 @@
   if (document.body) renderPanelWhenReady();
   else document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded panel render', renderPanelWhenReady), { once: true });
   setSafeInterval('panel interval', () => updateBootstrapPanel(), cfg.panelUpdateMs);
+  runAsyncSafely('startup userscript version check', () => checkUserscriptVersion('startup', { force: true }));
+  setSafeInterval('userscript version interval', () => runAsyncSafely('userscript version interval', () => checkUserscriptVersion('interval')), cfg.userscriptVersionCheckMs);
 
   if (isGameAuthCallback()) {
     suppressLogin('oauth callback', cfg.authReturnGraceMs);
