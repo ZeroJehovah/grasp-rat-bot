@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.67"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.68"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -167,6 +167,7 @@
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
+    coinPickupExactTolerance: 0,
     targetStickMs: 5000,
     coinStickMs: 2500,
     coinNoProgressMs: 18000,
@@ -3400,6 +3401,11 @@
     const id = String(target.drop_id ?? target.id ?? '');
     const lock = bot.coinApproachLock;
     const sameLock = lock && lock.id === id && t < Number(lock.until || 0) && (lock.dx || lock.dy);
+    const exactTolerance = Math.max(0, Number(cfg.coinPickupExactTolerance ?? 0) || 0);
+    const exactDirection = () => ({
+      dx: absX > exactTolerance ? Math.sign(dxRaw) : 0,
+      dy: absY > exactTolerance ? Math.sign(dyRaw) : 0
+    });
 
     if (distance <= cfg.coinPickupSweepDistance) {
       const pulse = Math.max(60, Number(cfg.coinPickupPulseMs) || 180);
@@ -3413,20 +3419,18 @@
         return { dx: 0, dy: 0, distance, pickupSweep: true, ...extra };
       };
       const dominantAxis = () => coinNearApproachAxis(dxRaw, dyRaw, absX, absY, tolerance);
+      const direct = exactDirection();
+      if (direct.dx || direct.dy) {
+        return locked(direct, {
+          exactTarget: true,
+          pickupMicro: distance <= cfg.coinPickupMicroDistance,
+          pickupFine: distance > cfg.coinPickupMicroDistance && distance <= cfg.coinPickupFineDistance,
+          pushThrough: true
+        });
+      }
 
       if (distance <= cfg.coinPickupMicroDistance) {
-        const phase = Math.floor(t / pulse) % 6;
-        if (phase === 0 || phase === 3) return locked({ dx: 0, dy: 0 }, { pickupMicro: true });
-        if (absX > cfg.coinPickupStopDistance || absY > cfg.coinPickupStopDistance) {
-          return locked(dominantAxis(), { pickupMicro: true, pushThrough: true });
-        }
-        const pattern = [
-          { dx: 1, dy: 0 },
-          { dx: -1, dy: 0 },
-          { dx: 0, dy: 1 },
-          { dx: 0, dy: -1 }
-        ];
-        return locked(pattern[Math.floor(t / (pulse * 2)) % pattern.length], { pickupMicro: true, crossSweep: true });
+        return locked({ dx: 0, dy: 0 }, { pickupMicro: true, exactTarget: true });
       }
 
       if (distance <= cfg.coinPickupFineDistance) {
