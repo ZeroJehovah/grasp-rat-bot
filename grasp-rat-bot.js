@@ -196,6 +196,9 @@ function runSelfTest() {
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
     snapshotCoinClusterMinCoins: 2,
+    snapshotCoinLocalFallbackMaxDistance: 22000,
+    snapshotSingleCoinMaxDistance: 22000,
+    snapshotSingleCoinDistancePerAmount: 30000,
     patrolHeadingMs: 26000,
     patrolStaminaThreshold: 6500,
     chaseCoinStaminaThreshold: 0,
@@ -434,6 +437,7 @@ function runSelfTest() {
     for (const coin of candidates) {
       const members = candidates.filter(other => dist(coin, other) <= radius);
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      if (!snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) continue;
       const staminaCost = opportunityCoinStaminaCost(coin);
       const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
       const item = {
@@ -449,9 +453,20 @@ function runSelfTest() {
         || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
         || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
     }
-    if (best) return best;
-    const first = candidates[0];
-    return first ? { ...first, opportunityStaminaCost: opportunityCoinStaminaCost(first) } : null;
+    return best;
+  }
+
+  function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
+    const memberCount = Math.max(1, Number(members || 1));
+    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
+    if (memberCount >= minCoins) return true;
+    const distance = Number(coin?.distance ?? Infinity);
+    if (!Number.isFinite(distance)) return false;
+    const amount = Math.max(0, Number(totalAmount ?? coin?.amount ?? 0));
+    const baseMax = Math.max(0, Number(cfg.snapshotSingleCoinMaxDistance || cfg.globalCoinMaxDistance || cfg.coinMaxDistance || 0));
+    const perAmount = Math.max(0, Number(cfg.snapshotSingleCoinDistancePerAmount || 0));
+    const maxDistance = Math.max(baseMax, amount * perAmount);
+    return distance <= maxDistance;
   }
 
   function enemyTargets(self, entities, activeThreats) {
@@ -1174,12 +1189,12 @@ function runSelfTest() {
       want: 'seek-coin'
     },
     {
-      name: 'single far snapshot coin replaces open patrol',
+      name: 'single far low-value snapshot coin is skipped',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1 }]
       }).kind,
-      want: 'seek-coin'
+      want: 'wait'
     },
     {
       name: 'far snapshot coin cluster replaces open patrol',
@@ -1983,6 +1998,9 @@ function browserBotSource(config) {
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
     snapshotCoinClusterMinCoins: 2,
+    snapshotCoinLocalFallbackMaxDistance: 22000,
+    snapshotSingleCoinMaxDistance: 22000,
+    snapshotSingleCoinDistancePerAmount: 30000,
     snapshotCoinStaleMs: 30000,
     patrolHeadingMs: 26000,
     patrolStaminaThreshold: 6500,
@@ -3739,7 +3757,11 @@ function browserBotSource(config) {
 
   function getNativeCoinList() {
     const nativeState = getNativeState();
-    return Array.isArray(nativeState?.coinDrops) ? nativeState.coinDrops : null;
+    if (!nativeState) return null;
+    for (const key of ['coinDrops', 'coin_drops', 'coins', 'drops']) {
+      if (Array.isArray(nativeState[key])) return nativeState[key];
+    }
+    return null;
   }
 
   function entityIdKey(entity) {
@@ -3819,9 +3841,30 @@ function browserBotSource(config) {
     return 'xy:' + Math.round(Number(coin.x) || 0) + ':' + Math.round(Number(coin.y) || 0) + ':' + (Number(coin.amount) || 0);
   }
 
-  function snapshotCoinAllowed(self, coin) {
+  function nativeCoinMatchesSnapshot(snapshotCoin, nativeCoins) {
+    if (!snapshotCoin || !Array.isArray(nativeCoins) || !nativeCoins.length) return false;
+    const snapshotId = snapshotCoin.drop_id ?? snapshotCoin.id ?? snapshotCoin.coin_id;
+    const snapshotPoint = { x: Number(snapshotCoin.x), y: Number(snapshotCoin.y) };
+    const matchRadius = Math.max(100, Number(cfg.coinCollectedPruneRadius || 900));
+    return nativeCoins.some(nativeCoin => {
+      const nativeId = nativeCoin?.drop_id ?? nativeCoin?.id ?? nativeCoin?.coin_id;
+      if (snapshotId !== undefined && snapshotId !== null && snapshotId !== ''
+        && nativeId !== undefined && nativeId !== null && nativeId !== ''
+        && String(snapshotId) === String(nativeId)) return true;
+      const nativePoint = { x: Number(nativeCoin?.x), y: Number(nativeCoin?.y) };
+      if (!Number.isFinite(snapshotPoint.x) || !Number.isFinite(snapshotPoint.y)
+        || !Number.isFinite(nativePoint.x) || !Number.isFinite(nativePoint.y)) return false;
+      return dist(snapshotPoint, nativePoint) <= matchRadius;
+    });
+  }
+
+  function snapshotCoinAllowed(self, coin, nativeCoins = null) {
     const distance = self ? dist(self, coin) : Infinity;
-    return !(Number.isFinite(distance) && distance <= Number(cfg.nativeCoinAuthoritativeRadius || 0));
+    const authoritativeRadius = Number(cfg.nativeCoinAuthoritativeRadius || 0);
+    if (!Number.isFinite(distance) || distance > authoritativeRadius) return true;
+    if (nativeCoinMatchesSnapshot(coin, nativeCoins)) return true;
+    const fallbackMax = Math.max(0, Number(cfg.snapshotCoinLocalFallbackMaxDistance || cfg.coinMaxDistance || 0));
+    return distance <= fallbackMax;
   }
 
   function snapshotCoinFreshEnough() {
@@ -3846,7 +3889,7 @@ function browserBotSource(config) {
     if (useSnapshotCoins) {
       for (const coin of snapshotCoins) {
         const normalized = normalizeCoinDrop(coin, 'snapshot');
-        if (!normalized || !snapshotCoinAllowed(self, normalized)) continue;
+        if (!normalized || !snapshotCoinAllowed(self, normalized, nativeCoins)) continue;
         add(normalized, 'snapshot');
       }
     }
@@ -5947,9 +5990,13 @@ function browserBotSource(config) {
     if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
       const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
       if (sticky) {
-        const score = scoreCoinOpportunity(sticky);
-        const staminaCost = opportunityCoinStaminaCost(sticky);
-        return { ...sticky, snapshotMembers: 1, snapshotAmount: Number(sticky.amount || 0), snapshotScore: score, opportunityScore: score, opportunityStaminaCost: staminaCost, snapshotAgeMs: ageMs };
+        const members = candidates.filter(other => dist(sticky, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
+        const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        if (snapshotCoinWorthLongTravel(sticky, members.length, totalAmount)) {
+          const staminaCost = opportunityCoinStaminaCost(sticky);
+          const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+          return { ...sticky, snapshotMembers: members.length, snapshotAmount: totalAmount, snapshotScore: score, opportunityScore: score, opportunityStaminaCost: staminaCost, snapshotAgeMs: ageMs };
+        }
       }
     }
     let best = null;
@@ -5958,6 +6005,7 @@ function browserBotSource(config) {
     for (const coin of candidates.slice(0, 300)) {
       const members = candidates.filter(other => dist(coin, other) <= radius);
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      if (!snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) continue;
       const staminaCost = opportunityCoinStaminaCost(coin);
       const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
       const item = {
@@ -5974,10 +6022,20 @@ function browserBotSource(config) {
         || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
     }
     if (best) return { ...best, opportunityScore: best.snapshotScore };
-    const first = candidates[0];
-    if (!first) return null;
-    const score = scoreCoinOpportunity(first);
-    return { ...first, snapshotMembers: 1, snapshotAmount: Number(first.amount || 0), snapshotScore: score, opportunityScore: score, opportunityStaminaCost: opportunityCoinStaminaCost(first), snapshotAgeMs: ageMs };
+    return null;
+  }
+
+  function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
+    const memberCount = Math.max(1, Number(members || 1));
+    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
+    if (memberCount >= minCoins) return true;
+    const distance = Number(coin?.distance ?? Infinity);
+    if (!Number.isFinite(distance)) return false;
+    const amount = Math.max(0, Number(totalAmount ?? coin?.amount ?? 0));
+    const baseMax = Math.max(0, Number(cfg.snapshotSingleCoinMaxDistance || cfg.globalCoinMaxDistance || cfg.coinMaxDistance || 0));
+    const perAmount = Math.max(0, Number(cfg.snapshotSingleCoinDistancePerAmount || 0));
+    const maxDistance = Math.max(baseMax, amount * perAmount);
+    return distance <= maxDistance;
   }
 
   function scoreCoinOpportunity(coin) {
