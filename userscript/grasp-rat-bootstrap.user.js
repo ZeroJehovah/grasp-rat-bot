@@ -503,7 +503,7 @@
       'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
       'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
       'offline-leave': 'WebSocket 离线，正在退出',
-      'offline-leave-wait': 'WebSocket 离线退出后等待，继续补发退出',
+      'offline-leave-wait': 'WebSocket 离线退出后等待重连',
       'cloudflare-error-refresh': 'Cloudflare 错误页，等待刷新',
       'no-self': '未读到自身实体',
       'not-alive': '不在存活状态',
