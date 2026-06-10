@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.48"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.49"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -109,6 +109,7 @@
     opportunityShotStaminaCostMs: 500,
     opportunityEstimatedDamagePerShot: 3,
     opportunityCoinPickupStaminaMs: 0,
+    opportunityLongStaminaReserveMs: 1500,
     opportunityStickBonus: 35000,
     opportunitySwitchMargin: 120000,
     opportunitySwitchRelativeMargin: 0.2,
@@ -3227,9 +3228,10 @@
     return candidates[0];
   }
 
-  function pickCoinField(allCoins, activeThreats) {
+  function pickCoinField(self, allCoins, activeThreats) {
     const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.fieldMigrationMaxDistance)
-      .filter(c => c.distance >= cfg.fieldMigrationMinDistance);
+      .filter(c => c.distance >= cfg.fieldMigrationMinDistance)
+      .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
     if (!candidates.length) return null;
     let best = null;
     for (const coin of candidates.slice(0, 80)) {
@@ -3250,9 +3252,10 @@
     return best;
   }
 
-  function pickDistantCoin(allCoins, activeThreats) {
+  function pickDistantCoin(self, allCoins, activeThreats) {
     const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.distantCoinMaxDistance)
-      .filter(c => c.distance >= cfg.distantCoinMinDistance);
+      .filter(c => c.distance >= cfg.distantCoinMinDistance)
+      .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
     if (!candidates.length) return null;
     return candidates[0];
   }
@@ -3411,6 +3414,7 @@
         staminaCost: opportunityEnemyStaminaCost(e),
         estimatedShots: estimatedKillShots(e)
       }))
+      .filter(e => opportunityStaminaAffordable(self, e.staminaCost))
       .sort((a, b) => {
         const stickyA = bot.attackHistory.some(item => String(item.id) === String(a.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
         const stickyB = bot.attackHistory.some(item => String(item.id) === String(b.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
@@ -3695,6 +3699,22 @@
     const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
     const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
     return moveCost + shotCost;
+  }
+
+  function opportunityLongStaminaBudget(self) {
+    const values = ['1h', '1d']
+      .map(key => staminaRemaining(self, key))
+      .filter(value => Number.isFinite(value));
+    if (!values.length) return Infinity;
+    const reserve = staminaExhaustedThreshold() + Math.max(0, Number(cfg.opportunityLongStaminaReserveMs || 0));
+    return Math.max(0, Math.min(...values) - reserve);
+  }
+
+  function opportunityStaminaAffordable(self, staminaCost) {
+    const cost = Number(staminaCost);
+    if (!Number.isFinite(cost) || cost <= 0) return true;
+    const budget = opportunityLongStaminaBudget(self);
+    return !Number.isFinite(budget) || cost <= budget;
   }
 
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
@@ -3993,12 +4013,13 @@
     return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
   }
 
-  function pickSnapshotCoinDestination(allCoins, activeThreats) {
+  function pickSnapshotCoinDestination(self, allCoins, activeThreats) {
     const ageMs = snapshotCoinAgeMs();
     let candidates = safeCoinCandidates(allCoins, activeThreats, cfg.snapshotCoinMaxDistance);
     if (ageMs > cfg.snapshotCoinStaleMs) {
       candidates = candidates.filter(coin => coin.native);
     }
+    candidates = candidates.filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)));
     if (!candidates.length) return null;
     if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
       const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
@@ -4061,10 +4082,11 @@
     ) + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
-  function bestCoinOpportunityScore(coinGroups, activeThreats) {
+  function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
     let best = -Infinity;
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
       for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance)) {
+        if (!opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin))) continue;
         const score = scoreCoinOpportunity(coin);
         if (score > best) best = score;
       }
@@ -4078,7 +4100,8 @@
     if (!target) return null;
     const targetScore = scoreEnemyOpportunity(target);
     if (targetScore === null) return null;
-    const coinScore = bestCoinOpportunityScore(coinGroups, activeThreats);
+    if (!opportunityStaminaAffordable(self, opportunityEnemyStaminaCost(target))) return null;
+    const coinScore = bestCoinOpportunityScore(self, coinGroups, activeThreats);
     if (targetScore < coinScore) return null;
     return {
       ...target,
@@ -4117,7 +4140,8 @@
     const candidates = [];
     for (const coin of safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
       .filter(coin => Number(coin.amount || 0) > minAmount)
-      .filter(coin => Number.isFinite(Number(coin.distance)))) {
+      .filter(coin => Number.isFinite(Number(coin.distance)))
+      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))) {
       const attack = resolvedAttacks
         .filter(item => dist(coin, item) <= cfg.postAttackDropCoinRadius)
         .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(b.at || 0) - Number(a.at || 0))[0] || null;
@@ -4277,12 +4301,14 @@
       for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance)) {
         const id = String(coin.drop_id);
         const previous = coinById.get(id);
+        const staminaCost = opportunityCoinStaminaCost(coin);
+        if (!opportunityStaminaAffordable(self, staminaCost)) continue;
         const score = scoreCoinOpportunity(coin);
         if (!previous
           || score > Number(previous.opportunitySortScore || -Infinity)
           || (score === Number(previous.opportunitySortScore || -Infinity) && Number(coin.amount || 0) > Number(previous.amount || 0))
           || (score === Number(previous.opportunitySortScore || -Infinity) && Number(coin.distance || 0) < Number(previous.distance || Infinity))) {
-          coinById.set(id, { ...coin, opportunitySortScore: score });
+          coinById.set(id, { ...coin, opportunitySortScore: score, opportunityStaminaCost: staminaCost });
         }
       }
     }
@@ -4308,11 +4334,13 @@
     for (const target of enemyTargets) {
       const score = scoreEnemyOpportunity(target);
       if (score === null) continue;
+      const staminaCost = opportunityEnemyStaminaCost(target);
+      if (!opportunityStaminaAffordable(self, staminaCost)) continue;
       opportunities.push({
         type: 'enemy',
         id: target.user_id,
         distance: target.distance,
-        staminaCost: opportunityEnemyStaminaCost(target),
+        staminaCost,
         score,
         action: () => buildEnemyAction(self, target)
       });
@@ -4922,7 +4950,7 @@
       }, self, entities, { recovery });
     }
 
-    const snapshotCompetitionCoin = pickSnapshotCoinDestination(snapshotCoins, coinThreats);
+    const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
     const opportunityCoinGroups = [
       { coins, maxDistance: cfg.coinMaxDistance },
       { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
@@ -4954,7 +4982,7 @@
     }
 
     const fieldTarget = stamina5s >= cfg.fieldMigrationStaminaThreshold
-      ? pickCoinField(allCoins, coinThreats)
+      ? pickCoinField(self, allCoins, coinThreats)
       : null;
     if (fieldTarget) {
       bot.fleeLock = null;
@@ -4977,7 +5005,7 @@
       }, self, entities, { recovery });
     }
 
-    const distantCoin = pickDistantCoin(allCoins, coinThreats);
+    const distantCoin = pickDistantCoin(self, allCoins, coinThreats);
     if (distantCoin) {
       bot.fleeLock = null;
       const dir = coinDirectionTo(self, distantCoin);
