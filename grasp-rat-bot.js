@@ -167,15 +167,20 @@ function runSelfTest() {
     enemyReloginJitterMs: 15000,
     postAttackDropCoinMinAmount: 1,
     opportunisticShootEveryMs: 120,
+    opportunisticShotMinScoreRatio: 1,
     attackMinDrop: 8,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
     targetWhitelistNames: ['文月'],
     targetWhitelistIds: [],
     coinOpportunityValue: 60000,
-    dropOpportunityValue: 100000,
+    dropOpportunityValue: 60000,
     opportunityDistanceFloor: 50,
     opportunityDistanceScoreScale: 10000,
+    opportunityMoveStaminaPerCm: 1,
+    opportunityShotStaminaCostMs: 500,
+    opportunityEstimatedDamagePerShot: 3,
+    opportunityCoinPickupStaminaMs: 0,
     opportunityStickBonus: 35000,
     opportunitySwitchMargin: 120000,
     opportunitySwitchRelativeMargin: 0.2,
@@ -310,7 +315,7 @@ function runSelfTest() {
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
-    if (isAfkTarget(target)) return targetDrop > 0;
+    if (isAfkTarget(target)) return targetDrop >= cfg.attackMinDrop;
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -325,16 +330,38 @@ function runSelfTest() {
     const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
     return minJitter + (maxJitter - minJitter) * nearFactor;
   }
-  function opportunityEffectiveDistance(distance) {
+  function opportunityEffectiveStaminaCost(staminaCost) {
     const floor = Math.max(1, Number(cfg.opportunityDistanceFloor || 1));
-    const d = Math.max(0, Number(distance) || 0);
+    const d = Math.max(0, Number(staminaCost) || 0);
     return Math.max(floor, d);
   }
-  function opportunityValueScore(value, distance, weight = cfg.coinOpportunityValue) {
+  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
+    const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
+    return travel * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1));
+  }
+  function opportunityCoinStaminaCost(coin) {
+    const override = Number(coin?.opportunityStaminaCost ?? coin?.staminaCost ?? NaN);
+    if (Number.isFinite(override) && override >= 0) return override;
+    return opportunityMoveStaminaCost(coin?.distance, 0)
+      + Math.max(0, Number(cfg.opportunityCoinPickupStaminaMs || 0));
+  }
+  function estimatedKillShots(target) {
+    const damage = Math.max(0.1, Number(cfg.opportunityEstimatedDamagePerShot || 3));
+    const hp = Math.max(1, Number(combatHpValue(target) || 100));
+    return Math.max(1, Math.ceil(hp / damage));
+  }
+  function opportunityEnemyStaminaCost(target) {
+    const afk = isAfkTarget(target);
+    const stopDistance = afk ? cfg.attackRange : cfg.attackEngageRange;
+    const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
+    const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
+    return moveCost + shotCost;
+  }
+  function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
     const amount = Number(value || 0);
     if (!(amount > 0)) return -Infinity;
     const scale = Math.max(1, Number(cfg.opportunityDistanceScoreScale || 1));
-    return amount * Number(weight || 1) * scale / opportunityEffectiveDistance(distance);
+    return amount * Number(weight || 1) * scale / opportunityEffectiveStaminaCost(staminaCost);
   }
   function compareCoinOpportunity(a, b) {
     const scoreDiff = scoreCoinOpportunity(b) - scoreCoinOpportunity(a);
@@ -355,8 +382,9 @@ function runSelfTest() {
       const members = candidates.filter(other => dist(coin, other) <= cfg.fieldMigrationClusterRadius);
       if (members.length < cfg.fieldMigrationMinCoins) continue;
       const totalAmount = members.reduce((sum, item) => sum + item.amount, 0);
-      const score = opportunityValueScore(totalAmount, coin.distance, cfg.coinOpportunityValue);
-      if (!best || score > best.score) best = { ...coin, score, members: members.length, totalAmount };
+      const staminaCost = opportunityCoinStaminaCost(coin);
+      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+      if (!best || score > best.score) best = { ...coin, score, opportunityStaminaCost: staminaCost, members: members.length, totalAmount };
     }
     return best;
   }
@@ -388,20 +416,24 @@ function runSelfTest() {
     for (const coin of candidates) {
       const members = candidates.filter(other => dist(coin, other) <= radius);
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const score = opportunityValueScore(totalAmount, coin.distance, cfg.coinOpportunityValue);
+      const staminaCost = opportunityCoinStaminaCost(coin);
+      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
       const item = {
         ...coin,
         snapshotMembers: members.length,
         snapshotAmount: totalAmount,
         snapshotScore: score,
-        opportunityScore: score
+        opportunityScore: score,
+        opportunityStaminaCost: staminaCost
       };
       if (!best
         || item.snapshotScore > best.snapshotScore
         || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
         || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
     }
-    return best || candidates[0];
+    if (best) return best;
+    const first = candidates[0];
+    return first ? { ...first, opportunityStaminaCost: opportunityCoinStaminaCost(first) } : null;
   }
 
   function enemyTargets(self, entities, activeThreats) {
@@ -416,7 +448,7 @@ function runSelfTest() {
   function scoreCoinOpportunity(coin) {
     const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? NaN);
     if (Number.isFinite(override)) return override;
-    return opportunityValueScore(coin.amount, coin.distance, cfg.coinOpportunityValue);
+    return opportunityValueScore(coin.amount, opportunityCoinStaminaCost(coin), cfg.coinOpportunityValue);
   }
 
   function scoreEnemyOpportunity(target) {
@@ -426,7 +458,7 @@ function runSelfTest() {
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     return opportunityValueScore(
       target.drop,
-      target.distance,
+      opportunityEnemyStaminaCost(target),
       afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue
     );
   }
@@ -535,14 +567,43 @@ function runSelfTest() {
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
       .filter(e => !isWhitelistedTarget(e))
       .filter(e => e.distance <= cfg.attackRange)
-      .filter(e => Number(e.drop || 0) > 0 && isAfkTarget(e))
-      .sort((a, b) => (b.drop - a.drop) || a.distance - b.distance)[0] || null;
+      .filter(e => attackWorthTaking(self, e) && isAfkTarget(e))
+      .map(e => ({
+        ...e,
+        score: scoreEnemyOpportunity(e) ?? -Infinity,
+        staminaCost: opportunityEnemyStaminaCost(e),
+        estimatedShots: estimatedKillShots(e)
+      }))
+      .sort((a, b) => b.score - a.score || (b.drop - a.drop) || a.distance - b.distance)[0] || null;
+  }
+
+  function actionOpportunityScore(action) {
+    const explicit = Number(action?.score ?? action?.opportunityChoice?.score);
+    if (Number.isFinite(explicit)) return explicit;
+    const target = action?.target || action || {};
+    if (['coin', 'seek-coin'].includes(action?.kind) && Number(target.amount || 0) > 0) {
+      return scoreCoinOpportunity({
+        amount: Number(target.amount || 0),
+        distance: Number(target.distance ?? action?.distance ?? 0),
+        opportunityStaminaCost: Number.isFinite(Number(action?.staminaCost)) ? Number(action.staminaCost) : undefined
+      });
+    }
+    return -Infinity;
+  }
+
+  function opportunisticShotBeatsAction(action, target) {
+    const shotScore = Number(target?.score ?? scoreEnemyOpportunity(target) ?? -Infinity);
+    if (!Number.isFinite(shotScore)) return false;
+    const actionScore = actionOpportunityScore(action);
+    const minRatio = Math.max(0, Number(cfg.opportunisticShotMinScoreRatio ?? 1));
+    return !Number.isFinite(actionScore) || actionScore <= 0 || shotScore >= actionScore * minRatio;
   }
 
   function attachOpportunisticShot(action, self, entities, allow = true) {
     if (!allow || !action || !['coin', 'seek-coin'].includes(action.kind) || action.combat) return action;
     const target = pickOpportunisticShotTarget(self, entities);
     if (!target) return action;
+    if (!opportunisticShotBeatsAction(action, target)) return action;
     return {
       ...action,
       opportunisticShot: {
@@ -552,7 +613,10 @@ function runSelfTest() {
         y: target.y,
         hp: combatHpValue(target),
         drop: target.drop,
-        distance: Math.round(target.distance)
+        distance: Math.round(target.distance),
+        score: Math.round(Number(target.score || 0)),
+        staminaCost: Math.round(Number(target.staminaCost || 0)),
+        estimatedShots: target.estimatedShots
       }
     };
   }
@@ -573,7 +637,10 @@ function runSelfTest() {
         y: target.y,
         hp: combatHpValue(target),
         drop: target.drop,
-        distance: Math.round(target.distance)
+        distance: Math.round(target.distance),
+        score: Math.round(Number(target.score || 0)),
+        staminaCost: Math.round(Number(target.staminaCost || 0)),
+        estimatedShots: target.estimatedShots
       }
     };
   }
@@ -925,22 +992,22 @@ function runSelfTest() {
       want: 'best-opportunity-afk-drop-target'
     },
     {
-      name: 'afk drop shot does not preempt near coin',
+      name: 'low-drop opportunistic shot is skipped during near coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 3, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 3 }],
         coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
       }).opportunisticShot?.id,
-      want: 3
+      want: undefined
     },
     {
-      name: 'afk drop shot does not preempt medium coin',
+      name: 'low-drop opportunistic shot is skipped during medium coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 3, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 3 }],
         coins: [{ drop_id: 1, x: 22000, y: 0, amount: 999 }]
       }).opportunisticShot?.id,
-      want: 3
+      want: undefined
     },
     {
       name: 'near coin distance beats amount',
@@ -1548,7 +1615,7 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'same value afk drop wins coin tie',
+      name: 'same value coin beats afk drop after shot stamina cost',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -1557,7 +1624,25 @@ function runSelfTest() {
         });
         return action.kind + ':' + action.reason;
       })(),
-      want: 'attack:best-opportunity-afk-drop-target'
+      want: 'coin:best-opportunity-coin'
+    },
+    {
+      name: 'shot stamina can make a lower coin beat a low drop target',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 5 }],
+        coins: [{ drop_id: 1, x: 3000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'coin'
+    },
+    {
+      name: 'higher drop still wins when stamina yield is better',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 9 }],
+        coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'attack'
     }
   ];
   const failed = cases.filter(item => item.got !== item.want);
@@ -1771,9 +1856,13 @@ function browserBotSource(config) {
     targetWhitelistNames: ['文月'],
     targetWhitelistIds: [],
     coinOpportunityValue: 60000,
-    dropOpportunityValue: 100000,
+    dropOpportunityValue: 60000,
     opportunityDistanceFloor: 50,
     opportunityDistanceScoreScale: 10000,
+    opportunityMoveStaminaPerCm: 1,
+    opportunityShotStaminaCostMs: 500,
+    opportunityEstimatedDamagePerShot: 3,
+    opportunityCoinPickupStaminaMs: 0,
     opportunityStickBonus: 35000,
     opportunitySwitchMargin: 120000,
     opportunitySwitchRelativeMargin: 0.2,
@@ -1841,6 +1930,8 @@ function browserBotSource(config) {
     coinPickupSweepPulseMs: 80,
     coinPickupFinePulseMs: 45,
     shootEveryMs: 120,
+    opportunisticShootEveryMs: 120,
+    opportunisticShotMinScoreRatio: 1,
     globalRefreshMs: 5000,
     nativeTickMinMs: 120,
     attackMinStamina: 0,
@@ -2351,7 +2442,7 @@ function browserBotSource(config) {
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
-    if (isAfkTarget(target)) return targetDrop > 0;
+    if (isAfkTarget(target)) return targetDrop >= cfg.attackMinDrop;
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -4937,12 +5028,14 @@ function browserBotSource(config) {
       const members = candidates.filter(other => dist(coin, other) <= cfg.fieldMigrationClusterRadius);
       if (members.length < cfg.fieldMigrationMinCoins) continue;
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const score = opportunityValueScore(totalAmount, coin.distance, cfg.coinOpportunityValue);
+      const staminaCost = opportunityCoinStaminaCost(coin);
+      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
       const item = {
         ...coin,
         fieldMembers: members.length,
         fieldAmount: totalAmount,
-        fieldScore: score
+        fieldScore: score,
+        opportunityStaminaCost: staminaCost
       };
       if (!best || item.fieldScore > best.fieldScore) best = item;
     }
@@ -5102,12 +5195,19 @@ function browserBotSource(config) {
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
       .filter(e => !isWhitelistedTarget(e))
       .filter(e => e.distance <= cfg.attackRange)
-      .filter(e => Number(e.drop || 0) > 0 && !isInvulnerable(e))
+      .filter(e => attackWorthTaking(self, e) && !isInvulnerable(e))
       .filter(isAfkTarget)
+      .map(e => ({
+        ...e,
+        score: scoreEnemyOpportunity(e) ?? -Infinity,
+        staminaCost: opportunityEnemyStaminaCost(e),
+        estimatedShots: estimatedKillShots(e)
+      }))
       .sort((a, b) => {
         const stickyA = bot.attackHistory.some(item => String(item.id) === String(a.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
         const stickyB = bot.attackHistory.some(item => String(item.id) === String(b.user_id) && Date.now() - Number(item.at || 0) <= cfg.targetStickMs);
         if (stickyA !== stickyB) return stickyA ? -1 : 1;
+        if (b.score !== a.score) return b.score - a.score;
         if (b.drop !== a.drop) return b.drop - a.drop;
         return a.distance - b.distance;
       });
@@ -5121,9 +5221,34 @@ function browserBotSource(config) {
       hp: combatHpValue(target),
       drop: target.drop,
       distance: Math.round(target.distance),
+      score: Math.round(Number(target.score || 0)),
+      staminaCost: Math.round(Number(target.staminaCost || 0)),
+      estimatedShots: target.estimatedShots,
       mode: target.current_join_mode || '',
       reason: 'opportunistic-afk-drop-shot'
     };
+  }
+
+  function actionOpportunityScore(action) {
+    const explicit = Number(action?.score ?? action?.opportunityChoice?.score);
+    if (Number.isFinite(explicit)) return explicit;
+    const target = action?.target || {};
+    if (['coin', 'seek-coin'].includes(action?.kind) && Number(target.amount || 0) > 0) {
+      return scoreCoinOpportunity({
+        amount: Number(target.amount || 0),
+        distance: Number(target.distance ?? action?.distance ?? 0),
+        opportunityStaminaCost: Number.isFinite(Number(action?.staminaCost)) ? Number(action.staminaCost) : undefined
+      });
+    }
+    return -Infinity;
+  }
+
+  function opportunisticShotBeatsAction(action, shot) {
+    const shotScore = Number(shot?.score ?? scoreEnemyOpportunity(shot) ?? -Infinity);
+    if (!Number.isFinite(shotScore)) return false;
+    const actionScore = actionOpportunityScore(action);
+    const minRatio = Math.max(0, Number(cfg.opportunisticShotMinScoreRatio ?? 1));
+    return !Number.isFinite(actionScore) || actionScore <= 0 || shotScore >= actionScore * minRatio;
   }
 
   function attachOpportunisticShot(action, self, entities, options = {}) {
@@ -5131,6 +5256,7 @@ function browserBotSource(config) {
     if (options.recovery) return action;
     const shot = pickOpportunisticShotTarget(self, entities);
     if (!shot) return action;
+    if (!opportunisticShotBeatsAction(action, shot)) return action;
     return { ...action, opportunisticShot: shot };
   }
 
@@ -5331,17 +5457,43 @@ function browserBotSource(config) {
     return minJitter + (maxJitter - minJitter) * nearFactor;
   }
 
-  function opportunityEffectiveDistance(distance) {
+  function opportunityEffectiveStaminaCost(staminaCost) {
     const floor = Math.max(1, Number(cfg.opportunityDistanceFloor || 1));
-    const d = Math.max(0, Number(distance) || 0);
+    const d = Math.max(0, Number(staminaCost) || 0);
     return Math.max(floor, d);
   }
 
-  function opportunityValueScore(value, distance, weight = cfg.coinOpportunityValue) {
+  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
+    const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
+    return travel * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1));
+  }
+
+  function opportunityCoinStaminaCost(coin) {
+    const override = Number(coin?.opportunityStaminaCost ?? coin?.staminaCost ?? NaN);
+    if (Number.isFinite(override) && override >= 0) return override;
+    return opportunityMoveStaminaCost(coin?.distance, 0)
+      + Math.max(0, Number(cfg.opportunityCoinPickupStaminaMs || 0));
+  }
+
+  function estimatedKillShots(target) {
+    const damage = Math.max(0.1, Number(cfg.opportunityEstimatedDamagePerShot || 3));
+    const hp = Math.max(1, Number(combatHpValue(target) || 100));
+    return Math.max(1, Math.ceil(hp / damage));
+  }
+
+  function opportunityEnemyStaminaCost(target) {
+    const afk = isAfkTarget(target);
+    const stopDistance = afk ? cfg.attackRange : cfg.attackEngageRange;
+    const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
+    const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
+    return moveCost + shotCost;
+  }
+
+  function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
     const amount = Number(value || 0);
     if (!(amount > 0)) return -Infinity;
     const scale = Math.max(1, Number(cfg.opportunityDistanceScoreScale || 1));
-    return amount * Number(weight || 1) * scale / opportunityEffectiveDistance(distance);
+    return amount * Number(weight || 1) * scale / opportunityEffectiveStaminaCost(staminaCost);
   }
 
   function compareCoinOpportunity(a, b) {
@@ -5644,7 +5796,8 @@ function browserBotSource(config) {
       const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
       if (sticky) {
         const score = scoreCoinOpportunity(sticky);
-        return { ...sticky, snapshotMembers: 1, snapshotAmount: Number(sticky.amount || 0), snapshotScore: score, opportunityScore: score, snapshotAgeMs: ageMs };
+        const staminaCost = opportunityCoinStaminaCost(sticky);
+        return { ...sticky, snapshotMembers: 1, snapshotAmount: Number(sticky.amount || 0), snapshotScore: score, opportunityScore: score, opportunityStaminaCost: staminaCost, snapshotAgeMs: ageMs };
       }
     }
     let best = null;
@@ -5653,12 +5806,14 @@ function browserBotSource(config) {
     for (const coin of candidates.slice(0, 300)) {
       const members = candidates.filter(other => dist(coin, other) <= radius);
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const score = opportunityValueScore(totalAmount, coin.distance, cfg.coinOpportunityValue);
+      const staminaCost = opportunityCoinStaminaCost(coin);
+      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
       const item = {
         ...coin,
         snapshotMembers: members.length,
         snapshotAmount: totalAmount,
         snapshotScore: score,
+        opportunityStaminaCost: staminaCost,
         snapshotAgeMs: ageMs
       };
       if (!best
@@ -5670,7 +5825,7 @@ function browserBotSource(config) {
     const first = candidates[0];
     if (!first) return null;
     const score = scoreCoinOpportunity(first);
-    return { ...first, snapshotMembers: 1, snapshotAmount: Number(first.amount || 0), snapshotScore: score, opportunityScore: score, snapshotAgeMs: ageMs };
+    return { ...first, snapshotMembers: 1, snapshotAmount: Number(first.amount || 0), snapshotScore: score, opportunityScore: score, opportunityStaminaCost: opportunityCoinStaminaCost(first), snapshotAgeMs: ageMs };
   }
 
   function scoreCoinOpportunity(coin) {
@@ -5679,7 +5834,7 @@ function browserBotSource(config) {
     const sticky = bot.lastTarget?.kind === 'coin'
       && String(bot.lastTarget.id) === String(coin.drop_id)
       && now() - bot.lastTargetAt < cfg.coinStickMs;
-    return opportunityValueScore(coin.amount, coin.distance, cfg.coinOpportunityValue)
+    return opportunityValueScore(coin.amount, opportunityCoinStaminaCost(coin), cfg.coinOpportunityValue)
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
@@ -5693,7 +5848,7 @@ function browserBotSource(config) {
       && now() - bot.lastTargetAt < cfg.targetStickMs;
     return opportunityValueScore(
       target.drop,
-      target.distance,
+      opportunityEnemyStaminaCost(target),
       afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue
     ) + (sticky ? cfg.opportunityStickBonus : 0);
   }
@@ -5797,6 +5952,7 @@ function browserBotSource(config) {
 
   function buildCoinAction(self, coin, reason, kind = null) {
     const dir = coinDirectionTo(self, coin);
+    const staminaCost = opportunityCoinStaminaCost(coin);
     return {
       kind: kind || (coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'),
       reason,
@@ -5813,7 +5969,8 @@ function browserBotSource(config) {
       dx: dir.dx,
       dy: dir.dy,
       ...coinMotionMeta(dir),
-      score: Math.round(scoreCoinOpportunity(coin))
+      score: Math.round(scoreCoinOpportunity(coin)),
+      staminaCost: Math.round(staminaCost)
     };
   }
 
@@ -5822,6 +5979,7 @@ function browserBotSource(config) {
     const dir = directionTo(self, target);
     const afk = isAfkTarget(target);
     const inRange = Number(dir.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
+    const staminaCost = opportunityEnemyStaminaCost(target);
     return {
       kind: inRange ? 'attack' : 'seek-enemy',
       reason: reason || (afk
@@ -5841,7 +5999,9 @@ function browserBotSource(config) {
       dx: inRange ? 0 : dir.dx,
       dy: inRange ? 0 : dir.dy,
       shoot: inRange,
-      score: Math.round(scoreEnemyOpportunity(target) || 0)
+      score: Math.round(scoreEnemyOpportunity(target) || 0),
+      staminaCost: Math.round(staminaCost),
+      estimatedShots: estimatedKillShots(target)
     };
   }
 
@@ -5863,6 +6023,7 @@ function browserBotSource(config) {
       lastSeenAt: t,
       until: t + Math.max(0, Number(cfg.opportunitySwitchHoldMs) || 0),
       score: Math.round(Number(item.score || 0)),
+      staminaCost: Number.isFinite(Number(item.staminaCost)) ? Math.round(Number(item.staminaCost)) : null,
       reason: action?.reason || ''
     };
     return {
@@ -5871,6 +6032,7 @@ function browserBotSource(config) {
         type: bot.opportunityChoice.type,
         id: bot.opportunityChoice.id,
         score: bot.opportunityChoice.score,
+        staminaCost: bot.opportunityChoice.staminaCost,
         held: Boolean(item.held),
         competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
         holdRemainingMs: Math.max(0, Math.round(Number(bot.opportunityChoice.until || 0) - t))
@@ -5924,6 +6086,7 @@ function browserBotSource(config) {
         type: 'coin',
         id: coin.drop_id,
         distance: coin.distance,
+        staminaCost: opportunityCoinStaminaCost(coin),
         score: Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin),
         action: () => buildCoinAction(
           self,
@@ -5941,6 +6104,7 @@ function browserBotSource(config) {
         type: 'enemy',
         id: target.user_id,
         distance: target.distance,
+        staminaCost: opportunityEnemyStaminaCost(target),
         score,
         action: () => buildEnemyAction(self, target)
       });
