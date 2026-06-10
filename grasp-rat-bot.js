@@ -2060,6 +2060,7 @@ function browserBotSource(config) {
     leaveCommandTimeoutMs: 600,
     offlineLeaveCooldownMs: 60000,
     serverPositionStallEnabled: true,
+    serverPositionStallOfflineEnabled: false,
     serverPositionStallProbeMs: 1000,
     serverPositionStallMs: 2500,
     serverPositionNoMoveStallMs: 0,
@@ -3636,7 +3637,8 @@ function browserBotSource(config) {
 	    if (native) syncNativeControl(native);
 	    const nativeState = native?.state || null;
     const serverPositionStall = summarizeServerPositionStall();
-    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStall?.stalled);
+    const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
+    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline);
 	    const nativeCurrentVel = nativeState?.currentVel
 	      ? (Number(nativeState.currentVel.dx || 0) + ' ' + Number(nativeState.currentVel.dy || 0))
 	      : '';
@@ -3657,7 +3659,9 @@ function browserBotSource(config) {
 	      nativeWsReadyState: native ? native.wsReadyState : null,
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
-	      lastError: serverPositionStall?.stalled ? 'server position stalled' : (control.lastError || ''),
+	      lastError: serverPositionStallOffline
+          ? 'server position stalled'
+          : (control.lastError === 'server position stalled' ? '' : (control.lastError || '')),
 	      lastVelocity: control.lastVelocity || '',
       nonZeroVelocityAgeMs: control.lastNonZeroVelocityAt ? Date.now() - Number(control.lastNonZeroVelocityAt || 0) : null,
       nonZeroVelocityDurationMs: control.nonZeroVelocitySince ? Date.now() - Number(control.nonZeroVelocitySince || 0) : null,
@@ -4106,7 +4110,11 @@ function browserBotSource(config) {
       noServerMove,
       snapshotAgeMs
     });
-    if (stalled) bot.control.lastError = 'server position stalled';
+    if (stalled && cfg.serverPositionStallOfflineEnabled) {
+      bot.control.lastError = 'server position stalled';
+    } else if (bot.control.lastError === 'server position stalled') {
+      bot.control.lastError = '';
+    }
     return summarizeServerPositionStall(state);
   }
 
@@ -4404,7 +4412,7 @@ function browserBotSource(config) {
     } else {
       bot.control.nonZeroVelocitySince = 0;
       bot.control.lastNonZeroVelocityAt = 0;
-      if (!bot.serverPositionStall?.stalled) resetServerPositionStall('zero-velocity');
+      if (!bot.serverPositionStall?.stalled || !cfg.serverPositionStallOfflineEnabled) resetServerPositionStall('zero-velocity');
     }
 	    if (sendNativeVelocity(dx, dy, force)) return true;
 	    return wsSend('vel ' + vel);
@@ -7079,24 +7087,25 @@ function browserBotSource(config) {
 	      ensureControlWs();
       await refreshServerPositionProbeIfNeeded();
       const serverPositionStall = assessServerPositionStall(self);
-      const controlOffline = !bot.control.wsOpen || Boolean(serverPositionStall?.stalled);
-	      if (!cfg.dryRun && controlOffline) {
-	        bot.pursuit = null;
-	        stopMotionSafely(serverPositionStall?.stalled ? 'server-position-stalled' : 'control-ws-offline');
-	        if (!bot.offlineSince) bot.offlineSince = Date.now();
-	        const offlineAgeMs = Date.now() - bot.offlineSince;
+      const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline;
+		    if (!cfg.dryRun && controlOffline) {
+		      bot.pursuit = null;
+		      stopMotionSafely(serverPositionStallOffline ? 'server-position-stalled' : 'control-ws-offline');
+		      if (!bot.offlineSince) bot.offlineSince = Date.now();
+		      const offlineAgeMs = Date.now() - bot.offlineSince;
         const offlineSafety = assessOfflineSafety(self);
         const safeLeaveMs = Math.min(3000, Math.max(0, Number(cfg.offlineSafeLeaveMs ?? cfg.offlineLeaveMs ?? 3000)));
         const unsafeLeaveMs = Math.max(0, Number(cfg.offlineUnsafeLeaveMs ?? 0));
         const leaveDelayMs = offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs;
-	        const leaveResult = offlineAgeMs >= leaveDelayMs
-	          ? await leaveOffline(serverPositionStall?.stalled ? 'server position stalled' : 'websocket offline', currentSummary, offlineSafety)
-	          : null;
+		      const leaveResult = offlineAgeMs >= leaveDelayMs
+		        ? await leaveOffline(serverPositionStallOffline ? 'server position stalled' : 'websocket offline', currentSummary, offlineSafety)
+		        : null;
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: leaveResult?.attempted && !leaveResult?.error
               ? 'offline-leave'
-              : (serverPositionStall?.stalled
+              : (serverPositionStallOffline
                 ? 'control-ws-server-position-stalled'
                 : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')),
 	          control: summarizeControl(),
