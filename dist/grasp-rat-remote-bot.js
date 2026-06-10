@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.73"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.74"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1224,12 +1224,13 @@
           preBuffer: Array.isArray(state.preBuffer) ? state.preBuffer.length : 0,
           dropped: Number(state.dropped || 0),
           sent: Number(state.sent || 0),
-          failed: Number(state.failed || 0),
-          sending: Boolean(state.sending),
-          lastError: state.lastError || '',
-          lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null
-        };
-      }
+	          failed: Number(state.failed || 0),
+	          sending: Boolean(state.sending),
+	          lastError: state.lastError || '',
+	          lastSkipReason: state.lastSkipReason || '',
+	          lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null
+	        };
+	      }
 
       function combatLogSelfSummary(selfLike) {
         if (!selfLike) return null;
@@ -1492,22 +1493,37 @@
         };
       }
 
-      function combatLogTriggerReason(entry, decision) {
-        const reason = String(decision?.reason || '');
-        if (decision?.combat) return 'decision-combat';
-        if (/^combat-/.test(reason)) return 'combat-reason';
-        if (/injury|pursuit-leave|active-threat|incoming-bullet/.test(reason)) return reason || 'threat-reason';
-        if (decision?.injury || entry.injury) return 'injury';
-        if (decision?.pendingCombatLeave || entry.pendingCombatLeave) return 'pending-combat-leave';
-        if (entry.incomingBullet) return 'incoming-bullet';
-        const closeActive = (entry.nearbyEntities || []).find(entity =>
-          (entity.active || entity.firing)
-            && Number.isFinite(Number(entity.distance))
-            && Number(entity.distance) <= Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.panicRadius || 0))
-        );
-        if (closeActive) return 'near-active:' + (closeActive.name || closeActive.id || 'unknown');
-        return '';
-      }
+	      function combatLogTriggerReason(entry, decision) {
+	        const reason = String(decision?.reason || '');
+	        const target = decision?.target || entry?.target || null;
+	        const afkTarget = combatLogIsAfkAttack(entry, decision);
+	        if (decision?.combat && !afkTarget) return 'decision-combat';
+	        if (/^combat-/.test(reason) && !afkTarget) return 'combat-reason';
+	        if (decision?.pendingCombatLeave || entry.pendingCombatLeave) return 'pending-combat-leave';
+	        if (decision?.injury || entry.injury) return 'injury';
+	        if (entry.incomingBullet) return 'incoming-bullet';
+	        if (/injury|pursuit-leave|incoming-bullet/.test(reason)) return reason || 'self-threat-reason';
+	        return '';
+	      }
+
+	      function combatLogIsAfkAttack(entry, decision = entry?.decision || {}) {
+	        const reason = String(decision?.reason || entry?.decision?.reason || '').toLowerCase();
+	        const target = decision?.target || entry?.target || entry?.decision?.target || null;
+	        const shot = decision?.opportunisticShot || entry?.decision?.opportunisticShot || null;
+	        return Boolean(target?.afk)
+	          || Boolean(shot)
+	          || /afk/.test(reason)
+	          || /挂机/.test(reason);
+	      }
+
+	      function combatLogSuspendReason(decision) {
+	        const reason = String(decision?.reason || '');
+	        if (!reason) return '';
+	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|login-cooldown|login-control-missing)$/.test(reason)) return reason;
+	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
+	        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
+	        return '';
+	      }
 
       function combatLogTargetLabel(entry, decision) {
         const candidates = [
@@ -1533,11 +1549,12 @@
         return sanitizeCombatLogIdPart(t + '-self-' + selfId + '-vs-' + target, 'combat-' + Date.now());
       }
 
-      function rememberCombatPreBuffer(entry) {
-        const state = bot.combatLogging;
-        if (!Array.isArray(state.preBuffer)) state.preBuffer = [];
-        const snapshot = safeJsonClone({ ...entry, phase: 'prebuffer' }) || { at: entry?.at || Date.now(), phase: 'prebuffer', error: 'clone failed' };
-        state.preBuffer.push(snapshot);
+	      function rememberCombatPreBuffer(entry) {
+	        const state = bot.combatLogging;
+	        if (combatLogIsAfkAttack(entry)) return;
+	        if (!Array.isArray(state.preBuffer)) state.preBuffer = [];
+	        const snapshot = safeJsonClone({ ...entry, phase: 'prebuffer' }) || { at: entry?.at || Date.now(), phase: 'prebuffer', error: 'clone failed' };
+	        state.preBuffer.push(snapshot);
         const cutoff = Date.now() - Math.max(0, Number(cfg.combatLogPreBufferMs) || 10000);
         const maxEntries = Math.max(20, Math.ceil(Math.max(250, Number(cfg.combatLogPreBufferMs) || 10000) / Math.max(50, Number(cfg.tickMs) || 120)) + 10);
         while (state.preBuffer.length && Number(state.preBuffer[0].at || 0) < cutoff) state.preBuffer.shift();
@@ -1583,11 +1600,12 @@
           decision: entry.decision,
           nearbyEntities: entry.nearbyEntities,
           enemyExit: entry.enemyExit || null
-        });
-        for (const pre of prior) {
-          queueCombatLogEntry({
-            ...pre,
-            type: 'combat-pre-frame',
+	        });
+	        for (const pre of prior) {
+	          if (combatLogIsAfkAttack(pre)) continue;
+	          queueCombatLogEntry({
+	            ...pre,
+	            type: 'combat-pre-frame',
             phase: 'pre'
           });
         }
@@ -1672,14 +1690,35 @@
         return true;
       }
 
-      function recordCombatLogTick(source, decision = bot.lastDecision) {
-        const state = bot.combatLogging;
-        if (!state?.enabled) return;
-        state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
-        if (!state.endpoint) return;
-        const entry = buildCombatLogEntry(source, decision || {});
-        const triggerReason = combatLogTriggerReason(entry, decision || {});
-        const triggered = Boolean(triggerReason);
+	      function recordCombatLogTick(source, decision = bot.lastDecision) {
+	        const state = bot.combatLogging;
+	        if (!state?.enabled) return;
+	        state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
+	        if (!state.endpoint) return;
+	        const suspendedReason = combatLogSuspendReason(decision || {});
+	        if (suspendedReason) {
+	          if (state.active) {
+	            const entry = buildCombatLogEntry(source, decision || {});
+	            endCombatLogSession(entry, 'suspended:' + suspendedReason);
+	          }
+		          state.lastSkipReason = suspendedReason;
+		          return;
+		        }
+		        state.lastSkipReason = '';
+		        const entry = buildCombatLogEntry(source, decision || {});
+	        const triggerReason = combatLogTriggerReason(entry, decision || {});
+	        const triggered = Boolean(triggerReason);
+	        const afkFrame = combatLogIsAfkAttack(entry, decision || {});
+	        if (afkFrame && !triggered) {
+	          state.lastSkipReason = 'afk-attack';
+	          if (state.active
+	            && state.lastCombatAt
+	            && entry.at - Number(state.lastCombatAt || 0) >= Math.max(0, Number(cfg.combatLogPostBufferMs) || 10000)) {
+	            endCombatLogSession(entry, 'post-buffer-elapsed');
+	          }
+	          flushCombatLogs(false);
+	          return;
+	        }
         const priorActive = Boolean(state.active);
         if (triggered && !priorActive) {
           startCombatLogSession(entry, decision || {}, triggerReason);
