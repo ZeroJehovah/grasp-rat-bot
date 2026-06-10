@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.65"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.66"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2484,6 +2484,10 @@
     return !Number.isFinite(distance) || distance > suppressRadius;
   }
 
+  function isSnapshotOnlyCoin(coin) {
+    return Boolean(coin?.snapshot) && !coin?.native;
+  }
+
   function snapshotCoinFreshEnough() {
     return snapshotDataFreshEnough();
   }
@@ -3772,7 +3776,7 @@
         if (isCurrentlyActive(a) !== isCurrentlyActive(b)) return isCurrentlyActive(a) ? -1 : 1;
         return a.distance - b.distance;
       });
-	    const snapshotCoins = allCoins.filter(c => c.distance <= cfg.snapshotCoinMaxDistance);
+	    const snapshotCoins = allCoins.filter(c => isSnapshotOnlyCoin(c) && c.distance <= cfg.snapshotCoinMaxDistance);
 	    return { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets };
 	  }
 
@@ -4737,11 +4741,9 @@
 
   function pickSnapshotCoinDestination(self, allCoins, activeThreats) {
     const ageMs = snapshotCoinAgeMs();
-    let candidates = safeCoinCandidates(allCoins, activeThreats, cfg.snapshotCoinMaxDistance);
-    if (ageMs > cfg.snapshotCoinStaleMs) {
-      candidates = candidates.filter(coin => coin.native);
-    }
-    candidates = candidates.filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)));
+    if (ageMs > cfg.snapshotCoinStaleMs) return null;
+    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance)
+      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)));
     if (!candidates.length) return null;
     if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
       const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
@@ -4792,6 +4794,13 @@
     const perAmount = Math.max(0, Number(cfg.snapshotSingleCoinDistancePerAmount || 0));
     const maxDistance = Math.max(baseMax, amount * perAmount);
     return distance <= maxDistance;
+  }
+
+  function snapshotCoinNavigationReason(coin) {
+    if (isSnapshotOnlyCoin(coin) && Number(coin?.snapshotMembers || 0) > 0) {
+      return coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target';
+    }
+    return coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
   }
 
   function scoreCoinOpportunity(coin) {
@@ -5059,9 +5068,7 @@
       }
     }
     for (const coin of coinById.values()) {
-      const reason = coin.snapshotMembers
-        ? (coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target')
-        : (coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin');
+      const reason = snapshotCoinNavigationReason(coin);
       opportunities.push({
         type: 'coin',
         id: coin.drop_id,
@@ -5782,7 +5789,7 @@
       const action = buildCoinAction(
         self,
         snapshotCoin,
-        snapshotCoin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target',
+        snapshotCoinNavigationReason(snapshotCoin),
         'seek-coin'
       );
       action.target.fieldMembers = snapshotCoin.snapshotMembers;
