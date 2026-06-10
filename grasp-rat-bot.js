@@ -140,6 +140,10 @@ function runSelfTest() {
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
     combatAimEvasionScale: 1.0,
+    combatAimMotionSampleMs: 50,
+    combatAimRecentMotionDecayMs: 900,
+    combatAimMovingScaleThreshold: 0.15,
+    combatAimMinMotionJitterScale: 0.2,
     combatTargetDodgeSpeedPerTick: 50,
     combatBulletSpeedPerTick: 500,
     combatBulletHitRadiusCm: 90,
@@ -244,7 +248,7 @@ function runSelfTest() {
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0 };
+  const bot = { lastTarget: null, lastTargetAt: 0, combatTarget: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -340,23 +344,43 @@ function runSelfTest() {
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
   };
-  function combatAimJitterLimit(distance) {
+  function combatAimJitterLimit(distance, motionScale = 1) {
     const maxJitter = Math.max(0, Number(cfg.combatAimJitterMaxRadians || cfg.combatAimJitterRadians || 0));
     const minJitter = clampValue(Number(cfg.combatAimJitterMinRadians ?? maxJitter), 0, maxJitter);
+    const scale = clampValue(Number.isFinite(Number(motionScale)) ? Number(motionScale) : 1, 0, 1);
+    const minScale = clampValue(Number(cfg.combatAimMinMotionJitterScale ?? 0.2), 0, 1);
     const closeDistance = Math.max(0, Number(cfg.combatAimJitterCloseDistance || 0));
     const farDistance = Math.max(closeDistance + 1, Number(cfg.combatAimJitterFarDistance || cfg.combatAttackRange || closeDistance + 1));
     const rawDistance = Number(distance);
     const d = clampValue(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
     const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
-    const interpolated = minJitter + (maxJitter - minJitter) * nearFactor;
+    const interpolated = (minJitter + (maxJitter - minJitter) * nearFactor) * Math.max(minScale, scale);
     const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
     const dodgeSpeed = Math.max(0, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
     const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
     const evasionScale = Math.max(0, Number(cfg.combatAimEvasionScale ?? 1));
     const travelTicks = d / bulletSpeed;
-    const evasionWidth = (dodgeSpeed * travelTicks + hitRadius) * evasionScale;
+    const evasionWidth = (dodgeSpeed * scale * travelTicks + hitRadius) * evasionScale;
     const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
-    return clampValue(Math.max(interpolated, evasionAngle), minJitter, maxJitter);
+    return clampValue(Math.max(interpolated, evasionAngle), minJitter * minScale, maxJitter);
+  }
+  function combatAimMotionScale(target) {
+    const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const observedSpeed = Math.max(
+      speed(target),
+      Number(target?.motionObservedSpeed || 0),
+      Number(target?.motionSampleSpeed || 0)
+    );
+    let scale = clampValue(observedSpeed / maxSpeed, 0, 1);
+    if (target?.recentlyMoved) {
+      const decayMs = Math.max(1, Number(cfg.combatAimRecentMotionDecayMs || 900));
+      const ageMs = Number(target.motionAgeMs);
+      const recent = Number.isFinite(ageMs)
+        ? clampValue(1 - ageMs / decayMs, 0, 1)
+        : 1;
+      scale = Math.max(scale, recent * Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15)));
+    }
+    return scale;
   }
   function coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance = cfg.coinPrecisionTolerance) {
     const absX = Math.abs(dxRaw);
@@ -618,6 +642,27 @@ function runSelfTest() {
     };
   }
 
+  function pickEngagedCombatTarget(self, entities) {
+    const engaged = bot.combatTarget;
+    if (!engaged?.id) return null;
+    const target = (entities || [])
+      .filter(e => Number(e.user_id) !== Number(self.user_id))
+      .filter(isAlive)
+      .find(e => String(e.user_id ?? e.id ?? '') === String(engaged.id));
+    if (!target || isWhitelistedTarget(target) || isInvulnerable(target)) return null;
+    const distance = dist(self, target);
+    if (distance > Math.max(cfg.combatAttackRange, cfg.combatEngageGraceRange)) return null;
+    return {
+      ...target,
+      distance,
+      drop: dropValue(target),
+      speed: speed(target),
+      hp: combatHpValue(target),
+      knownHp: knownHpValue(target),
+      combatIntent: 'engaged'
+    };
+  }
+
   function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
     const incomingMatch = incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId);
     return (incomingMatch ? 1000000000 : 0)
@@ -856,7 +901,9 @@ function runSelfTest() {
       && hpGap > cfg.combatHighHpDisadvantageGap) {
       return { kind: 'leave', reason: 'combat-hp-disadvantage-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) }, combatState: { selfHp, targetHp, hpGap } };
     }
-    const moving = speed(target) >= cfg.combatStationarySpeed;
+    const motionScale = combatAimMotionScale(target);
+    const moving = speed(target) >= cfg.combatStationarySpeed
+      || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const spacing = incoming ? { active: false, dx: 0, dy: 0 } : combatSpacingVector(self, target, target.distance);
     return {
@@ -868,7 +915,7 @@ function runSelfTest() {
       dx: incoming ? 1 : spacing.dx,
       dy: incoming ? 1 : spacing.dy,
       aimMode: moving ? 'jitter' : 'exact',
-      aimJitterLimit: moving ? Number(combatAimJitterLimit(target.distance).toFixed(4)) : 0,
+      aimJitterLimit: moving ? Number(combatAimJitterLimit(target.distance, motionScale).toFixed(4)) : 0,
       target: { id: target.user_id, name: target.name, x: target.x, y: target.y, hp: combatHpValue(target), drop: target.drop, distance: Math.round(target.distance) },
       combatState: {
         spacing: spacing.active ? {
@@ -909,10 +956,10 @@ function runSelfTest() {
           id: snapshotCompetitionCoin.drop_id,
           amount: snapshotCompetitionCoin.amount,
           members: snapshotCompetitionCoin.snapshotMembers,
-          distance: snapshotCompetitionCoin.distance,
-          staminaCost,
-          score: scoreCoinOpportunity(snapshotCompetitionCoin)
-        });
+        distance: snapshotCompetitionCoin.distance,
+        staminaCost,
+        score: scoreCoinOpportunity(snapshotCompetitionCoin)
+      });
       }
     }
     for (const target of enemyTargets(self, entities, activeThreats)) {
@@ -1020,6 +1067,8 @@ function runSelfTest() {
     const recovery = !fullHp && isRecovering(self);
     const coinThreats = avoidanceThreats;
     const usableCoins = filterLocalSnapshotCoins(self, coins);
+    const engagedCombatTarget = pickEngagedCombatTarget(self, entities);
+    if (engagedCombatTarget) return chooseCombatAction(self, engagedCombatTarget, bullets);
     if (fullHp && closeThreats.length) return { kind: 'flee' };
     if (fullHp && cautionThreats.length) return { kind: 'flee' };
     const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
@@ -1478,6 +1527,19 @@ function runSelfTest() {
       want: 'flee'
     },
     {
+      name: 'recovering keeps fighting engaged stationary target in range',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-attack' };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100 }]
+        });
+        bot.combatTarget = null;
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'attack:combat-attack'
+    },
+    {
       name: 'full hp active outside combat range no longer forces flee',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -1604,6 +1666,11 @@ function runSelfTest() {
     {
       name: 'combat far target jitter covers measured dodge window',
       got: combatAimJitterLimit(14500) >= 0.1,
+      want: true
+    },
+    {
+      name: 'combat low target motion shrinks jitter window',
+      got: combatAimJitterLimit(10000, 0.15) < combatAimJitterLimit(10000, 1),
       want: true
     },
     {
@@ -2195,6 +2262,10 @@ function browserBotSource(config) {
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
     combatAimEvasionScale: 1.0,
+    combatAimMotionSampleMs: 50,
+    combatAimRecentMotionDecayMs: 900,
+    combatAimMovingScaleThreshold: 0.15,
+    combatAimMinMotionJitterScale: 0.2,
     combatTargetDodgeSpeedPerTick: 50,
     combatBulletSpeedPerTick: 500,
     combatBulletHitRadiusCm: 90,
@@ -4596,6 +4667,8 @@ function browserBotSource(config) {
 
   function markRecentMovement(entities) {
     const t = now();
+    const sampleMs = Math.max(1, Number(cfg.combatAimMotionSampleMs || 50));
+    const decayMs = Math.max(sampleMs, Number(cfg.combatAimRecentMotionDecayMs || 900));
     for (const entity of entities) {
       const id = Number(entity.user_id);
       if (!id) continue;
@@ -4603,11 +4676,29 @@ function browserBotSource(config) {
       const y = Number(entity.y);
       const previous = bot.seenEntities.get(id);
       let movedAt = previous?.movedAt || 0;
-      if (previous && Math.hypot(x - previous.x, y - previous.y) >= cfg.activeMoveMin) {
+      let motionSampleSpeed = 0;
+      let motionObservedSpeed = 0;
+      if (previous
+        && Number.isFinite(x)
+        && Number.isFinite(y)
+        && Number.isFinite(Number(previous.x))
+        && Number.isFinite(Number(previous.y))) {
+        const elapsedMs = Math.max(sampleMs, t - Number(previous.seenAt || t));
+        const delta = Math.hypot(x - Number(previous.x), y - Number(previous.y));
+        motionSampleSpeed = delta * sampleMs / elapsedMs;
+        const retained = Math.max(0, Number(previous.motionObservedSpeed || 0)) * Math.max(0, 1 - elapsedMs / decayMs);
+        motionObservedSpeed = Math.max(motionSampleSpeed, retained);
+        if (delta >= cfg.activeMoveMin) movedAt = t;
+      }
+      if (!previous && (Math.abs(Number(entity.vx) || 0) || Math.abs(Number(entity.vy) || 0))) {
         movedAt = t;
       }
-      entity.recentlyMoved = t - movedAt <= cfg.activeSeenMs;
-      bot.seenEntities.set(id, { x, y, seenAt: t, movedAt });
+      const motionAgeMs = movedAt ? Math.max(0, t - movedAt) : null;
+      entity.motionSampleSpeed = motionSampleSpeed;
+      entity.motionObservedSpeed = motionObservedSpeed;
+      entity.motionAgeMs = motionAgeMs;
+      entity.recentlyMoved = Boolean(movedAt && t - movedAt <= cfg.activeSeenMs);
+      bot.seenEntities.set(id, { x, y, seenAt: t, movedAt, motionSampleSpeed, motionObservedSpeed });
     }
     for (const [id, seen] of bot.seenEntities.entries()) {
       if (t - seen.seenAt > 10000) bot.seenEntities.delete(id);
@@ -5581,7 +5672,7 @@ function browserBotSource(config) {
   }
 
   function combatEngagedCandidate(self, raw) {
-    if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isAfkTarget(raw) || isInvulnerable(raw)) return null;
+    if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
     return {
       ...raw,
       distance: dist(self, raw),
@@ -5602,7 +5693,7 @@ function browserBotSource(config) {
       return null;
     }
     const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
-    if (target && !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target)) {
+    if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
       return {
         ...target,
         combatIntent: 'engaged',
@@ -5957,23 +6048,44 @@ function browserBotSource(config) {
     };
   }
 
-  function combatAimJitterLimit(distance) {
+  function combatAimJitterLimit(distance, motionScale = 1) {
     const maxJitter = Math.max(0, Number(cfg.combatAimJitterMaxRadians || cfg.combatAimJitterRadians || 0));
     const minJitter = clamp(Number(cfg.combatAimJitterMinRadians ?? maxJitter), 0, maxJitter);
+    const scale = clamp(Number.isFinite(Number(motionScale)) ? Number(motionScale) : 1, 0, 1);
+    const minScale = clamp(Number(cfg.combatAimMinMotionJitterScale ?? 0.2), 0, 1);
     const closeDistance = Math.max(0, Number(cfg.combatAimJitterCloseDistance || 0));
     const farDistance = Math.max(closeDistance + 1, Number(cfg.combatAimJitterFarDistance || cfg.combatAttackRange || closeDistance + 1));
     const rawDistance = Number(distance);
     const d = clamp(Number.isFinite(rawDistance) ? rawDistance : farDistance, closeDistance, farDistance);
     const nearFactor = 1 - ((d - closeDistance) / (farDistance - closeDistance));
-    const interpolated = minJitter + (maxJitter - minJitter) * nearFactor;
+    const interpolated = (minJitter + (maxJitter - minJitter) * nearFactor) * Math.max(minScale, scale);
     const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
     const dodgeSpeed = Math.max(0, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
     const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
     const evasionScale = Math.max(0, Number(cfg.combatAimEvasionScale ?? 1));
     const travelTicks = d / bulletSpeed;
-    const evasionWidth = (dodgeSpeed * travelTicks + hitRadius) * evasionScale;
+    const evasionWidth = (dodgeSpeed * scale * travelTicks + hitRadius) * evasionScale;
     const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
-    return clamp(Math.max(interpolated, evasionAngle), minJitter, maxJitter);
+    return clamp(Math.max(interpolated, evasionAngle), minJitter * minScale, maxJitter);
+  }
+
+  function combatAimMotionScale(target) {
+    const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const observedSpeed = Math.max(
+      speed(target),
+      Number(target?.motionObservedSpeed || 0),
+      Number(target?.motionSampleSpeed || 0)
+    );
+    let scale = clamp(observedSpeed / maxSpeed, 0, 1);
+    if (target?.recentlyMoved) {
+      const decayMs = Math.max(1, Number(cfg.combatAimRecentMotionDecayMs || 900));
+      const ageMs = Number(target.motionAgeMs);
+      const recent = Number.isFinite(ageMs)
+        ? clamp(1 - ageMs / decayMs, 0, 1)
+        : 1;
+      scale = Math.max(scale, recent * Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15)));
+    }
+    return scale;
   }
 
   function opportunityEffectiveStaminaCost(staminaCost) {
@@ -6103,7 +6215,9 @@ function browserBotSource(config) {
   }
 
   function combatAimTarget(self, target) {
-    const moving = speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved);
+    const motionScale = combatAimMotionScale(target);
+    const moving = speed(target) >= cfg.combatStationarySpeed
+      || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const targetDistance = Number(target.distance);
     const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, target);
     const exact = {
@@ -6111,12 +6225,13 @@ function browserBotSource(config) {
       y: Number(target.y),
       mode: 'exact',
       moving,
-      distance
+      distance,
+      motionScale
     };
     if (!moving) return exact;
     const dx = Number(target.x) - Number(self.x);
     const dy = Number(target.y) - Number(self.y);
-    const baseLimit = combatAimJitterLimit(distance);
+    const baseLimit = combatAimJitterLimit(distance, motionScale);
     const damage = combatAimDamageState(target);
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const noDamageLevel = damage.widenMs > 0 ? Math.min(3, 1 + damage.widenMs / stepMs) : 0;
@@ -6131,20 +6246,24 @@ function browserBotSource(config) {
     if (!sign && previousAim && String(previousAim.targetId || '') === targetId) sign = Math.sign(Number(previousAim.sign || 0));
     if (!sign) sign = Math.random() < 0.5 ? -1 : 1;
     const noDamageBucket = noDamageLevel ? Math.floor(damage.widenMs / stepMs) + 1 : 0;
+    const motionBucket = Math.round(motionScale * 10);
     let angle = 0;
     const locked = previousAim
       && String(previousAim.targetId || '') === targetId
       && String(previousAim.movementMode || '') === movement.mode
       && Number(previousAim.noDamageBucket || 0) === noDamageBucket
+      && Number(previousAim.motionBucket ?? motionBucket) === motionBucket
       && now() < Number(previousAim.until || 0)
       && Number.isFinite(Number(previousAim.angle));
     if (locked) {
       angle = Number(previousAim.angle);
       sign = Math.sign(Number(previousAim.sign || sign)) || sign;
     } else {
-      const minLead = Math.min(jitterLimit, Math.max(0, Number(cfg.combatAimLeadMinRadians) || 0));
-      const lead = Math.min(jitterLimit, Math.max(minLead, jitterLimit * movement.leadScale));
-      const randomSpread = jitterLimit * (noDamageLevel ? 0.35 : 0.22);
+      const aimScale = clamp(Math.max(0.2, motionScale), 0.2, 1);
+      const spreadScale = clamp(Math.max(0.35, motionScale), 0.35, 1);
+      const minLead = Math.min(jitterLimit, Math.max(0, Number(cfg.combatAimLeadMinRadians) || 0) * aimScale);
+      const lead = Math.min(jitterLimit, Math.max(minLead, jitterLimit * movement.leadScale * aimScale));
+      const randomSpread = jitterLimit * (noDamageLevel ? 0.35 : 0.22) * spreadScale;
       angle = sign * lead + (Math.random() * 2 - 1) * randomSpread;
       if (Math.abs(angle) < minLead && minLead > 0) angle = sign * minLead;
       angle = clamp(angle, -jitterLimit, jitterLimit);
@@ -6154,6 +6273,7 @@ function browserBotSource(config) {
         sign,
         movementMode: movement.mode,
         noDamageBucket,
+        motionBucket,
         until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
       };
     }
@@ -6167,6 +6287,7 @@ function browserBotSource(config) {
       angle,
       jitterLimit,
       distance,
+      motionScale,
       movementMode: movement.mode,
       radialSpeed: movement.radialSpeed,
       lateralSpeed: movement.lateralSpeed,
@@ -6180,6 +6301,9 @@ function browserBotSource(config) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
     const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
+    const targetMotionScale = combatAimMotionScale(target);
+    const targetMoving = speed(target) >= cfg.combatStationarySpeed
+      || targetMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const baseTarget = {
       id: target.user_id,
       name: target.name,
@@ -6189,7 +6313,8 @@ function browserBotSource(config) {
       knownHp: knownHpValue(target),
       drop: target.drop,
       distance: Math.round(targetDistance),
-      moving: speed(target) >= cfg.combatStationarySpeed || Boolean(target.recentlyMoved),
+      moving: targetMoving,
+      motionScale: Number(targetMotionScale.toFixed(2)),
       combatIntent: target.combatIntent || '',
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
       competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
@@ -6288,6 +6413,7 @@ function browserBotSource(config) {
         mode: aim.mode,
         angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
         jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0,
+        motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
         movementMode: aim.movementMode || '',
         noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
         widened: Boolean(aim.noDamageWidened),
@@ -6309,6 +6435,7 @@ function browserBotSource(config) {
         aim: {
           movementMode: aim.movementMode || '',
           angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
+          motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
           noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
           widened: Boolean(aim.noDamageWidened),
           locked: Boolean(aim.lockedAim)
