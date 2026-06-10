@@ -169,6 +169,9 @@ function runSelfTest() {
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
     enemyReloginJitterMs: 15000,
+    enemyReloginRepeatResetMs: 7200000,
+    enemyReloginRepeatSecondMaxMs: 1800000,
+    enemyReloginRepeatThirdMaxMs: 3600000,
     postAttackDropCoinMinAmount: 1,
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
@@ -884,23 +887,71 @@ function runSelfTest() {
     };
   }
 
+  function actorLabel(target) {
+    if (!target) return '未知目标';
+    return target.name || ('#' + (target.user_id ?? target.id ?? '-'));
+  }
+  function hpDisplay(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+  }
+  function combatExitSummary(reason, target, combatState = {}) {
+    const selfHp = Number(combatState.selfHp ?? NaN);
+    const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
+    const hpGap = Number(combatState.hpGap ?? (Number.isFinite(targetHp) && Number.isFinite(selfHp) ? targetHp - selfHp : NaN));
+    if (reason === 'combat-critical-hp-leave') {
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '低于' + cfg.combatCriticalHpLeaveThreshold + '，紧急退出';
+    }
+    if (reason === 'combat-hp-disadvantage-leave') {
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
+    }
+    return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
+  }
+	  function combatLeaveAction(reason, self, target, combatState = {}) {
+    const state = {
+      selfHp: hpValue(self),
+      targetHp: combatHpValue(target),
+      ...combatState
+    };
+    const actionTarget = {
+      id: target.user_id,
+      name: target.name,
+      hp: combatHpValue(target),
+      distance: Math.round(target.distance)
+    };
+    return {
+      kind: 'leave',
+      reason,
+      exitSummary: combatExitSummary(reason, actionTarget, state),
+      combat: true,
+      target: actionTarget,
+	      combatState: state
+	    };
+	  }
+  function enemyRepeatDelayMsForCount(count) {
+    const n = Math.max(0, Number(count) || 0);
+    if (n >= 3) return cfg.enemyReloginRepeatThirdMaxMs;
+    if (n >= 2) return cfg.enemyReloginRepeatSecondMaxMs;
+    return 0;
+  }
+
   function chooseCombatAction(self, target, bullets = []) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
     if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
-      return { kind: 'leave', reason: 'combat-critical-hp-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) }, combatState: { selfHp, targetHp } };
+      return combatLeaveAction('combat-critical-hp-leave', self, target);
     }
     if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
-      return { kind: 'leave', reason: 'combat-low-hp-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) } };
+      return combatLeaveAction('combat-low-hp-leave', self, target);
     }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
     const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
-    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
-      && Number.isFinite(hpGap)
-      && hpGap > cfg.combatHighHpDisadvantageGap) {
-      return { kind: 'leave', reason: 'combat-hp-disadvantage-leave', combat: true, target: { id: target.user_id, hp: targetHp, distance: Math.round(target.distance) }, combatState: { selfHp, targetHp, hpGap } };
-    }
+	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+	      && Number.isFinite(hpGap)
+	      && hpGap > cfg.combatHighHpDisadvantageGap) {
+	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap });
+	    }
     const motionScale = combatAimMotionScale(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
@@ -1484,27 +1535,49 @@ function runSelfTest() {
       }).kind,
       want: 'recover'
     },
-    {
-      name: 'low hp disadvantage in combat leaves immediately',
-      got: choose({
+	    {
+	      name: 'low hp disadvantage in combat leaves immediately',
+	      got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 14 },
         global: [{ user_id: 4, x: 1000, y: 0, death_reward_preview: 7 }],
         coins: [{ drop_id: 2, x: 100, y: 0, amount: 5 }],
         bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
       }).kind,
-      want: 'leave'
-    },
+	      want: 'leave'
+	    },
     {
-      name: 'critical hp combat leaves even when target hp is lower',
-      got: choose({
+      name: 'combat low hp exit summary includes target and hp details',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, name: '影', x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true }]
+        });
+        return action.exitSummary?.includes('与影战斗')
+          && action.exitSummary.includes('血量40不足50')
+          && action.exitSummary.includes('对方HP 80')
+          && action.exitSummary.includes('劣势退出');
+      })(),
+      want: true
+    },
+	    {
+	      name: 'critical hp combat leaves even when target hp is lower',
+	      got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 19, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true }]
-      }).reason,
-      want: 'combat-critical-hp-leave'
-    },
+	      }).reason,
+	      want: 'combat-critical-hp-leave'
+	    },
     {
-      name: 'high hp combat gap over threshold leaves immediately',
+      name: 'combat critical exit summary includes emergency threshold',
       got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 19, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, name: '强敌', x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true }]
+      }).exitSummary,
+      want: '与强敌战斗，血量19低于20，紧急退出'
+    },
+	    {
+	      name: 'high hp combat gap over threshold leaves immediately',
+	      got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 91, firing: true }]
       }).reason,
@@ -2074,11 +2147,21 @@ function runSelfTest() {
           stamina_1h_remaining_milli: 3500,
           stamina_1d_remaining_milli: 3500
         },
-        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, death_reward_preview: 100 }]
-      }).kind,
-      want: 'wait'
-    }
-  ];
+	        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, death_reward_preview: 100 }]
+	      }).kind,
+	      want: 'wait'
+	    },
+    {
+      name: 'same enemy relogin repeat backoff steps up',
+      got: [
+        enemyRepeatDelayMsForCount(1),
+        enemyRepeatDelayMsForCount(2),
+        enemyRepeatDelayMsForCount(3),
+        enemyRepeatDelayMsForCount(4)
+      ].join(','),
+      want: '0,1800000,3600000,3600000'
+	    }
+	  ];
   const failed = cases.filter(item => item.got !== item.want);
   if (failed.length) {
     console.error(JSON.stringify({ ok: false, failed }, null, 2));
@@ -2200,6 +2283,7 @@ function browserBotSource(config) {
 		  const PANEL_ID = 'grasp-rat-bot-panel';
 		  const PAUSED_KEY = 'graspRatBotPaused';
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
+      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 		  const previousBot = window[BOT_KEY] || null;
 	  const preserved = {
 	    attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
@@ -2291,6 +2375,9 @@ function browserBotSource(config) {
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
     enemyReloginJitterMs: 15000,
+    enemyReloginRepeatResetMs: 7200000,
+    enemyReloginRepeatSecondMaxMs: 1800000,
+    enemyReloginRepeatThirdMaxMs: 3600000,
     attackMinDrop: 8,
     attackMinAfkDrop: 3,
     attackApproachMinDrop: 12,
@@ -2488,6 +2575,7 @@ function browserBotSource(config) {
     lastEnemyLeaveRetryAt: 0,
     lastEnemyLeaveRetryResult: null,
     pursuitReloginUntil: 0,
+    enemyLeaveStreak: null,
     pursuit: null,
     combatStrafe: null,
     combatTarget: preserved.combatTarget,
@@ -2710,13 +2798,17 @@ function browserBotSource(config) {
 	          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
 	          lastResult: this.lastPursuitLeaveResult
 	        },
-	        enemyLeave: {
-	          holdUntil: this.pursuitReloginUntil || 0,
-	          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
-	          reason: this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || '',
-	          lastInjuryResult: this.lastInjuryLeaveResult,
-	          lastPursuitResult: this.lastPursuitLeaveResult,
-	          lastCombatResult: this.lastCombatLeaveResult,
+		        enemyLeave: {
+		          holdUntil: this.pursuitReloginUntil || 0,
+		          holdRemainingMs: Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+		          reason: this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || '',
+          summary: latestEnemyLeaveSummary(),
+          displayReason: latestEnemyLeaveDisplayReason(),
+          streak: readEnemyLeaveStreak(),
+          lastWaitMs: this.lastEnemyLeaveWaitMs || 0,
+		          lastInjuryResult: this.lastInjuryLeaveResult,
+		          lastPursuitResult: this.lastPursuitLeaveResult,
+		          lastCombatResult: this.lastCombatLeaveResult,
 	          lastRetryResult: this.lastEnemyLeaveRetryResult
 	        },
 	        combatLeave: {
@@ -2968,10 +3060,41 @@ function browserBotSource(config) {
       + suffix;
   }
 
+  function decisionReasonDetail(decision) {
+    return decision?.leave?.displayReason
+      || decision?.displayReason
+      || decision?.leave?.summary
+      || decision?.exitSummary
+      || decision?.leave?.exitSummary
+      || decision?.leave?.enemyLeaveSummary
+      || decision?.leave?.enemyLeaveReason
+      || '';
+  }
+
+  function latestEnemyLeaveResult() {
+    const candidates = [
+      { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
+      { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
+      { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
+    ].filter(item => item.result);
+    return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
+  }
+
+  function latestEnemyLeaveSummary() {
+    const result = latestEnemyLeaveResult();
+    return result?.summary || result?.exitSummary || result?.enemyLeaveSummary || result?.displayReason || '';
+  }
+
+  function latestEnemyLeaveDisplayReason() {
+    const result = latestEnemyLeaveResult();
+    return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || '';
+  }
+
 	  function actionText(decision) {
 	    const kind = decision?.kind || 'wait';
 	    const target = decision?.target || null;
 	    const threats = Array.isArray(decision?.threats) ? decision.threats : [];
+    const detail = decisionReasonDetail(decision);
 	    if (kind === 'coin') return '拾取金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
 	    if (kind === 'seek-coin') return '前往金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
     if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' HP ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
@@ -2985,8 +3108,8 @@ function browserBotSource(config) {
 	      if (target) return '巡航到' + (target.amount ? '金币' : '区域') + ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance);
 	      return '巡航扫描';
 	    }
-	    if (kind === 'wait') return '等待：' + (decision?.reason || '状态不足');
-	    if (kind === 'leave') return '退出：' + (decision?.reason || '状态不足');
+	    if (kind === 'wait') return '等待：' + (detail || decision?.reason || '状态不足');
+	    if (kind === 'leave') return '退出：' + (detail || decision?.reason || '状态不足');
 	    if (kind === 'idle') return '待命';
 	    return kind;
 	  }
@@ -3077,7 +3200,7 @@ function browserBotSource(config) {
 	    const panelLines = [
 	      '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + '</div>',
 	      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">远端 ' + escapeHtml(version) + ' / ' + escapeHtml(sourceHash) + '</div>',
-	      '<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>',
+	      '<div>原因：' + escapeHtml(decisionReasonDetail(decision) || reasonText(decision?.reason)) + '</div>',
 	      '<div>HP ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(staminaText) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
 	      '<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / 速度 ' + escapeHtml(velocity) + '</div>',
 	      '<div>WS ' + escapeHtml(wsLabel) + ' / 最近 Active ' + escapeHtml(nearestActive) + '</div>'
@@ -3285,7 +3408,7 @@ function browserBotSource(config) {
     return Math.round(lo + Math.random() * (hi - lo));
   }
 
-  function hpInfoForRelogin(selfLike, detail) {
+	  function hpInfoForRelogin(selfLike, detail) {
     const candidates = [
       selfLike,
       detail?.self,
@@ -3304,26 +3427,220 @@ function browserBotSource(config) {
     if (!Number.isFinite(maxHp) || maxHp <= 0) maxHp = 100;
     if (!Number.isFinite(hp)) hp = maxHp;
     hp = clamp(hp, 0, maxHp);
+	    return {
+	      hp,
+	      maxHp,
+	      ratio: maxHp > 0 ? clamp(hp / maxHp, 0, 1) : 1
+	    };
+	  }
+
+  function actorLabel(actor) {
+    if (!actor) return '未知目标';
+    const id = actor.user_id ?? actor.id ?? actor.targetId;
+    return actor.name || actor.label || (id !== undefined && id !== null && id !== '' ? '#' + id : '未知目标');
+  }
+
+  function hpDisplay(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+  }
+
+  function formatDurationMs(ms) {
+    const value = Math.max(0, Math.round(Number(ms) || 0));
+    if (value >= 3600000) {
+      const minutes = Math.round(value / 60000);
+      if (minutes % 60 === 0) return Math.round(minutes / 60) + '小时';
+      return minutes + '分钟';
+    }
+    if (value >= 60000) return Math.round(value / 60000) + '分钟';
+    if (value >= 1000) return Math.round(value / 1000) + '秒';
+    return value + 'ms';
+  }
+
+  function leaveWaitDisplay(base, detail) {
+    const summary = String(base || '').trim();
+    const waitMs = Number(detail?.reloginDelayMs ?? detail?.holdRemainingMs ?? 0);
+    if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
+    return summary + '，等待' + formatDurationMs(waitMs);
+  }
+
+  function finalizeLeaveDisplayReason(detail) {
+    if (!detail) return detail;
+    const base = String(detail.summary || detail.exitSummary || detail.enemyLeaveSummary || detail.reason || '').trim();
+    if (!base) return detail;
+    detail.summary = base;
+    detail.displayReason = leaveWaitDisplay(base, detail);
+    return detail;
+  }
+
+  function normalizeEnemyActor(actor) {
+    if (!actor) return null;
+    const rawId = actor.user_id ?? actor.id ?? actor.targetId;
+    const id = rawId !== undefined && rawId !== null && rawId !== '' ? String(rawId) : '';
+    const name = String(actor.name ?? actor.targetName ?? '').trim();
+    const key = id ? 'id:' + id : (name ? 'name:' + name : '');
+    if (!key) return null;
     return {
-      hp,
-      maxHp,
-      ratio: maxHp > 0 ? clamp(hp / maxHp, 0, 1) : 1
+      key,
+      id,
+      name,
+      label: name || ('#' + id)
     };
   }
 
-  function reloginDelayForHp(selfLike, detail) {
-    const info = hpInfoForRelogin(selfLike, detail);
-    const minMs = Math.max(1000, Number(cfg.enemyReloginMinDelayMs) || 60000);
-    const maxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs) || minMs);
-    const dangerFactor = Math.pow(1 - info.ratio, 1.35);
-    const jitterMs = Math.max(0, Number(cfg.enemyReloginJitterMs) || 0);
-    const delayMs = clamp(
-      Math.round(minMs + (maxMs - minMs) * dangerFactor + randomBetween(0, jitterMs)),
-      minMs,
-      maxMs
-    );
-    return { delayMs, minMs, maxMs, hp: info };
+  function enemyActorFromLeaveDetail(detail) {
+    return normalizeEnemyActor(detail?.enemyActor)
+      || normalizeEnemyActor(detail?.target)
+      || normalizeEnemyActor(detail?.pursuit)
+      || normalizeEnemyActor(detail?.injury?.nearestActive)
+      || normalizeEnemyActor(detail?.injury?.nearestAvoidance)
+      || normalizeEnemyActor(detail?.injury?.nearestHuman)
+      || null;
   }
+
+  function enemyRepeatDelayMsForCount(count) {
+    const n = Math.max(0, Number(count) || 0);
+    const secondMs = Math.max(0, Number(cfg.enemyReloginRepeatSecondMaxMs) || 0);
+    const thirdMs = Math.max(secondMs, Number(cfg.enemyReloginRepeatThirdMaxMs) || 0);
+    if (n >= 3) return thirdMs;
+    if (n >= 2) return secondMs;
+    return 0;
+  }
+
+  function readEnemyLeaveStreak(t = Date.now()) {
+    let streak = null;
+    try {
+      streak = JSON.parse(localStorage.getItem(ENEMY_LEAVE_STREAK_KEY) || 'null');
+    } catch (_) {
+      streak = null;
+    }
+    if (!streak || typeof streak !== 'object' || !streak.key) return null;
+    const resetMs = Math.max(0, Number(cfg.enemyReloginRepeatResetMs) || 0);
+    if (resetMs && t - Number(streak.at || 0) > resetMs) {
+      try {
+        localStorage.removeItem(ENEMY_LEAVE_STREAK_KEY);
+      } catch (_) {}
+      if (bot.enemyLeaveStreak?.key === streak.key) bot.enemyLeaveStreak = null;
+      return null;
+    }
+    const normalized = {
+      key: String(streak.key),
+      id: streak.id === undefined || streak.id === null ? '' : String(streak.id),
+      name: String(streak.name || ''),
+      label: String(streak.label || streak.name || (streak.id ? '#' + streak.id : '')),
+      count: Math.max(1, Number(streak.count || 1)),
+      firstAt: Number(streak.firstAt || streak.at || t),
+      previousAt: Number(streak.previousAt || 0),
+      at: Number(streak.at || t),
+      resetMs
+    };
+    normalized.reloginMinMs = enemyRepeatDelayMsForCount(normalized.count);
+    bot.enemyLeaveStreak = normalized;
+    return normalized;
+  }
+
+  function writeEnemyLeaveStreak(streak) {
+    bot.enemyLeaveStreak = streak;
+    try {
+      localStorage.setItem(ENEMY_LEAVE_STREAK_KEY, JSON.stringify(streak));
+    } catch (_) {}
+  }
+
+	  function updateEnemyLeaveStreak(detail, t = Date.now()) {
+	    const actor = enemyActorFromLeaveDetail(detail);
+	    if (!actor) {
+	      readEnemyLeaveStreak(t);
+	      if (detail) detail.enemyLeaveStreak = null;
+	      return null;
+	    }
+    const previous = readEnemyLeaveStreak(t);
+    const same = previous && previous.key === actor.key;
+    const count = same ? Number(previous.count || 1) + 1 : 1;
+    const streak = {
+      ...actor,
+      count,
+      firstAt: same ? Number(previous.firstAt || previous.at || t) : t,
+      previousAt: same ? Number(previous.at || 0) : 0,
+      at: t,
+      resetMs: Math.max(0, Number(cfg.enemyReloginRepeatResetMs) || 0),
+      reloginMinMs: enemyRepeatDelayMsForCount(count)
+    };
+    writeEnemyLeaveStreak(streak);
+    if (detail) {
+      detail.enemyActor = actor;
+      detail.enemyLeaveStreak = streak;
+      if (streak.reloginMinMs > 0) {
+        detail.reloginRepeatDelayMs = streak.reloginMinMs;
+        detail.reloginRepeatCount = streak.count;
+      }
+    }
+    return streak;
+  }
+
+  function combatExitSummary(reason, target, combatState = {}) {
+    const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
+    const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
+    const hpGap = Number(combatState.hpGap ?? (Number.isFinite(targetHp) && Number.isFinite(selfHp) ? targetHp - selfHp : NaN));
+    if (reason === 'combat-critical-hp-leave') {
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '低于' + cfg.combatCriticalHpLeaveThreshold + '，紧急退出';
+    }
+    if (reason === 'combat-hp-disadvantage-leave') {
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
+    }
+    return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
+  }
+
+  function combatLeaveAction(reason, baseTarget, combatState = {}) {
+    const exitSummary = combatExitSummary(reason, baseTarget, combatState);
+    return {
+      kind: 'leave',
+      reason,
+      exitSummary,
+      displayReason: exitSummary,
+      combat: true,
+      ignoreReturnBlock: true,
+      dx: 0,
+      dy: 0,
+      target: baseTarget,
+      combatState
+    };
+  }
+
+  function pursuitLeaveSummary(pursuit) {
+    const target = pursuit || {};
+    const duration = Number(target.durationMs);
+    const durationText = Number.isFinite(duration) && duration > 0 ? '，持续' + formatDurationMs(duration) : '';
+    const distance = Number(target.distance);
+    const distanceText = Number.isFinite(distance) ? '，距离' + Math.round(distance) : '';
+    return '被' + actorLabel(target) + '持续追击' + durationText + distanceText + '，退出等待重连';
+  }
+
+  function injuryLeaveSummary(injury) {
+    const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
+    const previousHp = Number(injury?.previousHp ?? NaN);
+    const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
+    const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp)
+      ? '，血量从' + hpDisplay(previousHp) + '降到' + hpDisplay(currentHp)
+      : (Number.isFinite(currentHp) ? '，当前血量' + hpDisplay(currentHp) : '');
+    return (actor ? '受到' + actorLabel(actor) + '伤害/附近威胁' : '检测到血量下降') + hpText + '，退出等待重连';
+  }
+
+	  function reloginDelayForHp(selfLike, detail) {
+	    const info = hpInfoForRelogin(selfLike, detail);
+	    const minMs = Math.max(1000, Number(cfg.enemyReloginMinDelayMs) || 60000);
+    const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);
+    const baseMaxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs) || minMs);
+	    const maxMs = Math.max(baseMaxMs, repeatMinMs);
+	    const dangerFactor = Math.pow(1 - info.ratio, 1.35);
+	    const jitterMs = Math.max(0, Number(cfg.enemyReloginJitterMs) || 0);
+	    const hpDelayMs = clamp(
+	      Math.round(minMs + (maxMs - minMs) * dangerFactor + randomBetween(0, jitterMs)),
+	      minMs,
+	      maxMs
+	    );
+    const delayMs = Math.max(hpDelayMs, repeatMinMs);
+	    return { delayMs, hpDelayMs, minMs, maxMs, baseMaxMs, repeatMinMs, hp: info };
+	  }
 
   function isExitLoginSuppressReason(reason) {
     return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ''));
@@ -3342,22 +3659,24 @@ function browserBotSource(config) {
       }
     } catch (_) {}
     const t = Date.now();
-    if (existingUntil > t && existingUntil >= minimumUntil) {
-      const holdReason = existingReason || storageReason;
-      if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
-      if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
-      if (detail) {
-        detail.reloginUntil = existingUntil;
-        detail.holdRemainingMs = Math.max(0, Math.round(existingUntil - Date.now()));
-        detail.enemyLeaveReason = reason;
-        detail.loginSuppressReason = holdReason;
-        detail.reusedExitSuppress = true;
-      }
-      return existingUntil;
-    }
-    const delay = reloginDelayForHp(selfLike, detail);
-    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
-    const reloginDelayMs = Math.max(delay.delayMs, minimumDelayMs);
+	    if (existingUntil > t && existingUntil >= minimumUntil) {
+	      const holdReason = existingReason || storageReason;
+	      if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
+	      if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
+	      if (detail) {
+	        detail.reloginUntil = existingUntil;
+	        detail.holdRemainingMs = Math.max(0, Math.round(existingUntil - Date.now()));
+	        detail.enemyLeaveReason = reason;
+	        detail.loginSuppressReason = holdReason;
+	        detail.reusedExitSuppress = true;
+	        finalizeLeaveDisplayReason(detail);
+	      }
+	      return existingUntil;
+	    }
+	    if (storageReason === 'enemy leave') updateEnemyLeaveStreak(detail, t);
+	    const delay = reloginDelayForHp(selfLike, detail);
+	    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
+	    const reloginDelayMs = Math.max(delay.delayMs, minimumDelayMs);
     const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
     if (storageReason === 'enemy leave') {
       bot.pursuitReloginUntil = reloginUntil;
@@ -3366,24 +3685,27 @@ function browserBotSource(config) {
       bot.offlineReloginUntil = reloginUntil;
       bot.lastOfflineLeaveWaitMs = reloginDelayMs;
     }
-    if (detail) {
-      detail.reloginDelayMs = reloginDelayMs;
-      detail.reloginHpDelayMs = delay.delayMs;
-      detail.reloginDelayRangeMs = {
-        min: delay.minMs,
-        max: delay.maxMs
-      };
+	    if (detail) {
+	      detail.reloginDelayMs = reloginDelayMs;
+	      detail.reloginHpDelayMs = delay.hpDelayMs;
+	      detail.reloginDelayRangeMs = {
+	        min: delay.minMs,
+	        max: delay.maxMs,
+	        baseMax: delay.baseMaxMs,
+	        repeatMin: delay.repeatMinMs
+	      };
       if (minimumDelayMs) {
         detail.reloginMinimumDelayMs = minimumDelayMs;
         detail.reloginMinimumUntil = minimumUntil;
         detail.reloginMinimumReason = options.minimumReason || '';
       }
       detail.reloginHp = delay.hp;
-      detail.reloginUntil = reloginUntil;
-      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
-      detail.enemyLeaveReason = reason;
-      detail.loginSuppressReason = storageReason;
-    }
+	      detail.reloginUntil = reloginUntil;
+	      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
+	      detail.enemyLeaveReason = reason;
+	      detail.loginSuppressReason = storageReason;
+	      finalizeLeaveDisplayReason(detail);
+	    }
     return reloginUntil;
   }
 
@@ -3451,13 +3773,15 @@ function browserBotSource(config) {
     };
   }
 
-  function summarizePendingCombatLeave(pending = bot.pendingCombatLeave) {
-    if (!pending) return null;
-    return {
-      reason: pending.reason || '',
-      at: pending.at || 0,
-      ageMs: pending.at ? Math.max(0, Math.round(Date.now() - Number(pending.at || Date.now()))) : 0,
-      retryCount: Number(pending.retryCount || 0),
+	  function summarizePendingCombatLeave(pending = bot.pendingCombatLeave) {
+	    if (!pending) return null;
+	    return {
+	      reason: pending.reason || '',
+      exitSummary: pending.exitSummary || '',
+      displayReason: pending.displayReason || '',
+	      at: pending.at || 0,
+	      ageMs: pending.at ? Math.max(0, Math.round(Date.now() - Number(pending.at || Date.now()))) : 0,
+	      retryCount: Number(pending.retryCount || 0),
       target: pending.target || null,
       combatState: pending.combatState || null,
       lastResult: pending.lastResult || null
@@ -3470,10 +3794,12 @@ function browserBotSource(config) {
     bot.pendingCombatLeave = {
       at: previous.at || Date.now(),
       lastRetryAt: Date.now(),
-      retryCount,
-      reason: action?.reason || previous.reason || 'combat-leave-retry',
-      target: action?.target || previous.target || null,
-      combatState: action?.combatState || previous.combatState || null,
+	      retryCount,
+	      reason: action?.reason || previous.reason || 'combat-leave-retry',
+      exitSummary: action?.exitSummary || previous.exitSummary || leaveResult?.exitSummary || leaveResult?.summary || '',
+      displayReason: action?.displayReason || previous.displayReason || leaveResult?.displayReason || leaveResult?.summary || '',
+	      target: action?.target || previous.target || null,
+	      combatState: action?.combatState || previous.combatState || null,
       self: selfSummary || previous.self || null,
       lastResult: leaveResult || previous.lastResult || null
     };
@@ -3487,10 +3813,12 @@ function browserBotSource(config) {
       reason: pending.reason || 'combat-leave-retry',
       combat: true,
       ignoreReturnBlock: true,
-      dx: 0,
-      dy: 0,
-      target: pending.target || null,
-      combatState: pending.combatState || null
+	      dx: 0,
+	      dy: 0,
+      exitSummary: pending.exitSummary || '',
+      displayReason: pending.displayReason || pending.exitSummary || '',
+	      target: pending.target || null,
+	      combatState: pending.combatState || null
     };
   }
 
@@ -3725,13 +4053,14 @@ function browserBotSource(config) {
         offlineSafety
       };
     }
-    const detail = {
-      attempted: false,
-      method: '',
-      reason,
-      userId: getCurrentUserId() || null,
-      self: selfSummary,
-      offlineSafety,
+	    const detail = {
+	      attempted: false,
+	      method: '',
+	      reason,
+      at: t,
+	      userId: getCurrentUserId() || null,
+	      self: selfSummary,
+	      offlineSafety,
       error: ''
     };
     bot.lastOfflineLeaveAt = t;
@@ -3741,25 +4070,29 @@ function browserBotSource(config) {
     return detail;
   }
 
-  async function leaveForInjury(injury) {
-    const t = Date.now();
-    if (cfg.dryRun || cfg.once) return null;
-    if (t - Number(bot.lastInjuryLeaveAt || 0) < cfg.combatLeaveRetryMs) {
-      return {
-        attempted: false,
-        reason: 'cooldown',
-        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastInjuryLeaveAt || 0)))),
-        injury
-      };
-    }
-    const detail = {
-      attempted: false,
-      method: '',
-      reason: 'injury hp drop',
-      userId: getCurrentUserId() || null,
-      injury,
-      error: ''
-    };
+	  async function leaveForInjury(injury) {
+	    const t = Date.now();
+	    if (cfg.dryRun || cfg.once) return null;
+	    if (t - Number(bot.lastInjuryLeaveAt || 0) < cfg.combatLeaveRetryMs) {
+	      const detail = {
+	        attempted: false,
+	        reason: 'cooldown',
+	        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastInjuryLeaveAt || 0)))),
+	        injury,
+        summary: injuryLeaveSummary(injury)
+	      };
+      return finalizeLeaveDisplayReason(detail);
+	    }
+		    const detail = {
+		      attempted: false,
+		      method: '',
+		      reason: 'injury hp drop',
+      at: t,
+		      userId: getCurrentUserId() || null,
+		      injury,
+      summary: injuryLeaveSummary(injury),
+	      error: ''
+	    };
     bot.lastInjuryLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
@@ -3770,26 +4103,31 @@ function browserBotSource(config) {
     return detail;
   }
 
-  async function leaveForPursuit(pursuit, selfSummary = null) {
-    const t = Date.now();
-    if (cfg.dryRun || cfg.once) return null;
-    if (t - Number(bot.lastPursuitLeaveAt || 0) < cfg.pursuitLeaveRetryMs) {
-      return {
-        attempted: false,
-        reason: 'cooldown',
-        cooldownRemainingMs: Math.max(0, Math.round(cfg.pursuitLeaveRetryMs - (t - Number(bot.lastPursuitLeaveAt || 0)))),
-        pursuit: summarizePursuit(pursuit)
-      };
-    }
-    const detail = {
-      attempted: false,
-      method: '',
-      reason: 'sustained pursuit',
-      userId: getCurrentUserId() || null,
-      self: selfSummary,
-      pursuit: summarizePursuit(pursuit),
-      error: ''
-    };
+	  async function leaveForPursuit(pursuit, selfSummary = null) {
+	    const t = Date.now();
+	    if (cfg.dryRun || cfg.once) return null;
+    const pursuitSummary = summarizePursuit(pursuit);
+	    if (t - Number(bot.lastPursuitLeaveAt || 0) < cfg.pursuitLeaveRetryMs) {
+	      const detail = {
+	        attempted: false,
+	        reason: 'cooldown',
+	        cooldownRemainingMs: Math.max(0, Math.round(cfg.pursuitLeaveRetryMs - (t - Number(bot.lastPursuitLeaveAt || 0)))),
+	        pursuit: pursuitSummary,
+        summary: pursuitLeaveSummary(pursuitSummary)
+	      };
+      return finalizeLeaveDisplayReason(detail);
+	    }
+		    const detail = {
+		      attempted: false,
+		      method: '',
+		      reason: 'sustained pursuit',
+      at: t,
+		      userId: getCurrentUserId() || null,
+		      self: selfSummary,
+	      pursuit: pursuitSummary,
+      summary: pursuitLeaveSummary(pursuitSummary),
+	      error: ''
+	    };
     bot.lastPursuitLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
@@ -3801,35 +4139,39 @@ function browserBotSource(config) {
     return detail;
   }
 
-  async function leaveForCombat(action, selfSummary = null) {
-    const t = Date.now();
-    if (cfg.dryRun || cfg.once) return null;
-    if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
-      const detail = {
-        attempted: false,
-        reason: 'cooldown',
-        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastCombatLeaveAt || 0)))),
-        combat: action?.combatState || null,
-        target: action?.target || null
-      };
-      rememberPendingCombatLeave(action, selfSummary, detail);
-      return detail;
-    }
+	  async function leaveForCombat(action, selfSummary = null) {
+	    const t = Date.now();
+	    if (cfg.dryRun || cfg.once) return null;
+	    if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
+	      const detail = {
+	        attempted: false,
+	        reason: 'cooldown',
+	        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastCombatLeaveAt || 0)))),
+	        combat: action?.combatState || null,
+	        target: action?.target || null,
+        summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {})
+	      };
+      finalizeLeaveDisplayReason(detail);
+	      rememberPendingCombatLeave(action, selfSummary, detail);
+	      return detail;
+	    }
     const reason = action?.reason === 'combat-critical-hp-leave'
       ? 'combat critical hp'
       : action?.reason === 'combat-hp-disadvantage-leave'
         ? 'combat hp disadvantage'
         : 'combat low hp disadvantage';
-    const detail = {
-      attempted: false,
-      method: '',
-      reason,
-      userId: getCurrentUserId() || null,
-      self: selfSummary,
-      target: action?.target || null,
-      combat: action?.combatState || null,
-      error: ''
-    };
+	    const detail = {
+	      attempted: false,
+	      method: '',
+	      reason,
+      at: t,
+	      userId: getCurrentUserId() || null,
+	      self: selfSummary,
+	      target: action?.target || null,
+	      combat: action?.combatState || null,
+      summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {}),
+	      error: ''
+	    };
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
@@ -3842,31 +4184,36 @@ function browserBotSource(config) {
     return detail;
   }
 
-  async function leaveDuringEnemyHold(reason = 'enemy leave wait') {
+	  async function leaveDuringEnemyHold(reason = 'enemy leave wait') {
     const t = Date.now();
     const retryMs = Math.max(cfg.pursuitLeaveRetryMs, cfg.combatLeaveRetryMs);
     if (cfg.dryRun || cfg.once) return null;
-    if (t - Number(bot.lastEnemyLeaveRetryAt || 0) < retryMs) {
-      return {
-        attempted: false,
-        reason: 'cooldown',
-        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastEnemyLeaveRetryAt || 0)))),
-        holdRemainingMs: enemyReloginHoldRemainingMs()
-      };
-    }
-    const detail = {
-      attempted: false,
-      method: '',
-      reason,
-      userId: getCurrentUserId() || null,
-      holdRemainingMs: enemyReloginHoldRemainingMs(),
-      error: ''
-    };
+	    if (t - Number(bot.lastEnemyLeaveRetryAt || 0) < retryMs) {
+	      const detail = {
+	        attempted: false,
+	        reason: 'cooldown',
+	        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastEnemyLeaveRetryAt || 0)))),
+	        holdRemainingMs: enemyReloginHoldRemainingMs(),
+        summary: bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || ''
+	      };
+      return finalizeLeaveDisplayReason(detail);
+	    }
+		    const detail = {
+		      attempted: false,
+		      method: '',
+		      reason,
+      at: t,
+		      userId: getCurrentUserId() || null,
+		      holdRemainingMs: enemyReloginHoldRemainingMs(),
+      summary: bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || '',
+	      error: ''
+	    };
     bot.lastEnemyLeaveRetryAt = t;
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
-    detail.holdRemainingMs = enemyReloginHoldRemainingMs();
-    bot.lastEnemyLeaveRetryResult = detail;
+	    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
+	    detail.holdRemainingMs = enemyReloginHoldRemainingMs();
+    finalizeLeaveDisplayReason(detail);
+	    bot.lastEnemyLeaveRetryResult = detail;
     return detail;
   }
 
@@ -6318,48 +6665,21 @@ function browserBotSource(config) {
       combatIntent: target.combatIntent || '',
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
       competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
-    };
-    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
-      return {
-        kind: 'leave',
-        reason: 'combat-critical-hp-leave',
-        combat: true,
-        ignoreReturnBlock: true,
-        dx: 0,
-        dy: 0,
-        target: baseTarget,
-        combatState: { selfHp, targetHp }
-      };
-    }
-    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
-      return {
-        kind: 'leave',
-        reason: 'combat-low-hp-leave',
-        combat: true,
-        ignoreReturnBlock: true,
-        dx: 0,
-        dy: 0,
-        target: baseTarget,
-        combatState: { selfHp, targetHp }
-      };
-    }
+	    };
+	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
+	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp });
+	    }
+	    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
+	      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp });
+	    }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
     const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
-    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
-      && Number.isFinite(hpGap)
-      && hpGap > cfg.combatHighHpDisadvantageGap) {
-      return {
-        kind: 'leave',
-        reason: 'combat-hp-disadvantage-leave',
-        combat: true,
-        ignoreReturnBlock: true,
-        dx: 0,
-        dy: 0,
-        target: baseTarget,
-        combatState: { selfHp, targetHp, hpGap }
-      };
-    }
+	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+	      && Number.isFinite(hpGap)
+	      && hpGap > cfg.combatHighHpDisadvantageGap) {
+	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap });
+	    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
       return {
