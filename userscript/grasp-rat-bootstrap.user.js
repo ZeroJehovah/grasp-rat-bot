@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.25
+// @version      0.4.26
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.25';
+  const BOOTSTRAP_VERSION = '0.4.26';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -71,6 +71,8 @@
     authorizeFallbackDelayMs: 10000,
     panelUpdateMs: 500,
     cloudflareErrorReloadMs: 5000,
+    combatLoggingEnabled: false,
+    combatLogEndpoint: 'http://127.0.0.1:18765/combat-log',
     cacheBust: true,
     autoLogin: true
   };
@@ -99,6 +101,8 @@
     authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
     panelUpdateMs: Math.max(250, Number(GM_getValue('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
     cloudflareErrorReloadMs: Math.max(1000, Number(GM_getValue('cloudflareErrorReloadMs', DEFAULTS.cloudflareErrorReloadMs)) || DEFAULTS.cloudflareErrorReloadMs),
+    combatLoggingEnabled: Boolean(GM_getValue('combatLoggingEnabled', DEFAULTS.combatLoggingEnabled)),
+    combatLogEndpoint: String(GM_getValue('combatLogEndpoint', DEFAULTS.combatLogEndpoint) || DEFAULTS.combatLogEndpoint),
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
     autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin))
   };
@@ -869,6 +873,12 @@
     panel.appendChild(header);
     appendLine('版本：' + bVersion, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
     appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
+    const combatLogStatus = status?.combatLogging || {};
+    appendLine(
+      '战斗日志：' + (cfg.combatLoggingEnabled ? '开' : '关')
+        + (cfg.combatLoggingEnabled ? ' / 待发 ' + (combatLogStatus.pending ?? 0) + ' / 失败 ' + (combatLogStatus.failed ?? 0) : ''),
+      'font-size:11px;color:#cbd5e1;word-break:break-all'
+    );
     if (state.cloudflareError) {
       appendLine('原因：' + reasonDetail);
     } else if (status?.running) {
@@ -1535,7 +1545,9 @@
       version: String(manifest.version || 'remote'),
       sourceHash: String(manifest.sha256 || ''),
       sourceUrl: String(manifest.scriptUrl || ''),
-      injectedBy: 'tampermonkey'
+      injectedBy: 'tampermonkey',
+      combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled),
+      combatLogEndpoint: cfg.combatLogEndpoint
     };
     const injectResult = await runInPage(source, manifest.scriptUrl);
     state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
@@ -2037,6 +2049,31 @@
     updatePanel() {
       updateBootstrapPanel(true);
       return true;
+    },
+    configureCombatLogging(options = {}) {
+      const next = options && typeof options === 'object' ? options : {};
+      if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+        cfg.combatLoggingEnabled = Boolean(next.enabled);
+        GM_setValue('combatLoggingEnabled', cfg.combatLoggingEnabled);
+      }
+      if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
+        cfg.combatLogEndpoint = String(next.endpoint || DEFAULTS.combatLogEndpoint);
+        GM_setValue('combatLogEndpoint', cfg.combatLogEndpoint);
+      }
+      try {
+        const bot = unsafeWindow.__graspRatBot;
+        if (bot && typeof bot.configureCombatLogging === 'function') {
+          bot.configureCombatLogging({
+            enabled: cfg.combatLoggingEnabled,
+            endpoint: cfg.combatLogEndpoint
+          });
+        }
+      } catch (_) {}
+      updateBootstrapPanel(true);
+      return {
+        enabled: cfg.combatLoggingEnabled,
+        endpoint: cfg.combatLogEndpoint
+      };
     },
     setManifestUrl(url) {
       cfg.manifestUrl = String(url || '');

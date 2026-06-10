@@ -1,0 +1,10 @@
+{
+  "name": "grasp-rat-combat-log-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local JSONL combat log collector for Grasp Rat Bot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
