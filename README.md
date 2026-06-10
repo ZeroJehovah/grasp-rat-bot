@@ -67,6 +67,34 @@ If the overlay disappears and `[grasp-rat-bot] started live control` prints agai
 
 Static full-stamina `Active` entities are treated as ordinary targets instead of active threats. Moving or non-full-stamina `Active` entities still trigger avoidance, but avoidance distances are narrower than the old bootstrap `0.2.x` build so the bot stops fleeing far across the map.
 
+## Combat Logs
+
+Tampermonkey can send detailed combat-window logs to the local collector in `combat-log-service/`. This is intentionally Tampermonkey-only; the extension bootstrap is not changed for this logging switch.
+
+Start the local service:
+
+```bash
+cd combat-log-service
+npm start
+```
+
+Enable logging from the game page console:
+
+```js
+window.__graspRatBotBootstrap.configureCombatLogging({
+  enabled: true,
+  endpoint: 'http://127.0.0.1:18765/combat-log'
+})
+```
+
+Disable it:
+
+```js
+window.__graspRatBotBootstrap.configureCombatLogging({ enabled: false })
+```
+
+The setting is persisted through Tampermonkey storage. Logs are written as JSONL under `combat-log-service/logs/YYYY-MM-DD/<combatId>.jsonl`. The bot records roughly 10 seconds before combat, every combat tick, and roughly 10 seconds after combat. Entries include the final decision, exit reason, self/target HP, nearby entities, incoming bullets, pursuit/injury context, control state, and snapshot ages. Entity and bullet lists are capped so normal fights should be MB-scale rather than unbounded full-page dumps.
+
 ## Build Script B
 
 After changing strategy code in `grasp-rat-bot.js`, regenerate the remote bot and manifest:
@@ -114,6 +142,7 @@ node --check extension/background.js
 node --check extension/content-bridge.js
 node --check extension/page-bootstrap.js
 node --check extension/popup.js
+node --check combat-log-service/server.js
 node grasp-rat-bot.js --self-test
 node scripts/build-remote-bot.js
 ```

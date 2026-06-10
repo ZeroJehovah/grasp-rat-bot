@@ -2378,6 +2378,13 @@ function browserBotSource(config) {
 	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
 	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
 	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
+	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
+	      ? {
+	        ...previousBot.combatLogging,
+	        preBuffer: Array.isArray(previousBot.combatLogging.preBuffer) ? previousBot.combatLogging.preBuffer.slice(-160) : [],
+	        pending: Array.isArray(previousBot.combatLogging.pending) ? previousBot.combatLogging.pending.slice(-1000) : []
+	      }
+	      : null,
 	    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
 	  };
 	  const cfg = {
@@ -2600,6 +2607,15 @@ function browserBotSource(config) {
 	    reloadAfterOfflineMs: 20000,
 	    cloudflareErrorReloadMs: 5000,
 	    globalRefreshTimeoutMs: 1500,
+	    combatLoggingEnabled: Boolean(config.combatLoggingEnabled),
+	    combatLogEndpoint: String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log'),
+	    combatLogPreBufferMs: 10000,
+	    combatLogPostBufferMs: 10000,
+	    combatLogFlushMs: 1000,
+	    combatLogBatchMaxEntries: 50,
+	    combatLogMaxPendingEntries: 1000,
+	    combatLogMaxBulletEntries: 24,
+	    combatLogMaxEntityEntries: 12,
     status: '',
     ...config,
     // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
@@ -2739,6 +2755,24 @@ function browserBotSource(config) {
     combatStrafe: null,
     combatTarget: preserved.combatTarget,
     combatAim: preserved.combatAim,
+    combatLogging: {
+      enabled: Boolean(cfg.combatLoggingEnabled),
+      endpoint: String(cfg.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log'),
+      combatId: String(preserved.combatLogging?.combatId || ''),
+      active: Boolean(preserved.combatLogging?.active),
+      startedAt: Number(preserved.combatLogging?.startedAt || 0),
+      lastCombatAt: Number(preserved.combatLogging?.lastCombatAt || 0),
+      lastFlushAt: 0,
+      preBuffer: Array.isArray(preserved.combatLogging?.preBuffer) ? preserved.combatLogging.preBuffer : [],
+      pending: Array.isArray(preserved.combatLogging?.pending) ? preserved.combatLogging.pending : [],
+      dropped: Number(preserved.combatLogging?.dropped || 0),
+      sent: Number(preserved.combatLogging?.sent || 0),
+      failed: Number(preserved.combatLogging?.failed || 0),
+      sending: false,
+      lastError: String(preserved.combatLogging?.lastError || ''),
+      lastOkAt: Number(preserved.combatLogging?.lastOkAt || 0),
+      sequence: Number(preserved.combatLogging?.sequence || 0)
+    },
     reloadRequestedAt: 0,
 	    lastTarget: null,
 	    lastTargetAt: 0,
@@ -2827,6 +2861,9 @@ function browserBotSource(config) {
 	      closeControlWs(reason);
 	      if (this.timer) clearInterval(this.timer);
 	      this.timer = 0;
+	      try {
+	        if (!String(reason || '').startsWith('replaced by ')) flushCombatLogs(true);
+	      } catch (_) {}
 	      logStatus('stopped: ' + reason);
 	      if (window[BOT_KEY] === this) removeBotPanel();
 	    },
@@ -2863,6 +2900,9 @@ function browserBotSource(config) {
 	    },
 	    forceLoginNow(reason = 'panel immediate login') {
 	      return forceLoginNow(reason);
+	    },
+	    configureCombatLogging(options = {}) {
+	      return configureCombatLogging(options);
 	    },
 	    step(source = 'external') {
 	      return tick(source);
@@ -2905,6 +2945,7 @@ function browserBotSource(config) {
 	        lastTarget: this.lastTarget,
 	        combatTarget: this.combatTarget,
 	        combatAim: this.combatAim,
+	        combatLogging: summarizeCombatLoggingStatus(),
 	        opportunityChoice: this.opportunityChoice,
 	        self: displaySelf,
         session,
@@ -3467,6 +3508,531 @@ function browserBotSource(config) {
 
       function arrayCount(value) {
         return Array.isArray(value) ? value.length : 0;
+      }
+
+      function safeJsonClone(value) {
+        try {
+          return JSON.parse(safeStringify(value));
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function sanitizeCombatLogIdPart(value, fallback = 'unknown') {
+        const text = String(value || fallback)
+          .replace(/[^\w.-]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 80);
+        return text || fallback;
+      }
+
+      function configureCombatLogging(options = {}) {
+        const next = options && typeof options === 'object' ? options : {};
+        if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+          cfg.combatLoggingEnabled = Boolean(next.enabled);
+          bot.combatLogging.enabled = Boolean(next.enabled);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
+          const endpoint = String(next.endpoint || 'http://127.0.0.1:18765/combat-log');
+          cfg.combatLogEndpoint = endpoint;
+          bot.combatLogging.endpoint = endpoint;
+        }
+        if (!bot.combatLogging.enabled) {
+          bot.combatLogging.active = false;
+          bot.combatLogging.combatId = '';
+        }
+        return summarizeCombatLoggingStatus();
+      }
+
+      function summarizeCombatLoggingStatus() {
+        const state = bot.combatLogging || {};
+        const t = Date.now();
+        return {
+          enabled: Boolean(state.enabled),
+          endpoint: String(state.endpoint || ''),
+          active: Boolean(state.active),
+          combatId: state.combatId || '',
+          startedAt: Number(state.startedAt || 0),
+          activeAgeMs: state.startedAt ? Math.max(0, Math.round(t - Number(state.startedAt || t))) : 0,
+          lastCombatAgeMs: state.lastCombatAt ? Math.max(0, Math.round(t - Number(state.lastCombatAt || t))) : null,
+          pending: Array.isArray(state.pending) ? state.pending.length : 0,
+          preBuffer: Array.isArray(state.preBuffer) ? state.preBuffer.length : 0,
+          dropped: Number(state.dropped || 0),
+          sent: Number(state.sent || 0),
+          failed: Number(state.failed || 0),
+          sending: Boolean(state.sending),
+          lastError: state.lastError || '',
+          lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null
+        };
+      }
+
+      function combatLogSelfSummary(selfLike) {
+        if (!selfLike) return null;
+        if (selfLike.stamina || Object.prototype.hasOwnProperty.call(selfLike, 'coins')) {
+          const clone = safeJsonClone(selfLike);
+          if (clone) return clone;
+        }
+        try {
+          return summarizeSelf(selfLike);
+        } catch (_) {
+          return {
+            id: selfLike.user_id ?? selfLike.id ?? null,
+            name: selfLike.name || '',
+            x: Math.round(Number(selfLike.x) || 0),
+            y: Math.round(Number(selfLike.y) || 0),
+            hp: selfLike.hp ?? null,
+            drop: Number(selfLike.drop ?? dropValue(selfLike) ?? 0) || 0,
+            life: selfLike.life || '',
+            mode: selfLike.current_join_mode || selfLike.mode || ''
+          };
+        }
+      }
+
+      function combatEntitySummary(entity, selfLike = null) {
+        if (!entity) return null;
+        const distance = Number.isFinite(Number(entity.distance))
+          ? Number(entity.distance)
+          : (selfLike && Number.isFinite(Number(selfLike.x)) && Number.isFinite(Number(selfLike.y)) ? dist(selfLike, entity) : NaN);
+        return {
+          id: entity.user_id ?? entity.id ?? null,
+          name: entity.name || '',
+          x: Math.round(Number(entity.x) || 0),
+          y: Math.round(Number(entity.y) || 0),
+          vx: Math.round(Number(entity.vx) || 0),
+          vy: Math.round(Number(entity.vy) || 0),
+          speed: Math.round(speed(entity)),
+          distance: Number.isFinite(distance) ? Math.round(distance) : null,
+          hp: Number.isFinite(Number(entity.hp)) ? Number(entity.hp) : null,
+          knownHp: knownHpValue(entity),
+          maxHp: Number(entity.max_hp ?? entity.maxHp ?? 0) || null,
+          drop: Number(entity.drop ?? dropValue(entity) ?? 0) || 0,
+          mode: entity.current_join_mode || entity.mode || '',
+          life: entity.life || '',
+          active: isCurrentlyActive(entity),
+          moving: isMovingThreat(entity),
+          firing: isFiringEntity(entity),
+          invulnerable: isInvulnerable(entity),
+          native: Boolean(entity.native),
+          snapshot: Boolean(entity.snapshot),
+          combatIntent: entity.combatIntent || '',
+          recentlyMoved: Boolean(entity.recentlyMoved)
+        };
+      }
+
+      function combatEntitySourceList() {
+        const byId = new Map();
+        const add = entity => {
+          if (!entity || typeof entity !== 'object') return;
+          const id = entity.user_id ?? entity.id;
+          const key = id === undefined || id === null || id === ''
+            ? 'xy:' + Math.round(Number(entity.x) || 0) + ':' + Math.round(Number(entity.y) || 0)
+            : 'id:' + id;
+          byId.set(key, { ...(byId.get(key) || {}), ...entity });
+        };
+        if (Array.isArray(bot.lastActionEntities)) {
+          for (const entity of bot.lastActionEntities) add(entity);
+        }
+        let nativeEntities = [];
+        try {
+          nativeEntities = getNativeEntityList();
+        } catch (_) {
+          nativeEntities = [];
+        }
+        if (Array.isArray(nativeEntities)) {
+          for (const entity of nativeEntities) add({ ...entity, native: true });
+        }
+        if (Array.isArray(bot.globalState.entities)) {
+          for (const entity of bot.globalState.entities) add({ ...entity, snapshot: true });
+        }
+        return Array.from(byId.values());
+      }
+
+      function summarizeCombatEntities(selfLike, decision) {
+        const limit = Math.max(1, Number(cfg.combatLogMaxEntityEntries) || 12);
+        const targetId = decision?.target?.id ?? decision?.target?.user_id ?? null;
+        return combatEntitySourceList()
+          .filter(entity => {
+            const id = entity.user_id ?? entity.id;
+            const selfId = selfLike?.user_id ?? selfLike?.id;
+            return id === undefined || id === null || String(id) !== String(selfId);
+          })
+          .map(entity => combatEntitySummary(entity, selfLike))
+          .filter(Boolean)
+          .sort((a, b) => {
+            const aTarget = targetId !== null && targetId !== undefined && String(a.id) === String(targetId);
+            const bTarget = targetId !== null && targetId !== undefined && String(b.id) === String(targetId);
+            if (aTarget !== bTarget) return aTarget ? -1 : 1;
+            if (a.active !== b.active) return a.active ? -1 : 1;
+            const ad = Number.isFinite(Number(a.distance)) ? Number(a.distance) : Infinity;
+            const bd = Number.isFinite(Number(b.distance)) ? Number(b.distance) : Infinity;
+            return ad - bd;
+          })
+          .slice(0, limit);
+      }
+
+      function combatBulletSummary(raw, selfLike = null) {
+        const bullet = normalizeBullet(raw, raw?.native ? 'native' : 'snapshot');
+        if (!bullet) return null;
+        const speedValue = hypot(Number(bullet.vx) || 0, Number(bullet.vy) || 0);
+        let distance = NaN;
+        let projection = null;
+        let laneDistance = null;
+        let signedLaneDistance = null;
+        let timeToImpactMs = null;
+        if (selfLike && Number.isFinite(Number(selfLike.x)) && Number.isFinite(Number(selfLike.y))) {
+          const toSelfX = Number(selfLike.x) - Number(bullet.x);
+          const toSelfY = Number(selfLike.y) - Number(bullet.y);
+          distance = hypot(toSelfX, toSelfY);
+          if (speedValue > 0.01) {
+            projection = (toSelfX * bullet.vx + toSelfY * bullet.vy) / speedValue;
+            signedLaneDistance = (toSelfX * bullet.vy - toSelfY * bullet.vx) / speedValue;
+            laneDistance = Math.abs(signedLaneDistance);
+            timeToImpactMs = projection > 0 ? projection / speedValue * 50 : null;
+          }
+        }
+        return {
+          id: bullet.id,
+          ownerId: bullet.ownerId,
+          x: Math.round(Number(bullet.x) || 0),
+          y: Math.round(Number(bullet.y) || 0),
+          vx: Math.round(Number(bullet.vx) || 0),
+          vy: Math.round(Number(bullet.vy) || 0),
+          speedPerTick: Math.round(Number(bullet.speedPerTick || speedValue || 0)),
+          distance: Number.isFinite(distance) ? Math.round(distance) : null,
+          projection: Number.isFinite(Number(projection)) ? Math.round(Number(projection)) : null,
+          laneDistance: Number.isFinite(Number(laneDistance)) ? Math.round(Number(laneDistance)) : null,
+          signedLaneDistance: Number.isFinite(Number(signedLaneDistance)) ? Math.round(Number(signedLaneDistance)) : null,
+          timeToImpactMs: Number.isFinite(Number(timeToImpactMs)) ? Math.round(Number(timeToImpactMs)) : null,
+          createdTick: bullet.createdTick,
+          expireTick: bullet.expireTick,
+          native: Boolean(bullet.native),
+          snapshot: Boolean(bullet.snapshot)
+        };
+      }
+
+      function summarizeCombatBullets(selfLike) {
+        const limit = Math.max(1, Number(cfg.combatLogMaxBulletEntries) || 24);
+        let bullets = [];
+        try {
+          bullets = getBullets();
+        } catch (_) {
+          bullets = Array.isArray(bot.globalState.bullets) ? bot.globalState.bullets : [];
+        }
+        return (bullets || [])
+          .map(bullet => combatBulletSummary(bullet, selfLike))
+          .filter(Boolean)
+          .sort((a, b) => {
+            const aThreat = Number.isFinite(Number(a.projection)) && Number(a.projection) > 0 && Number.isFinite(Number(a.laneDistance));
+            const bThreat = Number.isFinite(Number(b.projection)) && Number(b.projection) > 0 && Number.isFinite(Number(b.laneDistance));
+            if (aThreat !== bThreat) return aThreat ? -1 : 1;
+            if (aThreat && bThreat && a.laneDistance !== b.laneDistance) return a.laneDistance - b.laneDistance;
+            const ad = Number.isFinite(Number(a.distance)) ? Number(a.distance) : Infinity;
+            const bd = Number.isFinite(Number(b.distance)) ? Number(b.distance) : Infinity;
+            return ad - bd;
+          })
+          .slice(0, limit);
+      }
+
+      function combatLogGlobalStateSummary() {
+        return {
+          refreshedAt: bot.globalState.refreshedAt || 0,
+          snapshotRefreshedAt: bot.globalState.snapshotRefreshedAt || 0,
+          snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : null,
+          tick: bot.globalState.tick,
+          entities: arrayCount(bot.globalState.entities),
+          bullets: arrayCount(bot.globalState.bullets),
+          coinDrops: arrayCount(bot.globalState.coinDrops),
+          minimapPoints: bot.globalState.minimap?.points?.length || 0,
+          error: bot.globalState.error || ''
+        };
+      }
+
+      function combatLogDecisionSummary(decision) {
+        const cloned = safeJsonClone(decision || {});
+        if (!cloned || typeof cloned !== 'object') return { reason: String(decision?.reason || '') };
+        return cloned;
+      }
+
+      function combatLogEnemyExitSummary() {
+        const detail = bot.lastEnemyLeaveResult || bot.lastCombatLeaveResult || bot.lastInjuryLeaveResult || bot.lastPursuitLeaveResult || null;
+        if (!detail) return null;
+        return {
+          reason: detail.reason || '',
+          summary: detail.summary || detail.exitSummary || detail.enemyLeaveSummary || '',
+          displayReason: detail.displayReason || '',
+          enemyActor: detail.enemyActor || null,
+          target: detail.target || null,
+          injury: detail.injury || null,
+          pursuit: detail.pursuit || null,
+          reloginUntil: detail.reloginUntil || 0,
+          holdRemainingMs: detail.reloginUntil ? Math.max(0, Math.round(Number(detail.reloginUntil || 0) - Date.now())) : Number(detail.holdRemainingMs || 0),
+          reloginDelayMs: detail.reloginDelayMs || 0,
+          reloginRepeatCount: detail.reloginRepeatCount || detail.enemyLeaveStreak?.count || 0
+        };
+      }
+
+      function buildCombatLogEntry(source, decision) {
+        let currentSelf = null;
+        try {
+          currentSelf = getSelf();
+        } catch (_) {
+          currentSelf = null;
+        }
+        const rawSelf = currentSelf || decision?.self || bot.lastSelf || null;
+        const self = combatLogSelfSummary(rawSelf);
+        const nearbyEntities = summarizeCombatEntities(rawSelf || self, decision);
+        const bullets = summarizeCombatBullets(rawSelf || self);
+        let incoming = null;
+        try {
+          incoming = rawSelf ? incomingBulletThreat(rawSelf, null, getBullets()) : null;
+        } catch (_) {
+          incoming = null;
+        }
+        return {
+          type: 'combat-frame',
+          at: Date.now(),
+          perfNow: Math.round(now()),
+          tickCount: bot.tickCount,
+          source,
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          url: location.href,
+          visibilityState: document.visibilityState || '',
+          self,
+          decision: combatLogDecisionSummary(decision),
+          target: decision?.target || null,
+          combatState: decision?.combatState || null,
+          aimTarget: decision?.aimTarget || null,
+          incomingBullet: decision?.incomingBullet || (incoming ? {
+            id: incoming.id,
+            ownerId: incoming.ownerId,
+            distance: Math.round(Number(incoming.distance || 0)),
+            laneDistance: Math.round(Number(incoming.laneDistance || 0)),
+            signedLaneDistance: Number.isFinite(Number(incoming.signedLaneDistance)) ? Math.round(Number(incoming.signedLaneDistance)) : null,
+            timeToImpactMs: Number.isFinite(Number(incoming.timeToImpactMs)) ? Math.round(Number(incoming.timeToImpactMs)) : null,
+            reason: incoming.reason || 'incoming-bullet'
+          } : null),
+          injury: decision?.injury || bot.pendingInjuryLeave || null,
+          pendingCombatLeave: summarizePendingCombatLeave(),
+          pursuit: decision?.pursuit || summarizePursuit(bot.pursuit),
+          safety: bot.lastSafety || null,
+          combatTarget: bot.combatTarget || null,
+          combatAim: bot.combatAim || null,
+          control: summarizeControl(),
+          globalState: combatLogGlobalStateSummary(),
+          enemyExit: combatLogEnemyExitSummary(),
+          nearbyEntities,
+          bullets
+        };
+      }
+
+      function combatLogTriggerReason(entry, decision) {
+        const reason = String(decision?.reason || '');
+        if (decision?.combat) return 'decision-combat';
+        if (/^combat-/.test(reason)) return 'combat-reason';
+        if (/injury|pursuit-leave|active-threat|incoming-bullet/.test(reason)) return reason || 'threat-reason';
+        if (decision?.injury || entry.injury) return 'injury';
+        if (decision?.pendingCombatLeave || entry.pendingCombatLeave) return 'pending-combat-leave';
+        if (entry.incomingBullet) return 'incoming-bullet';
+        const closeActive = (entry.nearbyEntities || []).find(entity =>
+          (entity.active || entity.firing)
+            && Number.isFinite(Number(entity.distance))
+            && Number(entity.distance) <= Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.panicRadius || 0))
+        );
+        if (closeActive) return 'near-active:' + (closeActive.name || closeActive.id || 'unknown');
+        return '';
+      }
+
+      function combatLogTargetLabel(entry, decision) {
+        const candidates = [
+          decision?.target,
+          entry?.target,
+          entry?.enemyExit?.target,
+          entry?.enemyExit?.enemyActor,
+          entry?.injury?.nearestActive,
+          entry?.injury?.nearestAvoidance,
+          entry?.injury?.nearestHuman,
+          entry?.pursuit,
+          (entry?.nearbyEntities || [])[0]
+        ];
+        const picked = candidates.find(Boolean) || null;
+        if (!picked) return 'unknown';
+        return picked.name || picked.label || picked.id || picked.user_id || picked.targetId || 'unknown';
+      }
+
+      function makeCombatLogId(entry, decision) {
+        const t = new Date(entry.at || Date.now()).toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+        const selfId = entry.self?.id ?? entry.self?.user_id ?? getCurrentUserId() ?? 'self';
+        const target = combatLogTargetLabel(entry, decision);
+        return sanitizeCombatLogIdPart(t + '-self-' + selfId + '-vs-' + target, 'combat-' + Date.now());
+      }
+
+      function rememberCombatPreBuffer(entry) {
+        const state = bot.combatLogging;
+        if (!Array.isArray(state.preBuffer)) state.preBuffer = [];
+        const snapshot = safeJsonClone({ ...entry, phase: 'prebuffer' }) || { at: entry?.at || Date.now(), phase: 'prebuffer', error: 'clone failed' };
+        state.preBuffer.push(snapshot);
+        const cutoff = Date.now() - Math.max(0, Number(cfg.combatLogPreBufferMs) || 10000);
+        const maxEntries = Math.max(20, Math.ceil(Math.max(250, Number(cfg.combatLogPreBufferMs) || 10000) / Math.max(50, Number(cfg.tickMs) || 120)) + 10);
+        while (state.preBuffer.length && Number(state.preBuffer[0].at || 0) < cutoff) state.preBuffer.shift();
+        while (state.preBuffer.length > maxEntries) state.preBuffer.shift();
+      }
+
+      function queueCombatLogEntry(entry) {
+        const state = bot.combatLogging;
+        if (!state.enabled || !state.endpoint) return false;
+        if (!Array.isArray(state.pending)) state.pending = [];
+        const snapshot = safeJsonClone(entry) || { at: Date.now(), type: 'combat-log-clone-error', originalType: entry?.type || '' };
+        const queued = {
+          ...snapshot,
+          combatId: state.combatId || snapshot.combatId || entry.combatId || '',
+          sequence: ++state.sequence
+        };
+        state.pending.push(queued);
+        const maxPending = Math.max(50, Number(cfg.combatLogMaxPendingEntries) || 1000);
+        while (state.pending.length > maxPending) {
+          state.pending.shift();
+          state.dropped += 1;
+        }
+        return true;
+      }
+
+      function startCombatLogSession(entry, decision, triggerReason) {
+        const state = bot.combatLogging;
+        const prior = Array.isArray(state.preBuffer) ? state.preBuffer.slice() : [];
+        state.active = true;
+        state.startedAt = entry.at || Date.now();
+        state.lastCombatAt = entry.at || Date.now();
+        state.combatId = makeCombatLogId(entry, decision);
+        state.sequence = 0;
+        state.lastError = '';
+        queueCombatLogEntry({
+          type: 'combat-start',
+          at: state.startedAt,
+          triggerReason,
+          source: entry.source,
+          version: cfg.version,
+          self: entry.self,
+          target: entry.target || null,
+          decision: entry.decision,
+          nearbyEntities: entry.nearbyEntities,
+          enemyExit: entry.enemyExit || null
+        });
+        for (const pre of prior) {
+          queueCombatLogEntry({
+            ...pre,
+            type: 'combat-pre-frame',
+            phase: 'pre'
+          });
+        }
+      }
+
+      function endCombatLogSession(entry, reason = 'post-buffer-elapsed') {
+        const state = bot.combatLogging;
+        queueCombatLogEntry({
+          type: 'combat-end',
+          at: entry?.at || Date.now(),
+          reason,
+          source: entry?.source || '',
+          self: entry?.self || null,
+          decision: entry?.decision || null,
+          enemyExit: entry?.enemyExit || null,
+          sent: state.sent,
+          dropped: state.dropped
+        });
+        state.active = false;
+        state.combatId = '';
+        state.startedAt = 0;
+        state.lastCombatAt = 0;
+      }
+
+      function flushCombatLogs(force = false) {
+        const state = bot.combatLogging;
+        if (!state?.enabled || !state.endpoint || state.sending) return false;
+        if (!Array.isArray(state.pending) || !state.pending.length) return false;
+        const t = Date.now();
+        if (!force && t - Number(state.lastFlushAt || 0) < Math.max(250, Number(cfg.combatLogFlushMs) || 1000)) return false;
+        if (typeof fetch !== 'function') {
+          state.lastError = 'fetch unavailable';
+          return false;
+        }
+        state.lastFlushAt = t;
+        const batchSize = force
+          ? Math.min(state.pending.length, Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50) * 4)
+          : Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50);
+        const entries = state.pending.splice(0, batchSize);
+        const payload = {
+          combatId: entries[0]?.combatId || state.combatId || '',
+          startedAt: state.startedAt || entries[0]?.at || t,
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          entries
+        };
+        state.sending = true;
+        const body = safeStringify(payload);
+        let sentOk = false;
+        Promise.resolve()
+          .then(() => fetch(state.endpoint, {
+            method: 'POST',
+            mode: 'cors',
+            cache: 'no-store',
+            keepalive: body.length < 60000,
+            headers: { 'content-type': 'application/json' },
+            body
+          }))
+          .then(res => {
+            if (!res || !res.ok) throw new Error('combat log POST failed: HTTP ' + (res?.status || 0));
+            sentOk = true;
+            state.sent += entries.length;
+            state.lastOkAt = Date.now();
+            state.lastError = '';
+          })
+          .catch(err => {
+            state.failed += entries.length;
+            state.lastError = err?.message || String(err);
+            state.pending = entries.concat(Array.isArray(state.pending) ? state.pending : []);
+            const maxPending = Math.max(50, Number(cfg.combatLogMaxPendingEntries) || 1000);
+            while (state.pending.length > maxPending) {
+              state.pending.pop();
+              state.dropped += 1;
+            }
+          })
+          .finally(() => {
+            state.sending = false;
+            if (sentOk && (force || state.pending.length >= Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50)) && state.pending.length) {
+              flushCombatLogs(force);
+            }
+          });
+        return true;
+      }
+
+      function recordCombatLogTick(source, decision = bot.lastDecision) {
+        const state = bot.combatLogging;
+        if (!state?.enabled) return;
+        state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
+        if (!state.endpoint) return;
+        const entry = buildCombatLogEntry(source, decision || {});
+        const triggerReason = combatLogTriggerReason(entry, decision || {});
+        const triggered = Boolean(triggerReason);
+        const priorActive = Boolean(state.active);
+        if (triggered && !priorActive) {
+          startCombatLogSession(entry, decision || {}, triggerReason);
+        } else if (triggered) {
+          state.lastCombatAt = entry.at;
+        }
+        rememberCombatPreBuffer(entry);
+        if (state.active) {
+          queueCombatLogEntry({
+            ...entry,
+            phase: triggered ? 'combat' : 'post',
+            triggerReason: triggerReason || ''
+          });
+          if (!triggered && state.lastCombatAt && entry.at - Number(state.lastCombatAt || 0) >= Math.max(0, Number(cfg.combatLogPostBufferMs) || 10000)) {
+            endCombatLogSession(entry);
+          }
+        }
+        flushCombatLogs(false);
       }
 
       function recordUnhandledTickError(source, err) {
@@ -8818,6 +9384,13 @@ function browserBotSource(config) {
 		        console.error('[grasp-rat-bot:error]', err);
 		      } catch (_) {}
 		    } finally {
+		      try {
+		        recordCombatLogTick(source, bot.lastDecision);
+		      } catch (logErr) {
+		        try {
+		          bot.combatLogging.lastError = 'record failed: ' + (logErr?.message || String(logErr));
+		        } catch (_) {}
+		      }
 		      bot.ticking = false;
 		    }
 		  }
