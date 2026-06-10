@@ -169,6 +169,7 @@ function runSelfTest() {
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
     attackMinDrop: 8,
+    attackMinAfkDrop: 3,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
     targetWhitelistNames: ['文月'],
@@ -182,9 +183,9 @@ function runSelfTest() {
     opportunityEstimatedDamagePerShot: 3,
     opportunityCoinPickupStaminaMs: 0,
     opportunityLongStaminaReserveMs: 1500,
-    opportunityStickBonus: 35000,
-    opportunitySwitchMargin: 120000,
-    opportunitySwitchRelativeMargin: 0.2,
+    opportunityStickBonus: 0,
+    opportunitySwitchMargin: 3000,
+    opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
@@ -239,7 +240,10 @@ function runSelfTest() {
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
     conserveStaminaThreshold: 6500,
+    targetStickMs: 5000,
+    coinStickMs: 2500,
   };
+  const bot = { lastTarget: null, lastTargetAt: 0 };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -330,7 +334,7 @@ function runSelfTest() {
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
-    if (isAfkTarget(target)) return targetDrop >= cfg.attackMinDrop;
+    if (isAfkTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -550,7 +554,11 @@ function runSelfTest() {
   function scoreCoinOpportunity(coin) {
     const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? NaN);
     if (Number.isFinite(override)) return override;
-    return opportunityValueScore(coin.amount, opportunityCoinStaminaCost(coin), cfg.coinOpportunityValue);
+    const sticky = bot.lastTarget?.kind === 'coin'
+      && String(bot.lastTarget.id) === String(coin.drop_id)
+      && Date.now() - bot.lastTargetAt < cfg.coinStickMs;
+    return opportunityValueScore(coin.amount, opportunityCoinStaminaCost(coin), cfg.coinOpportunityValue)
+      + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
   function scoreEnemyOpportunity(target) {
@@ -558,11 +566,14 @@ function runSelfTest() {
     const afk = isAfkTarget(target);
     const inRange = target.distance <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
+    const sticky = bot.lastTarget?.kind === 'enemy'
+      && String(bot.lastTarget.id) === String(target.user_id)
+      && Date.now() - bot.lastTargetAt < cfg.targetStickMs;
     return opportunityValueScore(
       target.drop,
       opportunityEnemyStaminaCost(target),
       afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue
-    );
+    ) + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
   function bestCoinOpportunityScore(self, coins, activeThreats, snapshotCompetitionCoin = null) {
@@ -1192,6 +1203,24 @@ function runSelfTest() {
       want: 1
     },
     {
+      name: 'closer same-value coin beats sticky older far coin',
+      got: (() => {
+        bot.lastTarget = { kind: 'coin', id: 2 };
+        bot.lastTargetAt = Date.now();
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: 15000, y: 0, amount: 1 },
+            { drop_id: 2, x: 21300, y: 0, amount: 1 }
+          ]
+        });
+        bot.lastTarget = null;
+        bot.lastTargetAt = 0;
+        return action.id;
+      })(),
+      want: 1
+    },
+    {
       name: 'local snapshot coin does not beat visible native coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -1225,6 +1254,15 @@ function runSelfTest() {
         ]
       }).id,
       want: 2
+    },
+    {
+      name: 'near drop three afk target beats far single coin by roi',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 33, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 3 }],
+        coins: [{ drop_id: 1, x: 22000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'attack'
     },
     {
       name: 'near high afk drop beats low coin by value',
@@ -2153,6 +2191,7 @@ function browserBotSource(config) {
     enemyReloginMaxDelayMs: 600000,
     enemyReloginJitterMs: 15000,
     attackMinDrop: 8,
+    attackMinAfkDrop: 3,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
     targetWhitelistNames: ['文月'],
@@ -2166,9 +2205,9 @@ function browserBotSource(config) {
     opportunityEstimatedDamagePerShot: 3,
     opportunityCoinPickupStaminaMs: 0,
     opportunityLongStaminaReserveMs: 1500,
-    opportunityStickBonus: 35000,
-    opportunitySwitchMargin: 120000,
-    opportunitySwitchRelativeMargin: 0.2,
+    opportunityStickBonus: 0,
+    opportunitySwitchMargin: 3000,
+    opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
@@ -2752,7 +2791,7 @@ function browserBotSource(config) {
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
-    if (isAfkTarget(target)) return targetDrop >= cfg.attackMinDrop;
+    if (isAfkTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);

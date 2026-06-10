@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.59"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.60"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -103,6 +103,7 @@
     enemyReloginMaxDelayMs: 600000,
     enemyReloginJitterMs: 15000,
     attackMinDrop: 8,
+    attackMinAfkDrop: 3,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
     targetWhitelistNames: ['文月'],
@@ -116,9 +117,9 @@
     opportunityEstimatedDamagePerShot: 3,
     opportunityCoinPickupStaminaMs: 0,
     opportunityLongStaminaReserveMs: 1500,
-    opportunityStickBonus: 35000,
-    opportunitySwitchMargin: 120000,
-    opportunitySwitchRelativeMargin: 0.2,
+    opportunityStickBonus: 0,
+    opportunitySwitchMargin: 3000,
+    opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
@@ -702,7 +703,7 @@
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
-    if (isAfkTarget(target)) return targetDrop >= cfg.attackMinDrop;
+    if (isAfkTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
