@@ -2302,6 +2302,8 @@ function browserBotSource(config) {
 		  const PANEL_ID = 'grasp-rat-bot-panel';
 		  const PAUSED_KEY = 'graspRatBotPaused';
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
+		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
+		  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
 	      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
@@ -2794,10 +2796,13 @@ function browserBotSource(config) {
 	      }
 	      return this.status();
 	    },
-    step(source = 'external') {
-      return tick(source);
-    },
-    status() {
+	    forceLoginNow(reason = 'panel immediate login') {
+	      return forceLoginNow(reason);
+	    },
+	    step(source = 'external') {
+	      return tick(source);
+	    },
+	    status() {
       try {
         if (!this.ticking) syncPausedFromPage(false);
       } catch (_) {}
@@ -3528,8 +3533,8 @@ function browserBotSource(config) {
     let existingUntil = 0;
     let existingReason = '';
     try {
-      existingUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
-      existingReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+      existingUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+      existingReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
     } catch (_) {}
     const reuseExisting = existingUntil > requestedUntil;
     const until = reuseExisting ? existingUntil : requestedUntil;
@@ -3537,8 +3542,8 @@ function browserBotSource(config) {
       ? String(existingReason || reason || 'login flow')
       : String(reason || 'login flow');
     try {
-      localStorage.setItem('graspRatLoginSuppressUntil', String(until));
-      localStorage.setItem('graspRatLoginSuppressReason', suppressReason);
+      localStorage.setItem(LOGIN_SUPPRESS_KEY, String(until));
+      localStorage.setItem(LOGIN_SUPPRESS_REASON_KEY, suppressReason);
     } catch (_) {}
     return until;
   }
@@ -3546,16 +3551,78 @@ function browserBotSource(config) {
   function loginSuppressRemainingMs() {
     let until = 0;
     try {
-      until = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+      until = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
     } catch (_) {}
     const remaining = Math.max(0, until - Date.now());
     if (!remaining && until) {
       try {
-        localStorage.removeItem('graspRatLoginSuppressUntil');
-        localStorage.removeItem('graspRatLoginSuppressReason');
+        localStorage.removeItem(LOGIN_SUPPRESS_KEY);
+        localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
       } catch (_) {}
     }
     return remaining;
+  }
+
+  function clearExitHoldDetail(detail, reason, t = Date.now()) {
+    if (!detail || typeof detail !== 'object') return null;
+    const reloginUntil = Number(detail.reloginUntil || 0) || 0;
+    const previousHoldRemainingMs = Math.max(0, Math.round(reloginUntil - t));
+    if (reloginUntil && !detail.manualLoginBypassPreviousReloginUntil) {
+      detail.manualLoginBypassPreviousReloginUntil = reloginUntil;
+    }
+    if (previousHoldRemainingMs && !detail.manualLoginBypassPreviousHoldMs) {
+      detail.manualLoginBypassPreviousHoldMs = previousHoldRemainingMs;
+    }
+    detail.manualLoginBypassAt = t;
+    detail.manualLoginBypassReason = String(reason || 'manual force login');
+    detail.reloginUntil = 0;
+    detail.holdRemainingMs = 0;
+    detail.reloginDelayMs = 0;
+    detail.reloginHpDelayMs = 0;
+    detail.reloginMinimumDelayMs = 0;
+    finalizeLeaveDisplayReason(detail);
+    return detail;
+  }
+
+  function clearCurrentReloginHold(reason = 'manual force login') {
+    const t = Date.now();
+    const enemyDetail = activeEnemyLeaveDetail(t);
+    const offlineDetail = activeOfflineLeaveDetail(t);
+    let suppressUntil = 0;
+    let suppressReason = '';
+    try {
+      suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+      suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+      localStorage.removeItem(LOGIN_SUPPRESS_KEY);
+      localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+    } catch (_) {}
+    const cleared = {
+      at: t,
+      reason: String(reason || 'manual force login'),
+      suppressReason,
+      suppressUntil,
+      suppressRemainingMs: Math.max(0, Math.round(suppressUntil - t)),
+      enemyHoldRemainingMs: Math.max(
+        0,
+        Math.round(Number(enemyDetail?.holdRemainingMs || 0)),
+        Math.round(Number(bot.pursuitReloginUntil || 0) - t)
+      ),
+      offlineHoldRemainingMs: Math.max(
+        0,
+        Math.round(Number(offlineDetail?.holdRemainingMs || 0)),
+        Math.round(Number(bot.offlineReloginUntil || 0) - t)
+      )
+    };
+    bot.pursuitReloginUntil = 0;
+    bot.offlineReloginUntil = 0;
+    bot.lastEnemyLeaveResult = clearExitHoldDetail(bot.lastEnemyLeaveResult, reason, t);
+    bot.lastPursuitLeaveResult = clearExitHoldDetail(bot.lastPursuitLeaveResult, reason, t);
+    bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
+    bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
+    bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
+    clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+    clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+    return cleared;
   }
 
   function readPauseReason() {
@@ -3838,8 +3905,8 @@ function browserBotSource(config) {
     let existingReason = '';
     const minimumUntil = Math.max(0, Number(options.minimumUntil || 0) || 0);
     try {
-      const storedReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
-      const storedUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
+      const storedReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+      const storedUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
       if (isExitLoginSuppressReason(storedReason) && storedUntil > existingUntil) {
         existingUntil = storedUntil;
         existingReason = storedReason;
@@ -3935,8 +4002,8 @@ function browserBotSource(config) {
       bot.lastEnemyLeaveResult = persistent;
     }
     try {
-      const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
-      const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+      const suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+      const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
       if ((suppressReason === 'enemy leave' || suppressReason === 'pursuit leave' || suppressReason === 'combat leave') && suppressUntil > until) {
         until = suppressUntil;
         bot.pursuitReloginUntil = suppressUntil;
@@ -3959,8 +4026,8 @@ function browserBotSource(config) {
       bot.lastOfflineLeaveResult = persistent;
     }
     try {
-      const suppressUntil = Number(localStorage.getItem('graspRatLoginSuppressUntil') || 0) || 0;
-      const suppressReason = String(localStorage.getItem('graspRatLoginSuppressReason') || '');
+      const suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+      const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
       if (/offline.*leave/i.test(suppressReason) && suppressUntil > until) {
         until = suppressUntil;
         bot.offlineReloginUntil = suppressUntil;
@@ -4185,7 +4252,10 @@ function browserBotSource(config) {
     return detail;
   }
 
-  async function maybeStartAutoLogin(reason) {
+  async function maybeStartAutoLogin(reason, options = {}) {
+    const force = Boolean(options.force || options.immediate || options.manual);
+    const ignoreSuppress = Boolean(options.ignoreSuppress || force);
+    const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
     if (syncPausedFromPage()) {
       return {
         needed: false,
@@ -4199,14 +4269,14 @@ function browserBotSource(config) {
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
     const suppressRemainingMs = loginSuppressRemainingMs();
-    if (suppressRemainingMs > 0) {
+    if (suppressRemainingMs > 0 && !ignoreSuppress) {
       return {
         needed: true,
         attempted: false,
         reason: 'suppressed',
         cooldownRemainingMs: Math.round(suppressRemainingMs),
         error: '',
-        suppressReason: localStorage.getItem('graspRatLoginSuppressReason') || 'login flow',
+        suppressReason: localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || 'login flow',
         hasToken: Boolean(getSessionToken()),
         currentUserId: getCurrentUserId()
       };
@@ -4215,9 +4285,23 @@ function browserBotSource(config) {
     const hasToken = Boolean(getSessionToken());
     const loginControl = findLoginControl();
     const loginRequired = hasLoginRequiredText();
-    const needsLogin = !hasToken || loginRequired;
-    if (!needsLogin) return null;
-    if (t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
+    const self = getSelf();
+    const hasAliveSelf = Boolean(self && isAlive(self));
+    const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
+    const needsLogin = !hasAliveSelf && (!hasToken || loginRequired || (force && canStartLogin));
+    if (!needsLogin) {
+      return force ? {
+        needed: false,
+        attempted: false,
+        reason: hasAliveSelf ? 'already-alive' : 'already-logged-in',
+        error: '',
+        forced: true,
+        hasToken,
+        currentUserId: userId,
+        self: hasAliveSelf ? summarizeSelf(self) : null
+      } : null;
+    }
+    if (!ignoreLoginCooldown && t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
       const lastError = bot.lastLoginResult?.error || '';
       return {
         needed: true,
@@ -4236,6 +4320,8 @@ function browserBotSource(config) {
       hasToken,
       currentUserId: userId,
       loginRequired,
+      forced: force,
+      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
       loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
       method: '',
       error: ''
@@ -4259,6 +4345,38 @@ function browserBotSource(config) {
     }
     if (detail.attempted && !detail.error) setLoginSuppress('bot login started', cfg.postLoginGraceMs);
     bot.lastLoginResult = detail;
+    return detail;
+  }
+
+  async function forceLoginNow(reason = 'panel immediate login') {
+    const manualReason = String(reason || 'panel immediate login');
+    const cleared = clearCurrentReloginHold(manualReason);
+    bot.lastLoginAt = 0;
+    const login = await maybeStartAutoLogin(manualReason, {
+      force: true,
+      ignoreSuppress: true,
+      ignoreLoginCooldown: true
+    });
+    const detail = {
+      at: Date.now(),
+      reason: manualReason,
+      cleared,
+      login
+    };
+    bot.lastLoginResult = login || bot.lastLoginResult;
+    bot.lastDecision = {
+      kind: 'wait',
+      reason: login?.attempted ? 'manual-login' : (login?.reason || 'manual-login'),
+      dx: 0,
+      dy: 0,
+      self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
+      currentUserId: getCurrentUserId(),
+      control: summarizeControl(),
+      login,
+      manualLogin: detail
+    };
+    updateBotPanel(bot.lastDecision);
+    setTimeout(() => triggerNativeTick('manual-login', false), 0);
     return detail;
   }
 
