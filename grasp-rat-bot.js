@@ -226,6 +226,7 @@ function runSelfTest() {
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
+    coinPickupExactTolerance: 0,
     precisionPulseMaxMs: 260,
     coinPickupStopDistance: 30,
     coinPickupMicroDistance: 120,
@@ -420,6 +421,15 @@ function runSelfTest() {
     const dxRaw = Number(target.x) - Number(self.x);
     const dyRaw = Number(target.y) - Number(self.y);
     const distance = dist(self, target);
+    const exactTolerance = Math.max(0, Number(cfg.coinPickupExactTolerance ?? 0) || 0);
+    if (distance <= Math.max(0, Number(cfg.coinPickupSweepDistance || cfg.coinPickupFineDistance || 0))) {
+      return {
+        dx: Math.abs(dxRaw) > exactTolerance ? Math.sign(dxRaw) : 0,
+        dy: Math.abs(dyRaw) > exactTolerance ? Math.sign(dyRaw) : 0,
+        distance,
+        exactTarget: true
+      };
+    }
     return coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance)
       || directionTo(self, target, tolerance);
   }
@@ -1804,6 +1814,22 @@ function runSelfTest() {
       want: true
     },
     {
+      name: 'close coin pickup keeps moving inside old tolerance',
+      got: (() => {
+        const dir = coinDirectionTo({ x: 0, y: 0 }, { x: 40, y: 0 });
+        return dir.dx === 1 && dir.dy === 0 && dir.exactTarget === true;
+      })(),
+      want: true
+    },
+    {
+      name: 'close coin pickup stops only at exact coordinate',
+      got: (() => {
+        const dir = coinDirectionTo({ x: 10, y: -5 }, { x: 10, y: -5 });
+        return dir.dx === 0 && dir.dy === 0 && dir.exactTarget === true;
+      })(),
+      want: true
+    },
+    {
       name: 'coin route keeps diagonal when both axes are material',
       got: (() => {
         const dir = coinDirectionTo({ x: 0, y: 0 }, { x: 15000, y: 6000 });
@@ -2454,6 +2480,7 @@ function browserBotSource(config) {
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
+    coinPickupExactTolerance: 0,
     targetStickMs: 5000,
     coinStickMs: 2500,
     coinNoProgressMs: 18000,
@@ -5687,6 +5714,11 @@ function browserBotSource(config) {
     const id = String(target.drop_id ?? target.id ?? '');
     const lock = bot.coinApproachLock;
     const sameLock = lock && lock.id === id && t < Number(lock.until || 0) && (lock.dx || lock.dy);
+    const exactTolerance = Math.max(0, Number(cfg.coinPickupExactTolerance ?? 0) || 0);
+    const exactDirection = () => ({
+      dx: absX > exactTolerance ? Math.sign(dxRaw) : 0,
+      dy: absY > exactTolerance ? Math.sign(dyRaw) : 0
+    });
 
     if (distance <= cfg.coinPickupSweepDistance) {
       const pulse = Math.max(60, Number(cfg.coinPickupPulseMs) || 180);
@@ -5700,20 +5732,18 @@ function browserBotSource(config) {
         return { dx: 0, dy: 0, distance, pickupSweep: true, ...extra };
       };
       const dominantAxis = () => coinNearApproachAxis(dxRaw, dyRaw, absX, absY, tolerance);
+      const direct = exactDirection();
+      if (direct.dx || direct.dy) {
+        return locked(direct, {
+          exactTarget: true,
+          pickupMicro: distance <= cfg.coinPickupMicroDistance,
+          pickupFine: distance > cfg.coinPickupMicroDistance && distance <= cfg.coinPickupFineDistance,
+          pushThrough: true
+        });
+      }
 
       if (distance <= cfg.coinPickupMicroDistance) {
-        const phase = Math.floor(t / pulse) % 6;
-        if (phase === 0 || phase === 3) return locked({ dx: 0, dy: 0 }, { pickupMicro: true });
-        if (absX > cfg.coinPickupStopDistance || absY > cfg.coinPickupStopDistance) {
-          return locked(dominantAxis(), { pickupMicro: true, pushThrough: true });
-        }
-        const pattern = [
-          { dx: 1, dy: 0 },
-          { dx: -1, dy: 0 },
-          { dx: 0, dy: 1 },
-          { dx: 0, dy: -1 }
-        ];
-        return locked(pattern[Math.floor(t / (pulse * 2)) % pattern.length], { pickupMicro: true, crossSweep: true });
+        return locked({ dx: 0, dy: 0 }, { pickupMicro: true, exactTarget: true });
       }
 
       if (distance <= cfg.coinPickupFineDistance) {
