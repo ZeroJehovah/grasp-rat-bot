@@ -224,6 +224,9 @@ function runSelfTest() {
     coinPickupPulseMs: 240,
     coinPickupSweepPulseMs: 150,
     coinPickupFinePulseMs: 130,
+    coinAxisApproachMinDistance: 5000,
+    coinAxisApproachRatio: 4,
+    coinAxisApproachLaneTolerance: 1800,
     attackMinStamina: 0,
     passiveAvoidRadius: 11000,
     passivePanicRadius: 120,
@@ -345,6 +348,28 @@ function runSelfTest() {
     const evasionWidth = (dodgeSpeed * travelTicks + hitRadius) * evasionScale;
     const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
     return clampValue(Math.max(interpolated, evasionAngle), minJitter, maxJitter);
+  }
+  function coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance = cfg.coinPrecisionTolerance) {
+    const absX = Math.abs(dxRaw);
+    const absY = Math.abs(dyRaw);
+    const minDistance = Math.max(0, Number(cfg.coinAxisApproachMinDistance || cfg.nearCoinStuckDistance || 0));
+    if (Math.max(absX, absY) <= minDistance) return null;
+    const ratio = Math.max(1, Number(cfg.coinAxisApproachRatio || 1));
+    const laneTolerance = Math.max(tolerance, Number(cfg.coinAxisApproachLaneTolerance || 0));
+    if (absX > tolerance && absX > absY && (absY <= laneTolerance || absX >= absY * ratio)) {
+      return { dx: Math.sign(dxRaw), dy: 0, distance, axisApproach: 'x' };
+    }
+    if (absY > tolerance && absY > absX && (absX <= laneTolerance || absY >= absX * ratio)) {
+      return { dx: 0, dy: Math.sign(dyRaw), distance, axisApproach: 'y' };
+    }
+    return null;
+  }
+  function coinDirectionTo(self, target, tolerance = cfg.coinPrecisionTolerance) {
+    const dxRaw = Number(target.x) - Number(self.x);
+    const dyRaw = Number(target.y) - Number(self.y);
+    const distance = dist(self, target);
+    return coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance)
+      || directionTo(self, target, tolerance);
   }
   function opportunityEffectiveStaminaCost(staminaCost) {
     const floor = Math.max(1, Number(cfg.opportunityDistanceFloor || 1));
@@ -1420,6 +1445,22 @@ function runSelfTest() {
       want: true
     },
     {
+      name: 'coin route uses horizontal axis when x gap dominates',
+      got: (() => {
+        const dir = coinDirectionTo({ x: 0, y: 0 }, { x: 15000, y: 500 });
+        return dir.dx === 1 && dir.dy === 0 && dir.axisApproach === 'x';
+      })(),
+      want: true
+    },
+    {
+      name: 'coin route keeps diagonal when both axes are material',
+      got: (() => {
+        const dir = coinDirectionTo({ x: 0, y: 0 }, { x: 15000, y: 6000 });
+        return dir.dx === 1 && dir.dy === 1 && !dir.axisApproach;
+      })(),
+      want: true
+    },
+    {
       name: 'stationary active outside caution allows foot coin only',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -2069,6 +2110,9 @@ function browserBotSource(config) {
     coinPickupPulseMs: 240,
     coinPickupSweepPulseMs: 150,
     coinPickupFinePulseMs: 130,
+    coinAxisApproachMinDistance: 5000,
+    coinAxisApproachRatio: 4,
+    coinAxisApproachLaneTolerance: 1800,
     shootEveryMs: 120,
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
@@ -4617,6 +4661,26 @@ function browserBotSource(config) {
     };
   }
 
+  function coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance = cfg.coinPrecisionTolerance, lock = null) {
+    const absX = Math.abs(dxRaw);
+    const absY = Math.abs(dyRaw);
+    const minDistance = Math.max(0, Number(cfg.coinAxisApproachMinDistance || cfg.nearCoinStuckDistance || 0));
+    if (Math.max(absX, absY) <= minDistance) return null;
+    const baseRatio = Math.max(1, Number(cfg.coinAxisApproachRatio || 1));
+    const laneTolerance = Math.max(tolerance, Number(cfg.coinAxisApproachLaneTolerance || 0));
+    const xLocked = lock && lock.dx && !lock.dy;
+    const yLocked = lock && lock.dy && !lock.dx;
+    const xRatio = xLocked ? Math.max(1, baseRatio * 0.75) : baseRatio;
+    const yRatio = yLocked ? Math.max(1, baseRatio * 0.75) : baseRatio;
+    if (absX > tolerance && absX > absY && (absY <= laneTolerance || absX >= absY * xRatio)) {
+      return { dx: Math.sign(dxRaw), dy: 0, distance, axisApproach: 'x' };
+    }
+    if (absY > tolerance && absY > absX && (absX <= laneTolerance || absY >= absX * yRatio)) {
+      return { dx: 0, dy: Math.sign(dyRaw), distance, axisApproach: 'y' };
+    }
+    return null;
+  }
+
   function coinDirectionTo(self, target, tolerance = cfg.coinPrecisionTolerance) {
     const dxRaw = Number(target.x) - Number(self.x);
     const dyRaw = Number(target.y) - Number(self.y);
@@ -4673,6 +4737,11 @@ function browserBotSource(config) {
       bot.coinApproachLock = null;
       return { dx: 0, dy: 0, distance };
     }
+    const axisApproach = coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance, sameLock ? lock : null);
+    if (axisApproach) {
+      bot.coinApproachLock = { id, dx: axisApproach.dx, dy: axisApproach.dy, until: t + cfg.coinApproachLockMs };
+      return { ...axisApproach, locked: Boolean(sameLock) };
+    }
     if (distance <= cfg.nearCoinStuckDistance && Math.max(absX, absY) > tolerance) {
       if (sameLock) {
         const axisRaw = lock.dx ? dxRaw : dyRaw;
@@ -4708,6 +4777,7 @@ function browserBotSource(config) {
     if (dir?.pickupMicro) meta.pickupMode = dir.crossSweep ? 'micro-cross-sweep' : 'micro';
     else if (dir?.pickupFine) meta.pickupMode = 'fine';
     else if (dir?.pickupSweep) meta.pickupMode = 'sweep';
+    else if (dir?.axisApproach) meta.routeMode = 'axis-approach-' + dir.axisApproach;
     if (dir?.locked) meta.motionLocked = true;
     if (dir?.pushThrough) meta.pushThrough = true;
     return meta;
