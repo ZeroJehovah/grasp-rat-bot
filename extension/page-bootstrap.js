@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.5';
+  const BOOTSTRAP_VERSION = '0.1.6';
   const BOOTSTRAP_OWNER = 'extension';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -663,6 +663,60 @@
     return remaining;
   }
 
+  function clearCurrentReloginHold(reason = 'panel immediate login', options = {}) {
+    const t = Date.now();
+    const entry = currentSuppressEntry();
+    const clearBot = options.clearBot !== false;
+    const clearLocal = options.clearLocal !== false;
+    const clearPersistent = options.clearPersistent !== false;
+    writeStored({ [LOGIN_SUPPRESS_KEY]: 0, [LOGIN_SUPPRESS_REASON_KEY]: '' });
+    state.lastLoginSuppressUntil = 0;
+    state.lastLoginSuppressReason = '';
+    state.lastLoginAt = 0;
+    try {
+      if (clearLocal) {
+        localStorage.removeItem(LOGIN_SUPPRESS_KEY);
+        localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+      }
+      if (clearPersistent) {
+        localStorage.removeItem(ENEMY_LEAVE_STATE_KEY);
+        localStorage.removeItem(OFFLINE_LEAVE_STATE_KEY);
+      }
+    } catch (_) {}
+    const bot = clearBot ? (window.__graspRatBot || null) : null;
+    if (bot && typeof bot === 'object') {
+      bot.pursuitReloginUntil = 0;
+      bot.offlineReloginUntil = 0;
+      ['lastEnemyLeaveResult', 'lastPursuitLeaveResult', 'lastCombatLeaveResult', 'lastInjuryLeaveResult', 'lastOfflineLeaveResult'].forEach(key => {
+        const detail = bot[key];
+        if (!detail || typeof detail !== 'object') return;
+        const reloginUntil = Number(detail.reloginUntil || 0) || 0;
+        const previousHoldRemainingMs = Math.max(0, Math.round(reloginUntil - t));
+        if (reloginUntil && !detail.manualLoginBypassPreviousReloginUntil) {
+          detail.manualLoginBypassPreviousReloginUntil = reloginUntil;
+        }
+        if (previousHoldRemainingMs && !detail.manualLoginBypassPreviousHoldMs) {
+          detail.manualLoginBypassPreviousHoldMs = previousHoldRemainingMs;
+        }
+        detail.manualLoginBypassAt = t;
+        detail.manualLoginBypassReason = String(reason || 'panel immediate login');
+        detail.reloginUntil = 0;
+        detail.holdRemainingMs = 0;
+        detail.reloginDelayMs = 0;
+        detail.reloginHpDelayMs = 0;
+        detail.reloginMinimumDelayMs = 0;
+      });
+    }
+    return {
+      at: t,
+      reason: String(reason || 'panel immediate login'),
+      suppressReason: String(entry.reason || ''),
+      suppressUntil: Number(entry.until || 0) || 0,
+      suppressRemainingMs: Math.max(0, Math.round((Number(entry.until || 0) || 0) - t)),
+      clearedRunningBot: Boolean(bot)
+    };
+  }
+
   function readPauseReason() {
     let reason = '';
     try {
@@ -798,6 +852,9 @@
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
     const session = status?.session || {};
+    const persistent = activePersistentExitDetail(status);
+    const reloginHold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
+    const showImmediateLogin = !state.cloudflareError && !paused && Number(reloginHold || 0) > 0;
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     while (panel.firstChild) panel.removeChild(panel.firstChild);
@@ -824,7 +881,30 @@
       setPaused(!isPaused(), 'panel button');
     }, { once: true });
     header.appendChild(title);
-    header.appendChild(button);
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;align-items:center;gap:6px;flex:0 0 auto';
+    if (showImmediateLogin) {
+      const loginButton = document.createElement('button');
+      loginButton.type = 'button';
+      loginButton.title = '忽略当前退出冷却，立即登录';
+      loginButton.style.cssText = 'flex:0 0 auto;border:1px solid rgba(34,197,94,.55);border-radius:6px;background:rgba(34,197,94,.2);color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer';
+      loginButton.textContent = '立即登录';
+      loginButton.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        loginButton.disabled = true;
+        loginButton.style.cursor = 'default';
+        loginButton.style.opacity = '.72';
+        loginButton.textContent = '登录中';
+        forceLoginNow('panel immediate login').catch(err => {
+          noteBootstrapError('force login failed', err);
+          updateBootstrapPanel(true);
+        });
+      }, { once: true });
+      actions.appendChild(loginButton);
+    }
+    actions.appendChild(button);
+    header.appendChild(actions);
     panel.appendChild(header);
     appendLine('版本：' + bVersion + ' / 插件 A ' + BOOTSTRAP_VERSION, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
     appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
@@ -850,8 +930,7 @@
       if (pursuit) {
         appendLine('追击：' + (pursuit.name || ('#' + pursuit.id)) + ' ' + formatDistance(pursuit.distance) + ' / ' + Math.round((pursuit.durationMs || 0) / 1000) + 's');
       }
-      const persistent = activePersistentExitDetail(status);
-      const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
+      const hold = reloginHold;
       if (hold > 0) appendLine('等待重连：' + formatDuration(hold));
       if (Array.isArray(status.errors) && status.errors.length) {
         appendLine('BOT错误：' + (status.errors[status.errors.length - 1]?.message || ''), 'color:#fca5a5');
@@ -1552,7 +1631,10 @@
     return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
   }
 
-  async function maybeStartGameLogin(reason = 'watchdog') {
+  async function maybeStartGameLogin(reason = 'watchdog', options = {}) {
+    const force = Boolean(options.force || options.immediate || options.manual);
+    const ignoreSuppress = Boolean(options.ignoreSuppress || force);
+    const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
     if (!cfg.autoLogin || !isGamePage() || !ensureNotBlocked()) return false;
     if (isPaused()) {
       syncPauseToPage();
@@ -1563,9 +1645,9 @@
       return false;
     }
     const t = Date.now();
-    if (t - state.lastLoginAt < cfg.loginCooldownMs) return false;
+    if (!ignoreLoginCooldown && t - state.lastLoginAt < cfg.loginCooldownMs) return false;
     const suppressRemainingMs = loginSuppressRemainingMs();
-    if (suppressRemainingMs > 0) {
+    if (suppressRemainingMs > 0 && !ignoreSuppress) {
       return false;
     }
     const status = getBotStatus();
@@ -1574,7 +1656,10 @@
     const decisionReason = String(status?.lastDecision?.reason || '');
     const loginControl = findGameLoginControl();
     const loginRequired = hasLoginRequiredText();
-    const shouldLogin = !hasToken || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired);
+    const canStartLogin = Boolean(loginControl || typeof window.startLinuxDoLogin === 'function');
+    const shouldLogin = force
+      ? canStartLogin
+      : (!hasToken || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired));
     if (!shouldLogin) return false;
     state.lastLoginAt = t;
     const detail = {
@@ -1583,6 +1668,8 @@
       hasSelf,
       loginRequired,
       decisionReason,
+      forced: force,
+      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
       loginControl: loginControl ? (loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase()) : '',
       method: '',
       error: ''
@@ -1603,6 +1690,25 @@
     }
     if (detail.method && !detail.error) suppressLogin('login started', cfg.postLoginGraceMs);
     return Boolean(detail.method && !detail.error);
+  }
+
+  async function forceLoginNow(reason = 'panel immediate login') {
+    const text = String(reason || 'panel immediate login');
+    const bot = window.__graspRatBot || null;
+    if (bot && typeof bot.forceLoginNow === 'function') {
+      const result = await bot.forceLoginNow(text);
+      clearCurrentReloginHold(text, { clearBot: false, clearLocal: false, clearPersistent: false });
+      updateBootstrapPanel(true);
+      return result;
+    }
+    const cleared = clearCurrentReloginHold(text);
+    const login = await maybeStartGameLogin(text, {
+      force: true,
+      ignoreSuppress: true,
+      ignoreLoginCooldown: true
+    });
+    updateBootstrapPanel(true);
+    return { at: Date.now(), reason: text, cleared, login };
   }
 
   function findAuthorizeAllowControl() {
@@ -1733,6 +1839,7 @@
       pollOnce,
       watchdogOnce,
       maybeStartGameLogin,
+      forceLoginNow,
       maybeClickAuthorize,
       isPaused,
       setPaused,
