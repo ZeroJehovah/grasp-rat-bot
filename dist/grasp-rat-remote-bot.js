@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.47"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.48"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -168,13 +168,14 @@
     staleCoinEscapeMs: 1800,
     coinApproachLockMs: 900,
     coinAxisFlipTolerance: 650,
+    precisionPulseMaxMs: 260,
     coinPickupStopDistance: 30,
     coinPickupMicroDistance: 120,
     coinPickupFineDistance: 320,
     coinPickupSweepDistance: 900,
-    coinPickupPulseMs: 120,
-    coinPickupSweepPulseMs: 80,
-    coinPickupFinePulseMs: 45,
+    coinPickupPulseMs: 240,
+    coinPickupSweepPulseMs: 150,
+    coinPickupFinePulseMs: 130,
     shootEveryMs: 120,
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
@@ -2570,6 +2571,7 @@
 	      && (dx || dy)
 	      && (action?.kind === 'coin' || action?.kind === 'seek-coin');
 	    if (canPulse) {
+	      const pulseMaxMs = Math.max(110, Number(cfg.precisionPulseMaxMs || 260));
 	      bot.velocityStopTimer = setTimeout(() => {
 	        try {
 	          if (bot.velocityPulseToken !== token) return;
@@ -2578,7 +2580,7 @@
 	        } catch (err) {
 	          recordUnhandledTickError('precision-pulse', err);
 	        }
-	      }, clamp(Math.round(pulseMs), 20, 110));
+	      }, clamp(Math.round(pulseMs), 20, pulseMaxMs));
 	    }
 	    return sent;
 	  }
