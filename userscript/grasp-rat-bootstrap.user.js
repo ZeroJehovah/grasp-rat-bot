@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.26
+// @version      0.4.27
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.26';
+  const BOOTSTRAP_VERSION = '0.4.27';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -465,6 +465,8 @@
       'migrate-to-known-field': '迁移到金币密集区域',
       'snapshot-coin-field': '快照金币区域导航',
       'snapshot-coin-target': '快照金币导航',
+      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
+      'wait-for-stamina-budget': '长期体力预算不足',
       'wait-for-snapshot-coin': '等待快照金币',
       'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
       'combat-attack': '战斗：持续开火',

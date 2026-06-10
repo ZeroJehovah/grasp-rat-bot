@@ -475,6 +475,61 @@ function runSelfTest() {
     const budget = opportunityLongStaminaBudget(self);
     return !Number.isFinite(budget) || cost <= budget;
   }
+
+  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
+    const budget = opportunityLongStaminaBudget(self);
+    if (!Number.isFinite(budget)) return null;
+    const items = [];
+    for (const coin of coins || []) {
+      const distance = Number(coin?.distance);
+      const amount = Number(coin?.amount || 0);
+      if (!(amount > 0) || !Number.isFinite(distance)) continue;
+      const staminaCost = opportunityCoinStaminaCost(coin);
+      if (staminaCost <= budget) continue;
+      items.push({
+        type: 'coin',
+        id: coin.drop_id,
+        amount,
+        distance,
+        staminaCost,
+        shortageMs: staminaCost - budget,
+        snapshot: Boolean(coin.snapshot),
+        native: Boolean(coin.native)
+      });
+    }
+    for (const target of targets || []) {
+      const distance = Number(target?.distance);
+      const drop = Number(target?.drop ?? dropValue(target) ?? 0);
+      if (!(drop > 0) || !Number.isFinite(distance)) continue;
+      const staminaCost = opportunityEnemyStaminaCost(target);
+      if (staminaCost <= budget) continue;
+      items.push({
+        type: 'enemy',
+        id: target.user_id,
+        name: target.name || '',
+        drop,
+        distance,
+        staminaCost,
+        shortageMs: staminaCost - budget
+      });
+    }
+    if (!items.length) return null;
+    items.sort((a, b) => a.shortageMs - b.shortageMs || a.distance - b.distance);
+    const best = items[0];
+    return {
+      budgetMs: Math.max(0, Math.round(budget)),
+      requiredMs: Math.max(0, Math.round(best.staminaCost)),
+      shortageMs: Math.max(0, Math.round(best.shortageMs)),
+      type: best.type,
+      id: best.id,
+      name: best.name || '',
+      amount: best.amount || 0,
+      drop: best.drop || 0,
+      distance: Math.round(best.distance),
+      snapshot: Boolean(best.snapshot),
+      native: Boolean(best.native)
+    };
+  }
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
     const amount = Number(value || 0);
     if (!(amount > 0)) return -Infinity;
@@ -545,8 +600,7 @@ function runSelfTest() {
 
   function pickSnapshotCoinDestination(self, coins, activeThreats, options = {}) {
     const allowIdleFallback = Boolean(options.allowIdleFallback || options.idleFallback);
-    const candidates = safeCoins(self, filterLocalSnapshotCoins(self, coins).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance)
-      .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
+    const candidates = safeCoins(self, filterLocalSnapshotCoins(self, coins).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance);
     if (!candidates.length) return null;
     let best = null;
     let idleBest = null;
@@ -565,12 +619,14 @@ function runSelfTest() {
         opportunityScore: score,
         opportunityStaminaCost: staminaCost
       };
-      if (snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
+      const affordable = opportunityStaminaAffordable(self, staminaCost);
+      if (affordable && snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
         if (!best
         || item.snapshotScore > best.snapshotScore
         || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
         || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
-      } else if (allowIdleFallback && (!idleBest
+      }
+      if (allowIdleFallback && (!idleBest
         || item.snapshotScore > idleBest.snapshotScore
         || (item.snapshotScore === idleBest.snapshotScore && item.distance < idleBest.distance))) {
         idleBest = item;
@@ -1252,7 +1308,23 @@ function runSelfTest() {
         }), self, entities, !recovery);
       }
     }
-    return { kind: 'wait', reason: 'wait-for-snapshot-coin' };
+    const decoratedCoins = usableCoins
+      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
+      .filter(c => c.amount > 0);
+    const decoratedTargets = [...global, ...local]
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e) }))
+      .filter(e => e.drop > 0);
+    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, decoratedCoins, decoratedTargets);
+    return {
+      kind: 'wait',
+      reason: staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-snapshot-coin',
+      staminaBlocked,
+      snapshot: {
+        waitAgeMs: Math.round(snapshotWaitAgeMs),
+        waitMaxMs: Math.round(cfg.snapshotCoinIdleMaxMs),
+        waitRemainingMs: Math.max(0, Math.round(cfg.snapshotCoinIdleMaxMs - snapshotWaitAgeMs))
+      }
+    };
   }
 
   const cases = [
@@ -2197,6 +2269,22 @@ function runSelfTest() {
       want: 'wait'
     },
     {
+      name: 'low long stamina visible coin reports stamina budget wait',
+      got: choose({
+        self: {
+          user_id: 1,
+          x: 0,
+          y: 0,
+          hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_1h_remaining_milli: 3500,
+          stamina_1d_remaining_milli: 3500
+        },
+        coins: [{ drop_id: 1, x: 20000, y: 0, amount: 100 }]
+      }).reason,
+      want: 'wait-for-stamina-budget'
+    },
+    {
       name: 'low long stamina still takes foot coin',
       got: choose({
         self: {
@@ -2214,6 +2302,23 @@ function runSelfTest() {
         ]
       }).id,
       want: 1
+    },
+    {
+      name: 'low long stamina still uses snapshot idle fallback after timeout',
+      got: choose({
+        self: {
+          user_id: 1,
+          x: 0,
+          y: 0,
+          hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_1h_remaining_milli: 3500,
+          stamina_1d_remaining_milli: 3500
+        },
+        coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true }],
+        snapshotWaitAgeMs: 60000
+      }).reason,
+      want: 'snapshot-coin-idle-timeout'
     },
     {
       name: 'low long stamina skips expensive afk drop target',
@@ -2774,10 +2879,11 @@ function browserBotSource(config) {
       sequence: Number(preserved.combatLogging?.sequence || 0)
     },
     reloadRequestedAt: 0,
-	    lastTarget: null,
+    lastTarget: null,
 	    lastTargetAt: 0,
 	    snapshotCoinWaitSince: Number(previousBot?.snapshotCoinWaitSince || 0) || 0,
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
+	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    lastSelf: null,
     lastSafety: null,
     actionThreats: [],
@@ -2974,8 +3080,10 @@ function browserBotSource(config) {
 	        snapshotCoinWait: {
 	          since: this.snapshotCoinWaitSince || 0,
 	          ageMs: Math.max(0, Math.round(Number(this.lastSnapshotCoinWaitAgeMs || 0))),
-	          maxMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0)))
+	          maxMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0))),
+	          remainingMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0) - Number(this.lastSnapshotCoinWaitAgeMs || 0)))
 	        },
+	        coinSources: this.lastCoinSourceSummary,
 			        globalState: {
 			          refreshedAt: this.globalState.refreshedAt,
 		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
@@ -3394,6 +3502,7 @@ function browserBotSource(config) {
 		      'snapshot-coin-field': '快照金币区域导航',
 		      'snapshot-coin-target': '快照金币导航',
 		      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
+		      'wait-for-stamina-budget': '长期体力预算不足',
 		      'wait-for-snapshot-coin': '等待快照金币',
 	      'maintain-safe-spacing': '避开附近玩家',
 	      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
@@ -5411,13 +5520,48 @@ function browserBotSource(config) {
     return Array.isArray(nativeState?.entities) ? nativeState.entities : null;
   }
 
-  function getNativeCoinList() {
-    const nativeState = getNativeState();
-    if (!nativeState) return null;
-    for (const key of ['coinDrops', 'coin_drops', 'coins', 'drops']) {
-      if (Array.isArray(nativeState[key])) return nativeState[key];
-    }
+  function listFromNativeCoinValue(value) {
+    if (Array.isArray(value)) return value;
+    if (value instanceof Map || value instanceof Set) return Array.from(value.values());
     return null;
+  }
+
+  function addNativeCoinSource(sources, label, value) {
+    const list = listFromNativeCoinValue(value);
+    if (!list) return false;
+    sources.push({ label, list });
+    return true;
+  }
+
+  function getNativeCoinSources() {
+    const sources = [];
+    try {
+      if (typeof getRenderCoinDrops === 'function') addNativeCoinSource(sources, 'render', getRenderCoinDrops());
+    } catch (_) {}
+    const nativeState = getNativeState();
+    if (!nativeState) return sources;
+    for (const key of ['coinDrops', 'coin_drops', 'renderCoinDrops', 'render_coin_drops', 'visibleCoinDrops', 'visible_coin_drops', 'coins', 'drops']) {
+      addNativeCoinSource(sources, 'state.' + key, nativeState[key]);
+    }
+    for (const parentKey of ['latestSnapshot', 'latest_snapshot', 'lastSnapshot', 'last_snapshot', 'snapshot', 'currentSnapshot', 'current_snapshot']) {
+      const parent = nativeState[parentKey];
+      if (!parent || typeof parent !== 'object') continue;
+      for (const key of ['coinDrops', 'coin_drops', 'coins', 'drops']) {
+        addNativeCoinSource(sources, 'state.' + parentKey + '.' + key, parent[key]);
+      }
+    }
+    return sources;
+  }
+
+  function getNativeCoinList() {
+    const sources = getNativeCoinSources();
+    const list = [];
+    for (const source of sources) {
+      for (const item of source.list) {
+        list.push(item && typeof item === 'object' ? { ...item, nativeSource: item.nativeSource || source.label } : item);
+      }
+    }
+    return list.length ? list : null;
   }
 
   function entityIdKey(entity) {
@@ -5473,13 +5617,22 @@ function browserBotSource(config) {
     return true;
   }
 	
+  function firstFiniteNumber(...values) {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return NaN;
+  }
+
   function normalizeCoinDrop(raw, source) {
     if (!raw || typeof raw !== 'object') return null;
-    const x = Number(raw.x);
-    const y = Number(raw.y);
-    const amount = Number(raw.amount ?? raw.value ?? raw.coins ?? 0);
+    const point = raw.position || raw.pos || raw.point || raw.coord || null;
+    const x = firstFiniteNumber(raw.x, raw.pos_x, raw.posX, raw.world_x, raw.worldX, raw.coord_x, raw.coordX, raw.center_x, raw.centerX, point?.x);
+    const y = firstFiniteNumber(raw.y, raw.pos_y, raw.posY, raw.world_y, raw.worldY, raw.coord_y, raw.coordY, raw.center_y, raw.centerY, point?.y);
+    const amount = firstFiniteNumber(raw.amount, raw.value, raw.coins, raw.coin_amount, raw.coinAmount, raw.count, raw.num, raw.quantity, 0);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(amount) || amount <= 0) return null;
-    const dropId = raw.drop_id ?? raw.id ?? raw.coin_id;
+    const dropId = raw.drop_id ?? raw.dropId ?? raw.id ?? raw.coin_id ?? raw.coinId;
     return {
       ...raw,
       drop_id: dropId ?? ('coord:' + Math.round(x) + ':' + Math.round(y) + ':' + amount),
@@ -5535,7 +5688,13 @@ function browserBotSource(config) {
   }
 
   function getCoins(self = null) {
-    const nativeCoinList = getNativeCoinList();
+    const nativeCoinSources = getNativeCoinSources();
+    const nativeCoinList = [];
+    for (const source of nativeCoinSources) {
+      for (const item of source.list) {
+        nativeCoinList.push(item && typeof item === 'object' ? { ...item, nativeSource: item.nativeSource || source.label } : item);
+      }
+    }
     const nativeCoins = Array.isArray(nativeCoinList)
       ? nativeCoinList.map(coin => normalizeCoinDrop(coin, 'native')).filter(Boolean)
       : [];
@@ -5557,7 +5716,17 @@ function browserBotSource(config) {
       }
     }
     for (const coin of nativeCoins) add(coin, 'native');
-    return Array.from(byKey.values());
+    const merged = Array.from(byKey.values());
+    bot.lastCoinSourceSummary = {
+      nativeSources: nativeCoinSources.map(source => ({ label: source.label, raw: arrayCount(source.list) })),
+      nativeRaw: nativeCoinList.length,
+      native: nativeCoins.length,
+      snapshotRaw: snapshotCoins.length,
+      snapshotFresh: Boolean(useSnapshotCoins),
+      suppressRadius: Math.round(snapshotCoinLocalSuppressRadius()),
+      merged: merged.length
+    };
+    return merged;
   }
 
   function normalizeBullet(raw, source) {
@@ -7478,6 +7647,61 @@ function browserBotSource(config) {
     return !Number.isFinite(budget) || cost <= budget;
   }
 
+  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
+    const budget = opportunityLongStaminaBudget(self);
+    if (!Number.isFinite(budget)) return null;
+    const items = [];
+    for (const coin of coins || []) {
+      const distance = Number(coin?.distance);
+      const amount = Number(coin?.amount || 0);
+      if (!(amount > 0) || !Number.isFinite(distance)) continue;
+      const staminaCost = opportunityCoinStaminaCost(coin);
+      if (staminaCost <= budget) continue;
+      items.push({
+        type: 'coin',
+        id: coin.drop_id,
+        amount,
+        distance,
+        staminaCost,
+        shortageMs: staminaCost - budget,
+        snapshot: Boolean(coin.snapshot),
+        native: Boolean(coin.native)
+      });
+    }
+    for (const target of targets || []) {
+      const distance = Number(target?.distance);
+      const drop = Number(target?.drop ?? dropValue(target) ?? 0);
+      if (!(drop > 0) || !Number.isFinite(distance)) continue;
+      const staminaCost = opportunityEnemyStaminaCost(target);
+      if (staminaCost <= budget) continue;
+      items.push({
+        type: 'enemy',
+        id: target.user_id,
+        name: target.name || '',
+        drop,
+        distance,
+        staminaCost,
+        shortageMs: staminaCost - budget
+      });
+    }
+    if (!items.length) return null;
+    items.sort((a, b) => a.shortageMs - b.shortageMs || a.distance - b.distance);
+    const best = items[0];
+    return {
+      budgetMs: Math.max(0, Math.round(budget)),
+      requiredMs: Math.max(0, Math.round(best.staminaCost)),
+      shortageMs: Math.max(0, Math.round(best.shortageMs)),
+      type: best.type,
+      id: best.id,
+      name: best.name || '',
+      amount: best.amount || 0,
+      drop: best.drop || 0,
+      distance: Math.round(best.distance),
+      snapshot: Boolean(best.snapshot),
+      native: Boolean(best.native)
+    };
+  }
+
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
     const amount = Number(value || 0);
     if (!(amount > 0)) return -Infinity;
@@ -7786,15 +8010,16 @@ function browserBotSource(config) {
 
 	  function isSnapshotCoinWaitAction(action) {
 	    const reason = String(action?.reason || '');
-	    return reason === 'wait-for-snapshot-coin' || reason === 'snapshot-coin-idle-timeout';
+	    return reason === 'wait-for-snapshot-coin'
+	      || reason === 'wait-for-stamina-budget'
+	      || reason === 'snapshot-coin-idle-timeout';
 	  }
 
 	  function pickSnapshotCoinDestination(self, allCoins, activeThreats, options = {}) {
 	    const allowIdleFallback = Boolean(options.allowIdleFallback || options.idleFallback);
 	    const ageMs = snapshotCoinAgeMs();
 	    if (ageMs > cfg.snapshotCoinStaleMs) return null;
-	    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance)
-	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)));
+	    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance);
 	    if (!candidates.length) return null;
 	    const buildSnapshotItem = coin => {
 	      const members = candidates.filter(other => dist(coin, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
@@ -7817,7 +8042,8 @@ function browserBotSource(config) {
 	      const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
 	      if (sticky) {
 	        const stickyItem = buildSnapshotItem(sticky);
-	        if (snapshotCoinWorthLongTravel(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount)) return asOpportunity(stickyItem);
+	        if (opportunityStaminaAffordable(self, stickyItem.opportunityStaminaCost)
+	          && snapshotCoinWorthLongTravel(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount)) return asOpportunity(stickyItem);
 	        if (allowIdleFallback) stickyFallback = stickyItem;
 	      }
 	    }
@@ -7838,12 +8064,14 @@ function browserBotSource(config) {
 	        opportunityStaminaCost: staminaCost,
 	        snapshotAgeMs: ageMs
 	      };
-	      if (snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
+	      const affordable = opportunityStaminaAffordable(self, staminaCost);
+	      if (affordable && snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
 	        if (!best
 	          || item.snapshotScore > best.snapshotScore
 	          || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
 	          || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
-	      } else if (allowIdleFallback && (!idleBest
+	      }
+	      if (allowIdleFallback && (!idleBest
 	        || item.snapshotScore > idleBest.snapshotScore
 	        || (item.snapshotScore === idleBest.snapshotScore && item.distance < idleBest.distance))) {
 	        idleBest = item;
@@ -8873,13 +9101,15 @@ function browserBotSource(config) {
 	    bot.fleeLock = null;
 	    const shotWait = buildOpportunisticShotWait(self, entities, { recovery });
 	    if (shotWait) return shotWait;
-	    const snapshotWaitNow = Date.now();
-	    if (!isSnapshotCoinWaitAction(bot.lastDecision) || !bot.snapshotCoinWaitSince) bot.snapshotCoinWaitSince = snapshotWaitNow;
-	    const snapshotWaitAgeMs = Math.max(0, snapshotWaitNow - Number(bot.snapshotCoinWaitSince || snapshotWaitNow));
-	    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
-	    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
-	      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
-	      if (idleSnapshotCoin) {
+		    const snapshotWaitNow = Date.now();
+		    if (!isSnapshotCoinWaitAction(bot.lastDecision) || !bot.snapshotCoinWaitSince) bot.snapshotCoinWaitSince = snapshotWaitNow;
+		    const snapshotWaitAgeMs = Math.max(0, snapshotWaitNow - Number(bot.snapshotCoinWaitSince || snapshotWaitNow));
+		    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
+	    const snapshotWaitMaxMs = Math.max(0, Number(cfg.snapshotCoinIdleMaxMs || 0));
+	    const snapshotWaitRemainingMs = Math.max(0, snapshotWaitMaxMs - snapshotWaitAgeMs);
+		    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
+		      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
+		      if (idleSnapshotCoin) {
 	        const action = buildCoinAction(
 	          self,
 	          idleSnapshotCoin,
@@ -8896,16 +9126,38 @@ function browserBotSource(config) {
 	        return attachOpportunisticShot(action, self, entities, { recovery });
 	      }
 	    }
+	    const blockedTargets = [
+	      ...globalTargets.filter(target => !target.minimapOnly && isAfkTarget(target)),
+	      ...minimapDropTargets,
+	      ...inactiveTargets
+	    ];
+	    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, allCoins, blockedTargets);
+	    const waitReason = staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-snapshot-coin';
+	    const sourceSummary = bot.lastCoinSourceSummary || {};
+	    const waitDisplay = staminaBlocked
+	      ? '长期体力预算不足，预算' + formatDurationMs(staminaBlocked.budgetMs)
+	        + '，最近目标需' + formatDurationMs(staminaBlocked.requiredMs)
+	        + '，差' + formatDurationMs(staminaBlocked.shortageMs)
+	        + (snapshotWaitRemainingMs > 0
+	          ? '，' + formatDurationMs(snapshotWaitRemainingMs) + '后尝试远处快照金币'
+	          : '，已达到' + formatDurationMs(snapshotWaitMaxMs) + '兜底等待')
+	      : (snapshotWaitRemainingMs > 0
+	        ? '等待快照金币，' + formatDurationMs(snapshotWaitRemainingMs) + '后尝试远处快照金币'
+	        : '已达到' + formatDurationMs(snapshotWaitMaxMs) + '等待，暂无安全快照金币');
 	    return {
 	      kind: 'wait',
-	      reason: 'wait-for-snapshot-coin',
+	      reason: waitReason,
 	      dx: 0,
 	      dy: 0,
+	      displayReason: waitDisplay,
+	      staminaBlocked,
+	      coinSources: sourceSummary,
 	      snapshot: {
 		        coinDrops: arrayCount(bot.globalState.coinDrops),
 	        ageMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
 	        waitAgeMs: Math.round(snapshotWaitAgeMs),
-	        waitMaxMs: Math.round(cfg.snapshotCoinIdleMaxMs),
+	        waitMaxMs: Math.round(snapshotWaitMaxMs),
+	        waitRemainingMs: Math.round(snapshotWaitRemainingMs),
 	        error: bot.globalState.error || ''
 	      }
 	    };
