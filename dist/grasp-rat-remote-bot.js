@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.68"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.69"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -150,10 +150,11 @@
     fieldMigrationStaminaThreshold: 0,
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
-    snapshotCoinClusterMinCoins: 2,
-    snapshotSingleCoinMaxDistance: 22000,
-    snapshotSingleCoinDistancePerAmount: 30000,
-    snapshotCoinStaleMs: 30000,
+	    snapshotCoinClusterMinCoins: 2,
+	    snapshotSingleCoinMaxDistance: 22000,
+	    snapshotSingleCoinDistancePerAmount: 30000,
+	    snapshotCoinIdleMaxMs: 60000,
+	    snapshotCoinStaleMs: 30000,
     patrolHeadingMs: 26000,
     patrolStaminaThreshold: 6500,
     chaseCoinStaminaThreshold: 0,
@@ -391,9 +392,11 @@
     combatTarget: preserved.combatTarget,
     combatAim: preserved.combatAim,
     reloadRequestedAt: 0,
-    lastTarget: null,
-    lastTargetAt: 0,
-    lastSelf: null,
+	    lastTarget: null,
+	    lastTargetAt: 0,
+	    snapshotCoinWaitSince: Number(previousBot?.snapshotCoinWaitSince || 0) || 0,
+	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
+	    lastSelf: null,
     lastSafety: null,
     actionThreats: [],
     opportunityChoice: preserved.opportunityChoice,
@@ -573,14 +576,19 @@
           id,
           remainingMs: Math.max(0, Math.round(until - now()))
         })),
-        coinFailures: Array.from(this.coinFailures.entries()).slice(-8).map(([id, item]) => ({
-          id,
-          count: Number(item.count || 0),
-          reason: item.reason || '',
-          remainingMs: Math.max(0, Math.round(Number(item.ignoreUntil || 0) - now()))
-        })),
-		        globalState: {
-		          refreshedAt: this.globalState.refreshedAt,
+	        coinFailures: Array.from(this.coinFailures.entries()).slice(-8).map(([id, item]) => ({
+	          id,
+	          count: Number(item.count || 0),
+	          reason: item.reason || '',
+	          remainingMs: Math.max(0, Math.round(Number(item.ignoreUntil || 0) - now()))
+	        })),
+	        snapshotCoinWait: {
+	          since: this.snapshotCoinWaitSince || 0,
+	          ageMs: Math.max(0, Math.round(Number(this.lastSnapshotCoinWaitAgeMs || 0))),
+	          maxMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0)))
+	        },
+			        globalState: {
+			          refreshedAt: this.globalState.refreshedAt,
 		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
 		          snapshotAgeMs: this.globalState.snapshotRefreshedAt ? Date.now() - this.globalState.snapshotRefreshedAt : null,
 		          tick: this.globalState.tick,
@@ -994,9 +1002,10 @@
 	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
-	      'snapshot-coin-field': '快照金币区域导航',
-	      'snapshot-coin-target': '快照金币导航',
-	      'wait-for-snapshot-coin': '等待快照金币',
+		      'snapshot-coin-field': '快照金币区域导航',
+		      'snapshot-coin-target': '快照金币导航',
+		      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
+		      'wait-for-snapshot-coin': '等待快照金币',
 	      'maintain-safe-spacing': '避开附近玩家',
 	      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
 	      'leave-stale-coin': '离开疑似卡住金币',
@@ -4857,53 +4866,78 @@
     };
   }
 
-  function snapshotCoinAgeMs() {
-    return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
-  }
+	  function snapshotCoinAgeMs() {
+	    return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
+	  }
 
-  function pickSnapshotCoinDestination(self, allCoins, activeThreats) {
-    const ageMs = snapshotCoinAgeMs();
-    if (ageMs > cfg.snapshotCoinStaleMs) return null;
-    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance)
-      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)));
-    if (!candidates.length) return null;
-    if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
-      const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
-      if (sticky) {
-        const members = candidates.filter(other => dist(sticky, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
-        const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-        if (snapshotCoinWorthLongTravel(sticky, members.length, totalAmount)) {
-          const staminaCost = opportunityCoinStaminaCost(sticky);
-          const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
-          return { ...sticky, snapshotMembers: members.length, snapshotAmount: totalAmount, snapshotScore: score, opportunityScore: score, opportunityStaminaCost: staminaCost, snapshotAgeMs: ageMs };
-        }
-      }
-    }
-    let best = null;
-    const radius = Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius);
-    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
-    for (const coin of candidates.slice(0, 300)) {
-      const members = candidates.filter(other => dist(coin, other) <= radius);
-      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      if (!snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) continue;
-      const staminaCost = opportunityCoinStaminaCost(coin);
-      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
-      const item = {
-        ...coin,
+	  function isSnapshotCoinWaitAction(action) {
+	    const reason = String(action?.reason || '');
+	    return reason === 'wait-for-snapshot-coin' || reason === 'snapshot-coin-idle-timeout';
+	  }
+
+	  function pickSnapshotCoinDestination(self, allCoins, activeThreats, options = {}) {
+	    const allowIdleFallback = Boolean(options.allowIdleFallback || options.idleFallback);
+	    const ageMs = snapshotCoinAgeMs();
+	    if (ageMs > cfg.snapshotCoinStaleMs) return null;
+	    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance)
+	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)));
+	    if (!candidates.length) return null;
+	    const buildSnapshotItem = coin => {
+	      const members = candidates.filter(other => dist(coin, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
+	      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+	      const staminaCost = opportunityCoinStaminaCost(coin);
+	      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+	      return {
+	        ...coin,
+	        snapshotMembers: members.length,
+	        snapshotAmount: totalAmount,
+	        snapshotScore: score,
+	        opportunityStaminaCost: staminaCost,
+	        snapshotAgeMs: ageMs
+	      };
+	    };
+	    const asOpportunity = item => ({ ...item, opportunityScore: item.snapshotScore });
+	    const asIdleFallback = item => ({ ...asOpportunity(item), snapshotIdleFallback: true });
+	    let stickyFallback = null;
+	    if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
+	      const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
+	      if (sticky) {
+	        const stickyItem = buildSnapshotItem(sticky);
+	        if (snapshotCoinWorthLongTravel(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount)) return asOpportunity(stickyItem);
+	        if (allowIdleFallback) stickyFallback = stickyItem;
+	      }
+	    }
+	    let best = null;
+	    let idleBest = stickyFallback;
+	    const radius = Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius);
+	    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
+	    for (const coin of candidates.slice(0, 300)) {
+	      const members = candidates.filter(other => dist(coin, other) <= radius);
+	      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+	      const staminaCost = opportunityCoinStaminaCost(coin);
+	      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+	      const item = {
+	        ...coin,
         snapshotMembers: members.length,
         snapshotAmount: totalAmount,
         snapshotScore: score,
-        opportunityStaminaCost: staminaCost,
-        snapshotAgeMs: ageMs
-      };
-      if (!best
-        || item.snapshotScore > best.snapshotScore
-        || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
-        || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
-    }
-    if (best) return { ...best, opportunityScore: best.snapshotScore };
-    return null;
-  }
+	        opportunityStaminaCost: staminaCost,
+	        snapshotAgeMs: ageMs
+	      };
+	      if (snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
+	        if (!best
+	          || item.snapshotScore > best.snapshotScore
+	          || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
+	          || (item.snapshotScore === best.snapshotScore && item.distance < best.distance)) best = item;
+	      } else if (allowIdleFallback && (!idleBest
+	        || item.snapshotScore > idleBest.snapshotScore
+	        || (item.snapshotScore === idleBest.snapshotScore && item.distance < idleBest.distance))) {
+	        idleBest = item;
+	      }
+	    }
+	    if (best) return asOpportunity(best);
+	    return idleBest ? asIdleFallback(idleBest) : null;
+	  }
 
   function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
     const memberCount = Math.max(1, Number(members || 1));
@@ -4918,10 +4952,11 @@
     return distance <= maxDistance;
   }
 
-  function snapshotCoinNavigationReason(coin) {
-    if (isSnapshotOnlyCoin(coin) && Number(coin?.snapshotMembers || 0) > 0) {
-      return coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target';
-    }
+	  function snapshotCoinNavigationReason(coin) {
+	    if (coin?.snapshotIdleFallback) return 'snapshot-coin-idle-timeout';
+	    if (isSnapshotOnlyCoin(coin) && Number(coin?.snapshotMembers || 0) > 0) {
+	      return coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target';
+	    }
     return coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
   }
 
@@ -5921,20 +5956,45 @@
       return attachOpportunisticShot(action, self, entities, { recovery });
     }
 
-    bot.fleeLock = null;
-    const shotWait = buildOpportunisticShotWait(self, entities, { recovery });
-    if (shotWait) return shotWait;
-    return {
-      kind: 'wait',
-      reason: 'wait-for-snapshot-coin',
-      dx: 0,
-      dy: 0,
-      snapshot: {
-	        coinDrops: arrayCount(bot.globalState.coinDrops),
-        ageMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
-        error: bot.globalState.error || ''
-      }
-    };
+	    bot.fleeLock = null;
+	    const shotWait = buildOpportunisticShotWait(self, entities, { recovery });
+	    if (shotWait) return shotWait;
+	    const snapshotWaitNow = Date.now();
+	    if (!isSnapshotCoinWaitAction(bot.lastDecision) || !bot.snapshotCoinWaitSince) bot.snapshotCoinWaitSince = snapshotWaitNow;
+	    const snapshotWaitAgeMs = Math.max(0, snapshotWaitNow - Number(bot.snapshotCoinWaitSince || snapshotWaitNow));
+	    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
+	    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
+	      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
+	      if (idleSnapshotCoin) {
+	        const action = buildCoinAction(
+	          self,
+	          idleSnapshotCoin,
+	          snapshotCoinNavigationReason(idleSnapshotCoin),
+	          'seek-coin'
+	        );
+	        action.target.fieldMembers = idleSnapshotCoin.snapshotMembers;
+	        action.target.fieldAmount = idleSnapshotCoin.snapshotAmount;
+	        action.target.snapshotAgeMs = Number.isFinite(idleSnapshotCoin.snapshotAgeMs) ? Math.round(idleSnapshotCoin.snapshotAgeMs) : null;
+	        action.target.snapshotWaitAgeMs = Math.round(snapshotWaitAgeMs);
+	        action.snapshotWaitAgeMs = Math.round(snapshotWaitAgeMs);
+	        action.snapshotIdleFallback = true;
+	        action.score = Math.round(idleSnapshotCoin.snapshotScore ?? action.score ?? 0);
+	        return attachOpportunisticShot(action, self, entities, { recovery });
+	      }
+	    }
+	    return {
+	      kind: 'wait',
+	      reason: 'wait-for-snapshot-coin',
+	      dx: 0,
+	      dy: 0,
+	      snapshot: {
+		        coinDrops: arrayCount(bot.globalState.coinDrops),
+	        ageMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
+	        waitAgeMs: Math.round(snapshotWaitAgeMs),
+	        waitMaxMs: Math.round(cfg.snapshotCoinIdleMaxMs),
+	        error: bot.globalState.error || ''
+	      }
+	    };
   }
 
   async function tick(source = 'timer') {
@@ -6341,10 +6401,14 @@
           ...action,
           pursuit: pursuitSummary
         };
-      }
-      const canMove = true;
-      const canAttack = true;
-      sendActionVelocity(action);
+	      }
+	      const canMove = true;
+	      const canAttack = true;
+	      if (!isSnapshotCoinWaitAction(action)) {
+	        bot.snapshotCoinWaitSince = 0;
+	        bot.lastSnapshotCoinWaitAgeMs = 0;
+	      }
+	      sendActionVelocity(action);
       if (action.opportunisticShot) {
         const shotSent = shootAt(self, action.opportunisticShot, false, { shootEveryMs: cfg.opportunisticShootEveryMs });
         if (shotSent) rememberAttack(self, action.opportunisticShot, 'opportunistic-shot');
