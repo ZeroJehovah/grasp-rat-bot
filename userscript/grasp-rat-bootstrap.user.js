@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.22
+// @version      0.4.23
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.22';
+  const BOOTSTRAP_VERSION = '0.4.23';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -35,6 +35,9 @@
   const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
+  const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
+  const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
+  const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
   const BLOCKED_REMOTE_HASHES = new Set([
     '4dd9444acda372a715e559b4e3a03409299aed70c09ceb58cbfd9dbf1178591a',
     'a78f30e186e7cbaac7f2cf351aeaed6edccca787be4f238d5a895046946db58e',
@@ -67,6 +70,7 @@
     authorizeCooldownMs: 1000,
     authorizeFallbackDelayMs: 10000,
     panelUpdateMs: 500,
+    cloudflareErrorReloadMs: 5000,
     cacheBust: true,
     autoLogin: true
   };
@@ -94,6 +98,7 @@
     authorizeCooldownMs: Math.max(250, Number(GM_getValue('authorizeCooldownMs', DEFAULTS.authorizeCooldownMs)) || DEFAULTS.authorizeCooldownMs),
     authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
     panelUpdateMs: Math.max(250, Number(GM_getValue('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
+    cloudflareErrorReloadMs: Math.max(1000, Number(GM_getValue('cloudflareErrorReloadMs', DEFAULTS.cloudflareErrorReloadMs)) || DEFAULTS.cloudflareErrorReloadMs),
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
     autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin))
   };
@@ -124,6 +129,8 @@
     paused: false,
     pauseReason: '',
     pauseChangedAt: 0,
+    cloudflareError: null,
+    cloudflareReloadAt: 0,
     busyStartedAt: 0,
     busyReason: '',
     busyToken: ''
@@ -304,6 +311,105 @@
     return `${Math.ceil(n / 1000)}s`;
   }
 
+  function readPersistentExitState(key, t = Date.now()) {
+    let detail = null;
+    try {
+      detail = JSON.parse(localStorage.getItem(key) || 'null');
+    } catch (_) {
+      detail = null;
+    }
+    if (!detail || typeof detail !== 'object') return null;
+    const reloginUntil = Number(detail.reloginUntil || 0);
+    if (reloginUntil && reloginUntil <= t) {
+      try {
+        localStorage.removeItem(key);
+      } catch (_) {}
+      return null;
+    }
+    if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
+    const base = String(detail.summary || detail.exitSummary || detail.enemyLeaveSummary || detail.reason || '').trim();
+    if (base && !detail.displayReason) {
+      const waitMs = Number(detail.holdRemainingMs || detail.reloginDelayMs || 0);
+      detail.displayReason = base + (waitMs > 0 ? '，等待' + formatDuration(waitMs) : '');
+    }
+    return detail;
+  }
+
+  function activePersistentExitDetail(status) {
+    const enemyStatus = status?.enemyLeave || null;
+    const offlineStatus = status?.offlineLeave || null;
+    if (Number(enemyStatus?.holdRemainingMs || 0) > 0 || enemyStatus?.displayReason) return enemyStatus;
+    if (Number(offlineStatus?.holdRemainingMs || 0) > 0 || offlineStatus?.displayReason) return offlineStatus;
+    const enemyStored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+    if (enemyStored) return enemyStored;
+    return readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+  }
+
+  function decisionReasonDetail(decision, status) {
+    const persistent = activePersistentExitDetail(status);
+    return decision?.leave?.displayReason
+      || decision?.displayReason
+      || decision?.enemyLeave?.displayReason
+      || decision?.offlineLeave?.displayReason
+      || status?.enemyLeave?.displayReason
+      || status?.offlineLeave?.displayReason
+      || persistent?.displayReason
+      || decision?.leave?.summary
+      || decision?.exitSummary
+      || decision?.leave?.exitSummary
+      || decision?.leave?.enemyLeaveSummary
+      || decision?.leave?.enemyLeaveReason
+      || '';
+  }
+
+  function cloudflareErrorInfo() {
+    if (!isGamePage()) return null;
+    const title = String(document.title || '');
+    const text = String(document.body?.innerText || '').slice(0, 5000);
+    const combined = title + '\n' + text;
+    const isError = /Error\s*1033/i.test(combined)
+      || /Cloudflare\s+Tunnel\s+error/i.test(combined)
+      || (/Cloudflare/i.test(combined) && /unable\s+to\s+resolve/i.test(combined));
+    if (!isError) {
+      state.cloudflareError = null;
+      return null;
+    }
+    const t = Date.now();
+    const intervalMs = Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
+    let lastReloadAt = 0;
+    try {
+      lastReloadAt = Number(localStorage.getItem(CLOUDFLARE_RELOAD_KEY) || 0) || 0;
+    } catch (_) {}
+    const elapsedMs = lastReloadAt ? t - lastReloadAt : intervalMs;
+    const remainingMs = Math.max(0, intervalMs - elapsedMs);
+    const code = /Error\s*1033/i.test(combined) ? '1033' : '';
+    const label = code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页';
+    return {
+      error: true,
+      code,
+      label,
+      intervalMs,
+      lastReloadAt,
+      remainingMs,
+      displayReason: label + '，每' + formatDuration(intervalMs) + '刷新一次' + (remainingMs > 0 ? '，下次刷新剩余' + formatDuration(remainingMs) : '，正在刷新')
+    };
+  }
+
+  function maybeReloadCloudflareError(info = cloudflareErrorInfo()) {
+    if (!info) return false;
+    state.cloudflareError = info;
+    state.lastInstallStatus = info.displayReason;
+    updateBootstrapPanel(true);
+    if (Number(info.remainingMs || 0) > 0) return true;
+    try {
+      localStorage.setItem(CLOUDFLARE_RELOAD_KEY, String(Date.now()));
+    } catch (_) {}
+    state.cloudflareReloadAt = Date.now();
+    logBootstrap('cloudflare error reload', info);
+    location.reload();
+    return true;
+  }
+
   function formatNumber(value, fallback = '-') {
     const n = Number(value);
     return Number.isFinite(n) ? String(Math.round(n)) : fallback;
@@ -356,19 +462,28 @@
       'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
       'combat-attack': '战斗：持续开火',
       'combat-tangent-dodge': '战斗：切线规避并开火',
+      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
       'combat-low-hp-leave': '战斗低血劣势，立即退出',
       'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
+      'combat-leave': '战斗劣势退出后等待',
+      'combat-leave-retry': '战斗退出失败，等待补发退出',
       'injury-leave': '受伤后立即退出',
       'enemy-leave-wait': '敌方行为退出后等待',
       'pursuit-leave': '被同一玩家持续追击，退出等待',
+      'pursuit-leave-retry': '追击退出失败，等待补发退出',
       'pursuit-leave-wait': '追击退出后等待重新登录',
       'paused': '手动暂停',
       'auto-login': '自动触发登录/加入',
       'login-cooldown': '登录已触发，等待页面跳转',
       'control-ws-offline': 'WebSocket 离线',
+      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
+      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
       'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
       'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
       'offline-leave': 'WebSocket 离线，正在退出',
+      'offline-leave-wait': 'WebSocket 离线退出后等待，继续补发退出',
+      'cloudflare-error-refresh': 'Cloudflare 错误页，等待刷新',
       'no-self': '未读到自身实体',
       'not-alive': '不在存活状态',
       'bot-error': '脚本异常'
@@ -378,9 +493,11 @@
 
   function actionText(decision, status) {
     if (status?.paused || isPaused()) return '已暂停';
+    if (state.cloudflareError) return '等待：' + state.cloudflareError.label;
     const kind = decision?.kind || (status?.running ? 'wait' : 'missing');
     const target = decision?.target || null;
     const threats = Array.isArray(decision?.threats) ? decision.threats : [];
+    const detail = decisionReasonDetail(decision, status);
     if (kind === 'coin') return '拾取金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
     if (kind === 'seek-coin') return '前往金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
     if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' HP ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
@@ -391,8 +508,8 @@
     }
     if (kind === 'recover') return '恢复体力/血量';
     if (kind === 'patrol') return target ? '巡航到 #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '巡航扫描';
-    if (kind === 'wait') return '等待：' + reasonText(decision?.reason);
-    if (kind === 'leave') return '退出：' + reasonText(decision?.reason);
+    if (kind === 'wait') return '等待：' + (detail || reasonText(decision?.reason));
+    if (kind === 'leave') return '退出：' + (detail || reasonText(decision?.reason));
     if (kind === 'idle') return '待命';
     if (kind === 'missing') return '远端未运行';
     return kind;
@@ -627,6 +744,7 @@
     const paused = isPaused();
     const status = getBotStatus();
     const decision = status?.lastDecision || null;
+    const reasonDetail = state.cloudflareError?.displayReason || decisionReasonDetail(decision, status) || reasonText(decision?.reason);
     const self = status?.self || decision?.self || null;
     const safety = status?.safety || {};
     const control = status?.control || {};
@@ -647,9 +765,11 @@
       '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">版本：' + escapeHtml(bVersion) + '</div>',
       '<div>状态：' + escapeHtml(paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + escapeHtml(state.pauseReason) : '') + '</div>'
     ];
-    if (status?.running) {
+    if (state.cloudflareError) {
+      panelLines.push('<div>原因：' + escapeHtml(reasonDetail) + '</div>');
+    } else if (status?.running) {
       panelLines.push('<div>本次登录：' + escapeHtml(formatDuration(session.uptimeMs ?? status.uptimeMs)) + ' / 收获金币 +' + escapeHtml(formatNumber(session.coinsGained, '0')) + ' / 击杀 ' + escapeHtml(formatNumber(session.kills, '0')) + '</div>');
-      panelLines.push('<div>原因：' + escapeHtml(reasonText(decision?.reason)) + '</div>');
+      panelLines.push('<div>原因：' + escapeHtml(reasonDetail) + '</div>');
       panelLines.push('<div>HP ' + escapeHtml(self?.hp ?? '-') + ' / 体力 ' + escapeHtml(formatStamina(self)) + ' / Drop ' + escapeHtml(self?.drop ?? '-') + '</div>');
       panelLines.push('<div>WS ' + escapeHtml(wsLabel) + ' / Active ' + escapeHtml(nearestActive) + '</div>');
       if (decision?.target) {
@@ -667,7 +787,8 @@
       if (pursuit) {
         panelLines.push('<div>追击：' + escapeHtml(pursuit.name || ('#' + pursuit.id)) + ' ' + escapeHtml(formatDistance(pursuit.distance)) + ' / ' + escapeHtml(Math.round((pursuit.durationMs || 0) / 1000)) + 's</div>');
       }
-      const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || 0;
+      const persistent = activePersistentExitDetail(status);
+      const hold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
       if (hold > 0) panelLines.push('<div>等待重连：' + escapeHtml(formatDuration(hold)) + '</div>');
       if (Array.isArray(status.errors) && status.errors.length) {
         panelLines.push('<div style="color:#fca5a5">BOT错误：' + escapeHtml(status.errors[status.errors.length - 1]?.message || '') + '</div>');
@@ -1689,6 +1810,9 @@
     }
     if (!isGamePage()) return;
     updateBootstrapPanel();
+    if (maybeReloadCloudflareError()) {
+      return;
+    }
     if (isGameAuthCallback()) {
       suppressLogin('oauth callback', cfg.authReturnGraceMs);
       return;
