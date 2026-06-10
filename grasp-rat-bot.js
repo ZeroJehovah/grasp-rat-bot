@@ -188,7 +188,6 @@ function runSelfTest() {
     combatSpacingMinRange: 7500,
     combatSpacingPreferredRange: 10500,
     combatLeaveRetryMs: 1000,
-    leaveCommandMinIntervalMs: 10000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
     enemyReloginJitterMs: 15000,
@@ -2552,6 +2551,7 @@ function browserBotSource(config) {
 	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
 	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
 	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
+	    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
 	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
 	      ? {
 	        ...previousBot.combatLogging,
@@ -2638,7 +2638,6 @@ function browserBotSource(config) {
     combatSpacingMinRange: 7500,
     combatSpacingPreferredRange: 10500,
     combatLeaveRetryMs: 1000,
-    leaveCommandMinIntervalMs: 10000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
     enemyReloginJitterMs: 15000,
@@ -2906,14 +2905,13 @@ function browserBotSource(config) {
 	    startedAt: Date.now(),
     lastTickAt: 0,
     lastStatusAt: 0,
-    lastShotAt: 0,
-    lastAction: null,
-    waitSince: 0,
-    offlineSince: 0,
+	    lastShotAt: 0,
+	    lastAction: null,
+	    waitSince: 0,
+	    offlineSince: 0,
 	    lastLoginAt: 0,
 	    lastLoginResult: null,
-	    lastLeaveCommandAt: 0,
-	    lastLeaveCommandResult: null,
+	    pendingExit: preserved.pendingExit,
 	    lastOfflineLeaveAt: 0,
 		    lastOfflineLeaveResult: restoredOfflineLeaveState,
 	    offlineReloginUntil: Math.max(0, Number(restoredOfflineLeaveState?.reloginUntil || 0)),
@@ -3180,6 +3178,7 @@ function browserBotSource(config) {
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
           lastResult: this.lastLoginResult
         },
+        pendingExit: summarizePendingExit(this.pendingExit),
         offlineLeave: {
           lastAt: this.lastOfflineLeaveAt || 0,
           lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
@@ -4483,6 +4482,7 @@ function browserBotSource(config) {
     bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
     bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
     bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
+    bot.pendingExit = null;
     clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
     clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
     return cleared;
@@ -4938,6 +4938,271 @@ function browserBotSource(config) {
     };
   }
 
+  function cloneForPendingExit(value) {
+    if (!value || typeof value !== 'object') return value || null;
+    return safeJsonClone(value) || { ...value };
+  }
+
+  function pendingExitRetryMs(pending) {
+    const source = String(pending?.source || '');
+    if (pending?.scope === 'offline' || source === 'offline') {
+      return Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
+    }
+    if (source === 'pursuit') {
+      return Math.max(200, Number(cfg.pursuitLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
+    }
+    return Math.max(200, Number(cfg.combatLeaveRetryMs || cfg.pursuitLeaveRetryMs || 1000));
+  }
+
+  function pendingExitDisplayReason(summary) {
+    const base = String(summary || '退出请求已发送').trim();
+    return base + '，等待退出确认，未退出会继续补发';
+  }
+
+  function summarizePendingExit(pending = bot.pendingExit) {
+    if (!pending) return null;
+    const t = Date.now();
+    const retryMs = pendingExitRetryMs(pending);
+    const lastAttemptAt = Number(pending.lastAttemptAt || 0);
+    return {
+      scope: pending.scope || '',
+      source: pending.source || '',
+      reason: pending.reason || '',
+      summary: pending.summary || '',
+      displayReason: pending.displayReason || '',
+      at: Number(pending.at || 0),
+      ageMs: pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0,
+      lastAttemptAt,
+      lastAttemptAgeMs: lastAttemptAt ? Math.max(0, Math.round(t - lastAttemptAt)) : null,
+      retryMs,
+      retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
+      retryCount: Number(pending.retryCount || 0),
+      userId: pending.userId || null,
+      lastError: pending.lastResult?.error || ''
+    };
+  }
+
+  function recordPendingExitResult(source, detail, t = Date.now()) {
+    if (source === 'offline') {
+      bot.lastOfflineLeaveAt = t;
+      bot.lastOfflineLeaveResult = detail;
+    } else if (source === 'pursuit') {
+      bot.lastPursuitLeaveAt = t;
+      bot.lastPursuitLeaveResult = detail;
+    } else if (source === 'injury') {
+      bot.lastInjuryLeaveAt = t;
+      bot.lastInjuryLeaveResult = detail;
+    } else {
+      bot.lastCombatLeaveAt = t;
+      bot.lastCombatLeaveResult = detail;
+    }
+  }
+
+  function rememberPendingExit(scope, source, detail, selfLike = null) {
+    if (!detail?.attempted || detail.error) return null;
+    const t = Date.now();
+    const previous = bot.pendingExit && bot.pendingExit.scope === scope ? bot.pendingExit : null;
+    const summary = detail.summary || detail.exitSummary || detail.enemyLeaveSummary || previous?.summary || detail.reason || '';
+    const pending = {
+      scope,
+      source,
+      reason: detail.reason || previous?.reason || '',
+      summary,
+      displayReason: pendingExitDisplayReason(summary),
+      at: Number(previous?.at || detail.at || t),
+      updatedAt: t,
+      lastAttemptAt: Number(detail.at || t),
+      retryCount: Number(previous?.retryCount || 0) + 1,
+      retryMs: pendingExitRetryMs({ scope, source }),
+      userId: detail.userId || getCurrentUserId() || previous?.userId || null,
+      self: cloneForPendingExit(selfLike || detail.self || previous?.self || null),
+      offlineSafety: cloneForPendingExit(detail.offlineSafety || previous?.offlineSafety || null),
+      target: cloneForPendingExit(detail.target || previous?.target || null),
+      pursuit: cloneForPendingExit(detail.pursuit || previous?.pursuit || null),
+      injury: cloneForPendingExit(detail.injury || previous?.injury || null),
+      combat: cloneForPendingExit(detail.combat || previous?.combat || null),
+      lastResult: cloneForPendingExit(detail)
+    };
+    bot.pendingExit = pending;
+    detail.exitPending = true;
+    detail.exitConfirmed = false;
+    detail.pendingExit = summarizePendingExit(pending);
+    detail.displayReason = pending.displayReason;
+    return pending;
+  }
+
+  function pendingExitSelfState(self) {
+    const userId = getCurrentUserId();
+    if (!userId) return { known: true, alive: false, source: 'no-current-user-id', self: null };
+    try {
+      const nativeSelf = typeof getOwnEntity === 'function' ? getOwnEntity() : null;
+      if (nativeSelf && Number(nativeSelf.user_id) === userId) {
+        return { known: true, alive: Boolean(isAlive(nativeSelf)), source: 'native-own', self: summarizeSelf(nativeSelf) };
+      }
+    } catch (_) {}
+    const nativeState = getNativeState();
+    const nativeEntities = Array.isArray(nativeState?.entities) ? nativeState.entities : null;
+    if (nativeEntities) {
+      const nativeSelf = nativeEntities.find(entity => Number(entity.user_id) === userId) || null;
+      if (nativeSelf) {
+        return {
+          known: true,
+          alive: Boolean(isAlive(nativeSelf)),
+          source: 'native-entities',
+          self: summarizeSelf(nativeSelf)
+        };
+      }
+    }
+    if (self) {
+      return { known: true, alive: Boolean(isAlive(self)), source: 'tick-self', self: summarizeSelf(self) };
+    }
+    if (hasLoginRequiredText() || findLoginControl()) {
+      return { known: true, alive: false, source: 'login-required', self: null };
+    }
+    if (snapshotSelfFreshEnough()) {
+      const snapshotSelf = (bot.globalState.entities || []).find(entity => Number(entity.user_id) === userId) || null;
+      return {
+        known: true,
+        alive: Boolean(snapshotSelf && isAlive(snapshotSelf)),
+        source: 'snapshot',
+        self: snapshotSelf ? summarizeSelf(snapshotSelf) : null
+      };
+    }
+    return { known: false, alive: false, source: 'unknown', self: null };
+  }
+
+  function confirmPendingExit(pending, state) {
+    const t = Date.now();
+    const detail = cloneForPendingExit(pending.lastResult || {}) || {};
+    detail.reason = detail.reason || pending.reason || '';
+    detail.summary = detail.summary || pending.summary || detail.reason || '';
+    detail.userId = detail.userId || pending.userId || getCurrentUserId() || null;
+    detail.self = detail.self || pending.self || null;
+    detail.attempted = Boolean(detail.attempted);
+    detail.error = '';
+    detail.exitPending = false;
+    detail.exitConfirmed = true;
+    detail.exitConfirmedAt = t;
+    detail.exitConfirmation = state || null;
+    detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
+    detail.pendingExitRetryCount = Number(pending.retryCount || 0);
+    if (pending.scope === 'offline') {
+      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null);
+    } else {
+      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null);
+      if (pending.source === 'combat') bot.lastCombatLeaveResult = detail;
+      if (pending.source === 'pursuit') bot.lastPursuitLeaveResult = detail;
+      if (pending.source === 'injury') bot.lastInjuryLeaveResult = detail;
+      bot.pendingCombatLeave = null;
+      bot.pendingInjuryLeave = null;
+      bot.pursuit = null;
+      if (bot.lastSafety) bot.lastSafety.pursuit = null;
+    }
+    bot.pendingExit = null;
+    return detail;
+  }
+
+  function pendingExitWaitReason(pending, confirmed = false) {
+    if (confirmed) return pending.scope === 'offline' ? 'offline-leave-wait' : 'enemy-leave-wait';
+    if (pending.scope === 'offline') return 'offline-leave';
+    if (pending.source === 'pursuit') return 'pursuit-leave-retry';
+    return 'combat-leave-retry';
+  }
+
+  function pendingExitWaitDecision(pending, self, leaveResult, state, confirmed = false) {
+    const activeDetail = pending.scope === 'offline' ? activeOfflineLeaveDetail() : activeEnemyLeaveDetail();
+    const currentSummary = state?.self || (self && isAlive(self) ? summarizeSelf(self) : (pending.self || bot.lastSelf || null));
+    return {
+      kind: 'wait',
+      reason: pendingExitWaitReason(pending, confirmed),
+      dx: 0,
+      dy: 0,
+      self: currentSummary,
+      currentUserId: getCurrentUserId(),
+      control: summarizeControl(),
+      displayReason: leaveResult?.displayReason || activeDetail?.displayReason || pending.displayReason || '',
+      leave: leaveResult,
+      pendingExit: summarizePendingExit(bot.pendingExit || pending),
+      exitConfirmation: state || null,
+      holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === 'offline' ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs())
+    };
+  }
+
+  async function retryPendingExit(pending, self, state) {
+    const t = Date.now();
+    const retryMs = pendingExitRetryMs(pending);
+    const lastAttemptAt = Number(pending.lastAttemptAt || 0);
+    if (lastAttemptAt && t - lastAttemptAt < retryMs) {
+      const detail = {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - lastAttemptAt))),
+        summary: pending.summary || '',
+        displayReason: pending.displayReason || '',
+        exitPending: true,
+        exitConfirmed: false,
+        pendingExit: summarizePendingExit(pending),
+        exitConfirmation: state || null
+      };
+      return detail;
+    }
+    const detail = cloneForPendingExit(pending.lastResult || {}) || {};
+    detail.at = t;
+    detail.attempted = false;
+    detail.method = '';
+    detail.error = '';
+    detail.reason = pending.reason || detail.reason || '';
+    detail.summary = pending.summary || detail.summary || detail.reason || '';
+    detail.userId = getCurrentUserId() || pending.userId || detail.userId || null;
+    detail.self = state?.self || (self && isAlive(self) ? summarizeSelf(self) : (pending.self || detail.self || null));
+    detail.offlineSafety = detail.offlineSafety || pending.offlineSafety || null;
+    detail.target = detail.target || pending.target || null;
+    detail.pursuit = detail.pursuit || pending.pursuit || null;
+    detail.injury = detail.injury || pending.injury || null;
+    detail.combat = detail.combat || pending.combat || null;
+    detail.exitPending = true;
+    detail.exitConfirmed = false;
+    detail.pendingExitRetry = true;
+    detail.exitConfirmation = state || null;
+    recordPendingExitResult(pending.source, detail, t);
+    await issueLeaveCommand(detail);
+    if (detail.attempted && !detail.error) {
+      rememberPendingExit(pending.scope, pending.source, detail, detail.self || pending.self || null);
+    } else {
+      const next = {
+        ...pending,
+        updatedAt: t,
+        lastAttemptAt: t,
+        retryCount: Number(pending.retryCount || 0) + 1,
+        lastResult: cloneForPendingExit(detail)
+      };
+      bot.pendingExit = next;
+      detail.pendingExit = summarizePendingExit(next);
+      detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReason(detail.summary || pending.summary || detail.reason);
+    }
+    recordPendingExitResult(pending.source, detail, t);
+    return detail;
+  }
+
+  async function handlePendingExit(self) {
+    const pending = bot.pendingExit;
+    if (!pending) return null;
+    const existingHoldMs = pending.scope === 'offline' ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs();
+    if (existingHoldMs > 0) {
+      bot.pendingExit = null;
+      return null;
+    }
+    const state = pendingExitSelfState(self);
+    if (state.known && !state.alive) {
+      const detail = confirmPendingExit(pending, state);
+      return pendingExitWaitDecision(pending, self, detail, state, true);
+    }
+    bot.pursuit = null;
+    stopMotionSafely('pending-exit-confirmation');
+    const detail = await retryPendingExit(pending, self, state);
+    return pendingExitWaitDecision(pending, self, detail, state, false);
+  }
+
 	  function summarizePendingCombatLeave(pending = bot.pendingCombatLeave) {
 	    if (!pending) return null;
 	    return {
@@ -5104,36 +5369,36 @@ function browserBotSource(config) {
     });
   }
 
+  function leaveCommandFailureMessage(value) {
+    if (value === false) return 'leave request returned false';
+    if (!value || typeof value !== 'object') return '';
+    if (value.ok === false || value.success === false) {
+      return value.message || value.error || 'leave request returned failure';
+    }
+    if (value.error && value.ok !== true && value.success !== true) {
+      return value.message || value.error || 'leave request returned error';
+    }
+    const status = Number(value.status || value.statusCode || 0);
+    if (status >= 400) return value.statusText || value.message || ('leave request HTTP ' + status);
+    return '';
+  }
+
 	  async function issueLeaveCommand(detail) {
-	    const t = Date.now();
-	    const minIntervalMs = Math.max(1000, Number(cfg.leaveCommandMinIntervalMs) || 10000);
-	    const elapsedMs = t - Number(bot.lastLeaveCommandAt || 0);
-	    if (bot.lastLeaveCommandAt && elapsedMs < minIntervalMs) {
-	      detail.attempted = false;
-	      detail.reason = detail.reason || 'leave-command-rate-limited';
-	      detail.rateLimited = true;
-	      detail.cooldownRemainingMs = Math.max(0, Math.round(minIntervalMs - elapsedMs));
-	      detail.previousLeaveCommand = bot.lastLeaveCommandResult || null;
-	      return detail;
-	    }
-	    let commandIssued = false;
 	    try {
 	      if (typeof leave === 'function') {
 	        detail.attempted = true;
 	        detail.method = detail.userId ? 'leave(userId)' : 'leave';
-	        bot.lastLeaveCommandAt = t;
-	        commandIssued = true;
-	        const result = detail.userId ? leave(detail.userId) : leave();
+	        let result = detail.userId ? leave(detail.userId) : leave();
 	        if (result && typeof result.then === 'function') {
-	          await waitWithTimeout(result, cfg.leaveCommandTimeoutMs, 'leave request');
+	          result = await waitWithTimeout(result, cfg.leaveCommandTimeoutMs, 'leave request');
 	        }
+	        const failure = leaveCommandFailureMessage(result);
+	        if (failure) detail.error = failure;
 	      } else {
 	        const leaveBtn = document.querySelector('#leaveBtn');
 	        if (leaveBtn && isVisible(leaveBtn)) {
 	          detail.attempted = true;
 	          detail.method = '#leaveBtn';
-	          bot.lastLeaveCommandAt = t;
-	          commandIssued = true;
 	          leaveBtn.click();
 	        } else {
 	          detail.error = 'leave control not found';
@@ -5141,15 +5406,6 @@ function browserBotSource(config) {
 	      }
 	    } catch (err) {
 	      detail.error = err?.message || String(err);
-	    }
-	    if (commandIssued) {
-	      bot.lastLeaveCommandResult = {
-	        at: t,
-	        attempted: Boolean(detail.attempted),
-	        method: detail.method || '',
-	        reason: detail.reason || '',
-	        error: detail.error || ''
-	      };
 	    }
 	    return detail;
 	  }
@@ -5312,7 +5568,7 @@ function browserBotSource(config) {
     };
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) setOfflineLeaveSuppress(reason || 'websocket offline', detail, selfSummary);
+    if (detail.attempted && !detail.error) rememberPendingExit('offline', 'offline', detail, selfSummary);
     finalizeLeaveDisplayReason(detail);
     bot.lastOfflineLeaveResult = detail;
     return detail;
@@ -5340,11 +5596,11 @@ function browserBotSource(config) {
 		      injury,
       summary: injuryLeaveSummary(injury),
 	      error: ''
-	    };
+    };
     bot.lastInjuryLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      setEnemyLeaveSuppress('injury hp drop', detail, injury?.self || injury);
+      rememberPendingExit('enemy', 'injury', detail, injury?.self || injury);
       bot.pendingInjuryLeave = null;
     }
     bot.lastInjuryLeaveResult = detail;
@@ -5375,11 +5631,11 @@ function browserBotSource(config) {
 	      pursuit: pursuitSummary,
       summary: pursuitLeaveSummary(pursuitSummary),
 	      error: ''
-	    };
+    };
     bot.lastPursuitLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      setEnemyLeaveSuppress('sustained pursuit', detail, selfSummary);
+      rememberPendingExit('enemy', 'pursuit', detail, selfSummary);
       bot.pursuit = null;
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
     }
@@ -5423,7 +5679,7 @@ function browserBotSource(config) {
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted && !detail.error) {
-      setEnemyLeaveSuppress(reason, detail, selfSummary);
+      rememberPendingExit('enemy', 'combat', detail, selfSummary);
       bot.pendingCombatLeave = null;
     } else {
       rememberPendingCombatLeave(action, selfSummary, detail);
@@ -9349,7 +9605,14 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
       }
-			      const self = getSelf();
+				      const self = getSelf();
+      const pendingExitDecision = await handlePendingExit(self);
+      if (pendingExitDecision) {
+        bot.lastDecision = pendingExitDecision;
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
       const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
 	      if (enemyHoldRemainingMs > 0) {
 	        const enemyLeaveDetail = activeEnemyLeaveDetail();
