@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.56"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.57"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -189,6 +189,9 @@
     coinAxisApproachMinDistance: 5000,
     coinAxisApproachRatio: 4,
     coinAxisApproachLaneTolerance: 1800,
+    coinApproachBrakeDistance: 700,
+    coinPickupBrakeDistance: 650,
+    coinPickupBrakePulseMs: 80,
     shootEveryMs: 120,
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
@@ -2746,6 +2749,34 @@
     return null;
   }
 
+  function coinPickupPrecisionPulseMs(distance) {
+    const d = Math.max(0, Number(distance) || 0);
+    if (d <= Math.max(0, Number(cfg.coinPickupBrakeDistance || 0))) {
+      return Math.max(25, Number(cfg.coinPickupBrakePulseMs) || Number(cfg.coinPickupFinePulseMs) || 80);
+    }
+    return d <= cfg.coinPickupFineDistance
+      ? Math.max(25, Number(cfg.coinPickupFinePulseMs) || 45)
+      : Math.max(30, Number(cfg.coinPickupSweepPulseMs) || 80);
+  }
+
+  function coinAxisLockShouldHold(lock, dxRaw, dyRaw) {
+    if (!lock || !(lock.dx || lock.dy)) return false;
+    const axisRaw = lock.dx ? dxRaw : dyRaw;
+    const axisSign = lock.dx || lock.dy;
+    const brakeDistance = Math.max(cfg.coinPrecisionTolerance, Number(cfg.coinApproachBrakeDistance || cfg.coinAxisFlipTolerance || 0));
+    return Math.sign(axisRaw) === axisSign && Math.abs(axisRaw) > brakeDistance;
+  }
+
+  function coinNearApproachAxis(dxRaw, dyRaw, absX, absY, tolerance) {
+    const brakeDistance = Math.max(tolerance, Number(cfg.coinApproachBrakeDistance || cfg.coinAxisFlipTolerance || 0));
+    if (absX >= absY) {
+      if (absX <= brakeDistance && absY > tolerance) return { dx: 0, dy: Math.sign(dyRaw) };
+      return { dx: absX > tolerance ? Math.sign(dxRaw) : 0, dy: 0 };
+    }
+    if (absY <= brakeDistance && absX > tolerance) return { dx: Math.sign(dxRaw), dy: 0 };
+    return { dx: 0, dy: absY > tolerance ? Math.sign(dyRaw) : 0 };
+  }
+
   function coinDirectionTo(self, target, tolerance = cfg.coinPrecisionTolerance) {
     const dxRaw = Number(target.x) - Number(self.x);
     const dyRaw = Number(target.y) - Number(self.y);
@@ -2759,19 +2790,16 @@
 
     if (distance <= cfg.coinPickupSweepDistance) {
       const pulse = Math.max(60, Number(cfg.coinPickupPulseMs) || 180);
-      const sweepPulseMs = Math.max(30, Number(cfg.coinPickupSweepPulseMs) || 80);
-      const finePulseMs = Math.max(25, Number(cfg.coinPickupFinePulseMs) || 45);
-      const precisionPulseMs = distance <= cfg.coinPickupFineDistance ? finePulseMs : sweepPulseMs;
+      const precisionPulseMs = coinPickupPrecisionPulseMs(distance);
       const locked = (next, extra = {}) => {
         if (next.dx || next.dy) {
           bot.coinApproachLock = { id, dx: next.dx, dy: next.dy, until: t + pulse };
           return { ...next, distance, pickupSweep: true, locked: Boolean(sameLock), precisionPulseMs, ...extra };
         }
+        if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
         return { dx: 0, dy: 0, distance, pickupSweep: true, ...extra };
       };
-      const dominantAxis = () => absX >= absY
-        ? { dx: Math.sign(dxRaw) || (sameLock ? lock.dx : 0), dy: 0 }
-        : { dx: 0, dy: Math.sign(dyRaw) || (sameLock ? lock.dy : 0) };
+      const dominantAxis = () => coinNearApproachAxis(dxRaw, dyRaw, absX, absY, tolerance);
 
       if (distance <= cfg.coinPickupMicroDistance) {
         const phase = Math.floor(t / pulse) % 6;
@@ -2798,7 +2826,6 @@
     }
 
     if (distance <= tolerance) {
-      if (sameLock) return { dx: lock.dx, dy: lock.dy, distance, locked: true, pushThrough: true };
       bot.coinApproachLock = null;
       return { dx: 0, dy: 0, distance };
     }
@@ -2809,22 +2836,19 @@
     }
     if (distance <= cfg.nearCoinStuckDistance && Math.max(absX, absY) > tolerance) {
       if (sameLock) {
-        const axisRaw = lock.dx ? dxRaw : dyRaw;
-        const axisSign = lock.dx || lock.dy;
-        if (Math.sign(axisRaw) === axisSign || Math.abs(axisRaw) <= cfg.coinAxisFlipTolerance) {
+        if (coinAxisLockShouldHold(lock, dxRaw, dyRaw)) {
           return { dx: lock.dx, dy: lock.dy, distance, locked: true };
         }
+        bot.coinApproachLock = null;
       }
-      const next = absX >= absY
-        ? { dx: Math.sign(dxRaw), dy: 0 }
-        : { dx: 0, dy: Math.sign(dyRaw) };
+      const next = coinNearApproachAxis(dxRaw, dyRaw, absX, absY, tolerance);
+      if (!(next.dx || next.dy)) return { dx: 0, dy: 0, distance, braking: true };
       bot.coinApproachLock = { id, dx: next.dx, dy: next.dy, until: t + cfg.coinApproachLockMs };
       return { ...next, distance };
     }
     if (distance <= cfg.nearCoinStuckDistance) {
-      const next = absX >= absY
-        ? { dx: Math.sign(dxRaw), dy: 0 }
-        : { dx: 0, dy: Math.sign(dyRaw) };
+      const next = coinNearApproachAxis(dxRaw, dyRaw, absX, absY, tolerance);
+      if (!(next.dx || next.dy)) return { dx: 0, dy: 0, distance, braking: true };
       bot.coinApproachLock = { id, dx: next.dx, dy: next.dy, until: t + cfg.coinApproachLockMs };
       return { ...next, distance };
     }
@@ -2845,6 +2869,7 @@
     else if (dir?.axisApproach) meta.routeMode = 'axis-approach-' + dir.axisApproach;
     if (dir?.locked) meta.motionLocked = true;
     if (dir?.pushThrough) meta.pushThrough = true;
+    if (dir?.braking) meta.routeMode = 'coin-brake';
     return meta;
   }
 
