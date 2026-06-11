@@ -113,8 +113,11 @@ npm run monitor -- --watch-count 1
 ```bash
 npm run analyze:current
 npm run validate:current
+npm run validate:objective
 npm run monitor:current
 npm run monitor:current:strict
+npm run monitor:objective
+npm run monitor:objective -- --since now --latest 10
 npm run monitor:current:strict -- --since now --latest 10
 npm run monitor:current -- --since now --latest 10
 npm run monitor -- --min-version bootstrap-0.4.101 --latest 10
@@ -122,6 +125,8 @@ npm run monitor -- --since now --min-version bootstrap-0.4.101 --latest 10
 ```
 
 `validate:current` 会额外要求至少存在一条当前 manifest 版本日志；没有匹配日志时返回非零退出码，用来区分“无问题”和“还没有验证证据”。
+
+`validate:objective` 更严格：它要求当前 manifest 版本既有日志，也至少有一个退出事件，并且没有退出/重连/行为回归问题。没有当前版本退出样本时会返回 `no-matching-exit-events`，避免把“还没发生退出”误判成“退出逻辑已验证”。
 
 需要验证刚发布的当前版本时，建议先启动收集服务并开启 Tampermonkey 战斗日志，然后从当前时间开始严格监控：
 
@@ -134,16 +139,17 @@ npm start
 
 ```bash
 cd combat-log-service
-npm run monitor:current:strict -- --since now --latest 10
+npm run monitor:objective -- --since now --latest 10
 ```
 
-`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue；如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配日志时会返回非零退出码。
+`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
 
 用于自动检查时可以让问题返回非零退出码：
 
 ```bash
 npm run analyze -- --fail-on-issue
 npm run analyze:current -- --require-entries --fail-on-issue
+npm run validate:objective
 ```
 
 验证审计器自身的版本过滤和问题识别逻辑：
@@ -160,5 +166,10 @@ npm test
 - `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；
 - `ambiguous-opportunity-wait`: 当前版本日志里重新出现“收益接近，原地等待更明确目标”；
 - `coin-action-with-active-player-in-range`: 射程内存在非无敌 Active 玩家时，决策仍在执行金币行动而不是战斗/退出。
+
+证据缺口会标记：
+
+- `no-matching-entries`: 当前过滤条件没有任何日志；
+- `no-matching-exit-events`: 当前过滤条件有日志，但没有退出事件。
 
 最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
