@@ -191,7 +191,33 @@ function main() {
       assert(clickBody.includes('control.click()'), 'zoom-out control click not found');
       assert(text.includes('postLoginZoom: this.postLoginZoom'), 'status does not expose postLoginZoom state');
     });
+    check(`${file} treats join-mode Active as non-AFK combat`, () => {
+      const expectedMin = file === 'grasp-rat-bot.js' ? 2 : 1;
+      assert(
+        countMatches(text, /const isJoinModeActive = e => e\?\.current_join_mode === 'Active' \|\| e\?\.mode === 'Active';/g) >= expectedMin,
+        'join-mode Active helper not found'
+      );
+      assert(
+        countMatches(text, /const isAfkTarget = e => !isJoinModeActive\(e\) && !is(?:Currently)?Active\(e\) && !isMovingThreat\(e\);/g) >= expectedMin,
+        'AFK target filter does not exclude join-mode Active'
+      );
+      assert(
+        countMatches(text, /if \(isJoinModeActive\(target\)\) return true;/g) >= expectedMin,
+        'defensive combat target does not accept join-mode Active'
+      );
+      assert(
+        countMatches(text, /\+ \(isJoinModeActive\(target\) \? [0-9]+ : 0\)/g) >= expectedMin,
+        'combat target priority does not include join-mode Active'
+      );
+    });
   }
+
+  check('grasp-rat-bot.js covers stationary full-stamina Active combat self-test', () => {
+    assert(
+      /name: 'stationary full-stamina active in range beats coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'attack'/.test(sourceBot),
+      'stationary full-stamina Active coin override self-test not found'
+    );
+  });
 
   const obsoleteReason = ['wait', 'for', 'clear', 'opportunity'].join('-');
   const obsoleteDisplayText = String.fromCharCode(0x6536, 0x76ca, 0x63a5, 0x8fd1);
