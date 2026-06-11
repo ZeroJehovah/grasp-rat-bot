@@ -28,6 +28,8 @@ const DEFAULTS = {
   failOnIssue: false,
   requireEntries: false,
   requireExitEvents: false,
+  requireActiveCombatEvents: false,
+  requireHpDisadvantageExitEvents: false,
   selfTest: false
 };
 
@@ -56,6 +58,8 @@ function parseArgs(args) {
     else if (arg === '--fail-on-issue') out.failOnIssue = true;
     else if (arg === '--require-entries') out.requireEntries = true;
     else if (arg === '--require-exit-events') out.requireExitEvents = true;
+    else if (arg === '--require-active-combat-events') out.requireActiveCombatEvents = true;
+    else if (arg === '--require-hp-disadvantage-exit-events') out.requireHpDisadvantageExitEvents = true;
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -90,6 +94,9 @@ Options:
   --fail-on-issue                Exit with code 1 when issues are found.
   --require-entries              Treat zero matching log entries as an evidence failure.
   --require-exit-events          Treat zero matching exit events as an evidence failure.
+  --require-active-combat-events Treat zero Active-in-range combat responses as an evidence failure.
+  --require-hp-disadvantage-exit-events
+                                  Treat zero HP-disadvantage combat exits as an evidence failure.
   --self-test                    Run analyzer regression checks.
 `);
 }
@@ -310,6 +317,16 @@ function isCombatDecision(entry) {
     || /combat|attack|shoot|leave|exit|flee|recovery/.test(reason);
 }
 
+function isActiveCombatResponse(entry) {
+  const decision = entry?.decision || {};
+  const kind = String(decision.kind || '').toLowerCase();
+  const reason = String(decision.reason || '').toLowerCase();
+  return Boolean(decision.combat || decision.shoot || decision.forceShoot)
+    || kind === 'attack'
+    || (kind === 'leave' && /combat|attack|shoot/.test(reason))
+    || /^combat(?:-|$)/.test(reason);
+}
+
 function isCoinDecision(entry) {
   const decision = entry?.decision || {};
   const text = decisionText(entry).join(' ');
@@ -335,6 +352,10 @@ function behaviorIssues(entry, options) {
     issues.push('coin-action-with-active-player-in-range');
   }
   return issues;
+}
+
+function hpDisadvantageExitReason(reason) {
+  return /combat-(?:hp-disadvantage|low-hp)-leave/.test(String(reason || ''));
 }
 
 function delayMs(entry) {
@@ -460,6 +481,8 @@ function auditFile(file, rootDir, options) {
   const activeBySignature = new Map();
   const behaviorEvents = [];
   const activeBehaviorBySignature = new Map();
+  const activeCombatEvents = [];
+  const activeCombatBySignature = new Map();
   const sourceHashes = new Set();
   const sourceHashMismatches = [];
   let sourceHashMismatchEntries = 0;
@@ -536,6 +559,48 @@ function auditFile(file, rootDir, options) {
       for (const issue of currentBehaviorIssues) {
         if (!event.issues.includes(issue)) event.issues.push(issue);
       }
+    }
+    const activeCombatTargets = activePlayersInAttackRange(entry, options);
+    if (activeCombatTargets.length && isActiveCombatResponse(entry)) {
+      const activeTarget = activeCombatTargets[0] || null;
+      const activeTargetLabel = activeTarget ? String(activeTarget.name || activeTarget.id || activeTarget.user_id || '') : '';
+      const decision = entry?.decision || {};
+      const reason = String(decision.reason || decision.kind || 'active-combat-response');
+      const summary = String(decision.displayReason || decision.summary || reason || '');
+      const target = targetLabel(entry) || activeTargetLabel;
+      const signature = [
+        reason,
+        summary,
+        target
+      ].join('|');
+      const existing = activeCombatBySignature.get(signature);
+      const timeGap = existing && t && existing.lastAt ? Math.abs(t - Number(existing.lastAt || 0)) : 0;
+      const lineGap = existing ? Math.max(0, item.line - Number(existing.lastLine || 0)) : 0;
+      const reuseExisting = Boolean(existing)
+        && lineGap <= Math.max(0, Number(options.eventLineGap || 0))
+        && (!timeGap || timeGap <= Math.max(0, Number(options.eventGapMs || 0)));
+      const event = reuseExisting ? existing : {
+        file: relFile,
+        firstLine: item.line,
+        lastLine: item.line,
+        firstAt: t,
+        lastAt: t,
+        version: entry?.version || '',
+        reason,
+        summary,
+        target,
+        activeTarget: activeTargetLabel,
+        count: 0,
+        issues: []
+      };
+      if (!reuseExisting) {
+        activeCombatEvents.push(event);
+        activeCombatBySignature.set(signature, event);
+      }
+      event.lastLine = item.line;
+      if (t && (!event.firstAt || t < event.firstAt)) event.firstAt = t;
+      if (t && t > event.lastAt) event.lastAt = t;
+      event.count += 1;
     }
     if (!isExitish(entry)) continue;
     const signature = eventSignature(entry) || `${item.line}:${exitReason(entry)}`;
@@ -625,7 +690,8 @@ function auditFile(file, rootDir, options) {
     firstAt,
     lastAt,
     exitEvents,
-    behaviorEvents
+    behaviorEvents,
+    activeCombatEvents
   };
 }
 
@@ -637,8 +703,15 @@ function auditLogs(options) {
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
   const behaviorEvents = fileReports.flatMap(report => report.behaviorEvents || [])
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+  const activeCombatEvents = fileReports.flatMap(report => report.activeCombatEvents || [])
+    .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+  const hpDisadvantageExitEvents = exitEvents
+    .filter(event => hpDisadvantageExitReason(event.reason))
+    .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
   const exitReasonCounts = eventReasonCounts(exitEvents);
   const behaviorReasonCounts = eventReasonCounts(behaviorEvents);
+  const activeCombatReasonCounts = eventReasonCounts(activeCombatEvents);
+  const hpDisadvantageExitReasonCounts = eventReasonCounts(hpDisadvantageExitEvents);
   const exitSafetyCounts = summarizeExitSafety(exitEvents, options.minUnsafeDelayMs);
   const issues = [
     ...exitEvents.flatMap(event => event.issues.map(issue => ({ issue, event }))),
@@ -654,6 +727,8 @@ function auditLogs(options) {
     minUnsafeDelayMs: options.minUnsafeDelayMs,
     requireEntries: Boolean(options.requireEntries),
     requireExitEvents: Boolean(options.requireExitEvents),
+    requireActiveCombatEvents: Boolean(options.requireActiveCombatEvents),
+    requireHpDisadvantageExitEvents: Boolean(options.requireHpDisadvantageExitEvents),
     sinceMs: options.sinceMs || 0,
     minVersion: options.minVersion || '',
     version: options.version || '',
@@ -672,8 +747,12 @@ function auditLogs(options) {
     sourceHashMismatches,
     exitEvents,
     behaviorEvents,
+    activeCombatEvents,
+    hpDisadvantageExitEvents,
     exitReasonCounts,
     behaviorReasonCounts,
+    activeCombatReasonCounts,
+    hpDisadvantageExitReasonCounts,
     exitSafetyCounts,
     issues,
     evidenceIssues: []
@@ -688,6 +767,18 @@ function auditLogs(options) {
     report.evidenceIssues.push({
       issue: 'no-matching-exit-events',
       message: 'No exit events matched the active filters.'
+    });
+  }
+  if (options.requireActiveCombatEvents && activeCombatEvents.length === 0) {
+    report.evidenceIssues.push({
+      issue: 'no-active-in-range-combat-events',
+      message: 'No Active-in-range combat response events matched the active filters.'
+    });
+  }
+  if (options.requireHpDisadvantageExitEvents && hpDisadvantageExitEvents.length === 0) {
+    report.evidenceIssues.push({
+      issue: 'no-hp-disadvantage-exit-events',
+      message: 'No combat HP-disadvantage exit events matched the active filters.'
     });
   }
   if (options.manifestHash && entries > 0) {
@@ -837,6 +928,7 @@ function formatExitSafetyCounts(counts) {
 function reportFingerprint(report) {
   const latest = report.exitEvents[0] || {};
   const latestBehavior = report.behaviorEvents?.[0] || {};
+  const latestActiveCombat = report.activeCombatEvents?.[0] || {};
   return JSON.stringify({
     files: report.files,
     entries: report.entries,
@@ -851,6 +943,8 @@ function reportFingerprint(report) {
     sourceHashMismatchEntries: report.sourceHashMismatchEntries || 0,
     exitReasonCounts: report.exitReasonCounts,
     behaviorReasonCounts: report.behaviorReasonCounts,
+    activeCombatReasonCounts: report.activeCombatReasonCounts,
+    hpDisadvantageExitReasonCounts: report.hpDisadvantageExitReasonCounts,
     exitSafetyCounts: report.exitSafetyCounts,
     latestExit: {
       file: latest.file || '',
@@ -865,6 +959,12 @@ function reportFingerprint(report) {
       at: latestBehavior.lastAt || 0,
       reason: latestBehavior.reason || '',
       issues: latestBehavior.issues || []
+    },
+    latestActiveCombat: {
+      file: latestActiveCombat.file || '',
+      line: latestActiveCombat.lastLine || 0,
+      at: latestActiveCombat.lastAt || 0,
+      reason: latestActiveCombat.reason || ''
     }
   });
 }
@@ -873,7 +973,7 @@ function printHuman(report, options) {
   console.log('Combat log audit');
   console.log(`Dir: ${report.dir}`);
   console.log(`Files: ${report.files}, entries: ${report.entries}/${report.scannedEntries}, versions: ${report.versions.join(', ') || '-'}`);
-  if (report.sinceMs || report.minVersion || report.version || report.requireEntries || report.requireExitEvents) {
+  if (report.sinceMs || report.minVersion || report.version || report.requireEntries || report.requireExitEvents || report.requireActiveCombatEvents || report.requireHpDisadvantageExitEvents) {
     const filters = [];
     if (report.sinceMs) filters.push(`since=${isoTime(report.sinceMs) || report.sinceMs}`);
     if (report.manifestVersion) filters.push(`manifest=${report.manifestVersion}${report.manifestMode ? `:${report.manifestMode}` : ''}`);
@@ -882,9 +982,11 @@ function printHuman(report, options) {
     if (report.version) filters.push(`version=${report.version}`);
     if (report.requireEntries) filters.push('requireEntries=true');
     if (report.requireExitEvents) filters.push('requireExitEvents=true');
+    if (report.requireActiveCombatEvents) filters.push('requireActiveCombatEvents=true');
+    if (report.requireHpDisadvantageExitEvents) filters.push('requireHpDisadvantageExitEvents=true');
     console.log('Filters: ' + filters.join(', '));
   }
-  console.log(`Exit events: ${report.exitEvents.length}, behavior events: ${report.behaviorEvents.length}, issues: ${report.issues.length}, evidence issues: ${report.evidenceIssues.length}, parse errors: ${report.parseErrors.length}`);
+  console.log(`Exit events: ${report.exitEvents.length}, behavior events: ${report.behaviorEvents.length}, active combat events: ${report.activeCombatEvents.length}, HP-disadvantage exits: ${report.hpDisadvantageExitEvents.length}, issues: ${report.issues.length}, evidence issues: ${report.evidenceIssues.length}, parse errors: ${report.parseErrors.length}`);
   if (report.issues.length) {
     console.log('Issue counts: ' + issueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
   }
@@ -909,6 +1011,12 @@ function printHuman(report, options) {
   }
   if (report.behaviorReasonCounts.length) {
     console.log('Behavior reason counts: ' + formatReasonCounts(report.behaviorReasonCounts));
+  }
+  if (report.activeCombatReasonCounts.length) {
+    console.log('Active combat reason counts: ' + formatReasonCounts(report.activeCombatReasonCounts));
+  }
+  if (report.hpDisadvantageExitReasonCounts.length) {
+    console.log('HP-disadvantage exit reason counts: ' + formatReasonCounts(report.hpDisadvantageExitReasonCounts));
   }
   const latest = report.exitEvents.slice(0, options.latest);
   if (latest.length) {
@@ -942,6 +1050,18 @@ function printHuman(report, options) {
       const flags = [];
       if (event.count > 1) flags.push(`count=${event.count}`);
       if (event.issues.length) flags.push(`issues=${event.issues.join('+')}`);
+      console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
+      if (event.summary && event.summary !== event.reason) console.log(`  ${event.summary}`);
+    }
+  }
+  const latestActiveCombat = report.activeCombatEvents.slice(0, options.latest);
+  if (latestActiveCombat.length) {
+    console.log('');
+    console.log(`Latest Active-in-range combat events (${latestActiveCombat.length}):`);
+    for (const event of latestActiveCombat) {
+      const flags = [];
+      if (event.count > 1) flags.push(`count=${event.count}`);
+      if (event.activeTarget && event.activeTarget !== event.target) flags.push(`active=${event.activeTarget}`);
       console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
       if (event.summary && event.summary !== event.reason) console.log(`  ${event.summary}`);
     }
@@ -1151,6 +1271,12 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(currentReport.exitSafetyCounts.unsafeDelayBelowMin === 0, `expected no current unsafe exits below minimum, got ${currentReport.exitSafetyCounts.unsafeDelayBelowMin}`);
 
+    const hpEvidenceReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true, requireExitEvents: true, requireHpDisadvantageExitEvents: true });
+    cases += 1;
+    assertSelfTest(hpEvidenceReport.hpDisadvantageExitEvents.length === 1, `expected 1 HP-disadvantage exit event, got ${hpEvidenceReport.hpDisadvantageExitEvents.length}`);
+    cases += 1;
+    assertSelfTest(hpEvidenceReport.evidenceIssues.length === 0, `expected no HP evidence issues, got ${hpEvidenceReport.evidenceIssues.length}`);
+
     const requiredReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true });
     cases += 1;
     assertSelfTest(requiredReport.entries === 3, `expected 3 required entries, got ${requiredReport.entries}`);
@@ -1194,6 +1320,12 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(noExitRequiredReport, 'no-matching-exit-events') === 1, 'expected one no-matching-exit-events evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(noExitRequiredReport), 'expected no-exit required report to count as failure');
+
+    const noActiveEvidenceReport = auditLogs({ dir: noExitLogsDir, manifestPath, requireEntries: true, requireActiveCombatEvents: true });
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(noActiveEvidenceReport, 'no-active-in-range-combat-events') === 1, 'expected one no-active-in-range-combat-events evidence issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(noActiveEvidenceReport), 'expected no-active-combat required report to count as failure');
 
     const reloginEntries = [
       {
@@ -1326,6 +1458,21 @@ function runSelfTest() {
     const coinReason = behaviorReport.behaviorReasonCounts.find(item => item.reason === 'visible-coin') || null;
     cases += 1;
     assertSelfTest(coinReason?.events === 1, `expected 1 coin behavior reason event, got ${coinReason?.events}`);
+    cases += 1;
+    assertSelfTest(behaviorReport.activeCombatEvents.length === 1, `expected 1 active combat evidence event, got ${behaviorReport.activeCombatEvents.length}`);
+    const activeCombatReason = behaviorReport.activeCombatReasonCounts.find(item => item.reason === 'combat-spacing') || null;
+    cases += 1;
+    assertSelfTest(activeCombatReason?.events === 1, `expected 1 active combat reason event, got ${activeCombatReason?.events}`);
+
+    const activeEvidenceReport = auditLogs({ dir: behaviorLogsDir, manifestPath, requireEntries: true, requireActiveCombatEvents: true });
+    cases += 1;
+    assertSelfTest(activeEvidenceReport.evidenceIssues.length === 0, `expected no active combat evidence issues, got ${activeEvidenceReport.evidenceIssues.length}`);
+
+    const noHpEvidenceReport = auditLogs({ dir: behaviorLogsDir, manifestPath, requireEntries: true, requireHpDisadvantageExitEvents: true });
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(noHpEvidenceReport, 'no-hp-disadvantage-exit-events') === 1, 'expected one no-hp-disadvantage-exit-events evidence issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(noHpEvidenceReport), 'expected no-hp-evidence required report to count as failure');
 
     const requiredDelayEntries = [
       {
