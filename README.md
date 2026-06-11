@@ -4,7 +4,7 @@ This repository contains the browser-side automation scripts for `https://grasp-
 
 The primary runtime uses a small bootstrap script A plus the shared remote bot script B. Script A can run either as Tampermonkey or as the Chrome extension in this repo:
 
-- `userscript/grasp-rat-bootstrap.user.js` is script A. Install it in the user's normal Chrome. It checks the manifest every 5 seconds, verifies the remote bot hash, injects the bot, and hot-updates without stopping a working old bot when download or verification fails.
+- `userscript/grasp-rat-bootstrap.user.js` is script A. Install it in the user's normal Chrome. It checks the manifest every 10 seconds, verifies the remote bot hash, injects the bot, and hot-updates without stopping a working old bot when download or verification fails.
 - `extension/` is the Chrome extension version of script A. Load this directory as an unpacked extension in Chrome.
 - `dist/grasp-rat-remote-bot.js` is script B. It contains the game strategy and native page WebSocket control.
 - `dist/manifest.json` points A at B and includes the SHA-256 hash A must verify before injection.
@@ -39,7 +39,7 @@ By default the bootstrap loads:
 https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json
 ```
 
-The bootstrap polls every 5 seconds. On refresh, navigation, relogin, or page recovery, Tampermonkey runs again and fetches the latest verified manifest before falling back to cache. It also runs a one-second watchdog: if the page bot is missing, stopped, stale, or on the wrong manifest hash, it reinstalls from verified source. Version `0.3.5` refuses cached remote bot builds that contain bot-owned game WebSocket creation or page reconnect calls.
+The bootstrap polls every 10 seconds. On refresh, navigation, relogin, or page recovery, Tampermonkey runs again and fetches the latest verified manifest before falling back to cache. It also runs a one-second watchdog: if the page bot is missing, stopped, stale, or on the wrong manifest hash, it reinstalls from verified source. Version `0.3.5` refuses cached remote bot builds that contain bot-owned game WebSocket creation or page reconnect calls.
 
 Version `0.3.6` fixes a refresh-time bootstrap race: script A no longer waits forever for script B's startup promise, and script B registers `window.__graspRatBot` before waiting on `/snapshot` or `/minimap`. Those page data requests are now timeout-bounded, so a slow page refresh cannot leave the bootstrap stuck in `installing` without future manifest polls.
 

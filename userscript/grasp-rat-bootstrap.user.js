@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.28
+// @version      0.4.29
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.28';
+  const BOOTSTRAP_VERSION = '0.4.29';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -56,7 +56,7 @@
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
     userscriptUpdateUrl: USERSCRIPT_UPDATE_URL,
-    pollMs: 5000,
+    pollMs: 10000,
     userscriptVersionCheckMs: 300000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
@@ -88,7 +88,7 @@
   const cfg = {
     manifestUrl: String(GM_getValue('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
     userscriptUpdateUrl: String(GM_getValue('userscriptUpdateUrl', DEFAULTS.userscriptUpdateUrl) || DEFAULTS.userscriptUpdateUrl),
-    pollMs: Math.max(5000, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
+    pollMs: Math.max(10000, Number(GM_getValue('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
     userscriptVersionCheckMs: Math.max(60000, Number(GM_getValue('userscriptVersionCheckMs', DEFAULTS.userscriptVersionCheckMs)) || DEFAULTS.userscriptVersionCheckMs),
     watchdogMs: Math.max(250, Number(GM_getValue('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
     busyLeaseMs: Math.max(3000, Number(GM_getValue('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
@@ -1050,10 +1050,16 @@
     }
   }
 
-  function requestText(method, url, body = null, headers = {}) {
+  async function requestText(method, url, body = null, headers = {}) {
     const attempts = [];
     const pageFetch = typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.fetch === 'function' ? unsafeWindow.fetch.bind(unsafeWindow) : null;
     const sandboxFetch = typeof fetch === 'function' ? fetch.bind(globalThis) : null;
+    if (typeof GM_xmlhttpRequest === 'function') {
+      attempts.push({
+        transport: 'GM_xmlhttpRequest',
+        run: () => gmRequest(method, url, body, headers)
+      });
+    }
     if (pageFetch) {
       attempts.push({
         transport: 'page-fetch',
@@ -1066,37 +1072,21 @@
         run: () => fetchRequest(sandboxFetch, 'fetch', method, url, body, headers)
       });
     }
-    if (typeof GM_xmlhttpRequest === 'function') {
-      attempts.push({
-        transport: 'GM_xmlhttpRequest',
-        run: () => gmRequest(method, url, body, headers)
-      });
-    }
-    if (!attempts.length) return Promise.reject(new Error(`${method} ${url} failed: no request transports`));
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let pending = attempts.length;
-      const errors = [];
-      for (const attempt of attempts) {
-        withTimeout(
+    if (!attempts.length) throw new Error(`${method} ${url} failed: no request transports`);
+    const errors = [];
+    for (const attempt of attempts) {
+      try {
+        const text = await withTimeout(
           Promise.resolve().then(attempt.run),
           cfg.requestTimeoutMs + 500,
           `${attempt.transport} ${method} request`
-        ).then(text => {
-          if (settled) return;
-          settled = true;
-          resolve({ text, transport: attempt.transport });
-        }).catch(err => {
-          if (settled) return;
-          errors.push(`${attempt.transport}: ${err?.message || String(err)}`);
-          pending -= 1;
-          if (pending <= 0) {
-            settled = true;
-            reject(new Error(`${method} ${url} failed via all transports: ${errors.join(' | ')}`));
-          }
-        });
+        );
+        return { text, transport: attempt.transport };
+      } catch (err) {
+        errors.push(`${attempt.transport}: ${err?.message || String(err)}`);
       }
-    });
+    }
+    throw new Error(`${method} ${url} failed via all transports: ${errors.join(' | ')}`);
   }
 
   async function requestAcceptedTextWithFallback(label, urls, acceptText) {
@@ -1104,53 +1094,42 @@
     if (!candidates.length) {
       throw new Error(`${label} fetch failed: no urls`);
     }
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let completed = 0;
-      const errors = [];
-      const timers = candidates.map((url, i) => setTimeout(async () => {
-        if (settled) return;
-        try {
-          logBootstrap(`${label} fetch try`, {
-            url,
-            index: i + 1,
-            total: candidates.length,
-            delayMs: i * cfg.fallbackStaggerMs
-          });
-          noteFetchStatus(label, `fetching ${i + 1}/${candidates.length}`);
-          const { text, transport } = await requestText('GET', withCacheBust(url));
-          const accepted = acceptText ? await acceptText(text, url) : null;
-          if (settled) return;
-          settled = true;
-          timers.forEach(timer => clearTimeout(timer));
-          noteFetchStatus(label, `ok via ${transport}`, true);
-          logBootstrap(`${label} fetch ok`, {
-            url,
-            index: i + 1,
-            transport,
-            bytes: String(text || '').length
-          });
-          resolve({ text, url, accepted, transport });
-        } catch (err) {
-          if (settled) return;
-          const error = err?.message || String(err);
-          errors[i] = `${url}: ${error}`;
-          completed += 1;
-          noteFetchStatus(label, `failed ${completed}/${candidates.length}: ${error}`);
-          logBootstrap(`${label} fetch failed`, {
-            url,
-            index: i + 1,
-            total: candidates.length,
-            error
-          });
-          if (completed >= candidates.length) {
-            settled = true;
-            noteFetchStatus(label, `failed: ${errors.filter(Boolean).join(' | ')}`, true);
-            reject(new Error(`${label} fetch failed from ${candidates.length} url(s): ${errors.filter(Boolean).join(' | ')}`));
-          }
-        }
-      }, i * cfg.fallbackStaggerMs));
-    });
+    const errors = [];
+    for (let i = 0; i < candidates.length; i += 1) {
+      const url = candidates[i];
+      if (i > 0 && cfg.fallbackStaggerMs > 0) await sleep(cfg.fallbackStaggerMs);
+      try {
+        logBootstrap(`${label} fetch try`, {
+          url,
+          index: i + 1,
+          total: candidates.length,
+          delayMs: i > 0 ? cfg.fallbackStaggerMs : 0
+        });
+        noteFetchStatus(label, `fetching ${i + 1}/${candidates.length}`);
+        const { text, transport } = await requestText('GET', withCacheBust(url));
+        const accepted = acceptText ? await acceptText(text, url) : null;
+        noteFetchStatus(label, `ok via ${transport}`, true);
+        logBootstrap(`${label} fetch ok`, {
+          url,
+          index: i + 1,
+          transport,
+          bytes: String(text || '').length
+        });
+        return { text, url, accepted, transport };
+      } catch (err) {
+        const error = err?.message || String(err);
+        errors[i] = `${url}: ${error}`;
+        noteFetchStatus(label, `failed ${i + 1}/${candidates.length}: ${error}`);
+        logBootstrap(`${label} fetch failed`, {
+          url,
+          index: i + 1,
+          total: candidates.length,
+          error
+        });
+      }
+    }
+    noteFetchStatus(label, `failed: ${errors.filter(Boolean).join(' | ')}`, true);
+    throw new Error(`${label} fetch failed from ${candidates.length} url(s): ${errors.filter(Boolean).join(' | ')}`);
   }
 
   async function requestTextWithFallback(label, urls) {
