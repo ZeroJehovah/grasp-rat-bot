@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.35
+// @version      0.4.36
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,11 +27,13 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.35';
+  const BOOTSTRAP_VERSION = '0.4.36';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
+  const HOST_LAYOUT_STYLE_ID = 'grasp-rat-bot-host-layout-style';
+  const INLINE_LOGIN_BUTTON_ID = 'grasp-rat-bot-inline-login';
   const PAUSED_KEY = 'graspRatBotPaused';
   const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
@@ -831,7 +833,187 @@
     return state.paused;
   }
 
-  function bootstrapPanelShellStyle(error = false) {
+  function directChildren(el) {
+    return Array.from(el?.children || []);
+  }
+
+  function getNativeSidebar() {
+    return document.querySelector('aside.side') || document.querySelector('.app > .side');
+  }
+
+  function nativeSidebarBlock(side, test) {
+    return directChildren(side).find(el => {
+      try {
+        return Boolean(test(el));
+      } catch (_) {
+        return false;
+      }
+    }) || null;
+  }
+
+  function setDisplayNone(el) {
+    if (!el) return;
+    el.dataset.graspRatHiddenNativeBlock = 'true';
+    el.setAttribute('aria-hidden', 'true');
+    try {
+      el.style.setProperty('display', 'none', 'important');
+    } catch (_) {
+      el.style.display = 'none';
+    }
+  }
+
+  function ensureHostLayoutStyle() {
+    if (!document.head) return;
+    let style = document.getElementById(HOST_LAYOUT_STYLE_ID);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = HOST_LAYOUT_STYLE_ID;
+      document.head.appendChild(style);
+    }
+    style.textContent = [
+      'body.grasp-rat-bot-sidebar-embedded{margin:0!important;overflow:hidden!important}',
+      'body.grasp-rat-bot-sidebar-embedded .app{height:100vh!important;min-height:100vh!important;margin:0!important;padding:0!important;gap:0!important;align-items:stretch!important}',
+      'body.grasp-rat-bot-sidebar-embedded .side{position:relative!important;left:0!important;top:0!important;bottom:0!important;transform:none!important;align-self:stretch!important;height:100vh!important;min-height:100vh!important;max-height:100vh!important;margin:0!important;border-radius:0!important;display:flex!important;flex-direction:column!important;overflow-y:auto!important}',
+      'body.grasp-rat-bot-sidebar-embedded .side>.brand,body.grasp-rat-bot-sidebar-embedded .side>.view-control,body.grasp-rat-bot-sidebar-embedded .side>[data-grasp-rat-hidden-native-block="true"]{display:none!important}',
+      'body.grasp-rat-bot-sidebar-embedded #joinBtn[data-grasp-rat-native-login-hidden="true"]{display:none!important}',
+      'body.grasp-rat-bot-sidebar-embedded .side>.bottom-dock{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;inset:auto!important;transform:none!important;width:auto!important;max-width:none!important;margin:0!important;border-radius:0!important;flex:1 1 auto!important;min-height:0!important;display:flex!important;flex-direction:column!important;overflow:hidden!important}',
+      'body.grasp-rat-bot-sidebar-embedded .side>.bottom-dock>.dock-minimap{display:none!important}',
+      'body.grasp-rat-bot-sidebar-embedded .side>.bottom-dock>.log-wrap{flex:1 1 auto!important;min-height:0!important;display:flex!important;flex-direction:column!important}',
+      'body.grasp-rat-bot-sidebar-embedded .side .log{flex:1 1 auto!important;min-height:120px!important}',
+      'body.grasp-rat-bot-sidebar-embedded #' + PANEL_ID + '{margin:0!important;flex:0 0 auto!important}'
+    ].join('\n');
+  }
+
+  function syncNativeSidebarStructure() {
+    const side = getNativeSidebar();
+    if (!side || !document.body) {
+      document.body?.classList.remove('grasp-rat-bot-sidebar-embedded');
+      return null;
+    }
+    ensureHostLayoutStyle();
+    document.body.classList.add('grasp-rat-bot-sidebar-embedded');
+    setDisplayNone(nativeSidebarBlock(side, el => el.classList?.contains('brand')));
+    setDisplayNone(nativeSidebarBlock(side, el => el.querySelector?.('#status,#inGame,#entities,#visibleCount,#cells') || /Runtime Metrics/i.test(el.textContent || '')));
+    setDisplayNone(nativeSidebarBlock(side, el => el.classList?.contains('view-control') || el.querySelector?.('#densityText,#scaleText,#staminaText,#teleportInput,#zoomOutBtn,#zoomInBtn')));
+    return side;
+  }
+
+  function controlWsLooksActive(control) {
+    const states = [control?.nativeWsReadyState, control?.wsReadyState];
+    return Boolean(control?.rawWsOpen || control?.nativeWsOpen || control?.wsOpen || control?.connecting || states.some(value => {
+      const n = Number(value);
+      return n === 0 || n === 1;
+    }));
+  }
+
+  function pageLooksLoggedIn(status) {
+    const inputText = String(document.getElementById('userId')?.value || '').trim();
+    const hasNativeUser = Boolean(inputText && !/linuxdo|login|登录|登陆/i.test(inputText));
+    const control = status?.control || {};
+    const hasToken = Boolean(localStorage.getItem('tmpGameSessionToken') || control.hasToken);
+    const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
+    const statusUserId = Number(currentUserIdFromStatus(status) || 0);
+    return Boolean(hasNativeUser || hasToken || hasSelf || (statusUserId && controlWsLooksActive(control)));
+  }
+
+  function syncEntityControlLogin(status) {
+    const side = getNativeSidebar();
+    const nativeJoin = document.getElementById('joinBtn');
+    if (nativeJoin) {
+      nativeJoin.dataset.graspRatNativeLoginHidden = 'true';
+      nativeJoin.setAttribute('aria-hidden', 'true');
+      try {
+        nativeJoin.style.setProperty('display', 'none', 'important');
+      } catch (_) {
+        nativeJoin.style.display = 'none';
+      }
+    }
+    const grid = nativeJoin?.parentElement || side?.querySelector?.('.control-grid') || null;
+    if (!grid) return;
+    const loggedIn = pageLooksLoggedIn(status);
+    let loginButton = document.getElementById(INLINE_LOGIN_BUTTON_ID);
+    if (state.cloudflareError || loggedIn) {
+      if (loginButton) loginButton.remove();
+      return;
+    }
+    if (!loginButton) {
+      loginButton = document.createElement('button');
+      loginButton.id = INLINE_LOGIN_BUTTON_ID;
+      loginButton.type = 'button';
+      grid.insertBefore(loginButton, document.getElementById('leaveBtn') || null);
+    } else if (loginButton.parentElement !== grid) {
+      grid.insertBefore(loginButton, document.getElementById('leaveBtn') || null);
+    }
+    loginButton.className = nativeJoin?.className || 'join';
+    loginButton.textContent = loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录';
+    loginButton.title = '通过脚本立即登录/加入游戏';
+    loginButton.disabled = loginButton.dataset.graspRatLoginPending === 'true';
+    loginButton.onclick = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (loginButton.dataset.graspRatLoginPending === 'true') return;
+      loginButton.dataset.graspRatLoginPending = 'true';
+      loginButton.disabled = true;
+      loginButton.textContent = '登录中';
+      forceLoginNow('sidebar immediate login')
+        .catch(err => noteBootstrapError('sidebar force login failed', err))
+        .finally(() => {
+          const current = document.getElementById(INLINE_LOGIN_BUTTON_ID);
+          if (current) {
+            current.dataset.graspRatLoginPending = 'false';
+            current.disabled = false;
+          }
+          updateBootstrapPanel(true);
+        });
+    };
+  }
+
+  function placeBootstrapPanel(panel) {
+    const side = syncNativeSidebarStructure();
+    if (!side) {
+      if (panel.parentElement !== document.body) document.body.appendChild(panel);
+      panel.dataset.graspRatEmbedded = 'false';
+      return false;
+    }
+    const bottomDock = nativeSidebarBlock(side, el => el.classList?.contains('bottom-dock'));
+    const logWrap = bottomDock?.querySelector?.('.log-wrap') || null;
+    if (bottomDock && logWrap) {
+      if (panel.parentElement !== bottomDock || panel.nextSibling !== logWrap) bottomDock.insertBefore(panel, logWrap);
+    } else if (bottomDock) {
+      if (panel.parentElement !== side || panel.nextSibling !== bottomDock) side.insertBefore(panel, bottomDock);
+    } else {
+      const entityBlock = nativeSidebarBlock(side, el => el.querySelector?.('#userId,#leaveBtn,#joinBtn'));
+      if (entityBlock?.nextSibling) side.insertBefore(panel, entityBlock.nextSibling);
+      else side.appendChild(panel);
+    }
+    panel.dataset.graspRatEmbedded = 'true';
+    return true;
+  }
+
+  function bootstrapPanelShellStyle(error = false, embedded = false) {
+    if (embedded) {
+      return [
+        'position:static',
+        'z-index:auto',
+        'width:100%',
+        'max-width:none',
+        'max-height:none',
+        'box-sizing:border-box',
+        'padding:0',
+        'border-top:1px solid ' + (error ? 'rgba(251,113,133,.48)' : 'rgba(148,163,184,.20)'),
+        'border-right:0',
+        'border-bottom:0',
+        'border-left:0',
+        'border-radius:0',
+        'background:transparent',
+        'color:#e5edf7',
+        'font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+        'box-shadow:none',
+        'pointer-events:auto',
+        'white-space:normal',
+        'overflow:visible'
+      ].join(';');
+    }
     return [
       'position:fixed',
       'right:16px',
@@ -872,7 +1054,8 @@
       document.body.appendChild(panel);
     }
     panel.setAttribute('aria-live', 'polite');
-    panel.style.cssText = bootstrapPanelShellStyle();
+    const embedded = placeBootstrapPanel(panel);
+    panel.style.cssText = bootstrapPanelShellStyle(false, embedded);
     return panel;
   }
 
@@ -885,7 +1068,8 @@
         panel.id = PANEL_ID;
         document.body.appendChild(panel);
       }
-      panel.style.cssText = bootstrapPanelShellStyle(true) + ';padding:12px 14px;color:#fee2e2';
+      const embedded = placeBootstrapPanel(panel);
+      panel.style.cssText = bootstrapPanelShellStyle(true, embedded) + ';padding:12px 14px;color:#fee2e2';
       panel.textContent = `BOT 面板错误：${message || state.lastError || 'unknown error'}`;
     } catch (_) {}
   }
@@ -899,6 +1083,7 @@
     if (!panel) return;
     const paused = isPaused();
     const status = getBotStatus();
+    syncEntityControlLogin(status);
     const decision = status?.lastDecision || null;
     const reasonDetail = state.cloudflareError?.displayReason || decisionReasonDetail(decision, status) || reasonText(decision?.reason);
     const self = status?.self || decision?.self || null;
@@ -915,7 +1100,6 @@
     const session = status?.session || {};
     const persistent = activePersistentExitDetail(status);
     const reloginHold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
-    const showImmediateLogin = !state.cloudflareError && !paused && Number(reloginHold || 0) > 0;
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
@@ -946,6 +1130,44 @@
           line.appendChild(document.createTextNode(String(part ?? '')));
         }
       }
+      appendParent.appendChild(line);
+      return line;
+    };
+    const appendStaminaLine = () => {
+      const stamina = self?.stamina || {};
+      const exhausted = Array.isArray(stamina.exhausted) && stamina.exhausted.length > 0;
+      const line = document.createElement('div');
+      line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;line-height:1.42;color:#e5edf7';
+      const hpLabel = document.createElement('span');
+      const hpValue = Number(self?.hp);
+      hpLabel.textContent = 'HP ' + (self?.hp ?? '-');
+      if (Number.isFinite(hpValue) && hpValue < 100) hpLabel.style.cssText = 'color:#fca5a5;font-weight:700';
+      else if (hpValue === 100) hpLabel.style.cssText = 'color:#86efac;font-weight:700';
+      const staminaPill = document.createElement('span');
+      staminaPill.className = 'pill compact' + (exhausted ? ' exhausted' : '');
+      staminaPill.textContent = '体力: ' + formatStamina(self);
+      staminaPill.style.cssText = [
+        'display:inline-flex',
+        'align-items:center',
+        'max-width:100%',
+        'min-height:22px',
+        'box-sizing:border-box',
+        'padding:2px 8px',
+        'border:1px solid ' + (exhausted ? 'rgba(251,113,133,.42)' : 'rgba(148,163,184,.24)'),
+        'border-radius:999px',
+        'background:' + (exhausted ? 'rgba(127,29,29,.28)' : 'rgba(15,23,42,.54)'),
+        'color:' + (exhausted ? '#fecdd3' : '#cbd5e1'),
+        'font-size:11px',
+        'line-height:1.25',
+        'font-variant-numeric:tabular-nums',
+        'overflow-wrap:anywhere'
+      ].join(';');
+      const dropLabel = document.createElement('span');
+      dropLabel.textContent = 'Drop ' + (self?.drop ?? '-');
+      dropLabel.style.cssText = 'color:#e5edf7';
+      line.appendChild(hpLabel);
+      line.appendChild(staminaPill);
+      line.appendChild(dropLabel);
       appendParent.appendChild(line);
       return line;
     };
@@ -1011,26 +1233,6 @@
     header.appendChild(titleWrap);
     const actions = document.createElement('div');
     actions.style.cssText = 'display:flex;align-items:center;gap:6px;flex:0 0 auto';
-    if (showImmediateLogin) {
-      const loginButton = document.createElement('button');
-      loginButton.type = 'button';
-      loginButton.title = '忽略当前退出冷却，立即登录';
-      loginButton.style.cssText = bootstrapButtonStyle('join');
-      loginButton.textContent = '立即登录';
-      loginButton.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        loginButton.disabled = true;
-        loginButton.style.cursor = 'default';
-        loginButton.style.opacity = '.72';
-        loginButton.textContent = '登录中';
-        forceLoginNow('panel immediate login').catch(err => {
-          noteBootstrapError('force login failed', err);
-          updateBootstrapPanel(true);
-        });
-      }, { once: true });
-      actions.appendChild(loginButton);
-    }
     actions.appendChild(button);
     header.appendChild(actions);
     appendParent.appendChild(header);
@@ -1097,12 +1299,7 @@
         { label: 'coins', value: '+' + formatNumber(coinsGained, '0'), color: coinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
         { label: 'kills', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
-      const hpValue = Number(self?.hp);
-      appendRichLine([
-        'HP ',
-        { text: self?.hp ?? '-', style: Number.isFinite(hpValue) && hpValue < 100 ? 'color:#fca5a5;font-weight:700' : (hpValue === 100 ? 'color:#86efac;font-weight:700' : '') },
-        ' / 体力: ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-')
-      ]);
+      appendStaminaLine();
       appendLine('Active ' + nearestActive);
       if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
         appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
