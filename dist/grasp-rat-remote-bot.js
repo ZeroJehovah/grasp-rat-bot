@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.77"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.78"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -241,6 +241,8 @@
     offlineLeaveMs: 3000,
     offlineUnsafeLeaveMs: 0,
     offlineSafeLeaveMs: 3000,
+    offlineReconnectChurnWindowMs: 10000,
+    offlineReconnectChurnMinEvents: 3,
     offlinePassiveDangerRadius: 2500,
     offlineLeaveRetryMs: 600,
     leaveCommandTimeoutMs: 600,
@@ -491,6 +493,10 @@
 	      transport: '',
 	      nativeWsOpen: false,
 	      nativeWsReadyState: null,
+	      nativeReconnectEvents: [],
+	      nativeReconnectChurn: false,
+	      nativeReconnectEventCount: 0,
+	      nativeReconnectWindowMs: 0,
 	      lastOpenAt: 0,
 	      lastMessageAt: 0,
 	      lastError: '',
@@ -1080,6 +1086,7 @@
 	      'control-ws-offline': 'WebSocket 离线',
 	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
 		      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+		      'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
 		      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
 		      'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
 		      'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
@@ -1524,7 +1531,7 @@
 	        if (!reason) return '';
 	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|login-cooldown|login-control-missing|game-session-connecting)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
-	        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
+	        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
 	      }
 
@@ -2258,6 +2265,7 @@
 		    if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
 		    const text = String(reason || '').toLowerCase();
 		    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+		    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return 'WebSocket 反复重连，退出等待重连';
 		    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
 		    if (offlineSafety?.unsafe) return 'WebSocket 离线且周围危险，退出等待重连';
 		    return 'WebSocket 离线，退出等待重连';
@@ -2423,6 +2431,35 @@
       clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
     }
     return Math.round(remaining);
+  }
+
+  function clearLoginSuppressMatching(pattern) {
+    try {
+      const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+      if (!pattern.test(suppressReason)) return false;
+      localStorage.removeItem(LOGIN_SUPPRESS_KEY);
+      localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function clearOfflineReloginHold(reason = 'online self restored') {
+    const t = Date.now();
+    bot.offlineReloginUntil = 0;
+    bot.lastOfflineLeaveWaitMs = 0;
+    bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;
+    if (bot.lastOfflineLeaveResult && typeof bot.lastOfflineLeaveResult === 'object') {
+      bot.lastOfflineLeaveResult.onlineRecoveryAt = t;
+      bot.lastOfflineLeaveResult.onlineRecoveryReason = String(reason || 'online self restored');
+      bot.lastOfflineLeaveResult.reloginUntil = 0;
+      bot.lastOfflineLeaveResult.holdRemainingMs = 0;
+      bot.lastOfflineLeaveResult.reloginDelayMs = 0;
+    }
+    bot.lastOfflineLeaveResult = null;
+    clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+    clearLoginSuppressMatching(/offline.*leave/i);
   }
 
   function summarizePursuit(pursuit = bot.pursuit) {
@@ -3267,6 +3304,54 @@
 	    };
 	  }
 
+  function wsConstant(name, fallback) {
+    try {
+      return typeof WebSocket !== 'undefined' && Number.isFinite(Number(WebSocket[name]))
+        ? Number(WebSocket[name])
+        : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function isOfflineishWsReadyState(value) {
+    const state = wsReadyStateNumber(value);
+    if (!Number.isFinite(state)) return false;
+    return state === wsConstant('CONNECTING', 0)
+      || state === wsConstant('CLOSING', 2)
+      || state === wsConstant('CLOSED', 3);
+  }
+
+  function noteNativeReconnectState(native) {
+    if (!native) return { count: 0, churn: false, windowMs: 0 };
+    const control = bot.control;
+    const t = Date.now();
+    const windowMs = Math.max(1000, Number(cfg.offlineReconnectChurnWindowMs || 0) || 10000);
+    const minEvents = Math.max(2, Number(cfg.offlineReconnectChurnMinEvents || 0) || 3);
+    const readyState = wsReadyStateNumber(native.wsReadyState);
+    const previousReadyState = wsReadyStateNumber(control.observedNativeWsReadyState);
+    const previousWs = control.observedNativeWs || null;
+    const wsChanged = Boolean(native.ws && previousWs && native.ws !== previousWs);
+    const hadPrevious = Boolean(previousWs || Number.isFinite(previousReadyState));
+    const wasOpen = previousReadyState === wsConstant('OPEN', 1);
+    const offlineish = Boolean(!native.wsOpen && isOfflineishWsReadyState(readyState));
+    const becameOfflineish = offlineish && (!hadPrevious || wsChanged || wasOpen || previousReadyState !== readyState);
+    const events = Array.isArray(control.nativeReconnectEvents) ? control.nativeReconnectEvents : [];
+    const freshEvents = events.filter(at => t - Number(at || 0) <= windowMs);
+    if (becameOfflineish) freshEvents.push(t);
+    control.nativeReconnectEvents = freshEvents;
+    control.nativeReconnectEventCount = freshEvents.length;
+    control.nativeReconnectWindowMs = windowMs;
+    control.nativeReconnectChurn = Boolean(offlineish && freshEvents.length >= minEvents);
+    control.observedNativeWs = native.ws || null;
+    control.observedNativeWsReadyState = native.wsReadyState;
+    return {
+      count: control.nativeReconnectEventCount,
+      churn: control.nativeReconnectChurn,
+      windowMs
+    };
+  }
+
 	  function detachNativeMessagePump() {
 	    if (bot.nativeMessageWs) {
 	      try {
@@ -3333,6 +3418,7 @@
 
 	  function syncNativeControl(native = getNativeControl()) {
 	    if (!native) return false;
+	    noteNativeReconnectState(native);
 	    bot.control.transport = 'native-page';
 	    bot.control.nativeWsOpen = native.wsOpen;
 	    bot.control.nativeWsReadyState = native.wsReadyState;
@@ -3373,6 +3459,9 @@
 	      allowBotWebSocketFallback: false,
 	      nativeWsOpen: Boolean(native?.wsOpen),
 	      nativeWsReadyState: native ? native.wsReadyState : null,
+	      nativeReconnectChurn: Boolean(control.nativeReconnectChurn),
+	      nativeReconnectEventCount: Number(control.nativeReconnectEventCount || 0),
+	      nativeReconnectWindowMs: Number(control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0),
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
 	      lastError: serverPositionStallOffline
@@ -7179,7 +7268,12 @@
         if (cfg.once) bot.stop('once');
         return;
       }
-      const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+      const offlineHoldControl = summarizeControl();
+      let offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+      if (offlineHoldRemainingMs > 0 && self && isAlive(self) && offlineHoldControl.wsOpen) {
+        clearOfflineReloginHold('online self restored during offline hold');
+        offlineHoldRemainingMs = 0;
+      }
       if (offlineHoldRemainingMs > 0) {
         const offlineLeaveDetail = activeOfflineLeaveDetail();
         bot.pursuit = null;
@@ -7196,7 +7290,7 @@
           dy: 0,
           self: currentSummary,
           currentUserId: getCurrentUserId(),
-	          control: summarizeControl(),
+	          control: offlineHoldControl,
 	          holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs(),
 	          displayReason: offlineLeaveDetail?.displayReason || offlineLeaveSummary('offline leave wait', offlineSafety),
 	          offlineSafety,
@@ -7309,34 +7403,46 @@
 	      ensureControlWs();
       const serverPositionStall = assessServerPositionStall(self);
       const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
-      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline;
+      const reconnectChurn = Boolean(bot.control.nativeReconnectChurn);
+      const reconnectChurnDetail = reconnectChurn ? {
+        count: Number(bot.control.nativeReconnectEventCount || 0),
+        windowMs: Number(bot.control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
+      } : null;
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn;
 		    if (!cfg.dryRun && controlOffline) {
 		      bot.pursuit = null;
-		      stopMotionSafely(serverPositionStallOffline ? 'server-position-stalled' : 'control-ws-offline');
+		      stopMotionSafely(serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline'));
 		      if (!bot.offlineSince) bot.offlineSince = Date.now();
 		      const offlineAgeMs = Date.now() - bot.offlineSince;
-        const offlineSafety = assessOfflineSafety(self);
+        const offlineSafety = {
+          ...assessOfflineSafety(self),
+          reconnectChurn: reconnectChurnDetail
+        };
         const safeLeaveMs = Math.min(3000, Math.max(0, Number(cfg.offlineSafeLeaveMs ?? cfg.offlineLeaveMs ?? 3000)));
         const unsafeLeaveMs = Math.max(0, Number(cfg.offlineUnsafeLeaveMs ?? 0));
-        const leaveDelayMs = offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs;
-			      const leaveResult = offlineAgeMs >= leaveDelayMs
-			        ? await leaveOffline(serverPositionStallOffline ? 'server position stalled' : 'websocket offline', currentSummary, offlineSafety)
+        const leaveDelayMs = reconnectChurn ? 0 : (offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs);
+        const leaveResult = offlineAgeMs >= leaveDelayMs
+			        ? await leaveOffline(serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline'), currentSummary, offlineSafety)
 			        : null;
         const offlineDetail = activeOfflineLeaveDetail();
+        const offlineWaitReason = leaveResult?.attempted && !leaveResult?.error
+          ? 'offline-leave'
+          : (serverPositionStallOffline
+            ? 'control-ws-server-position-stalled'
+            : (reconnectChurn
+              ? 'control-ws-reconnect-churn'
+              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')));
 	        bot.lastDecision = {
 	          kind: 'wait',
-	          reason: leaveResult?.attempted && !leaveResult?.error
-              ? 'offline-leave'
-              : (serverPositionStallOffline
-                ? 'control-ws-server-position-stalled'
-                : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')),
+	          reason: offlineWaitReason,
 	          control: summarizeControl(),
 	          self: summarizeSelf(self),
 	          offlineAgeMs,
           leaveDelayMs,
           offlineSafety,
+          reconnectChurn: reconnectChurnDetail,
           serverPositionStall,
-          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '',
+          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (reconnectChurn ? 'WebSocket 反复重连，正在退出' : ''),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
