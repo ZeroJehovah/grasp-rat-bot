@@ -224,6 +224,7 @@ function textParts(entry) {
   const enemyExit = entry?.enemyExit || {};
   const leave = decision?.leave || {};
   return [
+    entry?.reason,
     decision.reason,
     decision.displayReason,
     decision.exitSummary,
@@ -245,6 +246,7 @@ function exitReason(entry) {
   return String(
     entry?.exit?.reason
     || decision?.leave?.reason
+    || entry?.reason
     || decision?.reason
     || entry?.enemyExit?.reason
     || ''
@@ -270,12 +272,18 @@ function hasTopLevelExit(entry) {
   return Boolean(entry?.exit && typeof entry.exit === 'object');
 }
 
+function isSuspendedReloginEvent(entry) {
+  const reason = String(entry?.reason || exitReason(entry) || '');
+  return /^suspended:(?:login-suppressed|manual-login)$/i.test(reason);
+}
+
 function isExitish(entry) {
   const decision = entry?.decision || {};
   const reason = exitReason(entry);
   return hasTopLevelExit(entry)
     || Boolean(entry?.enemyExit)
     || Boolean(loginExitHoldIssues(entry).length)
+    || isSuspendedReloginEvent(entry)
     || decision.kind === 'leave'
     || /(?:^|[-\s])(leave|exit|offline|reconnect|control-ws|stamina-exhausted)(?:$|[-\s])/i.test(reason);
 }
@@ -624,7 +632,7 @@ function auditFile(file, rootDir, options) {
     const eventRequiredDelayMs = requiredDelayMs(entry, options);
     const issues = [];
     const loginIssues = loginExitHoldIssues(entry);
-    if (!topLevelExit && !loginIssues.length) issues.push('missing-top-level-exit');
+    if (!topLevelExit && !loginIssues.length && !isSuspendedReloginEvent(entry)) issues.push('missing-top-level-exit');
     if (unsafe && eventDelayMs < options.minUnsafeDelayMs) issues.push('unsafe-exit-delay-below-minimum');
     for (const issue of loginIssues) issues.push(issue);
     const event = reuseExisting ? existing : {
@@ -1391,6 +1399,21 @@ function runSelfTest() {
             ignoredSuppressMs: 45000
           }
         }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 5600,
+        version: 'bootstrap-0.4.97',
+        reason: 'suspended:login-suppressed',
+        decision: {
+          kind: 'wait',
+          reason: 'login-suppressed',
+          displayReason: '等待重连：pending unsafe hostile exit'
+        },
+        login: {
+          suppressRemainingMs: 30000,
+          suppressReason: 'pending unsafe hostile exit'
+        }
       }
     ];
     fs.writeFileSync(
@@ -1399,13 +1422,15 @@ function runSelfTest() {
     );
     const reloginReport = auditLogs({ dir: loginLogsDir, manifestPath });
     cases += 1;
-    assertSelfTest(reloginReport.exitEvents.length === 3, `expected 3 relogin events, got ${reloginReport.exitEvents.length}`);
+    assertSelfTest(reloginReport.exitEvents.length === 4, `expected 4 relogin events, got ${reloginReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(issueCount(reloginReport, 'login-attempt-during-exit-hold') === 2, 'expected two login during hold issues');
     cases += 1;
     assertSelfTest(issueCount(reloginReport, 'manual-login-cleared-exit-hold') === 1, 'expected one manual login hold-clear issue');
     cases += 1;
     assertSelfTest(issueCount(reloginReport, 'missing-top-level-exit') === 0, 'expected relogin hold issues not to require top-level exit');
+    cases += 1;
+    assertSelfTest(reloginReport.exitReasonCounts.some(item => item.reason === 'suspended:login-suppressed' && item.events === 1), 'expected suspended login-suppressed reason count');
 
     const behaviorEntries = [
       {
