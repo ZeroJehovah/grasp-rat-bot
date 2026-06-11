@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.80"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.81"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -743,6 +743,7 @@
     const value = staminaRemaining(e, windowName);
     return value !== null && value < staminaExhaustedThreshold();
   };
+  const combatMovementBlockedByStamina = self => isStaminaWindowExhausted(self, '5s');
   const hasLongWindowStamina = e => !isStaminaWindowExhausted(e, '1h') && !isStaminaWindowExhausted(e, '1d');
   const hasMoveStamina = e => Number(e?.stamina_5s_remaining_milli || 0) > 250 && hasLongWindowStamina(e);
   const hasAttackStamina = e => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina && hasLongWindowStamina(e);
@@ -1079,6 +1080,7 @@
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
+	      'combat-stamina-hold': '战斗：短体力不足，停止移动并开火',
 	      'combat-pressure-close': '战斗：久攻未中，压近开火',
 	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
@@ -5988,15 +5990,24 @@
 	    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
+      const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
+        ? {
+          reason: 'stamina-5s-exhausted',
+          stamina5s: staminaRemaining(self, '5s'),
+          thresholdMs: staminaExhaustedThreshold(),
+          requestedDx: dir.dx,
+          requestedDy: dir.dy
+        }
+        : null;
       return {
         kind: 'seek-enemy',
-        reason: 'combat-reengage',
+        reason: movementSuppressed ? 'combat-stamina-hold' : 'combat-reengage',
         combat: true,
         ignoreReturnBlock: true,
         shoot: false,
         forceShoot: false,
-        dx: dir.dx,
-        dy: dir.dy,
+        dx: movementSuppressed ? 0 : dir.dx,
+        dy: movementSuppressed ? 0 : dir.dy,
         target: baseTarget,
         combatState: {
           selfHp,
@@ -6006,7 +6017,8 @@
             attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
             outOfRangeMs: target.combatEngagement?.outOfRangeMs || 0,
             graceRemainingMs: target.combatEngagement?.graceRemainingMs || 0
-          }
+          },
+          movementSuppressed
         }
       };
     }
@@ -6021,16 +6033,28 @@
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
     combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
     return {
       kind: 'attack',
-      reason: realBulletPressure
-        ? 'combat-tangent-dodge'
-        : (spacingActive
-          ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-          : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))),
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (realBulletPressure
+          ? 'combat-tangent-dodge'
+          : (spacingActive
+            ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+            : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
@@ -6102,7 +6126,8 @@
           noDamageMs: Math.round(pressureClose.noDamageMs),
           preferClosing: Boolean(pressureClose.active),
           merged: Boolean(!realBulletPressure)
-        } : null
+        } : null,
+        movementSuppressed
       }
     };
   }

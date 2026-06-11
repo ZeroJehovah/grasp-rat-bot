@@ -298,6 +298,10 @@ function runSelfTest() {
     return Number.isFinite(value) ? value : null;
   };
   const staminaExhaustedThreshold = () => Math.max(0, Number(cfg.staminaExhaustedThresholdMs ?? 1000));
+  const combatMovementBlockedByStamina = self => {
+    const stamina5s = staminaRemaining(self, '5s');
+    return stamina5s !== null && stamina5s < staminaExhaustedThreshold();
+  };
   const hasFullStamina = e => {
     const limit = staminaLimit(e);
     const stamina = Number(e?.stamina_5s_remaining_milli ?? NaN);
@@ -1128,11 +1132,22 @@ function runSelfTest() {
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const spacing = incoming ? { active: false, dx: 0, dy: 0 } : combatSpacingVector(self, target, target.distance);
     const pressureClose = combatPressureCloseVector(self, target, target.distance, selfHp);
-    const dx = pressureClose.active ? pressureClose.dx : (incoming ? 1 : spacing.dx);
-    const dy = pressureClose.active ? pressureClose.dy : (incoming ? 1 : spacing.dy);
+    const requestedDx = pressureClose.active ? pressureClose.dx : (incoming ? 1 : spacing.dx);
+    const requestedDy = pressureClose.active ? pressureClose.dy : (incoming ? 1 : spacing.dy);
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(requestedDx || requestedDy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx,
+        requestedDy
+      }
+      : null;
+    const dx = movementSuppressed ? 0 : requestedDx;
+    const dy = movementSuppressed ? 0 : requestedDy;
     return {
       kind: 'attack',
-      reason: incoming ? 'combat-tangent-dodge' : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack')),
+      reason: movementSuppressed ? 'combat-stamina-hold' : (incoming ? 'combat-tangent-dodge' : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack'))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
@@ -1157,7 +1172,8 @@ function runSelfTest() {
           distance: Math.round(pressureClose.distance),
           closeRange: Math.round(pressureClose.closeRange),
           noDamageMs: Math.round(pressureClose.noDamageMs)
-        } : null
+        } : null,
+        movementSuppressed
       }
     };
   }
@@ -2039,6 +2055,17 @@ function runSelfTest() {
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.pressureClose?.reason;
       })(),
       want: 'combat-pressure-close:1:0:long-no-damage'
+    },
+    {
+      name: 'combat short stamina exhaustion stops movement but keeps shooting',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 500 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Passive', hp: 100, firing: true, drop: 20 }
+        );
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.movementSuppressed?.reason;
+      })(),
+      want: 'combat-stamina-hold:0:0:true:stamina-5s-exhausted'
     },
     {
       name: 'coin route uses horizontal axis when x gap dominates',
@@ -3358,6 +3385,7 @@ function browserBotSource(config) {
     const value = staminaRemaining(e, windowName);
     return value !== null && value < staminaExhaustedThreshold();
   };
+  const combatMovementBlockedByStamina = self => isStaminaWindowExhausted(self, '5s');
   const hasLongWindowStamina = e => !isStaminaWindowExhausted(e, '1h') && !isStaminaWindowExhausted(e, '1d');
   const hasMoveStamina = e => Number(e?.stamina_5s_remaining_milli || 0) > 250 && hasLongWindowStamina(e);
   const hasAttackStamina = e => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina && hasLongWindowStamina(e);
@@ -3694,6 +3722,7 @@ function browserBotSource(config) {
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
+	      'combat-stamina-hold': '战斗：短体力不足，停止移动并开火',
 	      'combat-pressure-close': '战斗：久攻未中，压近开火',
 	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
@@ -8603,15 +8632,24 @@ function browserBotSource(config) {
 	    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
+      const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
+        ? {
+          reason: 'stamina-5s-exhausted',
+          stamina5s: staminaRemaining(self, '5s'),
+          thresholdMs: staminaExhaustedThreshold(),
+          requestedDx: dir.dx,
+          requestedDy: dir.dy
+        }
+        : null;
       return {
         kind: 'seek-enemy',
-        reason: 'combat-reengage',
+        reason: movementSuppressed ? 'combat-stamina-hold' : 'combat-reengage',
         combat: true,
         ignoreReturnBlock: true,
         shoot: false,
         forceShoot: false,
-        dx: dir.dx,
-        dy: dir.dy,
+        dx: movementSuppressed ? 0 : dir.dx,
+        dy: movementSuppressed ? 0 : dir.dy,
         target: baseTarget,
         combatState: {
           selfHp,
@@ -8621,7 +8659,8 @@ function browserBotSource(config) {
             attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
             outOfRangeMs: target.combatEngagement?.outOfRangeMs || 0,
             graceRemainingMs: target.combatEngagement?.graceRemainingMs || 0
-          }
+          },
+          movementSuppressed
         }
       };
     }
@@ -8636,16 +8675,28 @@ function browserBotSource(config) {
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
     combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
     return {
       kind: 'attack',
-      reason: realBulletPressure
-        ? 'combat-tangent-dodge'
-        : (spacingActive
-          ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-          : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))),
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (realBulletPressure
+          ? 'combat-tangent-dodge'
+          : (spacingActive
+            ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+            : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
@@ -8717,7 +8768,8 @@ function browserBotSource(config) {
           noDamageMs: Math.round(pressureClose.noDamageMs),
           preferClosing: Boolean(pressureClose.active),
           merged: Boolean(!realBulletPressure)
-        } : null
+        } : null,
+        movementSuppressed
       }
     };
   }
