@@ -338,7 +338,8 @@ function runSelfTest() {
     || truthyFlag(e?.isInvulnerable)
     || truthyFlag(e?.immune)
     || truthyFlag(e?.is_immune);
-  const isInvulnerableActive = e => e?.current_join_mode === 'Active' && isInvulnerable(e);
+  const isJoinModeActive = e => e?.current_join_mode === 'Active' || e?.mode === 'Active';
+  const isInvulnerableActive = e => isJoinModeActive(e) && isInvulnerable(e);
   const staminaLimit = e => Number(e?.stamina_5s_limit_milli || 10000);
   const staminaRemaining = (e, windowName) => {
     const value = Number(e?.['stamina_' + windowName + '_remaining_milli'] ?? NaN);
@@ -362,9 +363,9 @@ function runSelfTest() {
     || truthyFlag(e?.is_firing)
     || truthyFlag(e?.attacking)
     || truthyFlag(e?.is_attacking);
-  const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (e.current_join_mode === 'Active' && (!hasFullStamina(e) || isInvulnerableActive(e)));
+  const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isActive(e);
-  const isAfkTarget = e => !isActive(e) && !isMovingThreat(e);
+  const isAfkTarget = e => !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
   const normalizeTargetText = value => String(value ?? '').trim();
   const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
     .map(normalizeTargetText)
@@ -1081,6 +1082,7 @@ function runSelfTest() {
     return (incomingMatch ? 1000000000 : 0)
       + (isFiringEntity(target) ? 500000000 : 0)
       + (unknownIncoming && isActive(target) ? 200000000 : 0)
+      + (isJoinModeActive(target) ? 150000000 : 0)
       + (isActive(target) ? 100000000 : 0)
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
@@ -1088,6 +1090,7 @@ function runSelfTest() {
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
+    if (isJoinModeActive(target)) return true;
     if (isFiringEntity(target)) return true;
     if (isActive(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
@@ -2682,13 +2685,13 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'stationary full-stamina active in range does not start combat',
+      name: 'stationary full-stamina active in range beats coin pickup',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 }],
         coins: [{ drop_id: 2, x: 5000, y: 0, amount: 1 }]
       }).kind,
-      want: 'coin'
+      want: 'attack'
     },
     {
       name: 'full hp avoids invulnerable active in caution range',
@@ -4080,7 +4083,8 @@ function browserBotSource(config) {
     || truthyFlag(e?.isInvulnerable)
     || truthyFlag(e?.immune)
     || truthyFlag(e?.is_immune);
-  const isInvulnerableActive = e => e?.current_join_mode === 'Active' && isInvulnerable(e);
+  const isJoinModeActive = e => e?.current_join_mode === 'Active' || e?.mode === 'Active';
+  const isInvulnerableActive = e => isJoinModeActive(e) && isInvulnerable(e);
   const staminaRemaining = (e, windowName) => {
     const value = Number(e?.['stamina_' + windowName + '_remaining_milli'] ?? NaN);
     return Number.isFinite(value) ? value : null;
@@ -4112,9 +4116,9 @@ function browserBotSource(config) {
     || truthyFlag(e?.attacking)
     || truthyFlag(e?.is_attacking);
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
-  const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (e.current_join_mode === 'Active' && (!hasFullStamina(e) || isInvulnerableActive(e)));
+  const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
-  const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
+  const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const normalizeTargetText = value => String(value ?? '').trim();
   const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
     .map(normalizeTargetText)
@@ -9029,6 +9033,7 @@ function browserBotSource(config) {
       + (isFiringEntity(target) ? 500000000 : 0)
       + (unknownIncoming && isCurrentlyActive(target) ? 200000000 : 0)
       + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 100000000 : 0)
+      + (isJoinModeActive(target) ? 75000000 : 0)
       + (isCurrentlyActive(target) ? 50000000 : 0)
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
@@ -9037,6 +9042,7 @@ function browserBotSource(config) {
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
+    if (isJoinModeActive(target)) return true;
     if (isFiringEntity(target)) return true;
     if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
