@@ -1055,6 +1055,7 @@ function runSelfTest() {
     return (incomingMatch ? 1000000000 : 0)
       + (isFiringEntity(target) ? 500000000 : 0)
       + (unknownIncoming && isActive(target) ? 200000000 : 0)
+      + (isActive(target) ? 100000000 : 0)
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
   }
@@ -1062,6 +1063,7 @@ function runSelfTest() {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
     if (isFiringEntity(target)) return true;
+    if (isActive(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
   }
   function isProfitableCombatTarget(target) {
@@ -1769,13 +1771,13 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'foot coin beats non-defensive profitable active combat',
+      name: 'active combat in range beats foot coin without firing',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, death_reward_preview: 7 }],
+        local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100 }],
         coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
       }).kind,
-      want: 'coin'
+      want: 'attack'
     },
     {
       name: 'profitable active combat wins when it beats safe coins',
@@ -1787,13 +1789,13 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'profit combat hp disadvantage falls back to coin',
+      name: 'active combat hp gap disadvantage leaves instead of taking coin',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 70, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 91, death_reward_preview: 30 }],
         coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
-      }).kind,
-      want: 'coin'
+      }).reason,
+      want: 'combat-hp-disadvantage-leave'
     },
     {
       name: 'near profitable active combat beats far snapshot cluster by yield',
@@ -2170,6 +2172,14 @@ function runSelfTest() {
         return action.kind + ':' + action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.reason;
       })(),
       want: 'leave:combat-low-hp-leave:1:1:true:combat-leave-dodge'
+    },
+    {
+      name: 'active combat hp disadvantage leaves before taking a bullet',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 40, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Active', hp: 80 }]
+      }).reason,
+      want: 'combat-low-hp-leave'
     },
     {
       name: 'combat leave cover honors short stamina exhaustion',
@@ -8774,6 +8784,7 @@ function browserBotSource(config) {
       + (isFiringEntity(target) ? 500000000 : 0)
       + (unknownIncoming && isCurrentlyActive(target) ? 200000000 : 0)
       + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 100000000 : 0)
+      + (isCurrentlyActive(target) ? 50000000 : 0)
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
   }
@@ -8782,6 +8793,7 @@ function browserBotSource(config) {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
     if (isFiringEntity(target)) return true;
+    if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
     return Boolean(recentCombatInjuryActive() && isCurrentlyActive(target));
   }
