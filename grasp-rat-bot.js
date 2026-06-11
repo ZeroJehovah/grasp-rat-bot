@@ -154,6 +154,9 @@ function runSelfTest() {
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatHighHpDisadvantageGap: 20,
+    combatLowHpNoDamageLeaveThreshold: 70,
+    combatLowHpNoDamageLeaveMs: 15000,
+    combatLowHpNoDamageMinGap: 0,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
@@ -1117,6 +1120,12 @@ function runSelfTest() {
     if (reason === 'combat-hp-disadvantage-leave') {
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
     }
+    if (reason === 'combat-low-hp-no-damage-leave') {
+      const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
+        ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
+        : '';
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
+    }
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
 	  function combatLeaveAction(reason, self, target, combatState = {}) {
@@ -1146,6 +1155,25 @@ function runSelfTest() {
     if (n >= 2) return cfg.enemyReloginRepeatSecondMaxMs;
     return 0;
   }
+  function combatTargetNoDamageMs(target) {
+    const previous = bot.combatTarget || null;
+    const targetId = target?.user_id ?? target?.id;
+    const same = previous?.id !== null && previous?.id !== undefined
+      && targetId !== null && targetId !== undefined
+      && String(previous.id) === String(targetId);
+    const lastDamageAt = same ? Number(previous.lastDamageAt || previous.at || Date.now()) : Date.now();
+    return Math.max(0, Date.now() - lastDamageAt);
+  }
+  function combatLowHpNoDamageLeaveState(selfHp, targetHp, noDamageMs) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveThreshold || 0));
+    const waitMs = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveMs || 0));
+    const minGap = Number.isFinite(Number(cfg.combatLowHpNoDamageMinGap))
+      ? Number(cfg.combatLowHpNoDamageMinGap)
+      : 0;
+    const hpGap = Number(targetHp) - Number(selfHp);
+    if (!threshold || !waitMs || !(Number(selfHp) < threshold) || !(hpGap >= minGap) || !(Number(noDamageMs) >= waitMs)) return null;
+    return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
+  }
 
   function chooseCombatAction(self, target, bullets = []) {
     const selfHp = hpValue(self);
@@ -1164,6 +1192,10 @@ function runSelfTest() {
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap });
 	    }
+    const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, combatTargetNoDamageMs(target));
+    if (lowNoDamage) {
+      return combatLeaveAction('combat-low-hp-no-damage-leave', self, target, lowNoDamage);
+    }
     const motionScale = combatAimMotionScale(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
@@ -1893,6 +1925,32 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 90, firing: true }]
       }).kind,
+      want: 'attack'
+    },
+    {
+      name: 'low hp no-damage combat leaves before bleeding out',
+      got: (() => {
+        bot.combatTarget = { id: 4, at: Date.now() - 16000, lastDamageAt: Date.now() - 16000, hp: 65 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 60, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 4, x: 9000, y: 0, distance: 9000, current_join_mode: 'Passive', hp: 65, firing: true, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + (Number(action.combatState?.noDamageMs || 0) >= cfg.combatLowHpNoDamageLeaveMs) + ':' + action.exitSummary.includes('低血久攻未中退出');
+      })(),
+      want: 'combat-low-hp-no-damage-leave:true:true'
+    },
+    {
+      name: 'low hp recent damage keeps fighting instead of no-damage leave',
+      got: (() => {
+        bot.combatTarget = { id: 4, at: Date.now() - 16000, lastDamageAt: Date.now() - 500, hp: 65 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 60, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 4, x: 9000, y: 0, distance: 9000, current_join_mode: 'Passive', hp: 65, firing: true, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.kind;
+      })(),
       want: 'attack'
     },
     {
@@ -2780,6 +2838,9 @@ function browserBotSource(config) {
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatHighHpDisadvantageGap: 20,
+    combatLowHpNoDamageLeaveThreshold: 70,
+    combatLowHpNoDamageLeaveMs: 15000,
+    combatLowHpNoDamageMinGap: 0,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
@@ -3785,6 +3846,7 @@ function browserBotSource(config) {
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
+	      'combat-low-hp-no-damage-leave': '战斗低血且久攻未中，立即退出',
 	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'combat-leave': '战斗劣势退出后等待',
 	      'combat-leave-retry': '战斗退出失败，等待补发退出',
@@ -4927,6 +4989,12 @@ function browserBotSource(config) {
     if (reason === 'combat-hp-disadvantage-leave') {
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
     }
+    if (reason === 'combat-low-hp-no-damage-leave') {
+      const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
+        ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
+        : '';
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
+    }
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
 
@@ -5926,7 +5994,9 @@ function browserBotSource(config) {
       ? 'combat critical hp'
       : action?.reason === 'combat-hp-disadvantage-leave'
         ? 'combat hp disadvantage'
-        : 'combat low hp disadvantage';
+        : action?.reason === 'combat-low-hp-no-damage-leave'
+          ? 'combat low hp no damage'
+          : 'combat low hp disadvantage';
 	    const detail = {
 	      attempted: false,
 	      method: '',
@@ -8547,6 +8617,18 @@ function browserBotSource(config) {
     };
   }
 
+  function combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveThreshold || 0));
+    const waitMs = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveMs || 0));
+    const minGap = Number.isFinite(Number(cfg.combatLowHpNoDamageMinGap))
+      ? Number(cfg.combatLowHpNoDamageMinGap)
+      : 0;
+    const hpGap = Number(targetHp) - Number(selfHp);
+    const noDamageMs = Number(damageState?.noDamageMs || 0);
+    if (!threshold || !waitMs || !(Number(selfHp) < threshold) || !(hpGap >= minGap) || !(noDamageMs >= waitMs)) return null;
+    return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
+  }
+
   function combatAimNoDamageLevel(widenMs) {
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const elapsed = Math.max(0, Number(widenMs) || 0);
@@ -8712,6 +8794,11 @@ function browserBotSource(config) {
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap });
 	    }
+    const damageState = combatAimDamageState(target);
+    const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState);
+    if (lowNoDamage) {
+      return combatLeaveAction('combat-low-hp-no-damage-leave', baseTarget, lowNoDamage);
+    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
       const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
@@ -8746,7 +8833,6 @@ function browserBotSource(config) {
         }
       };
     }
-    const damageState = combatAimDamageState(target);
     const pressureClose = combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
     const pressure = combatPressureThreat(self, target, bullets);
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
