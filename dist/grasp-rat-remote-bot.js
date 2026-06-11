@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.95"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.96"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5583,6 +5583,7 @@
       + (isFiringEntity(target) ? 500000000 : 0)
       + (unknownIncoming && isCurrentlyActive(target) ? 200000000 : 0)
       + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 100000000 : 0)
+      + (isCurrentlyActive(target) ? 50000000 : 0)
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
   }
@@ -5591,6 +5592,7 @@
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
     if (isFiringEntity(target)) return true;
+    if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
     return Boolean(recentCombatInjuryActive() && isCurrentlyActive(target));
   }
