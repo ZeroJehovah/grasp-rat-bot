@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.104"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.105"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2621,7 +2621,7 @@
 	      }
 	      : reloginDelayForHp(selfLike, detail);
 	    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
-	    const reloginDelayMs = fixedDelayMs || Math.max(delay.delayMs, minimumDelayMs);
+	    const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
 	    const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
     if (storageReason === 'enemy leave') {
       bot.pursuitReloginUntil = reloginUntil;
@@ -2686,7 +2686,7 @@
       unsafeExitReloginMinDelayMs(),
       Math.max(0, Number(options.minimumDelayMs || 0) || 0)
     );
-    const delayMs = fixedDelayMs || Math.max(Number(delay.delayMs || 0), minimumDelayMs);
+    const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
     if (!(delayMs > 0)) return 0;
     const suppressReason = pendingExitSuppressReason(storageReason);
     const until = setLoginSuppress(suppressReason, delayMs);
