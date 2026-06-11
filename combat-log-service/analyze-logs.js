@@ -438,9 +438,13 @@ function loginExitHoldIssues(entry) {
     login.suppressRemainingMs,
     login.enemyHoldRemainingMs,
     login.offlineHoldRemainingMs,
+    login.lastLoginIgnoredSuppressMs,
     login.decisionLoginIgnoredSuppressMs
   );
   if (login.decisionLoginAttempted && activeHoldMs > 0) {
+    issues.push('login-attempt-during-exit-hold');
+  }
+  if (login.lastLoginAttempted && login.lastLoginIgnoredSuppressMs > 0) {
     issues.push('login-attempt-during-exit-hold');
   }
   const manualClearedMs = Math.max(
@@ -1369,6 +1373,24 @@ function runSelfTest() {
             }
           }
         }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 5500,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'login-suppressed'
+        },
+        login: {
+          suppressRemainingMs: 45000,
+          suppressReason: 'pending unsafe hostile exit',
+          lastLogin: {
+            reason: 'no-self',
+            attempted: true,
+            ignoredSuppressMs: 45000
+          }
+        }
       }
     ];
     fs.writeFileSync(
@@ -1377,9 +1399,9 @@ function runSelfTest() {
     );
     const reloginReport = auditLogs({ dir: loginLogsDir, manifestPath });
     cases += 1;
-    assertSelfTest(reloginReport.exitEvents.length === 2, `expected 2 relogin events, got ${reloginReport.exitEvents.length}`);
+    assertSelfTest(reloginReport.exitEvents.length === 3, `expected 3 relogin events, got ${reloginReport.exitEvents.length}`);
     cases += 1;
-    assertSelfTest(issueCount(reloginReport, 'login-attempt-during-exit-hold') === 1, 'expected one login during hold issue');
+    assertSelfTest(issueCount(reloginReport, 'login-attempt-during-exit-hold') === 2, 'expected two login during hold issues');
     cases += 1;
     assertSelfTest(issueCount(reloginReport, 'manual-login-cleared-exit-hold') === 1, 'expected one manual login hold-clear issue');
     cases += 1;
