@@ -3337,6 +3337,8 @@ function browserBotSource(config) {
 	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
 	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
 	    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
+	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
+	    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
 	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
 	      ? {
 	        ...previousBot.combatLogging,
@@ -3725,7 +3727,8 @@ function browserBotSource(config) {
 	    waitSince: 0,
 	    offlineSince: 0,
 	    lastLoginAt: 0,
-	    lastLoginResult: null,
+	    lastLoginResult: preserved.lastLoginResult,
+	    lastManualLoginResult: preserved.lastManualLoginResult,
 	    pendingExit: preserved.pendingExit,
 	    lastOfflineLeaveAt: 0,
 		    lastOfflineLeaveResult: restoredOfflineLeaveState,
@@ -4818,6 +4821,68 @@ function browserBotSource(config) {
         };
       }
 
+      function combatLogLoginResultSummary(result) {
+        if (!result || typeof result !== 'object') return null;
+        return {
+          at: result.at || 0,
+          needed: Boolean(result.needed),
+          attempted: Boolean(result.attempted),
+          reason: result.reason || '',
+          error: result.error || '',
+          forced: Boolean(result.forced),
+          method: result.method || '',
+          cooldownRemainingMs: Number(result.cooldownRemainingMs || 0),
+          suppressReason: result.suppressReason || '',
+          ignoredSuppressMs: Number(result.ignoredSuppressMs || 0),
+          hasToken: Boolean(result.hasToken),
+          hasNativeSession: Boolean(result.hasNativeSession),
+          nativeWsReadyState: result.nativeWsReadyState ?? null,
+          loginRequired: Boolean(result.loginRequired),
+          currentUserId: result.currentUserId || null
+        };
+      }
+
+      function combatLogManualLoginSummary(result) {
+        if (!result || typeof result !== 'object') return null;
+        const cleared = result.cleared && typeof result.cleared === 'object' ? result.cleared : null;
+        return {
+          at: result.at || 0,
+          reason: result.reason || '',
+          cleared: cleared ? {
+            reason: cleared.reason || '',
+            suppressReason: cleared.suppressReason || '',
+            suppressUntil: cleared.suppressUntil || 0,
+            suppressRemainingMs: Number(cleared.suppressRemainingMs || 0),
+            enemyHoldRemainingMs: Number(cleared.enemyHoldRemainingMs || 0),
+            offlineHoldRemainingMs: Number(cleared.offlineHoldRemainingMs || 0)
+          } : null,
+          login: combatLogLoginResultSummary(result.login)
+        };
+      }
+
+      function combatLogLoginSummary(decision) {
+        let suppressUntil = 0;
+        let suppressReason = '';
+        try {
+          suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+          suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+        } catch (_) {}
+        const t = Date.now();
+        return {
+          suppressUntil,
+          suppressRemainingMs: Math.max(0, Math.round(suppressUntil - t)),
+          suppressReason,
+          enemyHoldUntil: Number(bot.pursuitReloginUntil || 0),
+          enemyHoldRemainingMs: enemyReloginHoldRemainingMs(),
+          offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
+          offlineHoldRemainingMs: offlineReloginHoldRemainingMs(),
+          lastLoginAt: Number(bot.lastLoginAt || 0),
+          lastLogin: combatLogLoginResultSummary(bot.lastLoginResult),
+          decisionLogin: combatLogLoginResultSummary(decision?.login),
+          manualLogin: combatLogManualLoginSummary(decision?.manualLogin || bot.lastManualLoginResult)
+        };
+      }
+
       const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};
 
       function combatLogExitSummary(decision) {
@@ -4842,6 +4907,7 @@ function browserBotSource(config) {
           incoming = null;
         }
         const exit = combatLogExitSummary(decision || {});
+        const login = combatLogLoginSummary(decision || {});
         return {
           type: 'combat-frame',
           at: Date.now(),
@@ -4876,6 +4942,7 @@ function browserBotSource(config) {
           control: summarizeControl(),
           globalState: combatLogGlobalStateSummary(),
           exit,
+          login,
           enemyExit: combatLogEnemyExitSummary(),
           nearbyEntities,
           bullets
@@ -4987,6 +5054,7 @@ function browserBotSource(config) {
           self: entry.self,
           target: entry.target || null,
           decision: entry.decision,
+          login: entry.login || null,
           nearbyEntities: entry.nearbyEntities,
           enemyExit: entry.enemyExit || null
 	        });
@@ -5009,6 +5077,7 @@ function browserBotSource(config) {
           source: entry?.source || '',
           self: entry?.self || null,
           decision: entry?.decision || null,
+          login: entry?.login || null,
           enemyExit: entry?.enemyExit || null,
           sent: state.sent,
           dropped: state.dropped
@@ -6725,6 +6794,7 @@ function browserBotSource(config) {
       cleared,
       login
     };
+    bot.lastManualLoginResult = detail;
     bot.lastLoginResult = login || bot.lastLoginResult;
     bot.lastDecision = {
       kind: 'wait',

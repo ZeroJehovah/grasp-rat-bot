@@ -286,6 +286,29 @@ function delayMs(entry) {
   );
 }
 
+function loginContext(entry) {
+  const login = entry?.login || {};
+  const lastLogin = login.lastLogin || {};
+  const decisionLogin = login.decisionLogin || {};
+  const manualLogin = login.manualLogin || {};
+  return {
+    suppressRemainingMs: numberOrZero(login.suppressRemainingMs),
+    suppressReason: String(login.suppressReason || ''),
+    enemyHoldRemainingMs: numberOrZero(login.enemyHoldRemainingMs),
+    offlineHoldRemainingMs: numberOrZero(login.offlineHoldRemainingMs),
+    lastLoginReason: String(lastLogin.reason || ''),
+    lastLoginAttempted: Boolean(lastLogin.attempted),
+    lastLoginIgnoredSuppressMs: numberOrZero(lastLogin.ignoredSuppressMs),
+    decisionLoginReason: String(decisionLogin.reason || ''),
+    decisionLoginAttempted: Boolean(decisionLogin.attempted),
+    decisionLoginIgnoredSuppressMs: numberOrZero(decisionLogin.ignoredSuppressMs),
+    manualLoginReason: String(manualLogin.reason || ''),
+    manualLoginSuppressClearedMs: numberOrZero(manualLogin.cleared?.suppressRemainingMs),
+    manualLoginEnemyHoldClearedMs: numberOrZero(manualLogin.cleared?.enemyHoldRemainingMs),
+    manualLoginOfflineHoldClearedMs: numberOrZero(manualLogin.cleared?.offlineHoldRemainingMs)
+  };
+}
+
 function targetLabel(entry) {
   const candidates = [
     entry?.target,
@@ -353,6 +376,7 @@ function auditFile(file, rootDir, options) {
       topLevelExit,
       unsafe,
       delayMs: eventDelayMs,
+      login: loginContext(entry),
       count: 0,
       issues: []
     };
@@ -366,6 +390,24 @@ function auditFile(file, rootDir, options) {
     event.topLevelExit = event.topLevelExit || topLevelExit;
     event.unsafe = event.unsafe || unsafe;
     event.delayMs = Math.max(event.delayMs, eventDelayMs);
+    const currentLogin = loginContext(entry);
+    event.login = {
+      ...event.login,
+      suppressRemainingMs: Math.max(Number(event.login?.suppressRemainingMs || 0), currentLogin.suppressRemainingMs),
+      suppressReason: currentLogin.suppressReason || event.login?.suppressReason || '',
+      enemyHoldRemainingMs: Math.max(Number(event.login?.enemyHoldRemainingMs || 0), currentLogin.enemyHoldRemainingMs),
+      offlineHoldRemainingMs: Math.max(Number(event.login?.offlineHoldRemainingMs || 0), currentLogin.offlineHoldRemainingMs),
+      lastLoginReason: currentLogin.lastLoginReason || event.login?.lastLoginReason || '',
+      lastLoginAttempted: Boolean(event.login?.lastLoginAttempted || currentLogin.lastLoginAttempted),
+      lastLoginIgnoredSuppressMs: Math.max(Number(event.login?.lastLoginIgnoredSuppressMs || 0), currentLogin.lastLoginIgnoredSuppressMs),
+      decisionLoginReason: currentLogin.decisionLoginReason || event.login?.decisionLoginReason || '',
+      decisionLoginAttempted: Boolean(event.login?.decisionLoginAttempted || currentLogin.decisionLoginAttempted),
+      decisionLoginIgnoredSuppressMs: Math.max(Number(event.login?.decisionLoginIgnoredSuppressMs || 0), currentLogin.decisionLoginIgnoredSuppressMs),
+      manualLoginReason: currentLogin.manualLoginReason || event.login?.manualLoginReason || '',
+      manualLoginSuppressClearedMs: Math.max(Number(event.login?.manualLoginSuppressClearedMs || 0), currentLogin.manualLoginSuppressClearedMs),
+      manualLoginEnemyHoldClearedMs: Math.max(Number(event.login?.manualLoginEnemyHoldClearedMs || 0), currentLogin.manualLoginEnemyHoldClearedMs),
+      manualLoginOfflineHoldClearedMs: Math.max(Number(event.login?.manualLoginOfflineHoldClearedMs || 0), currentLogin.manualLoginOfflineHoldClearedMs)
+    };
     event.count += 1;
     for (const issue of issues) {
       if (!event.issues.includes(issue)) event.issues.push(issue);
@@ -495,6 +537,15 @@ function printHuman(report, options) {
       if (!event.topLevelExit) flags.push('missing exit');
       if (event.unsafe) flags.push('unsafe');
       if (event.delayMs) flags.push(`delay=${event.delayMs}ms`);
+      if (event.login?.suppressRemainingMs) flags.push(`suppress=${event.login.suppressRemainingMs}ms`);
+      if (event.login?.enemyHoldRemainingMs) flags.push(`enemyHold=${event.login.enemyHoldRemainingMs}ms`);
+      if (event.login?.offlineHoldRemainingMs) flags.push(`offlineHold=${event.login.offlineHoldRemainingMs}ms`);
+      if (event.login?.lastLoginReason) flags.push(`lastLogin=${event.login.lastLoginReason}${event.login.lastLoginAttempted ? ':attempted' : ''}`);
+      if (event.login?.decisionLoginReason) flags.push(`decisionLogin=${event.login.decisionLoginReason}${event.login.decisionLoginAttempted ? ':attempted' : ''}`);
+      if (event.login?.manualLoginReason) flags.push(`manualLogin=${event.login.manualLoginReason}`);
+      if (event.login?.lastLoginIgnoredSuppressMs) flags.push(`ignoredSuppress=${event.login.lastLoginIgnoredSuppressMs}ms`);
+      if (event.login?.decisionLoginIgnoredSuppressMs) flags.push(`decisionIgnoredSuppress=${event.login.decisionLoginIgnoredSuppressMs}ms`);
+      if (event.login?.manualLoginSuppressClearedMs) flags.push(`manualClearedSuppress=${event.login.manualLoginSuppressClearedMs}ms`);
       if (event.issues.length) flags.push(`issues=${event.issues.join('+')}`);
       console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
       if (event.summary) console.log(`  ${event.summary}`);
@@ -598,6 +649,15 @@ function runSelfTest() {
           summary: 'current safe exit',
           pendingLoginSuppressReason: 'pending unsafe hostile exit',
           pendingLoginSuppressDelayMs: 60000
+        },
+        login: {
+          suppressRemainingMs: 60000,
+          suppressReason: 'pending unsafe hostile exit',
+          enemyHoldRemainingMs: 90000,
+          lastLogin: {
+            reason: 'suppressed',
+            attempted: false
+          }
         }
       },
       {
@@ -634,6 +694,10 @@ function runSelfTest() {
     assertSelfTest(currentReport.exitEvents.length === 1, `expected 1 current-version exit event, got ${currentReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(currentReport.issues.length === 0, `expected no current-version issues, got ${currentReport.issues.length}`);
+    cases += 1;
+    assertSelfTest(currentReport.exitEvents[0]?.login?.suppressRemainingMs === 60000, 'expected current exit login suppress context');
+    cases += 1;
+    assertSelfTest(currentReport.exitEvents[0]?.login?.enemyHoldRemainingMs === 90000, 'expected current exit enemy hold context');
 
     const requiredReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true });
     cases += 1;

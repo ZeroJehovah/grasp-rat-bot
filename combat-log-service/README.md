@@ -115,8 +115,8 @@ npm run analyze:current
 npm run validate:current
 npm run monitor:current
 npm run monitor:current -- --since now --latest 10
-npm run monitor -- --min-version bootstrap-0.4.99 --latest 10
-npm run monitor -- --since now --min-version bootstrap-0.4.99 --latest 10
+npm run monitor -- --min-version bootstrap-0.4.100 --latest 10
+npm run monitor -- --since now --min-version bootstrap-0.4.100 --latest 10
 ```
 
 `validate:current` 会额外要求至少存在一条当前 manifest 版本日志；没有匹配日志时返回非零退出码，用来区分“无问题”和“还没有验证证据”。
@@ -138,3 +138,5 @@ npm test
 
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
 - `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待。
+
+最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
