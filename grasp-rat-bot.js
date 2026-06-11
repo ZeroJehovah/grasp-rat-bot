@@ -130,7 +130,9 @@ function offlineLeaveSummaryText(reason, offlineSafety) {
 function combatLogExitSummaryFromDecision(decision) {
   const leave = decision?.leave || null;
   const detail = leave || decision || {};
-  const reason = String(leave?.reason || decision?.reason || '');
+  const leaveReason = String(leave?.reason || '');
+  const decisionReason = String(decision?.reason || '');
+  const reason = leaveReason && leaveReason !== 'cooldown' ? leaveReason : (decisionReason || leaveReason);
   const isExit = Boolean(leave)
     || decision?.kind === 'leave'
     || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
@@ -3127,6 +3129,28 @@ function runSelfTest() {
 	      name: 'combat log exit summary ignores non-exit decisions',
 	      got: combatLogExitSummaryFromDecision({ kind: 'wait', reason: 'combat-spacing' }),
 	      want: null
+	    },
+	    {
+	      name: 'combat log exit summary keeps specific reason during leave cooldown',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'wait',
+	          reason: 'combat-leave-retry',
+	          displayReason: 'retrying combat leave',
+	          leave: {
+	            reason: 'cooldown',
+	            attempted: false,
+	            cooldownRemainingMs: 800,
+	            summary: 'leave retry cooldown'
+	          }
+	        });
+	        return [
+	          exit?.reason,
+	          exit?.summary,
+	          String(exit?.attempted)
+	        ].join('|');
+	      })(),
+	      want: 'combat-leave-retry|leave retry cooldown|false'
 	    },
 	    {
 	      name: 'combat log exit summary includes pending unsafe suppress',
