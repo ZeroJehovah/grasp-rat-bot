@@ -149,7 +149,7 @@ node scripts/build-remote-bot.js
 node scripts/verify-objective-build.js
 ```
 
-`verify-objective-build.js` is a static release check. It verifies that `dist/manifest.json` matches the generated remote bot hash/current source, that key objective constants are present in source and dist, and that bootstrap layout/source-hash/compact-panel invariants are still present. It does not replace fresh `combat-log-service` current-version live validation.
+`verify-objective-build.js` is a static release check. It verifies that `dist/manifest.json` matches the generated remote bot hash/current source, that key objective constants are present in source and dist, and that bootstrap layout/source-hash/compact-panel/post-login zoom invariants are still present. It does not replace fresh `combat-log-service` current-version live validation.
 
 ## CDP Fallback
 
