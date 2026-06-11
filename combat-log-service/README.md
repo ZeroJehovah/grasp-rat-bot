@@ -166,7 +166,7 @@ npm test
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
 - `missing-exit-reason`: 日志帧有顶层 `exit` 摘要，但没有明确的 `exit.reason`；
 - `generic-exit-reason`: 顶层 `exit.reason` 是 `cooldown` 等泛化值，不能说明真实退出根因；
-- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；
+- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；带 `safeReloginAllowed` 的普通安全离线退出允许零等待；
 - `exit-delay-below-required`: 退出等待低于该退出原因要求的等待，例如 1h 体力预算退出低于 5 分钟；
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
 - `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；
@@ -182,4 +182,4 @@ npm test
 - `manifest-source-hash-missing`: 当前过滤条件有日志，但部分日志缺少 `sourceHash`，无法证明来自当前构建；
 - `manifest-source-hash-mismatch`: 日志 `sourceHash` 与 manifest SHA 不一致。
 
-审计输出会先汇总安全/非安全退出等待是否达标，再按退出 reason / 行为 reason / 射程内 Active 战斗响应 reason 聚合计数，最后列出最新事件。最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
+审计输出会先汇总安全/非安全退出等待是否达标，再按退出 reason / 行为 reason / 射程内 Active 战斗响应 reason 聚合计数，最后列出最新事件。最新退出事件行也会显示登录/重连上下文，例如 `safeRelogin`、`suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否允许立即重连、是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。

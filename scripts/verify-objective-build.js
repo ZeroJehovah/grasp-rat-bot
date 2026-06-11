@@ -235,6 +235,8 @@ function main() {
       const body = functionBody(text, 'combatLogExitSummaryFromDecision');
       assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
       assert(body.includes('decisionReason || leaveReason'), 'decision reason fallback not found for cooldown leave detail');
+      assert(body.includes('safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed)'), 'safe relogin marker not included in top-level exit summary');
+      assert(body.includes('offlineSafety: detail.offlineSafety || decision?.offlineSafety || null'), 'offline safety not included in top-level exit summary');
     });
     check(`${file} keeps longest exit suppress delay`, () => {
       const confirmedBody = functionBody(text, 'setExitReloginSuppress');
