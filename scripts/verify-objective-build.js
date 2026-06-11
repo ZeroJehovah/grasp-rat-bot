@@ -210,9 +210,10 @@ function main() {
         'combat target priority does not include join-mode Active'
       );
     });
-    check(`${file} ends combat logs on login-suppressed waits`, () => {
+    check(`${file} ends combat logs on relogin wait/manual states`, () => {
       const body = functionBody(text, 'combatLogSuspendReason');
       assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
+      assert(body.includes('manual-login'), 'manual-login suspend reason not found');
     });
   }
 
