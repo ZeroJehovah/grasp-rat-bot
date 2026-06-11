@@ -255,6 +255,7 @@ function isExitish(entry) {
   const reason = exitReason(entry);
   return hasTopLevelExit(entry)
     || Boolean(entry?.enemyExit)
+    || Boolean(loginExitHoldIssues(entry).length)
     || decision.kind === 'leave'
     || /(?:^|[-\s])(leave|exit|offline|reconnect|control-ws|stamina-exhausted)(?:$|[-\s])/i.test(reason);
 }
@@ -270,6 +271,7 @@ function delayMs(entry) {
   const exit = entry?.exit || {};
   const enemyExit = entry?.enemyExit || {};
   const pendingCombatLeave = entry?.pendingCombatLeave || {};
+  const login = loginContext(entry);
   return Math.max(
     numberOrZero(exit.pendingLoginSuppressDelayMs),
     numberOrZero(exit.reloginDelayMs),
@@ -282,15 +284,18 @@ function delayMs(entry) {
     numberOrZero(decision.holdRemainingMs),
     numberOrZero(enemyExit.reloginDelayMs),
     numberOrZero(enemyExit.holdRemainingMs),
-    numberOrZero(pendingCombatLeave.holdRemainingMs)
+    numberOrZero(pendingCombatLeave.holdRemainingMs),
+    numberOrZero(login.suppressRemainingMs),
+    numberOrZero(login.enemyHoldRemainingMs),
+    numberOrZero(login.offlineHoldRemainingMs)
   );
 }
 
 function loginContext(entry) {
   const login = entry?.login || {};
   const lastLogin = login.lastLogin || {};
-  const decisionLogin = login.decisionLogin || {};
-  const manualLogin = login.manualLogin || {};
+  const decisionLogin = login.decisionLogin || entry?.decision?.login || {};
+  const manualLogin = login.manualLogin || entry?.decision?.manualLogin || {};
   return {
     suppressRemainingMs: numberOrZero(login.suppressRemainingMs),
     suppressReason: String(login.suppressReason || ''),
@@ -307,6 +312,29 @@ function loginContext(entry) {
     manualLoginEnemyHoldClearedMs: numberOrZero(manualLogin.cleared?.enemyHoldRemainingMs),
     manualLoginOfflineHoldClearedMs: numberOrZero(manualLogin.cleared?.offlineHoldRemainingMs)
   };
+}
+
+function loginExitHoldIssues(entry) {
+  const login = loginContext(entry);
+  const issues = [];
+  const activeHoldMs = Math.max(
+    login.suppressRemainingMs,
+    login.enemyHoldRemainingMs,
+    login.offlineHoldRemainingMs,
+    login.decisionLoginIgnoredSuppressMs
+  );
+  if (login.decisionLoginAttempted && activeHoldMs > 0) {
+    issues.push('login-attempt-during-exit-hold');
+  }
+  const manualClearedMs = Math.max(
+    login.manualLoginSuppressClearedMs,
+    login.manualLoginEnemyHoldClearedMs,
+    login.manualLoginOfflineHoldClearedMs
+  );
+  if (manualClearedMs > 0) {
+    issues.push('manual-login-cleared-exit-hold');
+  }
+  return issues;
 }
 
 function targetLabel(entry) {
@@ -361,8 +389,10 @@ function auditFile(file, rootDir, options) {
     const unsafe = isUnsafeExit(entry);
     const eventDelayMs = delayMs(entry);
     const issues = [];
-    if (!topLevelExit) issues.push('missing-top-level-exit');
+    const loginIssues = loginExitHoldIssues(entry);
+    if (!topLevelExit && !loginIssues.length) issues.push('missing-top-level-exit');
     if (unsafe && eventDelayMs < options.minUnsafeDelayMs) issues.push('unsafe-exit-delay-below-minimum');
+    for (const issue of loginIssues) issues.push(issue);
     const event = reuseExisting ? existing : {
       file: relFile,
       firstLine: item.line,
@@ -614,9 +644,11 @@ function runSelfTest() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-log-audit-'));
   try {
     const logsDir = path.join(tempRoot, 'logs');
+    const loginLogsDir = path.join(tempRoot, 'login-logs');
     const emptyLogsDir = path.join(tempRoot, 'empty-logs');
     const manifestPath = path.join(tempRoot, 'manifest.json');
     fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(loginLogsDir, { recursive: true });
     fs.mkdirSync(emptyLogsDir, { recursive: true });
     fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
 
@@ -736,6 +768,60 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(emptyRequiredReport, 'no-matching-entries') === 1, 'expected one no-matching-entries evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(emptyRequiredReport), 'expected empty required report to count as failure');
+
+    const reloginEntries = [
+      {
+        type: 'combat-end',
+        at: baseAt + 4000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'auto-login'
+        },
+        login: {
+          suppressRemainingMs: 60000,
+          suppressReason: 'pending unsafe hostile exit',
+          enemyHoldRemainingMs: 60000,
+          decisionLogin: {
+            reason: 'no-self',
+            attempted: true,
+            ignoredSuppressMs: 60000
+          }
+        }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 5000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'manual-login'
+        },
+        login: {
+          manualLogin: {
+            reason: 'panel immediate login',
+            cleared: {
+              suppressRemainingMs: 45000,
+              enemyHoldRemainingMs: 90000,
+              offlineHoldRemainingMs: 0
+            }
+          }
+        }
+      }
+    ];
+    fs.writeFileSync(
+      path.join(loginLogsDir, 'relogin.jsonl'),
+      reloginEntries.map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    );
+    const reloginReport = auditLogs({ dir: loginLogsDir, manifestPath });
+    cases += 1;
+    assertSelfTest(reloginReport.exitEvents.length === 2, `expected 2 relogin events, got ${reloginReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(issueCount(reloginReport, 'login-attempt-during-exit-hold') === 1, 'expected one login during hold issue');
+    cases += 1;
+    assertSelfTest(issueCount(reloginReport, 'manual-login-cleared-exit-hold') === 1, 'expected one manual login hold-clear issue');
+    cases += 1;
+    assertSelfTest(issueCount(reloginReport, 'missing-top-level-exit') === 0, 'expected relogin hold issues not to require top-level exit');
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {

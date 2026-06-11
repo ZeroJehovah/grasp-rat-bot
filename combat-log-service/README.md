@@ -137,6 +137,8 @@ npm test
 审计会标记：
 
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
-- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待。
+- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；
+- `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
+- `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold。
 
 最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
