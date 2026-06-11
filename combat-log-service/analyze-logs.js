@@ -337,7 +337,11 @@ function activePlayersInAttackRange(entry, options) {
   const range = Math.max(0, Number(options.combatAttackRange || DEFAULTS.combatAttackRange) || 0);
   const entities = Array.isArray(entry?.nearbyEntities) ? entry.nearbyEntities : [];
   return entities.filter(entity => {
-    if (!entity || entity.active === false || String(entity.mode || '').toLowerCase() === 'passive') return false;
+    if (!entity) return false;
+    const joinMode = String(entity.mode || entity.current_join_mode || entity.currentJoinMode || entity.joinMode || '').trim().toLowerCase();
+    const joinModeActive = joinMode === 'active';
+    if (!joinModeActive && entity.active === false) return false;
+    if (!joinModeActive && joinMode === 'passive') return false;
     if (String(entity.life || '').toLowerCase() === 'dead') return false;
     if (entity.invulnerable) return false;
     const distance = Number(entity.distance);
@@ -1410,9 +1414,11 @@ function runSelfTest() {
             name: 'ActiveEnemy',
             mode: 'Active',
             life: 'Alive',
-            active: true,
+            active: false,
             invulnerable: false,
-            distance: 12000
+            distance: 12000,
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000
           }
         ]
       },
@@ -1432,9 +1438,11 @@ function runSelfTest() {
             name: 'ActiveEnemy',
             mode: 'Active',
             life: 'Alive',
-            active: true,
+            active: false,
             invulnerable: false,
-            distance: 12000
+            distance: 12000,
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000
           }
         ]
       }
