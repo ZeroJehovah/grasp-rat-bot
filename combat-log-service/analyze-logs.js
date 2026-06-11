@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const DEFAULTS = {
@@ -21,7 +22,8 @@ const DEFAULTS = {
   watchIntervalMs: 10000,
   watchCount: 0,
   json: false,
-  failOnIssue: false
+  failOnIssue: false,
+  selfTest: false
 };
 
 function parseArgs(args) {
@@ -45,6 +47,7 @@ function parseArgs(args) {
     else if (arg === '--watch-count') out.watchCount = Math.max(0, Number(args[++i] || out.watchCount) || out.watchCount);
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-issue') out.failOnIssue = true;
+    else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -74,6 +77,7 @@ Options:
   --watch-count <count>          Stop after this many watch scans. Default: unlimited
   --json                         Print machine-readable JSON.
   --fail-on-issue                Exit with code 1 when issues are found.
+  --self-test                    Run analyzer regression checks.
 `);
 }
 
@@ -409,6 +413,10 @@ function issueCounts(report) {
   return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 }
 
+function issueCount(report, issue) {
+  return report.issues.filter(item => item.issue === issue).length;
+}
+
 function reportFingerprint(report) {
   const latest = report.exitEvents[0] || {};
   return JSON.stringify({
@@ -498,6 +506,10 @@ async function watchLogs(options) {
 
 async function main() {
   const options = resolveOptions(parseArgs(process.argv.slice(2)));
+  if (options.selfTest) {
+    runSelfTest();
+    return;
+  }
   if (options.watch) {
     await watchLogs(options);
     return;
@@ -508,6 +520,91 @@ async function main() {
   if (options.failOnIssue && (report.issues.length || report.parseErrors.length)) process.exitCode = 1;
 }
 
+function assertSelfTest(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function runSelfTest() {
+  let cases = 0;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-log-audit-'));
+  try {
+    const logsDir = path.join(tempRoot, 'logs');
+    const manifestPath = path.join(tempRoot, 'manifest.json');
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
+
+    const baseAt = 1760000000000;
+    const entries = [
+      {
+        type: 'combat-frame',
+        at: baseAt,
+        version: 'bootstrap-0.4.96',
+        decision: {
+          kind: 'leave',
+          reason: 'combat-hp-disadvantage-leave',
+          leave: {
+            reason: 'combat-hp-disadvantage-leave',
+            summary: 'legacy unsafe exit',
+            pendingLoginSuppressDelayMs: 1000
+          }
+        }
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 1000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'leave',
+          reason: 'combat-hp-disadvantage-leave'
+        },
+        exit: {
+          reason: 'combat-hp-disadvantage-leave',
+          summary: 'current safe exit',
+          pendingLoginSuppressReason: 'pending unsafe hostile exit',
+          pendingLoginSuppressDelayMs: 60000
+        }
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 2000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'combat-spacing'
+        }
+      }
+    ];
+    fs.writeFileSync(
+      path.join(logsDir, 'sample.jsonl'),
+      entries.map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    );
+
+    const allReport = auditLogs({ dir: logsDir });
+    cases += 1;
+    assertSelfTest(allReport.entries === 3, `expected 3 included entries, got ${allReport.entries}`);
+    cases += 1;
+    assertSelfTest(allReport.exitEvents.length === 2, `expected 2 exit events, got ${allReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(issueCount(allReport, 'missing-top-level-exit') === 1, 'expected one missing top-level exit issue');
+    cases += 1;
+    assertSelfTest(issueCount(allReport, 'unsafe-exit-delay-below-minimum') === 1, 'expected one unsafe-delay issue');
+
+    const currentReport = auditLogs({ dir: logsDir, manifestPath });
+    cases += 1;
+    assertSelfTest(currentReport.manifestVersion === 'bootstrap-0.4.97', `expected manifest version bootstrap-0.4.97, got ${currentReport.manifestVersion}`);
+    cases += 1;
+    assertSelfTest(currentReport.entries === 2, `expected 2 current-version entries, got ${currentReport.entries}`);
+    cases += 1;
+    assertSelfTest(currentReport.exitEvents.length === 1, `expected 1 current-version exit event, got ${currentReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(currentReport.issues.length === 0, `expected no current-version issues, got ${currentReport.issues.length}`);
+
+    console.log(JSON.stringify({ ok: true, cases }, null, 2));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 if (require.main === module) {
   main().catch(err => {
     console.error(err?.stack || err?.message || String(err));
@@ -515,4 +612,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { auditLogs, parseArgs, resolveOptions };
+module.exports = { auditLogs, parseArgs, resolveOptions, runSelfTest };

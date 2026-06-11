@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node analyze-logs.js --self-test",
     "analyze": "node analyze-logs.js",
     "analyze:current": "node analyze-logs.js --manifest ../dist/manifest.json",
     "monitor": "node analyze-logs.js --watch",
