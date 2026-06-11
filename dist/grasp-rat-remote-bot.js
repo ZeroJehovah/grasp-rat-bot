@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.101"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.102"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -774,7 +774,8 @@
     || truthyFlag(e?.isInvulnerable)
     || truthyFlag(e?.immune)
     || truthyFlag(e?.is_immune);
-  const isInvulnerableActive = e => e?.current_join_mode === 'Active' && isInvulnerable(e);
+  const isJoinModeActive = e => e?.current_join_mode === 'Active' || e?.mode === 'Active';
+  const isInvulnerableActive = e => isJoinModeActive(e) && isInvulnerable(e);
   const staminaRemaining = (e, windowName) => {
     const value = Number(e?.['stamina_' + windowName + '_remaining_milli'] ?? NaN);
     return Number.isFinite(value) ? value : null;
@@ -806,9 +807,9 @@
     || truthyFlag(e?.attacking)
     || truthyFlag(e?.is_attacking);
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
-  const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (e.current_join_mode === 'Active' && (!hasFullStamina(e) || isInvulnerableActive(e)));
+  const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
-  const isAfkTarget = e => !isCurrentlyActive(e) && !isMovingThreat(e);
+  const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const normalizeTargetText = value => String(value ?? '').trim();
   const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
     .map(normalizeTargetText)
@@ -5747,6 +5748,7 @@
       + (isFiringEntity(target) ? 500000000 : 0)
       + (unknownIncoming && isCurrentlyActive(target) ? 200000000 : 0)
       + (recentCombatInjuryActive() && isCurrentlyActive(target) ? 100000000 : 0)
+      + (isJoinModeActive(target) ? 75000000 : 0)
       + (isCurrentlyActive(target) ? 50000000 : 0)
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
@@ -5755,6 +5757,7 @@
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
+    if (isJoinModeActive(target)) return true;
     if (isFiringEntity(target)) return true;
     if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
