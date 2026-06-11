@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.89"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.90"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2582,7 +2582,7 @@
   }
 
   function rememberPendingExit(scope, source, detail, selfLike = null) {
-    if (!detail?.attempted || detail.error) return null;
+    if (!detail?.attempted) return null;
     const t = Date.now();
     const previous = bot.pendingExit && bot.pendingExit.scope === scope ? bot.pendingExit : null;
     const summary = detail.summary || detail.exitSummary || detail.enemyLeaveSummary || previous?.summary || detail.reason || '';
@@ -2780,7 +2780,7 @@
     detail.exitConfirmation = state || null;
     recordPendingExitResult(pending.source, detail, t);
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted) {
       rememberPendingExit(pending.scope, pending.source, detail, detail.self || pending.self || null);
     } else {
       const next = {
@@ -3313,7 +3313,7 @@
 	    };
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted) {
       rememberPendingExit('enemy', 'combat', detail, selfSummary);
       bot.pendingCombatLeave = null;
     } else {
@@ -7265,12 +7265,24 @@
       } : null,
       conservingStamina: isConservingStamina(self)
     };
-    if (defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
+    const recoveryCombatTarget = defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)
+      ? defensiveCombatTarget
+      : (engagedCombatTarget || defensiveCombatTarget);
+    if (recovery && recoveryCombatTarget) {
+      const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets);
+      if (recoveryLeave?.kind === 'leave') {
+        bot.fleeLock = null;
+        bot.returnBlockScan = null;
+        return recoveryLeave;
+      }
+      clearCombatEngagement('recovery-hold');
+    }
+    if (!recovery && defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, defensiveCombatTarget, bullets);
     }
-    if (engagedCombatTarget) {
+    if (!recovery && engagedCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, engagedCombatTarget, bullets);
@@ -7297,7 +7309,7 @@
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
       };
     }
-    if (defensiveCombatTarget) {
+    if (!recovery && defensiveCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, defensiveCombatTarget, bullets);
