@@ -68,6 +68,33 @@ function expectObjectNumber(text, key, value) {
   return re.test(text);
 }
 
+function stringFromCodes(codes) {
+  return String.fromCharCode(...codes);
+}
+
+function functionBody(text, name) {
+  const marker = `function ${name}`;
+  const start = text.indexOf(marker);
+  assert(start >= 0, `${name} function not found`);
+  const open = text.indexOf('{', start);
+  assert(open >= 0, `${name} function body not found`);
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(open + 1, i);
+    }
+  }
+  throw new Error(`${name} function body not closed`);
+}
+
+function countMatches(text, re) {
+  const matches = String(text || '').match(re);
+  return matches ? matches.length : 0;
+}
+
 function generateRemoteSource(manifest) {
   return execFileSync(process.execPath, [
     path.join(ROOT, 'grasp-rat-bot.js'),
@@ -155,6 +182,41 @@ function main() {
       assert(/\.workspace\{[^'"\r\n]*inset:auto!important[^'"\r\n]*transform:none!important[^'"\r\n]*flex:1 1 0!important/.test(text), 'workspace inset/transform/flex reset not found');
       assert(/\.workspace>\.map-shell\{[^'"\r\n]*width:100%!important[^'"\r\n]*height:100%!important/.test(text), 'map-shell fill rule not found');
       assert(/\.workspace #world\{[^'"\r\n]*width:100%!important[^'"\r\n]*height:100%!important[^'"\r\n]*display:block!important/.test(text), 'world fill rule not found');
+    });
+    check(`${file} uses compact dot panel controls`, () => {
+      assert(text.includes('const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow'), 'BOT status dot not found');
+      assert(text.includes("onClick: () => setPaused(!isPaused(), 'panel bot dot')"), 'BOT status dot pause toggle not found');
+      assert(text.includes("statusDot.setAttribute('aria-pressed', String(paused))"), 'BOT status dot aria-pressed not found');
+      assert(text.includes('actions.appendChild(createDot(wsTitle, wsColor'), 'WS state dot not found');
+      assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
+      assert(text.includes('pending: remoteLogPending > 0 && remoteLogFailed <= 0'), 'remote-log pending blink state not found');
+      assert(text.includes('onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })'), 'remote-log dot toggle not found');
+      assert(text.includes("logDot.setAttribute('aria-pressed', String(remoteLogEnabled))"), 'remote-log dot aria-pressed not found');
+    });
+    check(`${file} keeps panel section titles removed`, () => {
+      const removedText = [
+        stringFromCodes([0x72b6, 0x6001, 0xff1a]),
+        stringFromCodes([0x811a, 0x672c, 0x4fe1, 0x606f]),
+        stringFromCodes([0x7edf, 0x8ba1, 0x4fe1, 0x606f]),
+        'BOT' + stringFromCodes([0x884c, 0x4e3a])
+      ];
+      const offenders = removedText.filter(value => text.includes(value));
+      assert(offenders.length === 0, `removed visible text found: ${offenders.join(', ')}`);
+      assert(!/appendLine\(['"]\s*remote log/i.test(text), 'visible remote log append line found');
+    });
+    check(`${file} uses tooltip-only metric labels`, () => {
+      assert(text.includes("item.title = String(metric.label ?? '')"), 'metric item title not found');
+      assert(text.includes("item.setAttribute('aria-label', String(metric.label ?? ''))"), 'metric item aria-label not found');
+      assert(text.includes("value.textContent = String(metric.value ?? '-')"), 'metric value-only text not found');
+      assert(!/textContent\s*=\s*String\(metric\.label/.test(text), 'metric label appears as visible textContent');
+      assert(!/appendChild\(label\)/.test(text), 'metric label element append found');
+    });
+    check(`${file} formats stamina as raw remaining/limit values`, () => {
+      const body = functionBody(text, 'formatStamina');
+      assert(countMatches(body, /\bpairText\(/g) === 3, 'formatStamina should use exactly three pairText calls');
+      assert(body.includes("Math.max(0, Math.round(r)) + '/' + Math.round(l)"), 'remaining/limit pair formatting not found');
+      assert(!body.includes('%'), 'percent stamina formatting found');
+      assert(text.includes("staminaPill.textContent = '") && text.includes("' + formatStamina(self)"), 'stamina line does not render formatStamina output');
     });
   }
 
