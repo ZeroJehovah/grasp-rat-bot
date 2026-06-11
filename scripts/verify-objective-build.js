@@ -78,7 +78,23 @@ function functionBody(text, name) {
   const marker = `function ${name}`;
   const start = text.indexOf(marker);
   assert(start >= 0, `${name} function not found`);
-  const open = text.indexOf('{', start);
+  const paren = text.indexOf('(', start + marker.length);
+  assert(paren >= 0, `${name} parameter list not found`);
+  let parenDepth = 0;
+  let bodyStart = -1;
+  for (let i = paren; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '(') parenDepth += 1;
+    else if (ch === ')') {
+      parenDepth -= 1;
+      if (parenDepth === 0) {
+        bodyStart = i + 1;
+        break;
+      }
+    }
+  }
+  assert(bodyStart >= 0, `${name} parameter list not closed`);
+  const open = text.indexOf('{', bodyStart);
   assert(open >= 0, `${name} function body not found`);
   let depth = 0;
   for (let i = open; i < text.length; i += 1) {
@@ -214,6 +230,18 @@ function main() {
       const body = functionBody(text, 'combatLogSuspendReason');
       assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
       assert(body.includes('manual-login'), 'manual-login suspend reason not found');
+    });
+    check(`${file} keeps longest exit suppress delay`, () => {
+      const confirmedBody = functionBody(text, 'setExitReloginSuppress');
+      assert(
+        confirmedBody.includes('const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'),
+        'confirmed exit suppress does not take max(delay, minimum)'
+      );
+      const pendingBody = functionBody(text, 'primePendingUnsafeExitLoginSuppress');
+      assert(
+        pendingBody.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'),
+        'pending unsafe exit suppress does not take max(delay, minimum)'
+      );
     });
   }
 
