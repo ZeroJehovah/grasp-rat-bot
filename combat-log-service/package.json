@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "analyze": "node analyze-logs.js"
+    "analyze": "node analyze-logs.js",
+    "monitor": "node analyze-logs.js --watch"
   }
 }

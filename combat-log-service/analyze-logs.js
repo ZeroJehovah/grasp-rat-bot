@@ -10,6 +10,9 @@ const DEFAULTS = {
   eventGapMs: 30000,
   eventLineGap: 100,
   latest: 20,
+  watch: false,
+  watchIntervalMs: 10000,
+  watchCount: 0,
   json: false,
   failOnIssue: false
 };
@@ -23,6 +26,9 @@ function parseArgs(args) {
     else if (arg === '--event-gap-ms') out.eventGapMs = Math.max(0, Number(args[++i] || out.eventGapMs) || out.eventGapMs);
     else if (arg === '--event-line-gap') out.eventLineGap = Math.max(0, Number(args[++i] || out.eventLineGap) || out.eventLineGap);
     else if (arg === '--latest') out.latest = Math.max(0, Number(args[++i] || out.latest) || out.latest);
+    else if (arg === '--watch') out.watch = true;
+    else if (arg === '--watch-interval-ms') out.watchIntervalMs = Math.max(250, Number(args[++i] || out.watchIntervalMs) || out.watchIntervalMs);
+    else if (arg === '--watch-count') out.watchCount = Math.max(0, Number(args[++i] || out.watchCount) || out.watchCount);
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-issue') out.failOnIssue = true;
     else if (arg === '--help' || arg === '-h') {
@@ -44,6 +50,9 @@ Options:
   --event-gap-ms <ms>            Split same-summary events after this time gap. Default: ${DEFAULTS.eventGapMs}
   --event-line-gap <count>       Split same-summary events after this line gap. Default: ${DEFAULTS.eventLineGap}
   --latest <count>               Number of recent exit events to print. Default: ${DEFAULTS.latest}
+  --watch                        Keep polling the log directory.
+  --watch-interval-ms <ms>       Poll interval for --watch. Default: ${DEFAULTS.watchIntervalMs}
+  --watch-count <count>          Stop after this many watch scans. Default: unlimited
   --json                         Print machine-readable JSON.
   --fail-on-issue                Exit with code 1 when issues are found.
 `);
@@ -301,15 +310,36 @@ function auditLogs(options) {
   };
 }
 
+function issueCounts(report) {
+  const counts = new Map();
+  for (const item of report.issues) counts.set(item.issue, (counts.get(item.issue) || 0) + 1);
+  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function reportFingerprint(report) {
+  const latest = report.exitEvents[0] || {};
+  return JSON.stringify({
+    files: report.files,
+    entries: report.entries,
+    parseErrors: report.parseErrors.length,
+    issues: issueCounts(report),
+    latestExit: {
+      file: latest.file || '',
+      line: latest.lastLine || 0,
+      at: latest.lastAt || 0,
+      reason: latest.reason || '',
+      issues: latest.issues || []
+    }
+  });
+}
+
 function printHuman(report, options) {
   console.log('Combat log audit');
   console.log(`Dir: ${report.dir}`);
   console.log(`Files: ${report.files}, entries: ${report.entries}, versions: ${report.versions.join(', ') || '-'}`);
   console.log(`Exit events: ${report.exitEvents.length}, issues: ${report.issues.length}, parse errors: ${report.parseErrors.length}`);
   if (report.issues.length) {
-    const counts = new Map();
-    for (const item of report.issues) counts.set(item.issue, (counts.get(item.issue) || 0) + 1);
-    console.log('Issue counts: ' + Array.from(counts.entries()).map(([issue, count]) => `${issue}=${count}`).join(', '));
+    console.log('Issue counts: ' + issueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
   }
   const latest = report.exitEvents.slice(0, options.latest);
   if (latest.length) {
@@ -334,14 +364,52 @@ function printHuman(report, options) {
   }
 }
 
-function main() {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function watchLogs(options) {
+  let lastFingerprint = '';
+  let lastReport = null;
+  let scans = 0;
+  console.log(`Watching ${options.dir} every ${options.watchIntervalMs}ms. Press Ctrl+C to stop.`);
+  while (true) {
+    const report = auditLogs(options);
+    const fingerprint = reportFingerprint(report);
+    const changed = fingerprint !== lastFingerprint;
+    scans += 1;
+    lastReport = report;
+    if (changed) {
+      console.log('');
+      console.log(`Audit update ${new Date().toISOString()} scan=${scans}`);
+      printHuman(report, options);
+      lastFingerprint = fingerprint;
+    } else {
+      console.log(`${new Date().toISOString()} no change: files=${report.files} entries=${report.entries} issues=${report.issues.length}`);
+    }
+    if (options.watchCount && scans >= options.watchCount) break;
+    await sleep(options.watchIntervalMs);
+  }
+  if (options.failOnIssue && lastReport && (lastReport.issues.length || lastReport.parseErrors.length)) process.exitCode = 1;
+}
+
+async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.watch) {
+    await watchLogs(options);
+    return;
+  }
   const report = auditLogs(options);
   if (options.json) console.log(JSON.stringify(report, null, 2));
   else printHuman(report, options);
   if (options.failOnIssue && (report.issues.length || report.parseErrors.length)) process.exitCode = 1;
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  main().catch(err => {
+    console.error(err?.stack || err?.message || String(err));
+    process.exitCode = 1;
+  });
+}
 
 module.exports = { auditLogs, parseArgs };
