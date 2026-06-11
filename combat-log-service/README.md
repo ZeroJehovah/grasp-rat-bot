@@ -82,7 +82,7 @@ http://127.0.0.1:18765/combat-log
 
 ## 退出/重连审计
 
-分析已收集的 JSONL，检查退出原因是否写入顶层 `exit`，以及非安全退出是否至少保留 60 秒重连等待：
+分析已收集的 JSONL，检查退出原因是否写入顶层 `exit`，非安全退出是否至少保留 60 秒重连等待，以及特定退出原因是否满足更长等待：
 
 ```bash
 cd combat-log-service
@@ -144,6 +144,8 @@ npm run monitor:objective -- --since now --latest 10
 
 `monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
 
+`stamina-budget-coin-leave` 默认要求 5 分钟等待；如果配置改变，可用 `--stamina-budget-delay-ms <ms>` 调整审计阈值。
+
 用于自动检查时可以让问题返回非零退出码：
 
 ```bash
@@ -162,6 +164,7 @@ npm test
 
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
 - `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；
+- `exit-delay-below-required`: 退出等待低于该退出原因要求的等待，例如 1h 体力预算退出低于 5 分钟；
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
 - `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；
 - `ambiguous-opportunity-wait`: 当前版本日志里重新出现“收益接近，原地等待更明确目标”；

@@ -8,6 +8,7 @@ const path = require('path');
 const DEFAULTS = {
   dir: path.join(__dirname, 'logs'),
   minUnsafeDelayMs: 60000,
+  staminaBudgetDelayMs: 300000,
   combatAttackRange: 14500,
   eventGapMs: 30000,
   eventLineGap: 100,
@@ -35,6 +36,7 @@ function parseArgs(args) {
     const arg = args[i];
     if (arg === '--dir') out.dir = path.resolve(args[++i] || out.dir);
     else if (arg === '--min-unsafe-delay-ms') out.minUnsafeDelayMs = Math.max(0, Number(args[++i] || out.minUnsafeDelayMs) || out.minUnsafeDelayMs);
+    else if (arg === '--stamina-budget-delay-ms') out.staminaBudgetDelayMs = Math.max(0, Number(args[++i] || out.staminaBudgetDelayMs) || out.staminaBudgetDelayMs);
     else if (arg === '--combat-attack-range') out.combatAttackRange = Math.max(0, Number(args[++i] || out.combatAttackRange) || out.combatAttackRange);
     else if (arg === '--event-gap-ms') out.eventGapMs = Math.max(0, Number(args[++i] || out.eventGapMs) || out.eventGapMs);
     else if (arg === '--event-line-gap') out.eventLineGap = Math.max(0, Number(args[++i] || out.eventLineGap) || out.eventLineGap);
@@ -70,6 +72,7 @@ function printHelp() {
 Options:
   --dir <dir>                    Log directory. Default: ./logs
   --min-unsafe-delay-ms <ms>     Required delay for unsafe exits. Default: ${DEFAULTS.minUnsafeDelayMs}
+  --stamina-budget-delay-ms <ms> Required delay for stamina-budget exits. Default: ${DEFAULTS.staminaBudgetDelayMs}
   --combat-attack-range <cm>     Range used for Active-player behavior audits. Default: ${DEFAULTS.combatAttackRange}
   --event-gap-ms <ms>            Split same-summary events after this time gap. Default: ${DEFAULTS.eventGapMs}
   --event-line-gap <count>       Split same-summary events after this line gap. Default: ${DEFAULTS.eventLineGap}
@@ -356,6 +359,26 @@ function delayMs(entry) {
   );
 }
 
+function requiredDelayMs(entry, options) {
+  const decision = entry?.decision || {};
+  const leave = decision?.leave || {};
+  const exit = entry?.exit || {};
+  const base = isUnsafeExit(entry) ? Math.max(0, Number(options.minUnsafeDelayMs || 0) || 0) : 0;
+  const explicit = Math.max(
+    numberOrZero(exit.pendingLoginSuppressMinimumDelayMs),
+    numberOrZero(exit.pendingLoginSuppressHpDelayMs),
+    numberOrZero(leave.pendingLoginSuppressMinimumDelayMs),
+    numberOrZero(leave.pendingLoginSuppressHpDelayMs),
+    numberOrZero(decision.pendingLoginSuppressMinimumDelayMs),
+    numberOrZero(decision.pendingLoginSuppressHpDelayMs)
+  );
+  const text = textParts(entry).join(' ');
+  const staminaBudget = /stamina-budget|1h体力预算|体力预算不足/i.test(text)
+    ? Math.max(0, Number(options.staminaBudgetDelayMs || DEFAULTS.staminaBudgetDelayMs) || 0)
+    : 0;
+  return Math.max(base, explicit, staminaBudget);
+}
+
 function loginContext(entry) {
   const login = entry?.login || {};
   const lastLogin = login.lastLogin || {};
@@ -500,6 +523,7 @@ function auditFile(file, rootDir, options) {
     const topLevelExit = hasTopLevelExit(entry);
     const unsafe = isUnsafeExit(entry);
     const eventDelayMs = delayMs(entry);
+    const eventRequiredDelayMs = requiredDelayMs(entry, options);
     const issues = [];
     const loginIssues = loginExitHoldIssues(entry);
     if (!topLevelExit && !loginIssues.length) issues.push('missing-top-level-exit');
@@ -518,6 +542,7 @@ function auditFile(file, rootDir, options) {
       topLevelExit,
       unsafe,
       delayMs: eventDelayMs,
+      requiredDelayMs: eventRequiredDelayMs,
       login: loginContext(entry),
       count: 0,
       issues: []
@@ -532,6 +557,7 @@ function auditFile(file, rootDir, options) {
     event.topLevelExit = event.topLevelExit || topLevelExit;
     event.unsafe = event.unsafe || unsafe;
     event.delayMs = Math.max(event.delayMs, eventDelayMs);
+    event.requiredDelayMs = Math.max(Number(event.requiredDelayMs || 0), eventRequiredDelayMs);
     const currentLogin = loginContext(entry);
     event.login = {
       ...event.login,
@@ -553,6 +579,12 @@ function auditFile(file, rootDir, options) {
     event.count += 1;
     for (const issue of issues) {
       if (!event.issues.includes(issue)) event.issues.push(issue);
+    }
+  }
+  for (const event of exitEvents) {
+    const baseRequiredMs = event.unsafe ? Math.max(0, Number(options.minUnsafeDelayMs || 0) || 0) : 0;
+    if (Number(event.requiredDelayMs || 0) > baseRequiredMs && Number(event.delayMs || 0) < Number(event.requiredDelayMs || 0)) {
+      if (!event.issues.includes('exit-delay-below-required')) event.issues.push('exit-delay-below-required');
     }
   }
   return {
@@ -699,13 +731,24 @@ function summarizeExitSafety(events, minUnsafeDelayMs) {
     unsafeDelayOk: 0,
     unsafeDelayBelowMin: 0,
     unsafeDelayMissing: 0,
+    requiredDelayEvents: 0,
+    requiredDelayOk: 0,
+    requiredDelayBelowRequired: 0,
     minUnsafeDelayMs: minDelay,
+    maxRequiredDelayMs: 0,
     maxObservedDelayMs: 0
   };
   for (const event of events || []) {
     out.total += 1;
     const delay = Math.max(0, Number(event?.delayMs || 0) || 0);
+    const requiredDelay = Math.max(0, Number(event?.requiredDelayMs || 0) || 0);
     out.maxObservedDelayMs = Math.max(out.maxObservedDelayMs, delay);
+    out.maxRequiredDelayMs = Math.max(out.maxRequiredDelayMs, requiredDelay);
+    if (requiredDelay > 0) {
+      out.requiredDelayEvents += 1;
+      if (delay >= requiredDelay) out.requiredDelayOk += 1;
+      else out.requiredDelayBelowRequired += 1;
+    }
     if (!event?.unsafe) {
       out.safe += 1;
       continue;
@@ -729,7 +772,10 @@ function formatExitSafetyCounts(counts) {
     `unsafeDelayOk=${Number(c.unsafeDelayOk || 0)}`,
     `unsafeDelayBelowMin=${Number(c.unsafeDelayBelowMin || 0)}`,
     `unsafeDelayMissing=${Number(c.unsafeDelayMissing || 0)}`,
+    `requiredDelayOk=${Number(c.requiredDelayOk || 0)}/${Number(c.requiredDelayEvents || 0)}`,
+    `requiredDelayBelowRequired=${Number(c.requiredDelayBelowRequired || 0)}`,
     `minUnsafeDelay=${Number(c.minUnsafeDelayMs || 0)}ms`,
+    `maxRequiredDelay=${Number(c.maxRequiredDelayMs || 0)}ms`,
     `maxObservedDelay=${Number(c.maxObservedDelayMs || 0)}ms`
   ].join(', ');
 }
@@ -804,6 +850,7 @@ function printHuman(report, options) {
       if (!event.topLevelExit) flags.push('missing exit');
       if (event.unsafe) flags.push('unsafe');
       if (event.delayMs) flags.push(`delay=${event.delayMs}ms`);
+      if (event.requiredDelayMs) flags.push(`required=${event.requiredDelayMs}ms`);
       if (event.login?.suppressRemainingMs) flags.push(`suppress=${event.login.suppressRemainingMs}ms`);
       if (event.login?.enemyHoldRemainingMs) flags.push(`enemyHold=${event.login.enemyHoldRemainingMs}ms`);
       if (event.login?.offlineHoldRemainingMs) flags.push(`offlineHold=${event.login.offlineHoldRemainingMs}ms`);
@@ -895,12 +942,14 @@ function runSelfTest() {
     const logsDir = path.join(tempRoot, 'logs');
     const loginLogsDir = path.join(tempRoot, 'login-logs');
     const behaviorLogsDir = path.join(tempRoot, 'behavior-logs');
+    const requiredDelayLogsDir = path.join(tempRoot, 'required-delay-logs');
     const noExitLogsDir = path.join(tempRoot, 'no-exit-logs');
     const emptyLogsDir = path.join(tempRoot, 'empty-logs');
     const manifestPath = path.join(tempRoot, 'manifest.json');
     fs.mkdirSync(logsDir, { recursive: true });
     fs.mkdirSync(loginLogsDir, { recursive: true });
     fs.mkdirSync(behaviorLogsDir, { recursive: true });
+    fs.mkdirSync(requiredDelayLogsDir, { recursive: true });
     fs.mkdirSync(noExitLogsDir, { recursive: true });
     fs.mkdirSync(emptyLogsDir, { recursive: true });
     fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
@@ -1202,6 +1251,54 @@ function runSelfTest() {
     const coinReason = behaviorReport.behaviorReasonCounts.find(item => item.reason === 'visible-coin') || null;
     cases += 1;
     assertSelfTest(coinReason?.events === 1, `expected 1 coin behavior reason event, got ${coinReason?.events}`);
+
+    const requiredDelayEntries = [
+      {
+        type: 'combat-end',
+        at: baseAt + 9000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'leave',
+          reason: 'stamina-budget-coin-leave',
+          displayReason: '1h体力预算不足，退出等待恢复'
+        },
+        exit: {
+          reason: 'stamina-budget-coin-leave',
+          summary: 'short stamina delay',
+          reloginDelayMs: 60000
+        }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 10000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'leave',
+          reason: 'stamina-budget-coin-leave',
+          displayReason: '1h体力预算不足，退出等待恢复'
+        },
+        exit: {
+          reason: 'stamina-budget-coin-leave',
+          summary: 'full stamina delay',
+          reloginDelayMs: 300000
+        }
+      }
+    ];
+    fs.writeFileSync(
+      path.join(requiredDelayLogsDir, 'required-delay.jsonl'),
+      requiredDelayEntries.map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    );
+    const requiredDelayReport = auditLogs({ dir: requiredDelayLogsDir, manifestPath });
+    cases += 1;
+    assertSelfTest(requiredDelayReport.exitEvents.length === 2, `expected 2 required-delay exits, got ${requiredDelayReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(issueCount(requiredDelayReport, 'exit-delay-below-required') === 1, 'expected one exit below reason-specific required delay');
+    cases += 1;
+    assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayEvents === 2, `expected 2 required-delay events, got ${requiredDelayReport.exitSafetyCounts.requiredDelayEvents}`);
+    cases += 1;
+    assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayOk === 1, `expected 1 required-delay ok event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayOk}`);
+    cases += 1;
+    assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayBelowRequired === 1, `expected 1 required-delay below event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayBelowRequired}`);
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {
