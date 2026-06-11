@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.86"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.87"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5304,6 +5304,20 @@
     };
   }
 
+  function defensiveTargetOverridesEngaged(engagedTarget, defensiveTarget) {
+    if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+    const ownerId = defensiveTarget.incomingBullet.ownerId
+      ?? defensiveTarget.incomingBullet.owner_id
+      ?? defensiveTarget.incomingBullet.source_user_id
+      ?? defensiveTarget.incomingBullet.user_id;
+    if (ownerId === null || ownerId === undefined) return false;
+    const defensiveId = defensiveTarget.user_id ?? defensiveTarget.id;
+    const engagedId = engagedTarget.user_id ?? engagedTarget.id;
+    return defensiveId !== null && defensiveId !== undefined
+      && engagedId !== null && engagedId !== undefined
+      && String(defensiveId) !== String(engagedId);
+  }
+
   function pickOpportunisticShotTarget(self, entities) {
     const candidates = (entities || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id))
@@ -7027,6 +7041,7 @@
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities);
+    const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -7067,6 +7082,11 @@
       } : null,
       conservingStamina: isConservingStamina(self)
     };
+    if (defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      return buildCombatAction(self, defensiveCombatTarget, bullets);
+    }
     if (engagedCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
@@ -7094,7 +7114,6 @@
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
       };
     }
-    const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
     if (defensiveCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
