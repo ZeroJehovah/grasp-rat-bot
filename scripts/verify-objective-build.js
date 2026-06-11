@@ -210,6 +210,10 @@ function main() {
         'combat target priority does not include join-mode Active'
       );
     });
+    check(`${file} ends combat logs on login-suppressed waits`, () => {
+      const body = functionBody(text, 'combatLogSuspendReason');
+      assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
+    });
   }
 
   check('grasp-rat-bot.js covers stationary full-stamina Active combat self-test', () => {
