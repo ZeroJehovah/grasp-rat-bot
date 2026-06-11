@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.92"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.93"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -146,13 +146,23 @@
     opportunityCoinPickupStaminaMs: 0,
     opportunityLongStaminaReserveMs: 1500,
     opportunityStickBonus: 0,
-    opportunitySwitchMargin: 3000,
-    opportunitySwitchRelativeMargin: 0.1,
-    opportunitySwitchHoldMs: 7000,
-    opportunityNearbyPriorityDistance: 18000,
-    coinMaxDistance: 18000,
-    coinDangerRadius: 25000,
-    stationaryActiveCoinDangerRadius: 12000,
+	    opportunitySwitchMargin: 3000,
+	    opportunitySwitchRelativeMargin: 0.1,
+	    opportunitySwitchHoldMs: 7000,
+	    opportunityAmbiguousWaitMargin: 3000,
+	    opportunityAmbiguousWaitRelativeMargin: 0.12,
+	    opportunityAmbiguousWaitMinDistance: 8000,
+	    opportunityAmbiguousWaitMinStaminaMs: 8000,
+	    opportunityAmbiguousWaitMaxMs: 12000,
+	    opportunityNearbyPriorityDistance: 18000,
+	    coinMaxDistance: 18000,
+	    coinDangerRadius: 25000,
+	    invulnerableActiveCoinDangerRadius: 36000,
+	    invulnerableActiveCoinHeadingBlockRadius: 65000,
+	    invulnerableActiveCoinHeadingLaneRadius: 18000,
+	    invulnerableActiveCoinHeadingCosMin: 0.55,
+	    invulnerableActiveCoinHeadingMinDistance: 1500,
+	    stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 22000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
@@ -246,8 +256,11 @@
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
-    pursuitLeaveMs: 300000,
-    pursuitLostGraceMs: 10000,
+	    pursuitLeaveMs: 300000,
+	    pursuitLeaveNonFullHpMs: 90000,
+	    pursuitLeaveInvulnerableMs: 60000,
+	    pursuitLeaveNonFullHpInvulnerableMs: 45000,
+	    pursuitLostGraceMs: 10000,
     pursuitLeaveRetryMs: 1000,
     pursuitTrackRadius: 42000,
     pursuitTowardCosMin: 0.25,
@@ -458,10 +471,11 @@
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    lastSelf: null,
-    lastSafety: null,
-    actionThreats: [],
-    opportunityChoice: preserved.opportunityChoice,
-    returnBlockLock: null,
+	    lastSafety: null,
+	    actionThreats: [],
+	    opportunityChoice: preserved.opportunityChoice,
+	    opportunityWait: null,
+	    returnBlockLock: null,
     returnBlockScan: null,
     returnBlockCooldownUntil: 0,
     returnBlockRecentThreatId: '',
@@ -1092,9 +1106,10 @@
 	      'post-attack-drop-coin': '战斗后优先拾取掉落',
 	      'best-opportunity-coin': '综合收益最高：拾取金币',
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
-	      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
-	      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
-	      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+		      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
+		      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
+		      'wait-for-clear-opportunity': '收益接近，等待更明确目标',
+		      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
 	      'approach-afk-drop-target': '综合收益最高：靠近挂机 Drop 目标',
 	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
@@ -2577,21 +2592,24 @@
     clearLoginSuppressMatching(/offline.*leave/i);
   }
 
-  function summarizePursuit(pursuit = bot.pursuit) {
-    if (!pursuit) return null;
-    const t = now();
-    const lastSeenAt = Number(pursuit.lastSeenAt || pursuit.startedAt || t);
-    return {
-      id: pursuit.id,
-      name: pursuit.name || '',
+	  function summarizePursuit(pursuit = bot.pursuit) {
+	    if (!pursuit) return null;
+	    const t = now();
+	    const lastSeenAt = Number(pursuit.lastSeenAt || pursuit.startedAt || t);
+	    const thresholdMs = Number.isFinite(Number(pursuit.thresholdMs)) ? Number(pursuit.thresholdMs) : cfg.pursuitLeaveMs;
+	    return {
+	      id: pursuit.id,
+	      name: pursuit.name || '',
       distance: Number.isFinite(Number(pursuit.distance)) ? Math.round(Number(pursuit.distance)) : null,
       speed: Number.isFinite(Number(pursuit.speed)) ? Math.round(Number(pursuit.speed)) : null,
       moving: Boolean(pursuit.moving),
-      active: Boolean(pursuit.active),
-      reason: pursuit.reason || '',
-      durationMs: Math.max(0, Math.round(Number(pursuit.durationMs ?? (lastSeenAt - Number(pursuit.startedAt || lastSeenAt))))),
-      thresholdMs: cfg.pursuitLeaveMs,
-      lastSeenAgeMs: Math.max(0, Math.round(t - lastSeenAt)),
+	      active: Boolean(pursuit.active),
+	      reason: pursuit.reason || '',
+	      durationMs: Math.max(0, Math.round(Number(pursuit.durationMs ?? (lastSeenAt - Number(pursuit.startedAt || lastSeenAt))))),
+	      thresholdMs,
+	      invulnerable: Boolean(pursuit.invulnerable),
+	      nonFullHp: Boolean(pursuit.nonFullHp),
+	      lastSeenAgeMs: Math.max(0, Math.round(t - lastSeenAt)),
       towardScore: Number.isFinite(Number(pursuit.towardScore)) ? Number(pursuit.towardScore).toFixed(2) : null,
       closingDistance: Number.isFinite(Number(pursuit.closingDistance)) ? Math.round(Number(pursuit.closingDistance)) : null
     };
@@ -2959,7 +2977,7 @@
     return threat ? String(threat.id ?? threat.user_id ?? '') : '';
   }
 
-  function pursuitPressure(self, threat, previous, action) {
+	  function pursuitPressure(self, threat, previous, action) {
     if (!threat) return null;
     const distance = Number(threat.distance ?? dist(self, threat));
     if (!Number.isFinite(distance) || distance > cfg.pursuitTrackRadius) return null;
@@ -3000,11 +3018,24 @@
       speed: s,
       moving: Boolean(threat.moving),
       towardScore,
-      closingDistance
-    };
-  }
+	      closingDistance
+	    };
+	  }
 
-  function updatePursuitTracking(self, activeThreats, action) {
+	  function pursuitLeaveThresholdFor(self, threat) {
+	    const normalMs = Math.max(0, Number(cfg.pursuitLeaveMs || 0));
+	    const nonFullHp = !isFullHp(self);
+	    const invulnerable = isInvulnerable(threat);
+	    const candidates = [normalMs];
+	    if (nonFullHp) candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpMs || normalMs)));
+	    if (invulnerable) candidates.push(Math.max(0, Number(cfg.pursuitLeaveInvulnerableMs || normalMs)));
+	    if (nonFullHp && invulnerable) {
+	      candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpInvulnerableMs || cfg.pursuitLeaveInvulnerableMs || cfg.pursuitLeaveNonFullHpMs || normalMs)));
+	    }
+	    return Math.max(0, Math.min(...candidates.filter(value => Number.isFinite(value))));
+	  }
+
+	  function updatePursuitTracking(self, activeThreats, action) {
     const t = now();
     const previous = bot.pursuit;
     const candidates = (activeThreats || [])
@@ -3025,22 +3056,25 @@
     }
     const same = previous && String(previous.id) === String(picked.id)
       && t - Number(previous.lastSeenAt || t) <= cfg.pursuitLostGraceMs;
-    const startedAt = same ? Number(previous.startedAt || t) : t;
-    bot.pursuit = {
-      id: picked.id,
-      name: picked.threat.name || '',
+	    const startedAt = same ? Number(previous.startedAt || t) : t;
+	    const thresholdMs = pursuitLeaveThresholdFor(self, picked.threat);
+	    bot.pursuit = {
+	      id: picked.id,
+	      name: picked.threat.name || '',
       startedAt,
       lastSeenAt: t,
       durationMs: Math.max(0, t - startedAt),
       distance: picked.distance,
       speed: picked.speed,
       moving: picked.moving,
-      active: true,
-      reason: picked.reason,
-      towardScore: picked.towardScore,
-      closingDistance: picked.closingDistance,
-      thresholdMs: cfg.pursuitLeaveMs
-    };
+	      active: true,
+	      reason: picked.reason,
+	      towardScore: picked.towardScore,
+	      closingDistance: picked.closingDistance,
+	      thresholdMs,
+	      invulnerable: isInvulnerable(picked.threat),
+	      nonFullHp: !isFullHp(self)
+	    };
     if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(bot.pursuit);
     return bot.pursuit;
   }
@@ -5344,19 +5378,51 @@
     return safety;
   }
 
-  function safeCoinCandidates(coins, activeThreats, maxDistance) {
-    const t = now();
-    for (const [id, until] of bot.ignoredCoins.entries()) {
-      if (until <= t) bot.ignoredCoins.delete(id);
-    }
-    return coins.filter(c => c.distance <= maxDistance
-      && !bot.ignoredCoins.has(String(c.drop_id))
-      && !activeThreats.some(t => dist(c, t) <= (t.coinDangerRadius ?? cfg.coinDangerRadius)))
-      .sort(compareCoinOpportunity);
-  }
+	  function coinThreatDangerRadius(threat) {
+	    const base = Number(threat?.coinDangerRadius ?? cfg.coinDangerRadius);
+	    if (isInvulnerableActive(threat)) return Math.max(base, Number(cfg.invulnerableActiveCoinDangerRadius || 0));
+	    return base;
+	  }
 
-  function pickCoin(coins, activeThreats, maxDistance) {
-    const candidates = safeCoinCandidates(coins, activeThreats, maxDistance);
+	  function coinHeadingBlockedByInvulnerableThreat(self, coin, threat) {
+	    if (!self || !coin || !isInvulnerableActive(threat)) return false;
+	    const coinDx = Number(coin.x) - Number(self.x);
+	    const coinDy = Number(coin.y) - Number(self.y);
+	    const threatDx = Number(threat.x) - Number(self.x);
+	    const threatDy = Number(threat.y) - Number(self.y);
+	    const coinDistance = Math.hypot(coinDx, coinDy);
+	    const threatDistance = Math.hypot(threatDx, threatDy);
+	    const minCoinDistance = Math.max(0, Number(cfg.invulnerableActiveCoinHeadingMinDistance || 0));
+	    const blockRadius = Math.max(0, Number(cfg.invulnerableActiveCoinHeadingBlockRadius || 0));
+	    if (!(coinDistance >= minCoinDistance) || !(threatDistance > 0) || threatDistance > blockRadius) return false;
+	    const cos = (coinDx * threatDx + coinDy * threatDy) / Math.max(1, coinDistance * threatDistance);
+	    if (cos < Number(cfg.invulnerableActiveCoinHeadingCosMin || 0)) return false;
+	    const lane = Math.abs(coinDx * threatDy - coinDy * threatDx) / Math.max(1, threatDistance);
+	    return lane <= Math.max(0, Number(cfg.invulnerableActiveCoinHeadingLaneRadius || 0))
+	      && coinDistance <= threatDistance + Math.max(0, Number(cfg.invulnerableActiveCoinDangerRadius || 0));
+	  }
+
+	  function coinBlockedByThreat(self, coin, threat) {
+	    if (dist(coin, threat) <= coinThreatDangerRadius(threat)) return true;
+	    return coinHeadingBlockedByInvulnerableThreat(self, coin, threat);
+	  }
+
+	  function safeCoinCandidates(coins, activeThreats, maxDistance, self = null) {
+	    const t = now();
+	    for (const [id, until] of bot.ignoredCoins.entries()) {
+	      if (until <= t) bot.ignoredCoins.delete(id);
+	    }
+	    return (coins || []).map(c => ({
+	      ...c,
+	      distance: Number.isFinite(Number(c?.distance)) ? Number(c.distance) : (self ? dist(self, c) : Number(c?.distance))
+	    })).filter(c => c.distance <= maxDistance
+	      && !bot.ignoredCoins.has(String(c.drop_id))
+	      && !activeThreats.some(t => coinBlockedByThreat(self, c, t)))
+	      .sort(compareCoinOpportunity);
+	  }
+
+	  function pickCoin(self, coins, activeThreats, maxDistance) {
+	    const candidates = safeCoinCandidates(coins, activeThreats, maxDistance, self);
     if (!candidates.length) return null;
     if (bot.lastTarget?.kind === 'coin' && now() - bot.lastTargetAt < cfg.coinStickMs) {
       const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
@@ -5366,7 +5432,7 @@
   }
 
   function pickCoinField(self, allCoins, activeThreats) {
-    const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.fieldMigrationMaxDistance)
+	    const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.fieldMigrationMaxDistance, self)
       .filter(c => c.distance >= cfg.fieldMigrationMinDistance)
       .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
     if (!candidates.length) return null;
@@ -5402,7 +5468,7 @@
   }
 
   function pickDistantCoin(self, allCoins, activeThreats) {
-    const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.distantCoinMaxDistance)
+	    const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.distantCoinMaxDistance, self)
       .filter(c => c.distance >= cfg.distantCoinMinDistance)
       .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
     if (!candidates.length) return null;
@@ -6617,7 +6683,7 @@
 	    const allowIdleFallback = Boolean(options.allowIdleFallback || options.idleFallback);
 	    const ageMs = snapshotCoinAgeMs();
 	    if (ageMs > cfg.snapshotCoinStaleMs) return null;
-	    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance);
+		    const candidates = safeCoinCandidates((allCoins || []).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance, self);
 	    if (!candidates.length) return null;
 	    const buildSnapshotItem = coin => {
 	      const members = candidates.filter(other => dist(coin, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
@@ -6737,7 +6803,7 @@
   function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
     let best = -Infinity;
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
-      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance)) {
+	      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
         if (!opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin))) continue;
         const score = scoreCoinOpportunity(coin);
         if (score > best) best = score;
@@ -6790,7 +6856,7 @@
     if (!resolvedAttacks.length) return null;
     const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
     const candidates = [];
-    for (const coin of safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance)
+	    for (const coin of safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance, self)
       .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)))
       .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))) {
@@ -6889,12 +6955,85 @@
     };
   }
 
-  function opportunityKey(item) {
-    if (!item) return '';
-    return String(item.type || '') + ':' + String(item.id ?? '');
-  }
+	  function opportunityKey(item) {
+	    if (!item) return '';
+	    return String(item.type || '') + ':' + String(item.id ?? '');
+	  }
 
-  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
+	  function opportunityCanAmbiguousWait(item) {
+	    if (!item || item.actionKind === 'attack') return false;
+	    const distance = Number(item.distance);
+	    const staminaCost = Number(item.staminaCost);
+	    return Number.isFinite(distance)
+	      && distance >= Math.max(0, Number(cfg.opportunityAmbiguousWaitMinDistance || 0))
+	      && Number.isFinite(staminaCost)
+	      && staminaCost >= Math.max(0, Number(cfg.opportunityAmbiguousWaitMinStaminaMs || 0));
+	  }
+
+	  function opportunityScoresAreAmbiguous(best, competitor) {
+	    if (!opportunityCanAmbiguousWait(best) || !competitor) return false;
+	    if (Number(best.priorityTier || 0) !== Number(competitor.priorityTier || 0)) return false;
+	    const bestScore = Number(best.score || 0);
+	    const competingScore = Number(competitor.score || 0);
+	    if (!(bestScore > 0) || !(competingScore > 0) || bestScore < competingScore) return false;
+	    const margin = Math.max(0, Number(cfg.opportunityAmbiguousWaitMargin || 0));
+	    const relativeMargin = Math.max(0, Number(cfg.opportunityAmbiguousWaitRelativeMargin || 0));
+	    return bestScore - competingScore <= Math.max(margin, competingScore * relativeMargin);
+	  }
+
+	  function buildAmbiguousOpportunityWait(best, competitor, waitAgeMs, waitRemainingMs) {
+	    return {
+	      kind: 'wait',
+	      reason: 'wait-for-clear-opportunity',
+	      dx: 0,
+	      dy: 0,
+	      displayReason: '收益接近，原地等待更明确目标',
+	      opportunityWait: {
+	        best: {
+	          type: best.type,
+	          id: best.id,
+	          score: Math.round(Number(best.score || 0)),
+	          distance: Math.round(Number(best.distance || 0)),
+	          staminaCost: Math.round(Number(best.staminaCost || 0))
+	        },
+	        competitor: {
+	          type: competitor.type,
+	          id: competitor.id,
+	          score: Math.round(Number(competitor.score || 0)),
+	          distance: Math.round(Number(competitor.distance || 0)),
+	          staminaCost: Math.round(Number(competitor.staminaCost || 0))
+	        },
+	        waitAgeMs: Math.round(waitAgeMs),
+	        waitRemainingMs: Number.isFinite(Number(waitRemainingMs)) ? Math.max(0, Math.round(Number(waitRemainingMs))) : null
+	      }
+	    };
+	  }
+
+	  function ambiguousOpportunityWait(best, competitor) {
+	    if (!opportunityScoresAreAmbiguous(best, competitor)) {
+	      bot.opportunityWait = null;
+	      return null;
+	    }
+	    const t = now();
+	    const key = opportunityKey(best) + '|' + opportunityKey(competitor);
+	    const previous = bot.opportunityWait && bot.opportunityWait.key === key ? bot.opportunityWait : null;
+	    const startedAt = previous ? Number(previous.startedAt || t) : t;
+	    const maxMs = Math.max(0, Number(cfg.opportunityAmbiguousWaitMaxMs || 0));
+	    const waitAgeMs = Math.max(0, t - startedAt);
+	    if (maxMs && waitAgeMs >= maxMs) {
+	      bot.opportunityWait = null;
+	      return null;
+	    }
+	    bot.opportunityWait = { key, startedAt, lastSeenAt: t };
+	    return {
+	      ...best,
+	      waiting: true,
+	      competingScore: competitor.score,
+	      action: () => buildAmbiguousOpportunityWait(best, competitor, waitAgeMs, maxMs ? maxMs - waitAgeMs : null)
+	    };
+	  }
+
+	  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
     if (!item) return action;
     const t = now();
     const key = opportunityKey(item);
@@ -6924,12 +7063,12 @@
     };
   }
 
-  function chooseStableOpportunity(opportunities) {
-    const sorted = opportunities
-      .slice()
-      .sort((a, b) => b.priorityTier - a.priorityTier || b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
-    const best = sorted[0] || null;
-    if (!best) return null;
+	  function chooseStableOpportunity(opportunities) {
+	    const sorted = opportunities
+	      .slice()
+	      .sort((a, b) => b.priorityTier - a.priorityTier || b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
+	    const best = sorted[0] || null;
+	    if (!best) return null;
     const current = bot.opportunityChoice;
     if (current?.key && now() < Number(current.until || 0)) {
       const held = sorted.find(item => opportunityKey(item) === String(current.key || ''));
@@ -6941,17 +7080,21 @@
         const requiredScore = Math.max(heldScore + margin, heldScore * (1 + relativeMargin));
         if (Number(best.score || 0) <= requiredScore) {
           return { ...held, held: true, competingScore: best.score };
-        }
-      }
-    }
-    return best;
-  }
+	        }
+	      }
+	    }
+	    const competitor = sorted.find(item => item !== best && Number(item.priorityTier || 0) === Number(best.priorityTier || 0)) || null;
+	    const waitChoice = ambiguousOpportunityWait(best, competitor);
+	    if (waitChoice) return waitChoice;
+	    bot.opportunityWait = null;
+	    return best;
+	  }
 
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups) {
     const opportunities = [];
     const coinById = new Map();
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
-      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance)) {
+	      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
         const id = String(coin.drop_id);
         const previous = coinById.get(id);
         const staminaCost = opportunityCoinStaminaCost(coin);
@@ -6973,8 +7116,9 @@
         distance: coin.distance,
         staminaCost: opportunityCoinStaminaCost(coin),
         score: Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin),
-        priorityTier: opportunityPriorityTier({ type: 'coin', distance: coin.distance }),
-        action: () => buildCoinAction(
+	        priorityTier: opportunityPriorityTier({ type: 'coin', distance: coin.distance }),
+	        actionKind: coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
+	        action: () => buildCoinAction(
           self,
           coin,
           reason
@@ -6994,18 +7138,21 @@
         distance: target.distance,
         staminaCost,
         score,
-        priorityTier: opportunityPriorityTier({
-          type: 'enemy',
-          kind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
+	        actionKind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
+	        priorityTier: opportunityPriorityTier({
+	          type: 'enemy',
+	          kind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
           distance: target.distance
         }),
         action: () => buildEnemyAction(self, target)
       });
     }
 
-    const best = chooseStableOpportunity(opportunities);
-    return best ? rememberOpportunityChoice(best, best.action()) : null;
-  }
+	    const best = chooseStableOpportunity(opportunities);
+	    if (!best) return null;
+	    const action = best.action();
+	    return best.waiting ? action : rememberOpportunityChoice(best, action);
+	  }
 
   function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
     if (scanCoin) {
@@ -7529,8 +7676,8 @@
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
       : cfg.nearCoinPriorityDistance;
-    const nearCoin = pickCoin(coins, coinThreats, nearCoinLimit);
-    const footCoin = pickCoin(coins, coinThreats, cfg.footCoinPriorityDistance);
+    const nearCoin = pickCoin(self, coins, coinThreats, nearCoinLimit);
+    const footCoin = pickCoin(self, coins, coinThreats, cfg.footCoinPriorityDistance);
     const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities, { includeSingle: !recovery });
     if (postAttackCoin) {
       bot.fleeLock = null;
@@ -7544,7 +7691,7 @@
 	    }
 	    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
 	      self,
-	      safeCoinCandidates(allCoins, coinThreats, cfg.snapshotCoinMaxDistance)
+	      safeCoinCandidates(allCoins, coinThreats, cfg.snapshotCoinMaxDistance, self)
 	    );
 	    if (staminaBudgetExit) {
 	      bot.fleeLock = null;
@@ -8201,7 +8348,7 @@
       action = blockThreatReturnAction(self, bot.actionThreats || [], action);
       const pursuit = updatePursuitTracking(self, bot.actionThreats || [], action);
       const pursuitSummary = summarizePursuit(pursuit);
-      if (pursuitSummary && pursuitSummary.durationMs >= cfg.pursuitLeaveMs) {
+	      if (pursuitSummary && pursuitSummary.durationMs >= Math.max(0, Number(pursuitSummary.thresholdMs || cfg.pursuitLeaveMs))) {
         const leaveResult = await leaveForPursuit(pursuit, currentSummary);
         const enemyDetail = activeEnemyLeaveDetail();
         stopMotionSafely('pursuit-leave');
