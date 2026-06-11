@@ -117,6 +117,7 @@ npm run validate:objective
 npm run monitor:current
 npm run monitor:current:strict
 npm run monitor:objective
+npm run monitor:objective:fresh
 npm run monitor:objective -- --since now --latest 10
 npm run monitor:current:strict -- --since now --latest 10
 npm run monitor:current -- --since now --latest 10
@@ -139,10 +140,10 @@ npm start
 
 ```bash
 cd combat-log-service
-npm run monitor:objective -- --since now --latest 10
+npm run monitor:objective:fresh
 ```
 
-`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件、射程内 Active 战斗响应事件、血量劣势退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
+`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件、射程内 Active 战斗响应事件、血量劣势退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。`monitor:objective:fresh` 等同于 `monitor:objective -- --since now --latest 10`，用于刚发布后只监控未来日志。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
 
 `stamina-budget-coin-leave` 默认要求 5 分钟等待；如果配置改变，可用 `--stamina-budget-delay-ms <ms>` 调整审计阈值。
 

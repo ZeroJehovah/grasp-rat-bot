@@ -14,6 +14,7 @@
     "monitor": "node analyze-logs.js --watch",
     "monitor:current": "node analyze-logs.js --watch --manifest ../dist/manifest.json",
     "monitor:current:strict": "node analyze-logs.js --watch --manifest ../dist/manifest.json --require-entries --fail-on-issue",
-    "monitor:objective": "node analyze-logs.js --watch --manifest ../dist/manifest.json --require-entries --require-exit-events --require-active-combat-events --require-hp-disadvantage-exit-events --fail-on-issue"
+    "monitor:objective": "node analyze-logs.js --watch --manifest ../dist/manifest.json --require-entries --require-exit-events --require-active-combat-events --require-hp-disadvantage-exit-events --fail-on-issue",
+    "monitor:objective:fresh": "node analyze-logs.js --watch --manifest ../dist/manifest.json --since now --latest 10 --require-entries --require-exit-events --require-active-combat-events --require-hp-disadvantage-exit-events --fail-on-issue"
   }
 }
