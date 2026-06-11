@@ -272,6 +272,10 @@ function hasTopLevelExit(entry) {
   return Boolean(entry?.exit && typeof entry.exit === 'object');
 }
 
+function hasTopLevelExitReason(entry) {
+  return Boolean(String(entry?.exit?.reason || '').trim());
+}
+
 function isSuspendedReloginEvent(entry) {
   const reason = String(entry?.reason || exitReason(entry) || '');
   return /^suspended:(?:login-suppressed|manual-login)$/i.test(reason);
@@ -633,6 +637,7 @@ function auditFile(file, rootDir, options) {
     const issues = [];
     const loginIssues = loginExitHoldIssues(entry);
     if (!topLevelExit && !loginIssues.length && !isSuspendedReloginEvent(entry)) issues.push('missing-top-level-exit');
+    if (topLevelExit && !hasTopLevelExitReason(entry)) issues.push('missing-exit-reason');
     if (unsafe && eventDelayMs < options.minUnsafeDelayMs) issues.push('unsafe-exit-delay-below-minimum');
     for (const issue of loginIssues) issues.push(issue);
     const event = reuseExisting ? existing : {
@@ -1148,6 +1153,7 @@ function runSelfTest() {
     const loginLogsDir = path.join(tempRoot, 'login-logs');
     const behaviorLogsDir = path.join(tempRoot, 'behavior-logs');
     const requiredDelayLogsDir = path.join(tempRoot, 'required-delay-logs');
+    const missingReasonLogsDir = path.join(tempRoot, 'missing-reason-logs');
     const hashOkLogsDir = path.join(tempRoot, 'hash-ok-logs');
     const hashBadLogsDir = path.join(tempRoot, 'hash-bad-logs');
     const noExitLogsDir = path.join(tempRoot, 'no-exit-logs');
@@ -1158,6 +1164,7 @@ function runSelfTest() {
     fs.mkdirSync(loginLogsDir, { recursive: true });
     fs.mkdirSync(behaviorLogsDir, { recursive: true });
     fs.mkdirSync(requiredDelayLogsDir, { recursive: true });
+    fs.mkdirSync(missingReasonLogsDir, { recursive: true });
     fs.mkdirSync(hashOkLogsDir, { recursive: true });
     fs.mkdirSync(hashBadLogsDir, { recursive: true });
     fs.mkdirSync(noExitLogsDir, { recursive: true });
@@ -1342,6 +1349,30 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(noActiveEvidenceReport, 'no-active-in-range-combat-events') === 1, 'expected one no-active-in-range-combat-events evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(noActiveEvidenceReport), 'expected no-active-combat required report to count as failure');
+
+    fs.writeFileSync(
+      path.join(missingReasonLogsDir, 'missing-reason.jsonl'),
+      JSON.stringify({
+        type: 'combat-frame',
+        at: baseAt + 3600,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'leave',
+          reason: 'combat-hp-disadvantage-leave'
+        },
+        exit: {
+          summary: 'top-level exit without reason',
+          pendingLoginSuppressDelayMs: 60000
+        }
+      }) + '\n'
+    );
+    const missingReasonReport = auditLogs({ dir: missingReasonLogsDir, manifestPath });
+    cases += 1;
+    assertSelfTest(missingReasonReport.exitEvents.length === 1, `expected 1 missing-reason exit event, got ${missingReasonReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(issueCount(missingReasonReport, 'missing-exit-reason') === 1, 'expected one missing exit reason issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(missingReasonReport), 'expected missing-reason report to count as failure');
 
     const reloginEntries = [
       {
