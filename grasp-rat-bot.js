@@ -1184,7 +1184,31 @@ function runSelfTest() {
     }
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
-	  function combatLeaveAction(reason, self, target, combatState = {}) {
+  function combatLeaveCoverAction(self, target, bullets = []) {
+    const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
+    const spacing = incoming ? { active: false, dx: 0, dy: 0 } : combatSpacingVector(self, target, target.distance);
+    const requestedDx = incoming ? 1 : spacing.dx;
+    const requestedDy = incoming ? 1 : spacing.dy;
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(requestedDx || requestedDy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx,
+        requestedDy
+      }
+      : null;
+    return {
+      reason: movementSuppressed ? 'combat-stamina-hold' : (incoming ? 'combat-leave-dodge' : (spacing.active ? 'combat-leave-spacing' : 'combat-leave-cover')),
+      dx: movementSuppressed ? 0 : requestedDx,
+      dy: movementSuppressed ? 0 : requestedDy,
+      shoot: true,
+      forceShoot: true,
+      movementSuppressed
+    };
+  }
+
+	  function combatLeaveAction(reason, self, target, combatState = {}, bullets = []) {
     const state = {
       selfHp: hpValue(self),
       targetHp: combatHpValue(target),
@@ -1196,13 +1220,22 @@ function runSelfTest() {
       hp: combatHpValue(target),
       distance: Math.round(target.distance)
     };
+    const cover = combatLeaveCoverAction(self, target, bullets);
     return {
       kind: 'leave',
       reason,
       exitSummary: combatExitSummary(reason, actionTarget, state),
       combat: true,
+      dx: cover.dx,
+      dy: cover.dy,
+      shoot: cover.shoot,
+      forceShoot: cover.forceShoot,
       target: actionTarget,
-	      combatState: state
+      combatCover: cover,
+	      combatState: {
+        ...state,
+        leaveCover: cover
+      }
 	    };
 	  }
   function enemyRepeatDelayMsForCount(count) {
@@ -1235,10 +1268,10 @@ function runSelfTest() {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
     if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
-      return combatLeaveAction('combat-critical-hp-leave', self, target);
+      return combatLeaveAction('combat-critical-hp-leave', self, target, {}, bullets);
     }
     if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
-      return combatLeaveAction('combat-low-hp-leave', self, target);
+      return combatLeaveAction('combat-low-hp-leave', self, target, {}, bullets);
     }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
@@ -1246,11 +1279,11 @@ function runSelfTest() {
 	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
 	      && Number.isFinite(hpGap)
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap });
+	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap }, bullets);
 	    }
     const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, combatTargetNoDamageMs(target));
     if (lowNoDamage) {
-      return combatLeaveAction('combat-low-hp-no-damage-leave', self, target, lowNoDamage);
+      return combatLeaveAction('combat-low-hp-no-damage-leave', self, target, lowNoDamage, bullets);
     }
     const motionScale = combatAimMotionScale(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
@@ -1940,6 +1973,30 @@ function runSelfTest() {
       }).kind,
 	      want: 'leave'
 	    },
+    {
+      name: 'combat leave keeps dodge cover while exit is pending',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true }],
+          bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
+        });
+        return action.kind + ':' + action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.reason;
+      })(),
+      want: 'leave:combat-low-hp-leave:1:1:true:combat-leave-dodge'
+    },
+    {
+      name: 'combat leave cover honors short stamina exhaustion',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 100 },
+          local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true }],
+          bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
+        });
+        return action.kind + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.movementSuppressed?.reason;
+      })(),
+      want: 'leave:0:0:true:stamina-5s-exhausted'
+    },
     {
       name: 'combat low hp exit summary includes target and hp details',
       got: (() => {
@@ -5111,8 +5168,9 @@ function browserBotSource(config) {
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
 
-  function combatLeaveAction(reason, baseTarget, combatState = {}) {
+  function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
     const exitSummary = combatExitSummary(reason, baseTarget, combatState);
+    const normalizedCover = cover ? { ...cover, target: cover.target || baseTarget } : null;
     return {
       kind: 'leave',
       reason,
@@ -5120,10 +5178,19 @@ function browserBotSource(config) {
       displayReason: exitSummary,
       combat: true,
       ignoreReturnBlock: true,
-      dx: 0,
-      dy: 0,
+      dx: normalizedCover ? clamp(Math.round(Number(normalizedCover.dx) || 0), -1, 1) : 0,
+      dy: normalizedCover ? clamp(Math.round(Number(normalizedCover.dy) || 0), -1, 1) : 0,
+      shoot: Boolean(normalizedCover?.shoot),
+      forceShoot: Boolean(normalizedCover?.forceShoot),
+      shootEveryMs: normalizedCover?.shootEveryMs,
+      aimTarget: normalizedCover?.aimTarget || null,
+      incomingBullet: normalizedCover?.incomingBullet || null,
       target: baseTarget,
-      combatState
+      combatCover: normalizedCover,
+      combatState: {
+        ...combatState,
+        leaveCover: normalizedCover
+      }
     };
   }
 
@@ -5408,6 +5475,12 @@ function browserBotSource(config) {
       retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
       retryCount: Number(pending.retryCount || 0),
       userId: pending.userId || null,
+      combatCover: pending.combatCover ? {
+        reason: pending.combatCover.reason || '',
+        dx: clamp(Math.round(Number(pending.combatCover.dx) || 0), -1, 1),
+        dy: clamp(Math.round(Number(pending.combatCover.dy) || 0), -1, 1),
+        shoot: Boolean(pending.combatCover.shoot)
+      } : null,
       lastError: pending.lastResult?.error || ''
     };
   }
@@ -5451,6 +5524,7 @@ function browserBotSource(config) {
       pursuit: cloneForPendingExit(detail.pursuit || previous?.pursuit || null),
       injury: cloneForPendingExit(detail.injury || previous?.injury || null),
       combat: cloneForPendingExit(detail.combat || previous?.combat || null),
+      combatCover: cloneForPendingExit(detail.combatCover || detail.combat?.leaveCover || previous?.combatCover || null),
       lastResult: cloneForPendingExit(detail)
     };
     bot.pendingExit = pending;
@@ -5545,20 +5619,46 @@ function browserBotSource(config) {
   function pendingExitWaitDecision(pending, self, leaveResult, state, confirmed = false) {
     const activeDetail = pending.scope === 'offline' ? activeOfflineLeaveDetail() : activeEnemyLeaveDetail();
     const currentSummary = state?.self || (self && isAlive(self) ? summarizeSelf(self) : (pending.self || bot.lastSelf || null));
+    const cover = !confirmed && pending.source === 'combat' ? pending.combatCover : null;
     return {
       kind: 'wait',
       reason: pendingExitWaitReason(pending, confirmed),
-      dx: 0,
-      dy: 0,
+      dx: cover ? clamp(Math.round(Number(cover.dx) || 0), -1, 1) : 0,
+      dy: cover ? clamp(Math.round(Number(cover.dy) || 0), -1, 1) : 0,
       self: currentSummary,
       currentUserId: getCurrentUserId(),
       control: summarizeControl(),
+      combat: Boolean(cover),
+      shoot: Boolean(cover?.shoot),
+      forceShoot: Boolean(cover?.forceShoot),
+      shootEveryMs: cover?.shootEveryMs,
+      target: cover?.target || pending.target || null,
+      aimTarget: cover?.aimTarget || null,
+      incomingBullet: cover?.incomingBullet || null,
+      combatState: pending.combat || null,
+      combatCover: cover || null,
       displayReason: leaveResult?.displayReason || activeDetail?.displayReason || pending.displayReason || '',
       leave: leaveResult,
       pendingExit: summarizePendingExit(bot.pendingExit || pending),
       exitConfirmation: state || null,
       holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === 'offline' ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs())
     };
+  }
+
+  function applyCombatExitCover(pending, self = null) {
+    const cover = pending?.source === 'combat' ? pending.combatCover : null;
+    if (!cover || !self || !isAlive(self)) return false;
+    const action = {
+      kind: 'wait',
+      combat: true,
+      dx: cover.dx,
+      dy: cover.dy
+    };
+    sendActionVelocity(action);
+    if (cover.shoot && cover.target && self) {
+      shootAt(self, cover.aimTarget || cover.target, Boolean(cover.forceShoot), { shootEveryMs: cover.shootEveryMs });
+    }
+    return true;
   }
 
   async function retryPendingExit(pending, self, state) {
@@ -5593,6 +5693,7 @@ function browserBotSource(config) {
     detail.pursuit = detail.pursuit || pending.pursuit || null;
     detail.injury = detail.injury || pending.injury || null;
     detail.combat = detail.combat || pending.combat || null;
+    detail.combatCover = detail.combatCover || pending.combatCover || detail.combat?.leaveCover || null;
     detail.exitPending = true;
     detail.exitConfirmed = false;
     detail.pendingExitRetry = true;
@@ -5631,7 +5732,7 @@ function browserBotSource(config) {
       return pendingExitWaitDecision(pending, self, detail, state, true);
     }
     bot.pursuit = null;
-    stopMotionSafely('pending-exit-confirmation');
+    if (!applyCombatExitCover(pending, self)) stopMotionSafely('pending-exit-confirmation');
     const detail = await retryPendingExit(pending, self, state);
     return pendingExitWaitDecision(pending, self, detail, state, false);
   }
@@ -5663,6 +5764,7 @@ function browserBotSource(config) {
       displayReason: action?.displayReason || previous.displayReason || leaveResult?.displayReason || leaveResult?.summary || '',
 	      target: action?.target || previous.target || null,
 	      combatState: action?.combatState || previous.combatState || null,
+      combatCover: action?.combatCover || action?.combatState?.leaveCover || previous.combatCover || null,
       self: selfSummary || previous.self || null,
       lastResult: leaveResult || previous.lastResult || null
     };
@@ -5676,11 +5778,16 @@ function browserBotSource(config) {
       reason: pending.reason || 'combat-leave-retry',
       combat: true,
       ignoreReturnBlock: true,
-	      dx: 0,
-	      dy: 0,
+      dx: clamp(Math.round(Number(pending.combatCover?.dx) || 0), -1, 1),
+      dy: clamp(Math.round(Number(pending.combatCover?.dy) || 0), -1, 1),
+      shoot: Boolean(pending.combatCover?.shoot),
+      forceShoot: Boolean(pending.combatCover?.forceShoot),
+      shootEveryMs: pending.combatCover?.shootEveryMs,
+      aimTarget: pending.combatCover?.aimTarget || null,
       exitSummary: pending.exitSummary || '',
       displayReason: pending.displayReason || pending.exitSummary || '',
 	      target: pending.target || null,
+      combatCover: pending.combatCover || null,
 	      combatState: pending.combatState || null
     };
   }
@@ -6096,6 +6203,7 @@ function browserBotSource(config) {
 	        reason: 'cooldown',
 	        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastCombatLeaveAt || 0)))),
 	        combat: action?.combatState || null,
+        combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
 	        target: action?.target || null,
         summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {})
 	      };
@@ -6119,6 +6227,7 @@ function browserBotSource(config) {
 	      self: selfSummary,
 	      target: action?.target || null,
 	      combat: action?.combatState || null,
+      combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
       summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {}),
 	      error: ''
 	    };
@@ -8902,6 +9011,82 @@ function browserBotSource(config) {
     };
   }
 
+  function combatLeaveCoverAction(self, target, bullets, targetDistance = null) {
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const pressure = combatPressureThreat(self, target, bullets);
+    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: false });
+    const dodging = Boolean(pressure || strafe.active);
+    const spacing = combatSpacingVector(self, target, distance);
+    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    let combatMove = dodging
+      ? mergeCombatMove(strafe, spacing, !realBulletPressure)
+      : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
+    const aim = combatAimTarget(self, target);
+    return {
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (realBulletPressure
+          ? 'combat-leave-dodge'
+          : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover')),
+      dx: combatMove.dx,
+      dy: combatMove.dy,
+      shoot: true,
+      forceShoot: true,
+      shootEveryMs: cfg.combatShootEveryMs,
+      aimTarget: {
+        x: aim.x,
+        y: aim.y,
+        mode: aim.mode,
+        angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
+        jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0,
+        motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
+        movementMode: aim.movementMode || '',
+        noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
+        widened: Boolean(aim.noDamageWidened),
+        locked: Boolean(aim.lockedAim)
+      },
+      incomingBullet: pressure ? {
+        id: pressure.id,
+        ownerId: pressure.ownerId,
+        distance: Math.round(Number(pressure.distance || 0)),
+        laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
+        timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        synthetic: Boolean(pressure.synthetic),
+        reason: pressure.reason || ''
+      } : null,
+      movementSuppressed,
+      strafe: dodging ? {
+        dx: combatMove.dx,
+        dy: combatMove.dy,
+        sign: strafe.sign,
+        precise: Boolean(strafe.precise),
+        locked: Boolean(strafe.locked),
+        lockOverridden: Boolean(strafe.lockOverridden),
+        carried: Boolean(strafe.carried)
+      } : null,
+      spacing: spacing.active ? {
+        dx: spacing.dx,
+        dy: spacing.dy,
+        reason: spacing.reason,
+        distance: Math.round(spacing.distance),
+        minRange: Math.round(spacing.minRange),
+        preferredRange: Math.round(spacing.preferredRange),
+        merged: Boolean(combatMove.spacingMerged)
+      } : null
+    };
+  }
+
   function buildCombatAction(self, target, bullets) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
@@ -8925,10 +9110,10 @@ function browserBotSource(config) {
       competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
 	    };
 	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
-	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp });
+	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
 	    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
-	      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp });
+	      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
@@ -8936,12 +9121,12 @@ function browserBotSource(config) {
 	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
 	      && Number.isFinite(hpGap)
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap });
+	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
     const damageState = combatAimDamageState(target);
     const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState);
     if (lowNoDamage) {
-      return combatLeaveAction('combat-low-hp-no-damage-leave', baseTarget, lowNoDamage);
+      return combatLeaveAction('combat-low-hp-no-damage-leave', baseTarget, lowNoDamage, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
@@ -10505,18 +10690,25 @@ function browserBotSource(config) {
       const pendingCombatLeave = pendingCombatLeaveAction();
       if (pendingCombatLeave) {
         bot.pursuit = null;
-        stopMotionSafely('combat-leave-retry');
+        sendActionVelocity(pendingCombatLeave);
+        if (pendingCombatLeave.shoot && pendingCombatLeave.target) {
+          shootAt(self, pendingCombatLeave.aimTarget || pendingCombatLeave.target, Boolean(pendingCombatLeave.forceShoot), { shootEveryMs: pendingCombatLeave.shootEveryMs });
+        }
         const leaveResult = await leaveForCombat(pendingCombatLeave, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
         const enemyDetail = activeEnemyLeaveDetail();
         bot.lastDecision = {
           kind: 'wait',
           reason: leaveIssued ? 'combat-leave' : 'combat-leave-retry',
-          dx: 0,
-          dy: 0,
+          dx: pendingCombatLeave.dx,
+          dy: pendingCombatLeave.dy,
           self: currentSummary,
           target: pendingCombatLeave.target || null,
           combat: true,
+          shoot: Boolean(pendingCombatLeave.shoot),
+          forceShoot: Boolean(pendingCombatLeave.forceShoot),
+          aimTarget: pendingCombatLeave.aimTarget || null,
+          combatCover: pendingCombatLeave.combatCover || null,
           combatState: pendingCombatLeave.combatState || null,
           pendingCombatLeave: summarizePendingCombatLeave(),
           displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || pendingCombatLeave.displayReason || pendingCombatLeave.exitSummary || '',
@@ -10543,7 +10735,10 @@ function browserBotSource(config) {
         bot.pendingInjuryLeave = null;
       }
       if (action.kind === 'leave' && action.combat) {
-        stopMotionSafely(action.reason || 'combat-leave');
+        sendActionVelocity(action);
+        if (action.shoot && action.target) {
+          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+        }
         const leaveResult = await leaveForCombat(action, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
         const enemyDetail = activeEnemyLeaveDetail();
