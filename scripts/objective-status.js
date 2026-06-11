@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -15,7 +16,8 @@ function parseArgs(args) {
     logDir: DEFAULT_LOG_DIR,
     latest: 5,
     json: false,
-    failOnIncomplete: false
+    failOnIncomplete: false,
+    selfTest: false
   };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -24,6 +26,7 @@ function parseArgs(args) {
     else if (arg === '--latest') out.latest = Math.max(0, Number(args[++i] || out.latest) || out.latest);
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-incomplete') out.failOnIncomplete = true;
+    else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -45,6 +48,7 @@ Options:
   --latest <count>        Recent event count to include. Default: 5
   --json                  Print machine-readable JSON.
   --fail-on-incomplete    Exit 1 unless static checks and required live evidence are complete.
+  --self-test             Run objective status regression checks.
 `);
 }
 
@@ -206,8 +210,112 @@ function printHuman(status) {
   console.log(`Overall: ${status.complete ? 'complete' : 'not complete'}`);
 }
 
+function assertSelfTest(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function writeJsonl(file, entries) {
+  fs.writeFileSync(file, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+}
+
+function runSelfTest() {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-objective-status-'));
+  try {
+    const emptyDir = path.join(tempRoot, 'empty');
+    const completeDir = path.join(tempRoot, 'complete');
+    fs.mkdirSync(emptyDir, { recursive: true });
+    fs.mkdirSync(completeDir, { recursive: true });
+    const manifest = readJson(DEFAULT_MANIFEST);
+    const baseAt = Date.parse('2026-06-12T00:00:00.000Z');
+    const currentVersion = String(manifest.version || '');
+    const currentHash = String(manifest.sha256 || '');
+
+    const incomplete = buildStatus({
+      manifestPath: DEFAULT_MANIFEST,
+      logDir: emptyDir,
+      latest: 3
+    });
+    assertSelfTest(incomplete.staticCheck.ok, 'expected static check to pass for incomplete fixture');
+    assertSelfTest(!incomplete.complete, 'expected empty logs to be incomplete');
+    assertSelfTest(incomplete.liveEvidence.evidenceIssues['no-matching-entries'] === 1, 'expected no-matching-entries evidence gap');
+    assertSelfTest(incomplete.requirements.some(item => item.key === 'exit-reasons-and-relogin-delay' && item.ok === false), 'expected exit requirement to be missing');
+    assertSelfTest(incomplete.requirements.some(item => item.key === 'active-enemy-combat-and-hp-exit' && item.ok === false), 'expected active combat requirement to be missing');
+
+    writeJsonl(path.join(completeDir, 'objective-complete.jsonl'), [
+      {
+        type: 'combat-frame',
+        at: baseAt,
+        version: currentVersion,
+        sourceHash: currentHash,
+        self: {
+          id: 1,
+          x: 0,
+          y: 0,
+          hp: 72
+        },
+        decision: {
+          kind: 'leave',
+          reason: 'combat-hp-disadvantage-leave',
+          displayReason: '与ActiveEnemy战斗，血量72，对方HP 100，差距28，劣势退出',
+          combat: true,
+          shoot: true,
+          target: {
+            id: 42,
+            name: 'ActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: false,
+            invulnerable: false,
+            distance: 12000,
+            hp: 100
+          }
+        },
+        exit: {
+          reason: 'combat-hp-disadvantage-leave',
+          summary: '与ActiveEnemy战斗，血量72，对方HP 100，差距28，劣势退出',
+          pendingLoginSuppressDelayMs: 60000,
+          reloginDelayMs: 60000,
+          target: {
+            id: 42,
+            name: 'ActiveEnemy',
+            mode: 'Active',
+            distance: 12000
+          }
+        },
+        login: {
+          suppressRemainingMs: 60000,
+          suppressReason: 'pending unsafe hostile exit'
+        }
+      }
+    ]);
+
+    const complete = buildStatus({
+      manifestPath: DEFAULT_MANIFEST,
+      logDir: completeDir,
+      latest: 3
+    });
+    assertSelfTest(complete.staticCheck.ok, 'expected static check to pass for complete fixture');
+    assertSelfTest(complete.complete, 'expected synthetic objective evidence to be complete');
+    assertSelfTest(complete.liveEvidence.entries === 1, `expected one matching entry, got ${complete.liveEvidence.entries}`);
+    assertSelfTest(complete.liveEvidence.exitEvents === 1, `expected one exit event, got ${complete.liveEvidence.exitEvents}`);
+    assertSelfTest(complete.liveEvidence.activeCombatEvents === 1, `expected one active combat event, got ${complete.liveEvidence.activeCombatEvents}`);
+    assertSelfTest(complete.liveEvidence.hpDisadvantageExitEvents === 1, `expected one HP-disadvantage exit, got ${complete.liveEvidence.hpDisadvantageExitEvents}`);
+    assertSelfTest(Object.keys(complete.liveEvidence.issues).length === 0, 'expected no audit issues for complete fixture');
+    assertSelfTest(Object.keys(complete.liveEvidence.evidenceIssues).length === 0, 'expected no evidence gaps for complete fixture');
+    assertSelfTest(complete.requirements.every(item => item.ok), 'expected every requirement to be complete');
+
+    console.log(JSON.stringify({ ok: true, cases: 17 }, null, 2));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.selfTest) {
+    runSelfTest();
+    return;
+  }
   const status = buildStatus(options);
   if (options.json) console.log(JSON.stringify(status, null, 2));
   else printHuman(status);
