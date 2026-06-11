@@ -23,6 +23,7 @@ const DEFAULTS = {
   watchCount: 0,
   json: false,
   failOnIssue: false,
+  requireEntries: false,
   selfTest: false
 };
 
@@ -47,6 +48,7 @@ function parseArgs(args) {
     else if (arg === '--watch-count') out.watchCount = Math.max(0, Number(args[++i] || out.watchCount) || out.watchCount);
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-issue') out.failOnIssue = true;
+    else if (arg === '--require-entries') out.requireEntries = true;
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -77,6 +79,7 @@ Options:
   --watch-count <count>          Stop after this many watch scans. Default: unlimited
   --json                         Print machine-readable JSON.
   --fail-on-issue                Exit with code 1 when issues are found.
+  --require-entries              Treat zero matching log entries as an evidence failure.
   --self-test                    Run analyzer regression checks.
 `);
 }
@@ -388,9 +391,11 @@ function auditLogs(options) {
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
   const issues = exitEvents.flatMap(event => event.issues.map(issue => ({ issue, event })));
   const parseErrors = fileReports.flatMap(report => report.parseErrors.map(error => ({ file: report.file, ...error })));
-  return {
+  const entries = fileReports.reduce((sum, report) => sum + report.entries, 0);
+  const report = {
     dir: options.dir,
     minUnsafeDelayMs: options.minUnsafeDelayMs,
+    requireEntries: Boolean(options.requireEntries),
     sinceMs: options.sinceMs || 0,
     minVersion: options.minVersion || '',
     version: options.version || '',
@@ -398,23 +403,47 @@ function auditLogs(options) {
     manifestMode: options.manifestMode || '',
     manifestVersion: options.manifestVersion || '',
     files: fileReports.length,
-    entries: fileReports.reduce((sum, report) => sum + report.entries, 0),
+    entries,
     scannedEntries: fileReports.reduce((sum, report) => sum + report.scannedEntries, 0),
     parseErrors,
     versions: Array.from(new Set(fileReports.flatMap(report => report.versions))).sort(),
     exitEvents,
-    issues
+    issues,
+    evidenceIssues: []
   };
+  if (options.requireEntries && entries === 0) {
+    report.evidenceIssues.push({
+      issue: 'no-matching-entries',
+      message: 'No log entries matched the active filters.'
+    });
+  }
+  return report;
+}
+
+function countIssues(items) {
+  const counts = new Map();
+  for (const item of items || []) counts.set(item.issue, (counts.get(item.issue) || 0) + 1);
+  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 }
 
 function issueCounts(report) {
-  const counts = new Map();
-  for (const item of report.issues) counts.set(item.issue, (counts.get(item.issue) || 0) + 1);
-  return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  return countIssues(report.issues);
+}
+
+function evidenceIssueCounts(report) {
+  return countIssues(report.evidenceIssues);
 }
 
 function issueCount(report, issue) {
   return report.issues.filter(item => item.issue === issue).length;
+}
+
+function evidenceIssueCount(report, issue) {
+  return report.evidenceIssues.filter(item => item.issue === issue).length;
+}
+
+function reportHasFailures(report) {
+  return Boolean(report?.issues?.length || report?.parseErrors?.length || report?.evidenceIssues?.length);
 }
 
 function reportFingerprint(report) {
@@ -425,6 +454,7 @@ function reportFingerprint(report) {
     scannedEntries: report.scannedEntries,
     manifestVersion: report.manifestVersion || '',
     parseErrors: report.parseErrors.length,
+    evidenceIssues: evidenceIssueCounts(report),
     issues: issueCounts(report),
     latestExit: {
       file: latest.file || '',
@@ -440,17 +470,21 @@ function printHuman(report, options) {
   console.log('Combat log audit');
   console.log(`Dir: ${report.dir}`);
   console.log(`Files: ${report.files}, entries: ${report.entries}/${report.scannedEntries}, versions: ${report.versions.join(', ') || '-'}`);
-  if (report.sinceMs || report.minVersion || report.version) {
+  if (report.sinceMs || report.minVersion || report.version || report.requireEntries) {
     const filters = [];
     if (report.sinceMs) filters.push(`since=${isoTime(report.sinceMs) || report.sinceMs}`);
     if (report.manifestVersion) filters.push(`manifest=${report.manifestVersion}${report.manifestMode ? `:${report.manifestMode}` : ''}`);
     if (report.minVersion) filters.push(`minVersion=${report.minVersion}`);
     if (report.version) filters.push(`version=${report.version}`);
+    if (report.requireEntries) filters.push('requireEntries=true');
     console.log('Filters: ' + filters.join(', '));
   }
-  console.log(`Exit events: ${report.exitEvents.length}, issues: ${report.issues.length}, parse errors: ${report.parseErrors.length}`);
+  console.log(`Exit events: ${report.exitEvents.length}, issues: ${report.issues.length}, evidence issues: ${report.evidenceIssues.length}, parse errors: ${report.parseErrors.length}`);
   if (report.issues.length) {
     console.log('Issue counts: ' + issueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
+  }
+  if (report.evidenceIssues.length) {
+    console.log('Evidence issue counts: ' + evidenceIssueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
   }
   const latest = report.exitEvents.slice(0, options.latest);
   if (latest.length) {
@@ -496,12 +530,12 @@ async function watchLogs(options) {
       printHuman(report, options);
       lastFingerprint = fingerprint;
     } else {
-      console.log(`${new Date().toISOString()} no change: files=${report.files} entries=${report.entries}/${report.scannedEntries} issues=${report.issues.length}`);
+      console.log(`${new Date().toISOString()} no change: files=${report.files} entries=${report.entries}/${report.scannedEntries} issues=${report.issues.length} evidenceIssues=${report.evidenceIssues.length}`);
     }
     if (options.watchCount && scans >= options.watchCount) break;
     await sleep(options.watchIntervalMs);
   }
-  if (options.failOnIssue && lastReport && (lastReport.issues.length || lastReport.parseErrors.length)) process.exitCode = 1;
+  if (options.failOnIssue && lastReport && reportHasFailures(lastReport)) process.exitCode = 1;
 }
 
 async function main() {
@@ -517,7 +551,7 @@ async function main() {
   const report = auditLogs(options);
   if (options.json) console.log(JSON.stringify(report, null, 2));
   else printHuman(report, options);
-  if (options.failOnIssue && (report.issues.length || report.parseErrors.length)) process.exitCode = 1;
+  if (options.failOnIssue && reportHasFailures(report)) process.exitCode = 1;
 }
 
 function assertSelfTest(condition, message) {
@@ -529,8 +563,10 @@ function runSelfTest() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-log-audit-'));
   try {
     const logsDir = path.join(tempRoot, 'logs');
+    const emptyLogsDir = path.join(tempRoot, 'empty-logs');
     const manifestPath = path.join(tempRoot, 'manifest.json');
     fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(emptyLogsDir, { recursive: true });
     fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
 
     const baseAt = 1760000000000;
@@ -598,6 +634,20 @@ function runSelfTest() {
     assertSelfTest(currentReport.exitEvents.length === 1, `expected 1 current-version exit event, got ${currentReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(currentReport.issues.length === 0, `expected no current-version issues, got ${currentReport.issues.length}`);
+
+    const requiredReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true });
+    cases += 1;
+    assertSelfTest(requiredReport.entries === 2, `expected 2 required entries, got ${requiredReport.entries}`);
+    cases += 1;
+    assertSelfTest(requiredReport.evidenceIssues.length === 0, `expected no evidence issues with matching entries, got ${requiredReport.evidenceIssues.length}`);
+
+    const emptyRequiredReport = auditLogs({ dir: emptyLogsDir, manifestPath, requireEntries: true });
+    cases += 1;
+    assertSelfTest(emptyRequiredReport.entries === 0, `expected 0 empty required entries, got ${emptyRequiredReport.entries}`);
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(emptyRequiredReport, 'no-matching-entries') === 1, 'expected one no-matching-entries evidence issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(emptyRequiredReport), 'expected empty required report to count as failure');
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {
