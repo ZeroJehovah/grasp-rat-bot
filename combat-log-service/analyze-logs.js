@@ -578,6 +578,7 @@ function auditLogs(options) {
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
   const exitReasonCounts = eventReasonCounts(exitEvents);
   const behaviorReasonCounts = eventReasonCounts(behaviorEvents);
+  const exitSafetyCounts = summarizeExitSafety(exitEvents, options.minUnsafeDelayMs);
   const issues = [
     ...exitEvents.flatMap(event => event.issues.map(issue => ({ issue, event }))),
     ...behaviorEvents.flatMap(event => event.issues.map(issue => ({ issue, event })))
@@ -604,6 +605,7 @@ function auditLogs(options) {
     behaviorEvents,
     exitReasonCounts,
     behaviorReasonCounts,
+    exitSafetyCounts,
     issues,
     evidenceIssues: []
   };
@@ -688,6 +690,50 @@ function formatReasonCounts(counts) {
   }).join(', ');
 }
 
+function summarizeExitSafety(events, minUnsafeDelayMs) {
+  const minDelay = Math.max(0, Number(minUnsafeDelayMs || 0) || 0);
+  const out = {
+    total: 0,
+    safe: 0,
+    unsafe: 0,
+    unsafeDelayOk: 0,
+    unsafeDelayBelowMin: 0,
+    unsafeDelayMissing: 0,
+    minUnsafeDelayMs: minDelay,
+    maxObservedDelayMs: 0
+  };
+  for (const event of events || []) {
+    out.total += 1;
+    const delay = Math.max(0, Number(event?.delayMs || 0) || 0);
+    out.maxObservedDelayMs = Math.max(out.maxObservedDelayMs, delay);
+    if (!event?.unsafe) {
+      out.safe += 1;
+      continue;
+    }
+    out.unsafe += 1;
+    if (delay >= minDelay) out.unsafeDelayOk += 1;
+    else {
+      out.unsafeDelayBelowMin += 1;
+      if (!delay) out.unsafeDelayMissing += 1;
+    }
+  }
+  return out;
+}
+
+function formatExitSafetyCounts(counts) {
+  const c = counts || {};
+  return [
+    `total=${Number(c.total || 0)}`,
+    `safe=${Number(c.safe || 0)}`,
+    `unsafe=${Number(c.unsafe || 0)}`,
+    `unsafeDelayOk=${Number(c.unsafeDelayOk || 0)}`,
+    `unsafeDelayBelowMin=${Number(c.unsafeDelayBelowMin || 0)}`,
+    `unsafeDelayMissing=${Number(c.unsafeDelayMissing || 0)}`,
+    `minUnsafeDelay=${Number(c.minUnsafeDelayMs || 0)}ms`,
+    `maxObservedDelay=${Number(c.maxObservedDelayMs || 0)}ms`
+  ].join(', ');
+}
+
 function reportFingerprint(report) {
   const latest = report.exitEvents[0] || {};
   const latestBehavior = report.behaviorEvents?.[0] || {};
@@ -701,6 +747,7 @@ function reportFingerprint(report) {
     issues: issueCounts(report),
     exitReasonCounts: report.exitReasonCounts,
     behaviorReasonCounts: report.behaviorReasonCounts,
+    exitSafetyCounts: report.exitSafetyCounts,
     latestExit: {
       file: latest.file || '',
       line: latest.lastLine || 0,
@@ -738,6 +785,9 @@ function printHuman(report, options) {
   }
   if (report.evidenceIssues.length) {
     console.log('Evidence issue counts: ' + evidenceIssueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
+  }
+  if (report.exitEvents.length) {
+    console.log('Exit safety counts: ' + formatExitSafetyCounts(report.exitSafetyCounts));
   }
   if (report.exitReasonCounts.length) {
     console.log('Exit reason counts: ' + formatReasonCounts(report.exitReasonCounts));
@@ -945,6 +995,16 @@ function runSelfTest() {
     assertSelfTest(allCombatReason?.events === 2, `expected 2 combat reason events, got ${allCombatReason?.events}`);
     cases += 1;
     assertSelfTest(allCombatReason?.frames === 2, `expected 2 combat reason frames, got ${allCombatReason?.frames}`);
+    cases += 1;
+    assertSelfTest(allReport.exitSafetyCounts.total === 3, `expected 3 safety-counted exits, got ${allReport.exitSafetyCounts.total}`);
+    cases += 1;
+    assertSelfTest(allReport.exitSafetyCounts.unsafe === 2, `expected 2 unsafe exits, got ${allReport.exitSafetyCounts.unsafe}`);
+    cases += 1;
+    assertSelfTest(allReport.exitSafetyCounts.safe === 1, `expected 1 safe exit, got ${allReport.exitSafetyCounts.safe}`);
+    cases += 1;
+    assertSelfTest(allReport.exitSafetyCounts.unsafeDelayOk === 1, `expected 1 unsafe delay ok exit, got ${allReport.exitSafetyCounts.unsafeDelayOk}`);
+    cases += 1;
+    assertSelfTest(allReport.exitSafetyCounts.unsafeDelayBelowMin === 1, `expected 1 unsafe delay below minimum exit, got ${allReport.exitSafetyCounts.unsafeDelayBelowMin}`);
 
     const currentReport = auditLogs({ dir: logsDir, manifestPath });
     cases += 1;
@@ -964,6 +1024,8 @@ function runSelfTest() {
     assertSelfTest(currentReport.exitEvents.some(event => event.reason === 'enemy-leave-wait' && event.topLevelExit && event.delayMs === 180000), 'expected combat-end exit wait to keep top-level exit and delay');
     cases += 1;
     assertSelfTest(currentReport.exitReasonCounts.length === 2, `expected 2 current exit reason counts, got ${currentReport.exitReasonCounts.length}`);
+    cases += 1;
+    assertSelfTest(currentReport.exitSafetyCounts.unsafeDelayBelowMin === 0, `expected no current unsafe exits below minimum, got ${currentReport.exitSafetyCounts.unsafeDelayBelowMin}`);
 
     const requiredReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true });
     cases += 1;
