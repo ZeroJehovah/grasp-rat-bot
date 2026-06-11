@@ -137,6 +137,7 @@ Run these checks before pushing strategy changes:
 node --check grasp-rat-bot.js
 node --check scripts/build-remote-bot.js
 node --check scripts/render-extension-icons.js
+node --check scripts/verify-objective-build.js
 node --check userscript/grasp-rat-bootstrap.user.js
 node --check extension/background.js
 node --check extension/content-bridge.js
@@ -145,7 +146,10 @@ node --check extension/popup.js
 node --check combat-log-service/server.js
 node grasp-rat-bot.js --self-test
 node scripts/build-remote-bot.js
+node scripts/verify-objective-build.js
 ```
+
+`verify-objective-build.js` is a static release check. It verifies that `dist/manifest.json` matches the generated remote bot hash/current source, that key objective constants are present in source and dist, and that the bootstrap layout/source-hash wiring is still present. It does not replace fresh `combat-log-service` current-version live validation.
 
 ## CDP Fallback
 
