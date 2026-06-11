@@ -27,6 +27,8 @@ const BOOTSTRAP_FILES = [
 
 const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomOutClicks', value: 6 },
+  { key: 'postLoginZoomOutIntervalMs', value: 80 },
+  { key: 'postLoginZoomArmMissingMs', value: 1000 },
   { key: 'unsafeExitReloginMinDelayMs', value: 60000 },
   { key: 'staminaBudgetReloginDelayMs', value: 300000 },
   { key: 'combatAttackRange', value: 14500 }
@@ -156,6 +158,38 @@ function main() {
     }
     check(`${file} accepts injected sourceHash`, () => {
       assert(text.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
+    });
+    check(`${file} keeps post-login zoom-out scheduling flow`, () => {
+      const keyBody = functionBody(text, 'postLoginZoomSessionKey');
+      assert(keyBody.includes("return String(userId) + ':token:' + String(token).slice(0, 24)"), 'token-based zoom session key not found');
+      assert(keyBody.includes("return String(userId) + ':generation:' + Number(bot.postLoginZoom?.generation || 0)"), 'generation-based zoom session key not found');
+
+      const unavailableBody = functionBody(text, 'noteSelfUnavailableForPostLoginZoom');
+      assert(unavailableBody.includes('cfg.postLoginZoomArmMissingMs'), 'missing-self arm delay config not used');
+      assert(unavailableBody.includes('state.generation = Number(state.generation || 0) + 1'), 'zoom generation increment not found');
+      assert(unavailableBody.includes('state.armed = true'), 'zoom re-arm state not found');
+      assert(unavailableBody.includes("state.scheduledKey = ''"), 'scheduled key reset not found');
+
+      const scheduleBody = functionBody(text, 'schedulePostLoginZoomOut');
+      assert(scheduleBody.includes('state.lastSeenSelfAt = t'), 'last seen self timestamp not updated');
+      assert(scheduleBody.includes('state.missingSince = 0'), 'missing-self timer not cleared on self detection');
+      assert(scheduleBody.includes('cfg.postLoginZoomOutClicks'), 'zoom click count config not used');
+      assert(scheduleBody.includes('if (!clicks || !state.armed) return null'), 'zoom armed/click guard not found');
+      assert(scheduleBody.includes('state.appliedKey === key || state.scheduledKey === key'), 'duplicate session zoom guard not found');
+      assert(scheduleBody.includes('state.armed = false'), 'zoom not disarmed after scheduling');
+      assert(scheduleBody.includes('requestedClicks: clicks'), 'requested click count not recorded');
+      assert(scheduleBody.includes('cfg.postLoginZoomOutIntervalMs'), 'zoom click interval config not used');
+      assert(scheduleBody.includes('for (let index = 0; index < clicks; index += 1)'), 'per-click scheduling loop not found');
+      assert(scheduleBody.includes('clickZoomOutControl()'), 'scheduled callback does not click zoom-out control');
+      assert(scheduleBody.includes('index * intervalMs'), 'scheduled clicks are not interval-spaced');
+      assert(scheduleBody.includes('latest.completedClicks') && scheduleBody.includes('latest.failedClicks'), 'zoom result counters not updated');
+
+      const findBody = functionBody(text, 'findZoomOutControl');
+      assert(findBody.includes('#zoomOutBtn') && findBody.includes('[data-testid="zoom-out"]'), 'native zoom-out selectors not found');
+      assert(findBody.includes('缩小'), 'localized zoom-out text fallback not found');
+      const clickBody = functionBody(text, 'clickZoomOutControl');
+      assert(clickBody.includes('control.click()'), 'zoom-out control click not found');
+      assert(text.includes('postLoginZoom: this.postLoginZoom'), 'status does not expose postLoginZoom state');
     });
   }
 
