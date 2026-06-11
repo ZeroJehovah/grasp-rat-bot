@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.78"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.79"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -114,8 +114,11 @@
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
     combatEngageGraceRange: 22000,
-    combatSpacingMinRange: 7500,
-    combatSpacingPreferredRange: 10500,
+    combatSpacingMinRange: 4500,
+    combatSpacingPreferredRange: 6500,
+    combatPressureCloseNoDamageMs: 8000,
+    combatPressureCloseRange: 6500,
+    combatPressureCloseMinHp: 70,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -1076,7 +1079,8 @@
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
-	      'combat-spacing': '战斗：保持距离并开火',
+	      'combat-pressure-close': '战斗：久攻未中，压近开火',
+	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
@@ -5438,7 +5442,7 @@
     return strafe.targetId === key || strafe.key === 'target:' + key || strafe.key === 'owner:' + key;
   }
 
-  function combatStrafeVector(self, target, pressure, sign) {
+  function combatStrafeVector(self, target, pressure, sign, options = {}) {
     let baseX = Number(pressure?.vx) || 0;
     let baseY = Number(pressure?.vy) || 0;
     if (!(baseX || baseY) && target) {
@@ -5452,8 +5456,12 @@
     if (target) {
       const awayX = Math.sign(Number(self.x) - Number(target.x)) || 0;
       const awayY = Math.sign(Number(self.y) - Number(target.y)) || 0;
-      if (dx && !dy && awayY) dy = awayY;
-      else if (dy && !dx && awayX) dx = awayX;
+      const approachX = Math.sign(Number(target.x) - Number(self.x)) || 0;
+      const approachY = Math.sign(Number(target.y) - Number(self.y)) || 0;
+      const fillX = options.preferClosing ? approachX : awayX;
+      const fillY = options.preferClosing ? approachY : awayY;
+      if (dx && !dy && fillY) dy = fillY;
+      else if (dy && !dx && fillX) dx = fillX;
     }
     if (!(dx || dy) && target) {
       dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
@@ -5462,7 +5470,7 @@
     return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1) };
   }
 
-  function tangentMoveForBullet(self, target, pressure) {
+  function tangentMoveForBullet(self, target, pressure, options = {}) {
     const t = now();
     const existing = bot.combatStrafe;
     if (!pressure) {
@@ -5500,7 +5508,7 @@
       until = t + combatStrafeHoldMs();
     }
 
-    let { dx, dy } = combatStrafeVector(self, target, pressure, sign);
+    let { dx, dy } = combatStrafeVector(self, target, pressure, sign, options);
     if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
       dx = clamp(Math.round(Number(existing.dx) || 0), -1, 1);
       dy = clamp(Math.round(Number(existing.dy) || 0), -1, 1);
@@ -5559,6 +5567,30 @@
       preferredRange,
       radialSpeed,
       reason: tooClose ? 'too-close' : 'closing'
+    };
+  }
+
+  function combatPressureCloseVector(self, target, targetDistance, noDamageMs, selfHp) {
+    const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatPressureCloseMinHp || cfg.combatLowHpLeaveThreshold || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    if (!thresholdMs || elapsed < thresholdMs || !(distance > closeRange) || Number(selfHp || 0) < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs: elapsed,
+      reason: 'long-no-damage'
     };
   }
 
@@ -5968,21 +6000,27 @@
         }
       };
     }
+    const damageState = combatAimDamageState(target);
+    const pressureClose = combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
     const pressure = combatPressureThreat(self, target, bullets);
-    const strafe = tangentMoveForBullet(self, target, pressure);
+    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
     const spacing = combatSpacingVector(self, target, targetDistance);
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
-    const combatMove = dodging
+    let combatMove = dodging
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
+    const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
     return {
       kind: 'attack',
       reason: realBulletPressure
         ? 'combat-tangent-dodge'
-        : (spacingActive ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing') : (dodging ? 'combat-tangent-dodge' : 'combat-attack')),
+        : (spacingActive
+          ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+          : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
@@ -6044,6 +6082,16 @@
           preferredRange: Math.round(spacing.preferredRange),
           radialSpeed: Number.isFinite(Number(spacing.radialSpeed)) ? Math.round(Number(spacing.radialSpeed)) : null,
           merged: Boolean(combatMove.spacingMerged)
+        } : null,
+        pressureClose: pressureClose.active ? {
+          dx: pressureClose.dx,
+          dy: pressureClose.dy,
+          reason: pressureClose.reason,
+          distance: Math.round(pressureClose.distance),
+          closeRange: Math.round(pressureClose.closeRange),
+          noDamageMs: Math.round(pressureClose.noDamageMs),
+          preferClosing: Boolean(pressureClose.active),
+          merged: Boolean(!realBulletPressure)
         } : null
       }
     };

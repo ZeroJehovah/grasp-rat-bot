@@ -186,8 +186,11 @@ function runSelfTest() {
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
     combatEngageGraceRange: 22000,
-    combatSpacingMinRange: 7500,
-    combatSpacingPreferredRange: 10500,
+    combatSpacingMinRange: 4500,
+    combatSpacingPreferredRange: 6500,
+    combatPressureCloseNoDamageMs: 8000,
+    combatPressureCloseRange: 6500,
+    combatPressureCloseMinHp: 70,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -1013,6 +1016,36 @@ function runSelfTest() {
     };
   }
 
+  function combatPressureCloseVector(self, target, targetDistance, selfHp) {
+    const previous = bot.combatTarget || null;
+    const targetId = target?.user_id ?? target?.id;
+    const same = previous?.id !== null && previous?.id !== undefined
+      && targetId !== null && targetId !== undefined
+      && String(previous.id) === String(targetId);
+    const lastDamageAt = same ? Number(previous.lastDamageAt || previous.at || Date.now()) : Date.now();
+    const noDamageMs = Math.max(0, Date.now() - lastDamageAt);
+    const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatPressureCloseMinHp || cfg.combatLowHpLeaveThreshold || 0));
+    if (!thresholdMs || noDamageMs < thresholdMs || !(distance > closeRange) || Number(selfHp || 0) < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs,
+      reason: 'long-no-damage'
+    };
+  }
+
   function actorLabel(target) {
     if (!target) return '未知目标';
     return target.name || ('#' + (target.user_id ?? target.id ?? '-'));
@@ -1083,14 +1116,17 @@ function runSelfTest() {
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const spacing = incoming ? { active: false, dx: 0, dy: 0 } : combatSpacingVector(self, target, target.distance);
+    const pressureClose = combatPressureCloseVector(self, target, target.distance, selfHp);
+    const dx = pressureClose.active ? pressureClose.dx : (incoming ? 1 : spacing.dx);
+    const dy = pressureClose.active ? pressureClose.dy : (incoming ? 1 : spacing.dy);
     return {
       kind: 'attack',
-      reason: incoming ? 'combat-tangent-dodge' : (spacing.active ? 'combat-spacing' : 'combat-attack'),
+      reason: incoming ? 'combat-tangent-dodge' : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack')),
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
-      dx: incoming ? 1 : spacing.dx,
-      dy: incoming ? 1 : spacing.dy,
+      dx,
+      dy,
       aimMode: moving ? 'jitter' : 'exact',
       aimJitterLimit: moving ? Number(combatAimJitterLimit(target.distance, motionScale).toFixed(4)) : 0,
       target: { id: target.user_id, name: target.name, x: target.x, y: target.y, hp: combatHpValue(target), drop: target.drop, distance: Math.round(target.distance) },
@@ -1102,6 +1138,14 @@ function runSelfTest() {
           distance: Math.round(spacing.distance),
           minRange: Math.round(spacing.minRange),
           preferredRange: Math.round(spacing.preferredRange)
+        } : null,
+        pressureClose: pressureClose.active ? {
+          dx: pressureClose.dx,
+          dy: pressureClose.dy,
+          reason: pressureClose.reason,
+          distance: Math.round(pressureClose.distance),
+          closeRange: Math.round(pressureClose.closeRange),
+          noDamageMs: Math.round(pressureClose.noDamageMs)
         } : null
       }
     };
@@ -1942,7 +1986,18 @@ function runSelfTest() {
       want: true
     },
     {
-      name: 'combat close target backs away while shooting',
+      name: 'combat very close target backs away while shooting',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 },
+          { user_id: 7, x: 3000, y: 0, distance: 3000, current_join_mode: 'Passive', hp: 100, vx: 30, drop: 20 }
+        );
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot);
+      })(),
+      want: 'combat-spacing:-1:0:true'
+    },
+    {
+      name: 'combat mid range target does not back away',
       got: (() => {
         const action = chooseCombatAction(
           { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 },
@@ -1950,7 +2005,20 @@ function runSelfTest() {
         );
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot);
       })(),
-      want: 'combat-spacing:-1:0:true'
+      want: 'combat-attack:0:0:true'
+    },
+    {
+      name: 'combat long no-damage target is pressured closer',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 10000, lastDamageAt: Date.now() - 10000, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 },
+          { user_id: 7, x: 9000, y: 0, distance: 9000, current_join_mode: 'Passive', hp: 100, vx: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.pressureClose?.reason;
+      })(),
+      want: 'combat-pressure-close:1:0:long-no-damage'
     },
     {
       name: 'coin route uses horizontal axis when x gap dominates',
@@ -2641,8 +2709,11 @@ function browserBotSource(config) {
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
     combatEngageGraceRange: 22000,
-    combatSpacingMinRange: 7500,
-    combatSpacingPreferredRange: 10500,
+    combatSpacingMinRange: 4500,
+    combatSpacingPreferredRange: 6500,
+    combatPressureCloseNoDamageMs: 8000,
+    combatPressureCloseRange: 6500,
+    combatPressureCloseMinHp: 70,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -3603,7 +3674,8 @@ function browserBotSource(config) {
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
 	      'combat-attack': '战斗：持续开火',
 	      'combat-tangent-dodge': '战斗：切线规避并开火',
-	      'combat-spacing': '战斗：保持距离并开火',
+	      'combat-pressure-close': '战斗：久攻未中，压近开火',
+	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
@@ -7965,7 +8037,7 @@ function browserBotSource(config) {
     return strafe.targetId === key || strafe.key === 'target:' + key || strafe.key === 'owner:' + key;
   }
 
-  function combatStrafeVector(self, target, pressure, sign) {
+  function combatStrafeVector(self, target, pressure, sign, options = {}) {
     let baseX = Number(pressure?.vx) || 0;
     let baseY = Number(pressure?.vy) || 0;
     if (!(baseX || baseY) && target) {
@@ -7979,8 +8051,12 @@ function browserBotSource(config) {
     if (target) {
       const awayX = Math.sign(Number(self.x) - Number(target.x)) || 0;
       const awayY = Math.sign(Number(self.y) - Number(target.y)) || 0;
-      if (dx && !dy && awayY) dy = awayY;
-      else if (dy && !dx && awayX) dx = awayX;
+      const approachX = Math.sign(Number(target.x) - Number(self.x)) || 0;
+      const approachY = Math.sign(Number(target.y) - Number(self.y)) || 0;
+      const fillX = options.preferClosing ? approachX : awayX;
+      const fillY = options.preferClosing ? approachY : awayY;
+      if (dx && !dy && fillY) dy = fillY;
+      else if (dy && !dx && fillX) dx = fillX;
     }
     if (!(dx || dy) && target) {
       dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
@@ -7989,7 +8065,7 @@ function browserBotSource(config) {
     return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1) };
   }
 
-  function tangentMoveForBullet(self, target, pressure) {
+  function tangentMoveForBullet(self, target, pressure, options = {}) {
     const t = now();
     const existing = bot.combatStrafe;
     if (!pressure) {
@@ -8027,7 +8103,7 @@ function browserBotSource(config) {
       until = t + combatStrafeHoldMs();
     }
 
-    let { dx, dy } = combatStrafeVector(self, target, pressure, sign);
+    let { dx, dy } = combatStrafeVector(self, target, pressure, sign, options);
     if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
       dx = clamp(Math.round(Number(existing.dx) || 0), -1, 1);
       dy = clamp(Math.round(Number(existing.dy) || 0), -1, 1);
@@ -8086,6 +8162,30 @@ function browserBotSource(config) {
       preferredRange,
       radialSpeed,
       reason: tooClose ? 'too-close' : 'closing'
+    };
+  }
+
+  function combatPressureCloseVector(self, target, targetDistance, noDamageMs, selfHp) {
+    const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatPressureCloseMinHp || cfg.combatLowHpLeaveThreshold || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    if (!thresholdMs || elapsed < thresholdMs || !(distance > closeRange) || Number(selfHp || 0) < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs: elapsed,
+      reason: 'long-no-damage'
     };
   }
 
@@ -8495,21 +8595,27 @@ function browserBotSource(config) {
         }
       };
     }
+    const damageState = combatAimDamageState(target);
+    const pressureClose = combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
     const pressure = combatPressureThreat(self, target, bullets);
-    const strafe = tangentMoveForBullet(self, target, pressure);
+    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
     const spacing = combatSpacingVector(self, target, targetDistance);
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
-    const combatMove = dodging
+    let combatMove = dodging
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
+    const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
     return {
       kind: 'attack',
       reason: realBulletPressure
         ? 'combat-tangent-dodge'
-        : (spacingActive ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing') : (dodging ? 'combat-tangent-dodge' : 'combat-attack')),
+        : (spacingActive
+          ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+          : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: true,
@@ -8571,6 +8677,16 @@ function browserBotSource(config) {
           preferredRange: Math.round(spacing.preferredRange),
           radialSpeed: Number.isFinite(Number(spacing.radialSpeed)) ? Math.round(Number(spacing.radialSpeed)) : null,
           merged: Boolean(combatMove.spacingMerged)
+        } : null,
+        pressureClose: pressureClose.active ? {
+          dx: pressureClose.dx,
+          dy: pressureClose.dy,
+          reason: pressureClose.reason,
+          distance: Math.round(pressureClose.distance),
+          closeRange: Math.round(pressureClose.closeRange),
+          noDamageMs: Math.round(pressureClose.noDamageMs),
+          preferClosing: Boolean(pressureClose.active),
+          merged: Boolean(!realBulletPressure)
         } : null
       }
     };
