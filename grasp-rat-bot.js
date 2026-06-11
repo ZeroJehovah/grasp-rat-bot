@@ -893,6 +893,19 @@ function runSelfTest() {
       combatIntent: 'engaged'
     };
   }
+  function defensiveTargetOverridesEngaged(engagedTarget, defensiveTarget) {
+    if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+    const ownerId = defensiveTarget.incomingBullet.ownerId
+      ?? defensiveTarget.incomingBullet.owner_id
+      ?? defensiveTarget.incomingBullet.source_user_id
+      ?? defensiveTarget.incomingBullet.user_id;
+    if (ownerId === null || ownerId === undefined) return false;
+    const defensiveId = defensiveTarget.user_id ?? defensiveTarget.id;
+    const engagedId = engagedTarget.user_id ?? engagedTarget.id;
+    return defensiveId !== null && defensiveId !== undefined
+      && engagedId !== null && engagedId !== undefined
+      && String(defensiveId) !== String(engagedId);
+  }
 
   function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
     const incomingMatch = incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId);
@@ -939,7 +952,7 @@ function runSelfTest() {
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
     if (incoming) {
       const shooter = candidates.find(e => String(e.user_id) === String(incomingOwnerId));
-      if (shooter) return { ...shooter, combatIntent: 'defensive' };
+      if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
     }
     const eligibleTargets = candidates.filter(e => !isAfkTarget(e));
     const defensiveTargets = eligibleTargets
@@ -1445,10 +1458,13 @@ function runSelfTest() {
     const coinThreats = avoidanceThreats;
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const engagedCombatTarget = pickEngagedCombatTarget(self, entities);
+    const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
+    if (defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
+      return chooseCombatAction(self, defensiveCombatTarget, bullets);
+    }
     if (engagedCombatTarget) return chooseCombatAction(self, engagedCombatTarget, bullets);
     if (fullHp && closeThreats.length) return { kind: 'flee' };
     if (fullHp && cautionThreats.length) return { kind: 'flee' };
-    const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
     if (defensiveCombatTarget) return chooseCombatAction(self, defensiveCombatTarget, bullets);
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
@@ -2016,6 +2032,39 @@ function runSelfTest() {
         return action.kind + ':' + action.reason;
       })(),
       want: 'attack:combat-attack'
+    },
+    {
+      name: 'real incoming bullet shooter overrides engaged combat target',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-attack' };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [
+            { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100 },
+            { user_id: 8, name: 'shooter', x: 9000, y: 0, current_join_mode: 'Active', hp: 100 }
+          ],
+          bullets: [{ owner_id: 8, x: 8000, y: 0, vx: -100, vy: 0 }]
+        });
+        bot.combatTarget = null;
+        return action.kind + ':' + action.target?.id;
+      })(),
+      want: 'attack:8'
+    },
+    {
+      name: 'synthetic pressure does not override engaged combat target',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-attack' };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [
+            { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100 },
+            { user_id: 8, name: 'firing', x: 9000, y: 0, current_join_mode: 'Active', hp: 100, firing: true }
+          ]
+        });
+        bot.combatTarget = null;
+        return action.kind + ':' + action.target?.id;
+      })(),
+      want: 'attack:7'
     },
     {
       name: 'full hp active outside combat range no longer forces flee',
@@ -8124,6 +8173,20 @@ function browserBotSource(config) {
     };
   }
 
+  function defensiveTargetOverridesEngaged(engagedTarget, defensiveTarget) {
+    if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+    const ownerId = defensiveTarget.incomingBullet.ownerId
+      ?? defensiveTarget.incomingBullet.owner_id
+      ?? defensiveTarget.incomingBullet.source_user_id
+      ?? defensiveTarget.incomingBullet.user_id;
+    if (ownerId === null || ownerId === undefined) return false;
+    const defensiveId = defensiveTarget.user_id ?? defensiveTarget.id;
+    const engagedId = engagedTarget.user_id ?? engagedTarget.id;
+    return defensiveId !== null && defensiveId !== undefined
+      && engagedId !== null && engagedId !== undefined
+      && String(defensiveId) !== String(engagedId);
+  }
+
   function pickOpportunisticShotTarget(self, entities) {
     const candidates = (entities || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id))
@@ -9847,6 +9910,7 @@ function browserBotSource(config) {
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities);
+    const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -9887,6 +9951,11 @@ function browserBotSource(config) {
       } : null,
       conservingStamina: isConservingStamina(self)
     };
+    if (defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      return buildCombatAction(self, defensiveCombatTarget, bullets);
+    }
     if (engagedCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
@@ -9914,7 +9983,6 @@ function browserBotSource(config) {
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
       };
     }
-    const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
     if (defensiveCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
