@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.12';
+  const BOOTSTRAP_VERSION = '0.1.13';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -898,6 +898,38 @@
     return state.paused;
   }
 
+  function bootstrapPanelShellStyle(error = false) {
+    return [
+      'position:fixed',
+      'right:16px',
+      'top:16px',
+      'z-index:2147483647',
+      'width:min(336px,calc(100vw - 32px))',
+      'max-width:336px',
+      'max-height:calc(100vh - 32px)',
+      'box-sizing:border-box',
+      'padding:0',
+      'border:1px solid ' + (error ? 'rgba(251,113,133,.48)' : 'rgba(148,163,184,.22)'),
+      'border-radius:16px',
+      'background:rgba(15,23,42,.78)',
+      'color:#e5edf7',
+      'font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+      'box-shadow:0 24px 70px rgba(0,0,0,.42)',
+      'backdrop-filter:blur(16px)',
+      '-webkit-backdrop-filter:blur(16px)',
+      'pointer-events:auto',
+      'white-space:normal',
+      'overflow:auto'
+    ].join(';');
+  }
+
+  function bootstrapButtonStyle(kind = 'neutral') {
+    const base = 'flex:0 0 auto;height:28px;border:1px solid rgba(148,163,184,.22);border-radius:6px;background:rgba(30,41,59,.74);color:#e5edf7;font:12px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;padding:0 10px;cursor:pointer;white-space:nowrap';
+    if (kind === 'join') return base + ';border-color:rgba(52,211,153,.42);background:rgba(16,185,129,.16);color:#a7f3d0;font-weight:750';
+    if (kind === 'leave') return base + ';border-color:rgba(251,113,133,.42);background:rgba(244,63,94,.12);color:#fecdd3';
+    return base;
+  }
+
   function ensureBootstrapPanel() {
     if (!isGamePage() || !document.body) return null;
     let panel = document.getElementById(PANEL_ID);
@@ -907,25 +939,7 @@
       document.body.appendChild(panel);
     }
     panel.setAttribute('aria-live', 'polite');
-    panel.style.cssText = [
-      'position:fixed',
-      'right:12px',
-      'top:12px',
-      'z-index:2147483647',
-      'width:min(360px,calc(100vw - 24px))',
-      'max-width:360px',
-      'box-sizing:border-box',
-      'padding:10px 12px',
-      'border:1px solid rgba(148,163,184,.35)',
-      'border-radius:8px',
-      'background:rgba(15,23,42,.9)',
-      'color:#e5e7eb',
-      'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif',
-      'box-shadow:0 10px 32px rgba(0,0,0,.38)',
-      'backdrop-filter:blur(8px)',
-      'pointer-events:auto',
-      'white-space:normal'
-    ].join(';');
+    panel.style.cssText = bootstrapPanelShellStyle();
     return panel;
   }
 
@@ -934,8 +948,7 @@
       if (!isGamePage() || !document.body || state.disabled) return;
       const panel = ensureBootstrapPanel();
       if (!panel) return;
-      panel.style.borderColor = 'rgba(248,113,113,.45)';
-      panel.style.color = '#fee2e2';
+      panel.style.cssText = bootstrapPanelShellStyle(true) + ';padding:12px 14px;color:#fee2e2';
       panel.textContent = `BOT 面板错误：${message || state.lastError || 'unknown error'}`;
     } catch (_) {}
   }
@@ -967,18 +980,24 @@
     const showImmediateLogin = !state.cloudflareError && !paused && Number(reloginHold || 0) > 0;
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
+    const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
+    const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
+    const statusHalo = paused ? 'rgba(251,113,133,.13)' : (status?.running ? 'rgba(52,211,153,.13)' : 'rgba(251,191,36,.14)');
+    const statusGlow = paused ? 'rgba(251,113,133,.45)' : (status?.running ? 'rgba(52,211,153,.45)' : 'rgba(251,191,36,.45)');
     while (panel.firstChild) panel.removeChild(panel.firstChild);
     let appendParent = panel;
     const appendLine = (text, style = '') => {
       const line = document.createElement('div');
-      if (style) line.style.cssText = style;
+      const baseStyle = 'min-width:0;overflow-wrap:anywhere';
+      line.style.cssText = style ? baseStyle + ';' + style : baseStyle;
       line.textContent = String(text ?? '');
       appendParent.appendChild(line);
       return line;
     };
     const appendRichLine = (parts, style = '') => {
       const line = document.createElement('div');
-      if (style) line.style.cssText = style;
+      const baseStyle = 'min-width:0;overflow-wrap:anywhere';
+      line.style.cssText = style ? baseStyle + ';' + style : baseStyle;
       for (const part of parts) {
         if (part && typeof part === 'object') {
           const span = document.createElement('span');
@@ -992,14 +1011,37 @@
       appendParent.appendChild(line);
       return line;
     };
+    const appendMetricGrid = metrics => {
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:1px 0 2px';
+      for (const metric of metrics) {
+        const item = document.createElement('div');
+        item.style.cssText = 'min-height:42px;border:1px solid rgba(148,163,184,.22);border-radius:8px;background:rgba(15,23,42,.72);padding:6px 7px;box-shadow:inset 0 1px 0 rgba(255,255,255,.035);overflow:hidden';
+        const value = document.createElement('b');
+        value.textContent = String(metric.value ?? '-');
+        value.style.cssText = 'display:block;font-size:14px;line-height:1.1;font-weight:800;color:' + (metric.color || '#e0f2fe') + ';font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        const label = document.createElement('span');
+        label.textContent = String(metric.label ?? '');
+        label.style.cssText = 'display:block;margin-top:2px;color:#94a3b8;font-size:9px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        item.appendChild(value);
+        item.appendChild(label);
+        grid.appendChild(item);
+      }
+      appendParent.appendChild(grid);
+      return grid;
+    };
     const appendSection = titleText => {
       const section = document.createElement('div');
-      section.style.cssText = 'padding:7px 0;border-top:1px solid rgba(148,163,184,.22)';
-      if (!panel.firstChild) section.style.borderTop = '0';
+      const first = !panel.firstChild;
+      section.style.cssText = first
+        ? 'padding:14px 16px 12px;background:linear-gradient(135deg,rgba(30,41,59,.86),rgba(15,23,42,.54))'
+        : 'padding:12px 14px;border-top:1px solid rgba(148,163,184,.22);display:grid;gap:7px';
       if (titleText) {
         const titleLine = document.createElement('div');
         titleLine.textContent = titleText;
-        titleLine.style.cssText = 'margin:0 0 4px;color:#93c5fd;font-size:10px;font-weight:700;letter-spacing:0';
+        titleLine.style.cssText = first
+          ? 'margin:0 0 7px;color:#38bdf8;font-size:11px;font-weight:700;letter-spacing:0'
+          : 'margin:0 0 2px;color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:0';
         section.appendChild(titleLine);
       }
       panel.appendChild(section);
@@ -1008,28 +1050,35 @@
     };
     appendSection('脚本信息');
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px';
+    const titleWrap = document.createElement('div');
+    titleWrap.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0';
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    title.style.cssText = 'font-weight:750;font-size:18px;line-height:1.2;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 0 24px rgba(56,189,248,.24)';
     title.textContent = 'BOT';
+    const statusDot = document.createElement('i');
+    statusDot.setAttribute('aria-hidden', 'true');
+    statusDot.style.cssText = 'flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:' + statusColor + ';box-shadow:0 0 0 4px ' + statusHalo + ',0 0 22px ' + statusGlow;
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(statusDot);
     const button = document.createElement('button');
     button.type = 'button';
     button.title = buttonTitle;
-    button.style.cssText = 'flex:0 0 auto;border:1px solid rgba(148,163,184,.45);border-radius:6px;background:' + (paused ? 'rgba(34,197,94,.2)' : 'rgba(239,68,68,.18)') + ';color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer';
+    button.style.cssText = bootstrapButtonStyle(paused ? 'join' : 'leave');
     button.textContent = buttonText;
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
       setPaused(!isPaused(), 'panel button');
     }, { once: true });
-    header.appendChild(title);
+    header.appendChild(titleWrap);
     const actions = document.createElement('div');
     actions.style.cssText = 'display:flex;align-items:center;gap:6px;flex:0 0 auto';
     if (showImmediateLogin) {
       const loginButton = document.createElement('button');
       loginButton.type = 'button';
       loginButton.title = '忽略当前退出冷却，立即登录';
-      loginButton.style.cssText = 'flex:0 0 auto;border:1px solid rgba(34,197,94,.55);border-radius:6px;background:rgba(34,197,94,.2);color:#f8fafc;font:12px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;padding:4px 8px;cursor:pointer';
+      loginButton.style.cssText = bootstrapButtonStyle('join');
       loginButton.textContent = '立即登录';
       loginButton.addEventListener('click', event => {
         event.preventDefault();
@@ -1051,7 +1100,7 @@
     if (state.loaderUpdateAvailable) {
       appendLine(
         '加载器A（扩展）有新版本：当前 ' + aVersion + ' / 最新 ' + (state.latestLoaderVersion || '-') + '，请手动更新扩展',
-        'margin:0 0 6px;padding:6px 8px;border:1px solid rgba(248,113,113,.75);border-radius:6px;background:rgba(127,29,29,.72);color:#fee2e2;font-weight:700;word-break:break-all'
+        'margin:0 0 8px;padding:7px 9px;border:1px solid rgba(251,113,133,.42);border-radius:8px;background:rgba(127,29,29,.28);color:#fecdd3;font-weight:700'
       );
     }
     appendRichLine([
@@ -1059,9 +1108,7 @@
       { text: displayVersion(aVersion), style: 'color:' + (state.loaderUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
       ' / 远程 ',
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
-    ], 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
-    const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
-    const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
+    ], 'font-size:11px;margin:-2px 0 6px;color:#94a3b8');
     appendRichLine([
       '状态：',
       { text: statusText, style: 'color:' + statusColor + ';font-weight:700' },
@@ -1081,7 +1128,7 @@
       { text: formatNumber(remoteLogPending, '0'), style: remoteLogPending > 0 ? 'color:#fde68a;font-weight:700' : '' },
       ' / 失败 ',
       { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
-    ], 'font-size:11px;color:#cbd5e1;word-break:break-all');
+    ], 'font-size:11px;color:#94a3b8');
     appendSection('BOT行为');
     appendLine('当前行为：' + behaviorText(decision, status));
     appendLine('当前目标：' + targetSummaryText(decision, status));
@@ -1093,7 +1140,7 @@
         { text: hpText(hp.selfHp), style: 'color:#fca5a5;font-weight:800' },
         ' vs ',
         { text: hpText(hp.targetHp), style: 'color:#fde68a;font-weight:800' }
-      ], 'margin:4px 0 0;padding:5px 7px;border:1px solid rgba(248,113,113,.48);border-radius:6px;background:rgba(127,29,29,.36);color:#fee2e2;font-weight:700');
+      ], 'margin:2px 0 0;padding:7px 9px;border:1px solid rgba(251,113,133,.42);border-radius:8px;background:rgba(127,29,29,.28);color:#fee2e2;font-weight:700');
       if (decision?.combat) {
         appendLine('战斗细节：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
       }
@@ -1104,11 +1151,10 @@
     } else if (status?.running) {
       const coinsGained = Number(session.coinsGained || 0) || 0;
       const kills = Number(session.kills || 0) || 0;
-      appendRichLine([
-        '本次登录：' + formatDuration(session.uptimeMs ?? status.uptimeMs) + ' / ',
-        { text: '收获金币 +' + formatNumber(coinsGained, '0'), style: coinsGained > 0 ? 'color:#86efac;font-weight:700' : '' },
-        ' / ',
-        { text: '击杀 ' + formatNumber(kills, '0'), style: kills > 0 ? 'color:#fde68a;font-weight:700' : '' }
+      appendMetricGrid([
+        { label: 'uptime', value: formatDuration(session.uptimeMs ?? status.uptimeMs), color: '#e0f2fe' },
+        { label: 'coins', value: '+' + formatNumber(coinsGained, '0'), color: coinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
+        { label: 'kills', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
       const hpValue = Number(self?.hp);
       appendRichLine([
