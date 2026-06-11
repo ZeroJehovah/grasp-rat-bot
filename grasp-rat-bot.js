@@ -3483,8 +3483,11 @@ function browserBotSource(config) {
 	    combatLogBatchMaxEntries: 50,
 	    combatLogMaxPendingEntries: 1000,
 	    combatLogMaxBulletEntries: 24,
-	    combatLogMaxEntityEntries: 12,
-    status: '',
+		    combatLogMaxEntityEntries: 12,
+    postLoginZoomOutClicks: 6,
+    postLoginZoomOutIntervalMs: 80,
+    postLoginZoomArmMissingMs: 1000,
+	    status: '',
     ...config,
     // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
     allowNativeReconnect: false,
@@ -3649,8 +3652,18 @@ function browserBotSource(config) {
       lastError: String(preserved.combatLogging?.lastError || ''),
       lastOkAt: Number(preserved.combatLogging?.lastOkAt || 0),
       sequence: Number(preserved.combatLogging?.sequence || 0)
+	    },
+    postLoginZoom: {
+      armed: true,
+      missingSince: 0,
+      generation: 0,
+      appliedKey: '',
+      scheduledKey: '',
+      scheduledAt: 0,
+      lastSeenSelfAt: 0,
+      lastResult: null
     },
-    reloadRequestedAt: 0,
+	    reloadRequestedAt: 0,
     lastTarget: null,
 	    lastTargetAt: 0,
 	    snapshotCoinWaitSince: Number(previousBot?.snapshotCoinWaitSince || 0) || 0,
@@ -3835,9 +3848,10 @@ function browserBotSource(config) {
 	        lastTarget: this.lastTarget,
 	        combatTarget: this.combatTarget,
 	        combatAim: this.combatAim,
-	        combatLogging: summarizeCombatLoggingStatus(),
-	        opportunityChoice: this.opportunityChoice,
-	        self: displaySelf,
+		        combatLogging: summarizeCombatLoggingStatus(),
+		        opportunityChoice: this.opportunityChoice,
+        postLoginZoom: this.postLoginZoom,
+		        self: displaySelf,
         session,
         safety: this.lastSafety,
         attackHistory: this.attackHistory.slice(-10),
@@ -5124,11 +5138,101 @@ function browserBotSource(config) {
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
   }
 
-  function controlText(el) {
-    return (el?.innerText || el?.value || el?.getAttribute?.('aria-label') || el?.getAttribute?.('title') || '').trim();
+	  function controlText(el) {
+	    return (el?.innerText || el?.value || el?.getAttribute?.('aria-label') || el?.getAttribute?.('title') || '').trim();
+	  }
+
+  function describeControl(el) {
+    if (!el) return '';
+    if (el.id) return '#' + el.id;
+    const text = controlText(el);
+    if (text) return text;
+    return String(el.tagName || '').toLowerCase();
   }
 
-  function findLoginControl() {
+  function findZoomOutControl() {
+    const direct = document.querySelector('#zoomOutBtn, [data-testid="zoom-out"], [aria-label="zoom out"], [aria-label="Zoom out"]');
+    if (direct) return direct;
+    const candidates = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"]'));
+    return candidates.find(el => {
+      const text = controlText(el);
+      return /zoom\s*out|缩小|缩放-|地图-|视图-/i.test(text);
+    }) || null;
+  }
+
+  function clickZoomOutControl() {
+    const control = findZoomOutControl();
+    if (!control) return { clicked: false, error: 'zoom-out control not found' };
+    if (control.disabled) return { clicked: false, error: 'zoom-out control disabled', control: describeControl(control) };
+    try {
+      control.click();
+      return { clicked: true, control: describeControl(control) };
+    } catch (err) {
+      return { clicked: false, error: err?.message || String(err), control: describeControl(control) };
+    }
+  }
+
+  function postLoginZoomSessionKey(selfSummary) {
+    const userId = selfSummary?.user_id ?? getCurrentUserId() ?? '';
+    const token = getSessionToken();
+    if (token) return String(userId) + ':token:' + String(token).slice(0, 24);
+    return String(userId) + ':generation:' + Number(bot.postLoginZoom?.generation || 0);
+  }
+
+  function noteSelfUnavailableForPostLoginZoom() {
+    const state = bot.postLoginZoom;
+    if (!state) return;
+    const t = Date.now();
+    if (!state.missingSince) state.missingSince = t;
+    const missingMs = Math.max(0, t - Number(state.missingSince || t));
+    if (missingMs < Math.max(0, Number(cfg.postLoginZoomArmMissingMs || 0))) return;
+    if (!state.armed) {
+      state.generation = Number(state.generation || 0) + 1;
+      state.armed = true;
+      state.scheduledKey = '';
+    }
+  }
+
+  function schedulePostLoginZoomOut(selfSummary) {
+    const state = bot.postLoginZoom;
+    if (!state) return null;
+    const t = Date.now();
+    state.lastSeenSelfAt = t;
+    state.missingSince = 0;
+    const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
+    if (!clicks || !state.armed) return null;
+    const key = postLoginZoomSessionKey(selfSummary);
+    if (!key || state.appliedKey === key || state.scheduledKey === key) return null;
+    state.armed = false;
+    state.appliedKey = key;
+    state.scheduledKey = key;
+    state.scheduledAt = t;
+    state.lastResult = {
+      key,
+      scheduledAt: t,
+      requestedClicks: clicks,
+      completedClicks: 0,
+      failedClicks: 0,
+      lastError: ''
+    };
+    const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
+    for (let index = 0; index < clicks; index += 1) {
+      setTimeout(() => {
+        if (window[BOT_KEY] !== bot || !bot.running) return;
+        const result = clickZoomOutControl();
+        const latest = state.lastResult || {};
+        latest.completedClicks = Number(latest.completedClicks || 0) + (result.clicked ? 1 : 0);
+        latest.failedClicks = Number(latest.failedClicks || 0) + (result.clicked ? 0 : 1);
+        latest.lastError = result.error || '';
+        latest.control = result.control || latest.control || '';
+        latest.finishedAt = Date.now();
+        state.lastResult = latest;
+      }, index * intervalMs);
+    }
+    return state.lastResult;
+  }
+
+	  function findLoginControl() {
     const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
     if (direct && isVisible(direct)) return direct;
     const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'))
@@ -11138,8 +11242,9 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
       }
-			      if (!self || !isAlive(self)) {
-			        bot.pursuit = null;
+				      if (!self || !isAlive(self)) {
+				        noteSelfUnavailableForPostLoginZoom();
+				        bot.pursuit = null;
 	        stopMotionSafely('no-self');
 	        if (!bot.waitSince) bot.waitSince = Date.now();
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
@@ -11181,9 +11286,10 @@ function browserBotSource(config) {
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
-      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
-      const currentSummary = summarizeSelf(self);
-	      const currentHp = Number(currentSummary.hp ?? NaN);
+	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
+	      const currentSummary = summarizeSelf(self);
+      schedulePostLoginZoomOut(currentSummary);
+		      const currentHp = Number(currentSummary.hp ?? NaN);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       if (staminaState.mustLeave) {
         bot.pursuit = null;
