@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.84"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.85"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5491,33 +5491,49 @@
     return { sign, until, locked, lockOverridden };
   }
 
-  function combatStrafeVector(self, target, pressure, sign, options = {}) {
-    let baseX = Number(pressure?.vx) || 0;
-    let baseY = Number(pressure?.vy) || 0;
-    if (!(baseX || baseY) && target) {
+	  function combatStrafeVector(self, target, pressure, sign, options = {}) {
+	    let baseX = Number(pressure?.vx) || 0;
+	    let baseY = Number(pressure?.vy) || 0;
+	    if (!(baseX || baseY) && target) {
       baseX = Number(target.x) - Number(self.x);
       baseY = Number(target.y) - Number(self.y);
     }
     const tangentX = -baseY * sign;
-    const tangentY = baseX * sign;
-    let dx = Math.sign(tangentX || 0);
-    let dy = Math.sign(tangentY || 0);
-    if (target) {
-      const awayX = Math.sign(Number(self.x) - Number(target.x)) || 0;
-      const awayY = Math.sign(Number(self.y) - Number(target.y)) || 0;
-      const approachX = Math.sign(Number(target.x) - Number(self.x)) || 0;
-      const approachY = Math.sign(Number(target.y) - Number(self.y)) || 0;
-      const fillX = options.preferClosing ? approachX : awayX;
-      const fillY = options.preferClosing ? approachY : awayY;
-      if (dx && !dy && fillY) dy = fillY;
-      else if (dy && !dx && fillX) dx = fillX;
-    }
-    if (!(dx || dy) && target) {
-      dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
-      dy = Math.sign(Number(target.x) - Number(self.x)) || 0;
-    }
-    return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1) };
-  }
+	    const tangentY = baseX * sign;
+	    let dx = Math.sign(tangentX || 0);
+	    let dy = Math.sign(tangentY || 0);
+    let closingBiased = false;
+	    if (target) {
+	      const awayX = Math.sign(Number(self.x) - Number(target.x)) || 0;
+	      const awayY = Math.sign(Number(self.y) - Number(target.y)) || 0;
+	      const approachX = Math.sign(Number(target.x) - Number(self.x)) || 0;
+	      const approachY = Math.sign(Number(target.y) - Number(self.y)) || 0;
+	      const fillX = options.preferClosing ? approachX : awayX;
+	      const fillY = options.preferClosing ? approachY : awayY;
+	      if (dx && !dy && fillY) dy = fillY;
+	      else if (dy && !dx && fillX) dx = fillX;
+      if (options.preferClosing && dx && dy) {
+        const closesX = Boolean(approachX && Math.sign(dx) === approachX);
+        const closesY = Boolean(approachY && Math.sign(dy) === approachY);
+        if (!closesX && !closesY) {
+          const offsetX = Math.abs(Number(target.x) - Number(self.x));
+          const offsetY = Math.abs(Number(target.y) - Number(self.y));
+          if (offsetX >= offsetY && approachX) {
+            closingBiased = Math.sign(dx) !== approachX;
+            dx = approachX;
+          } else if (approachY) {
+            closingBiased = Math.sign(dy) !== approachY;
+            dy = approachY;
+          }
+        }
+      }
+	    }
+	    if (!(dx || dy) && target) {
+	      dx = Math.sign(Number(self.y) - Number(target.y)) || 1;
+	      dy = Math.sign(Number(target.x) - Number(self.x)) || 0;
+	    }
+	    return { dx: clamp(Math.round(dx), -1, 1), dy: clamp(Math.round(dy), -1, 1), closingBiased };
+	  }
 
   function tangentMoveForBullet(self, target, pressure, options = {}) {
     const t = now();
@@ -5547,7 +5563,7 @@
     const sign = strafeSign.sign;
     const until = strafeSign.until;
 
-    let { dx, dy } = combatStrafeVector(self, target, pressure, sign, options);
+	    let { dx, dy, closingBiased } = combatStrafeVector(self, target, pressure, sign, options);
     if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
       dx = clamp(Math.round(Number(existing.dx) || 0), -1, 1);
       dy = clamp(Math.round(Number(existing.dy) || 0), -1, 1);
@@ -5565,11 +5581,12 @@
       carryUntil: t + carryMs
     };
     return {
-      dx,
-      dy,
-      locked: Boolean(strafeSign.locked),
-      lockOverridden: Boolean(strafeSign.lockOverridden),
-      carried: false,
+	      dx,
+	      dy,
+	      locked: Boolean(strafeSign.locked),
+	      lockOverridden: Boolean(strafeSign.lockOverridden),
+      closingBiased: Boolean(closingBiased),
+	      carried: false,
       active: true,
       sign,
       precise: Boolean(preciseSign),
@@ -6154,10 +6171,11 @@
           dx: combatMove.dx,
           dy: combatMove.dy,
           sign: strafe.sign,
-          precise: Boolean(strafe.precise),
-          locked: Boolean(strafe.locked),
-          lockOverridden: Boolean(strafe.lockOverridden),
-          carried: Boolean(strafe.carried),
+	          precise: Boolean(strafe.precise),
+	          locked: Boolean(strafe.locked),
+	          lockOverridden: Boolean(strafe.lockOverridden),
+          closingBiased: Boolean(strafe.closingBiased),
+	          carried: Boolean(strafe.carried),
           holdRemainingMs: strafe.holdRemainingMs || 0,
           carryRemainingMs: strafe.carryRemainingMs || 0,
           spacingMerged: Boolean(combatMove.spacingMerged)
