@@ -158,7 +158,7 @@ function runSelfTest() {
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
     combatAimJitterMinRadians: 0.025,
-    combatAimJitterMaxRadians: 0.16,
+    combatAimJitterMaxRadians: 0.14,
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
@@ -172,7 +172,7 @@ function runSelfTest() {
     combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
-    combatAimNoDamageMaxRadians: 0.16,
+    combatAimNoDamageMaxRadians: 0.14,
     combatAimLockMs: 450,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
@@ -2059,6 +2059,11 @@ function runSelfTest() {
       want: true
     },
     {
+      name: 'combat close target jitter stays in logged effective range',
+      got: combatAimJitterLimit(2500) <= cfg.combatAimJitterMaxRadians,
+      want: true
+    },
+    {
       name: 'combat low target motion shrinks jitter window',
       got: combatAimJitterLimit(10000, 0.15) < combatAimJitterLimit(10000, 1),
       want: true
@@ -2779,7 +2784,7 @@ function browserBotSource(config) {
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
     combatAimJitterMinRadians: 0.025,
-    combatAimJitterMaxRadians: 0.16,
+    combatAimJitterMaxRadians: 0.14,
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
@@ -2793,7 +2798,7 @@ function browserBotSource(config) {
     combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
-    combatAimNoDamageMaxRadians: 0.16,
+    combatAimNoDamageMaxRadians: 0.14,
     combatAimLockMs: 450,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
