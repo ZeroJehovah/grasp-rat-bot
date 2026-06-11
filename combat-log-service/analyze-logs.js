@@ -14,6 +14,9 @@ const DEFAULTS = {
   sinceLabel: '',
   minVersion: '',
   version: '',
+  manifestPath: '',
+  manifestMode: 'exact',
+  manifestVersion: '',
   watch: false,
   watchIntervalMs: 10000,
   watchCount: 0,
@@ -35,6 +38,8 @@ function parseArgs(args) {
       out.sinceMs = parseTimeArg(out.sinceLabel);
     } else if (arg === '--min-version') out.minVersion = String(args[++i] || '').trim();
     else if (arg === '--version') out.version = String(args[++i] || '').trim();
+    else if (arg === '--manifest') out.manifestPath = path.resolve(args[++i] || out.manifestPath);
+    else if (arg === '--manifest-mode') out.manifestMode = String(args[++i] || out.manifestMode).trim().toLowerCase();
     else if (arg === '--watch') out.watch = true;
     else if (arg === '--watch-interval-ms') out.watchIntervalMs = Math.max(250, Number(args[++i] || out.watchIntervalMs) || out.watchIntervalMs);
     else if (arg === '--watch-count') out.watchCount = Math.max(0, Number(args[++i] || out.watchCount) || out.watchCount);
@@ -62,6 +67,8 @@ Options:
   --since <time>                 Only audit entries at/after this time. Use "now", epoch ms, or ISO time.
   --min-version <version>        Only audit entries at/above this bot version, e.g. bootstrap-0.4.97.
   --version <version>            Only audit entries from this exact bot version.
+  --manifest <file>              Read the bot version from a manifest JSON file.
+  --manifest-mode <exact|min>    How --manifest filters versions. Default: ${DEFAULTS.manifestMode}
   --watch                        Keep polling the log directory.
   --watch-interval-ms <ms>       Poll interval for --watch. Default: ${DEFAULTS.watchIntervalMs}
   --watch-count <count>          Stop after this many watch scans. Default: unlimited
@@ -81,6 +88,27 @@ function parseTimeArg(value) {
   const parsed = Date.parse(text);
   if (Number.isFinite(parsed)) return parsed;
   throw new Error(`Invalid --since time: ${value}`);
+}
+
+function manifestVersion(manifestPath) {
+  const text = fs.readFileSync(manifestPath, 'utf8');
+  const parsed = JSON.parse(text);
+  const version = String(parsed?.version || '').trim();
+  if (!version) throw new Error(`Manifest version missing: ${manifestPath}`);
+  return version;
+}
+
+function resolveOptions(options) {
+  const out = { ...DEFAULTS, ...options };
+  if (!out.manifestPath) return out;
+  const mode = String(out.manifestMode || DEFAULTS.manifestMode).trim().toLowerCase();
+  if (mode !== 'exact' && mode !== 'min') throw new Error(`Invalid --manifest-mode: ${out.manifestMode}`);
+  const version = manifestVersion(out.manifestPath);
+  out.manifestMode = mode;
+  out.manifestVersion = version;
+  if (mode === 'min') out.minVersion = version;
+  else out.version = version;
+  return out;
 }
 
 function walkJsonlFiles(rootDir) {
@@ -349,6 +377,7 @@ function auditFile(file, rootDir, options) {
 }
 
 function auditLogs(options) {
+  options = resolveOptions(options);
   const files = walkJsonlFiles(options.dir);
   const fileReports = files.map(file => auditFile(file, options.dir, options));
   const exitEvents = fileReports.flatMap(report => report.exitEvents)
@@ -361,6 +390,9 @@ function auditLogs(options) {
     sinceMs: options.sinceMs || 0,
     minVersion: options.minVersion || '',
     version: options.version || '',
+    manifestPath: options.manifestPath || '',
+    manifestMode: options.manifestMode || '',
+    manifestVersion: options.manifestVersion || '',
     files: fileReports.length,
     entries: fileReports.reduce((sum, report) => sum + report.entries, 0),
     scannedEntries: fileReports.reduce((sum, report) => sum + report.scannedEntries, 0),
@@ -383,6 +415,7 @@ function reportFingerprint(report) {
     files: report.files,
     entries: report.entries,
     scannedEntries: report.scannedEntries,
+    manifestVersion: report.manifestVersion || '',
     parseErrors: report.parseErrors.length,
     issues: issueCounts(report),
     latestExit: {
@@ -402,6 +435,7 @@ function printHuman(report, options) {
   if (report.sinceMs || report.minVersion || report.version) {
     const filters = [];
     if (report.sinceMs) filters.push(`since=${isoTime(report.sinceMs) || report.sinceMs}`);
+    if (report.manifestVersion) filters.push(`manifest=${report.manifestVersion}${report.manifestMode ? `:${report.manifestMode}` : ''}`);
     if (report.minVersion) filters.push(`minVersion=${report.minVersion}`);
     if (report.version) filters.push(`version=${report.version}`);
     console.log('Filters: ' + filters.join(', '));
@@ -463,7 +497,7 @@ async function watchLogs(options) {
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = resolveOptions(parseArgs(process.argv.slice(2)));
   if (options.watch) {
     await watchLogs(options);
     return;
@@ -481,4 +515,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { auditLogs, parseArgs };
+module.exports = { auditLogs, parseArgs, resolveOptions };

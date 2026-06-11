@@ -7,6 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "analyze": "node analyze-logs.js",
-    "monitor": "node analyze-logs.js --watch"
+    "analyze:current": "node analyze-logs.js --manifest ../dist/manifest.json",
+    "monitor": "node analyze-logs.js --watch",
+    "monitor:current": "node analyze-logs.js --watch --manifest ../dist/manifest.json"
   }
 }
