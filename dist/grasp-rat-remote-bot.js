@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.97"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.98"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1512,25 +1512,33 @@
         };
       }
 
+      const combatLogExitSummaryFromDecision = function combatLogExitSummaryFromDecision(decision) {
+  const leave = decision?.leave || null;
+  const reason = String(leave?.reason || decision?.reason || '');
+  const isExit = Boolean(leave)
+    || decision?.kind === 'leave'
+    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
+  if (!isExit) return null;
+  return {
+    reason,
+    summary: leave?.summary || leave?.exitSummary || decision?.exitSummary || decision?.displayReason || '',
+    displayReason: leave?.displayReason || decision?.displayReason || '',
+    attempted: leave ? Boolean(leave.attempted) : null,
+    error: leave?.error || '',
+    reloginUntil: leave?.reloginUntil || 0,
+    holdRemainingMs: leave?.holdRemainingMs || 0,
+    reloginDelayMs: leave?.reloginDelayMs || 0,
+    pendingLoginSuppressUntil: leave?.pendingLoginSuppressUntil || 0,
+    pendingLoginSuppressDelayMs: leave?.pendingLoginSuppressDelayMs || 0,
+    pendingLoginSuppressReason: leave?.pendingLoginSuppressReason || '',
+    pendingLoginSuppressMinimumDelayMs: leave?.pendingLoginSuppressMinimumDelayMs || 0,
+    pendingLoginSuppressHpDelayMs: leave?.pendingLoginSuppressHpDelayMs || 0,
+    pendingLoginSuppressHp: leave?.pendingLoginSuppressHp || null
+  };
+};
+
       function combatLogExitSummary(decision) {
-        const leave = decision?.leave || null;
-        const reason = String(leave?.reason || decision?.reason || '');
-        const isExit = Boolean(leave)
-          || decision?.kind === 'leave'
-          || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
-        if (!isExit) return null;
-        return {
-          reason,
-          summary: leave?.summary || leave?.exitSummary || decision?.exitSummary || decision?.displayReason || '',
-          displayReason: leave?.displayReason || decision?.displayReason || '',
-          attempted: leave ? Boolean(leave.attempted) : null,
-          error: leave?.error || '',
-          reloginUntil: leave?.reloginUntil || 0,
-          reloginDelayMs: leave?.reloginDelayMs || 0,
-          pendingLoginSuppressUntil: leave?.pendingLoginSuppressUntil || 0,
-          pendingLoginSuppressDelayMs: leave?.pendingLoginSuppressDelayMs || 0,
-          pendingLoginSuppressReason: leave?.pendingLoginSuppressReason || ''
-        };
+        return combatLogExitSummaryFromDecision(decision);
       }
 
       function buildCombatLogEntry(source, decision) {
