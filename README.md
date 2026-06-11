@@ -146,6 +146,7 @@ node --check extension/page-bootstrap.js
 node --check extension/popup.js
 node --check combat-log-service/server.js
 node grasp-rat-bot.js --self-test
+node scripts/objective-status.js --self-test
 node scripts/build-remote-bot.js
 node scripts/verify-objective-build.js
 node scripts/objective-status.js --fail-on-incomplete
