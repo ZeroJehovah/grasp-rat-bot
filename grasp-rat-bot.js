@@ -6181,7 +6181,7 @@ function browserBotSource(config) {
     control.nativeReconnectEvents = freshEvents;
     control.nativeReconnectEventCount = freshEvents.length;
     control.nativeReconnectWindowMs = windowMs;
-    control.nativeReconnectChurn = Boolean(offlineish && freshEvents.length >= minEvents);
+	    control.nativeReconnectChurn = Boolean(freshEvents.length >= minEvents);
     control.observedNativeWs = native.ws || null;
     control.observedNativeWsReadyState = native.wsReadyState;
     return {

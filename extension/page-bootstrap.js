@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.11';
+  const BOOTSTRAP_VERSION = '0.1.12';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -512,6 +512,11 @@
     return Number.isFinite(n) ? String(Math.round(n)) : fallback;
   }
 
+  function displayVersion(value) {
+    const text = String(value || '-');
+    return text.replace(/^bootstrap-/, '');
+  }
+
   function formatStamina(self) {
     if (!self) return '-';
     const stamina = self.stamina || {};
@@ -521,11 +526,17 @@
       const l = Number(limit);
       return Math.floor(r / 1000) + '/' + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1000) : '-');
     };
+    const percentText = (remaining, limit) => {
+      const r = Number(remaining);
+      const l = Number(limit);
+      if (!Number.isFinite(r) || !Number.isFinite(l) || l <= 0) return '-';
+      return Math.max(0, Math.round((r / l) * 100)) + '%';
+    };
     const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
     const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
     return '5s ' + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
-      + ' 1h ' + valueText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
-      + ' 1d ' + valueText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
+      + ' 1h ' + percentText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
+      + ' 1d ' + percentText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
       + suffix;
   }
 
@@ -557,6 +568,7 @@
       'combat-attack': '战斗：持续开火',
       'combat-tangent-dodge': '战斗：切线规避并开火',
       'combat-stamina-hold': '战斗：短体力不足，停止移动并开火',
+      'combat-pressure-close': '战斗：久攻未中，压近开火',
       'combat-reengage': '战斗：重新靠近目标',
       'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
       'combat-low-hp-leave': '战斗低血劣势，立即退出',
@@ -575,6 +587,7 @@
       'control-ws-offline': 'WebSocket 离线',
       'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
       'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+      'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
       'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
       'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
       'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
@@ -586,6 +599,86 @@
       'bot-error': '脚本异常'
     };
     return map[reason] || reason || '-';
+  }
+
+  function isCombatDecision(decision, status) {
+    const reason = String(decision?.reason || '');
+    return Boolean(decision?.combat || decision?.combatState || /^combat-/.test(reason) || status?.combatTarget);
+  }
+
+  function behaviorText(decision, status) {
+    if (status?.paused || isPaused()) return '已暂停';
+    if (state.cloudflareError) return '等待刷新错误页';
+    if (!status?.running) return '远端未运行';
+    const kind = decision?.kind || (status?.running ? 'wait' : 'missing');
+    const reason = String(decision?.reason || '');
+    if (isCombatDecision(decision, status)) {
+      if (kind === 'attack') {
+        if (/pressure-close/.test(reason)) return '战斗中：压近开火';
+        if (/spacing/.test(reason)) return '战斗中：拉距开火';
+        if (/dodge|tangent/.test(reason)) return '战斗中：规避开火';
+        return '战斗中：持续开火';
+      }
+      if (kind === 'seek-enemy') return '战斗中：重新接敌';
+      if (kind === 'leave') return '战斗中：退出';
+      if (kind === 'wait') return '战斗后等待';
+      return '战斗中';
+    }
+    if (kind === 'coin') return '拾取金币';
+    if (kind === 'seek-coin') return '前往金币';
+    if (kind === 'attack') return '攻击目标';
+    if (kind === 'seek-enemy' || kind === 'seek-drop') return '前往目标';
+    if (kind === 'flee') return '避险撤离';
+    if (kind === 'recover') return '恢复体力/血量';
+    if (kind === 'patrol') return '巡航扫描';
+    if (kind === 'wait') return '等待';
+    if (kind === 'leave') return '退出';
+    if (kind === 'idle') return '待命';
+    if (kind === 'missing') return '远端未运行';
+    return kind;
+  }
+
+  function targetNameText(target) {
+    if (!target) return '-';
+    return target.name || ('#' + (target.id ?? '-'));
+  }
+
+  function targetSummaryText(decision, status) {
+    const target = decision?.target || null;
+    const kind = decision?.kind || '';
+    if (target) {
+      const parts = [];
+      const isCoin = kind === 'coin' || kind === 'seek-coin' || (target.amount !== undefined && target.drop === undefined && target.hp === undefined);
+      parts.push(isCoin ? '金币 ' : '目标 ');
+      parts.push(targetNameText(target));
+      if (target.distance !== undefined) parts.push(' 距离 ' + formatDistance(target.distance));
+      if (target.amount !== undefined) parts.push(' 金币 ' + target.amount);
+      if (target.hp !== undefined) parts.push(' HP ' + target.hp);
+      if (target.drop !== undefined) parts.push(' Drop ' + target.drop);
+      return parts.join('');
+    }
+    const threats = Array.isArray(decision?.threats) ? decision.threats : [];
+    if (kind === 'flee' && threats[0]) {
+      const threat = threats[0];
+      return '威胁 ' + (threat.name || ('#' + threat.id)) + ' 距离 ' + formatDistance(threat.d ?? threat.distance);
+    }
+    const combatTarget = status?.combatTarget;
+    if (isCombatDecision(decision, status) && combatTarget) {
+      return '目标 ' + targetNameText(combatTarget) + (combatTarget.hp !== undefined ? ' HP ' + combatTarget.hp : '');
+    }
+    return '-';
+  }
+
+  function hpText(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+  }
+
+  function combatHpSummary(decision, status, self) {
+    const target = decision?.target || status?.combatTarget || null;
+    const selfHp = Number(decision?.combatState?.selfHp ?? self?.hp ?? status?.self?.hp ?? NaN);
+    const targetHp = Number(decision?.combatState?.targetHp ?? target?.hp ?? NaN);
+    return { selfHp, targetHp };
   }
 
   function actionText(decision, status) {
@@ -875,18 +968,50 @@
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     while (panel.firstChild) panel.removeChild(panel.firstChild);
+    let appendParent = panel;
     const appendLine = (text, style = '') => {
       const line = document.createElement('div');
       if (style) line.style.cssText = style;
       line.textContent = String(text ?? '');
-      panel.appendChild(line);
+      appendParent.appendChild(line);
       return line;
     };
+    const appendRichLine = (parts, style = '') => {
+      const line = document.createElement('div');
+      if (style) line.style.cssText = style;
+      for (const part of parts) {
+        if (part && typeof part === 'object') {
+          const span = document.createElement('span');
+          span.textContent = String(part.text ?? '');
+          if (part.style) span.style.cssText = part.style;
+          line.appendChild(span);
+        } else {
+          line.appendChild(document.createTextNode(String(part ?? '')));
+        }
+      }
+      appendParent.appendChild(line);
+      return line;
+    };
+    const appendSection = titleText => {
+      const section = document.createElement('div');
+      section.style.cssText = 'padding:7px 0;border-top:1px solid rgba(148,163,184,.22)';
+      if (!panel.firstChild) section.style.borderTop = '0';
+      if (titleText) {
+        const titleLine = document.createElement('div');
+        titleLine.textContent = titleText;
+        titleLine.style.cssText = 'margin:0 0 4px;color:#93c5fd;font-size:10px;font-weight:700;letter-spacing:0';
+        section.appendChild(titleLine);
+      }
+      panel.appendChild(section);
+      appendParent = section;
+      return section;
+    };
+    appendSection('脚本信息');
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px';
     const title = document.createElement('div');
     title.style.cssText = 'font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    title.textContent = 'BOT ' + actionText(decision, status);
+    title.textContent = 'BOT';
     const button = document.createElement('button');
     button.type = 'button';
     button.title = buttonTitle;
@@ -922,31 +1047,78 @@
     }
     actions.appendChild(button);
     header.appendChild(actions);
-    panel.appendChild(header);
+    appendParent.appendChild(header);
     if (state.loaderUpdateAvailable) {
       appendLine(
         '加载器A（扩展）有新版本：当前 ' + aVersion + ' / 最新 ' + (state.latestLoaderVersion || '-') + '，请手动更新扩展',
         'margin:0 0 6px;padding:6px 8px;border:1px solid rgba(248,113,113,.75);border-radius:6px;background:rgba(127,29,29,.72);color:#fee2e2;font-weight:700;word-break:break-all'
       );
     }
-    appendLine('版本：远程B ' + bVersion + ' / 加载器A：扩展 ' + aVersion, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
-    if (state.lastLoaderVersionStatus && !state.loaderUpdateAvailable) {
-      appendLine('A更新检查：' + state.lastLoaderVersionStatus, 'font-size:11px;margin:-2px 0 4px;color:#94a3b8;word-break:break-all');
-    }
-    appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
-    if (state.cloudflareError) {
-      appendLine('原因：' + reasonDetail);
-    } else if (status?.running) {
-      appendLine('本次登录：' + formatDuration(session.uptimeMs ?? status.uptimeMs) + ' / 收获金币 +' + formatNumber(session.coinsGained, '0') + ' / 击杀 ' + formatNumber(session.kills, '0'));
-      appendLine('原因：' + reasonDetail);
-      appendLine('HP ' + (self?.hp ?? '-') + ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-'));
-      appendLine('WS ' + wsLabel + ' / Active ' + nearestActive);
-      if (decision?.target) {
-        const target = decision.target;
-        appendLine('目标：' + (target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + formatDistance(target.distance) + ' 金币 ' + (target.amount ?? '-') + ' Drop ' + (target.drop ?? '-'));
-      }
+    appendRichLine([
+      '版本：加载器: 扩展 ',
+      { text: displayVersion(aVersion), style: 'color:' + (state.loaderUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
+      ' / 远程 ',
+      { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
+    ], 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
+    const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
+    appendRichLine([
+      '状态：',
+      { text: statusText, style: 'color:' + statusColor + ';font-weight:700' },
+      paused && state.pauseReason ? ' / ' + state.pauseReason : ''
+    ]);
+    const combatLogStatus = status?.combatLogging || {};
+    const remoteLogEnabled = Boolean(combatLogStatus.enabled);
+    const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
+    const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
+    const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
+    appendRichLine([
+      '远程日志：',
+      { text: remoteLogEnabled ? '开' : '关', style: 'color:' + (remoteLogEnabled ? '#86efac' : '#fde68a') + ';font-weight:700' },
+      ' / 本次登录已发 ',
+      { text: formatNumber(remoteLogSent, '0'), style: remoteLogSent > 0 ? 'color:#86efac;font-weight:700' : '' },
+      ' / 待发 ',
+      { text: formatNumber(remoteLogPending, '0'), style: remoteLogPending > 0 ? 'color:#fde68a;font-weight:700' : '' },
+      ' / 失败 ',
+      { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
+    ], 'font-size:11px;color:#cbd5e1;word-break:break-all');
+    appendSection('BOT行为');
+    appendLine('当前行为：' + behaviorText(decision, status));
+    appendLine('当前目标：' + targetSummaryText(decision, status));
+    appendLine('原因：' + reasonDetail);
+    if (isCombatDecision(decision, status)) {
+      const hp = combatHpSummary(decision, status, self);
+      appendRichLine([
+        '战斗血量：',
+        { text: hpText(hp.selfHp), style: 'color:#fca5a5;font-weight:800' },
+        ' vs ',
+        { text: hpText(hp.targetHp), style: 'color:#fde68a;font-weight:800' }
+      ], 'margin:4px 0 0;padding:5px 7px;border:1px solid rgba(248,113,113,.48);border-radius:6px;background:rgba(127,29,29,.36);color:#fee2e2;font-weight:700');
       if (decision?.combat) {
-        appendLine('战斗：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
+        appendLine('战斗细节：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
+      }
+    }
+    appendSection('统计信息');
+    if (state.cloudflareError) {
+      appendLine('错误页：' + state.cloudflareError.label);
+    } else if (status?.running) {
+      const coinsGained = Number(session.coinsGained || 0) || 0;
+      const kills = Number(session.kills || 0) || 0;
+      appendRichLine([
+        '本次登录：' + formatDuration(session.uptimeMs ?? status.uptimeMs) + ' / ',
+        { text: '收获金币 +' + formatNumber(coinsGained, '0'), style: coinsGained > 0 ? 'color:#86efac;font-weight:700' : '' },
+        ' / ',
+        { text: '击杀 ' + formatNumber(kills, '0'), style: kills > 0 ? 'color:#fde68a;font-weight:700' : '' }
+      ]);
+      const hpValue = Number(self?.hp);
+      appendRichLine([
+        'HP ',
+        { text: self?.hp ?? '-', style: Number.isFinite(hpValue) && hpValue < 100 ? 'color:#fca5a5;font-weight:700' : (hpValue === 100 ? 'color:#86efac;font-weight:700' : '') },
+        ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-')
+      ]);
+      appendLine('WS ' + wsLabel + ' / Active ' + nearestActive);
+      if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
+        appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }
       if (decision?.opportunisticShot) {
         const shot = decision.opportunisticShot;
