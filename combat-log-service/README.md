@@ -165,6 +165,7 @@ npm test
 
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
 - `missing-exit-reason`: 日志帧有顶层 `exit` 摘要，但没有明确的 `exit.reason`；
+- `generic-exit-reason`: 顶层 `exit.reason` 是 `cooldown` 等泛化值，不能说明真实退出根因；
 - `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；
 - `exit-delay-below-required`: 退出等待低于该退出原因要求的等待，例如 1h 体力预算退出低于 5 分钟；
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；

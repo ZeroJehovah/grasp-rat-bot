@@ -272,8 +272,16 @@ function hasTopLevelExit(entry) {
   return Boolean(entry?.exit && typeof entry.exit === 'object');
 }
 
+function topLevelExitReason(entry) {
+  return String(entry?.exit?.reason || '').trim();
+}
+
 function hasTopLevelExitReason(entry) {
-  return Boolean(String(entry?.exit?.reason || '').trim());
+  return Boolean(topLevelExitReason(entry));
+}
+
+function isGenericExitReason(reason) {
+  return /^(?:cooldown|retry|leave|exit|unknown)$/i.test(String(reason || '').trim());
 }
 
 function isSuspendedReloginEvent(entry) {
@@ -638,6 +646,7 @@ function auditFile(file, rootDir, options) {
     const loginIssues = loginExitHoldIssues(entry);
     if (!topLevelExit && !loginIssues.length && !isSuspendedReloginEvent(entry)) issues.push('missing-top-level-exit');
     if (topLevelExit && !hasTopLevelExitReason(entry)) issues.push('missing-exit-reason');
+    if (topLevelExit && hasTopLevelExitReason(entry) && isGenericExitReason(topLevelExitReason(entry))) issues.push('generic-exit-reason');
     if (unsafe && eventDelayMs < options.minUnsafeDelayMs) issues.push('unsafe-exit-delay-below-minimum');
     for (const issue of loginIssues) issues.push(issue);
     const event = reuseExisting ? existing : {
@@ -1352,25 +1361,43 @@ function runSelfTest() {
 
     fs.writeFileSync(
       path.join(missingReasonLogsDir, 'missing-reason.jsonl'),
-      JSON.stringify({
-        type: 'combat-frame',
-        at: baseAt + 3600,
-        version: 'bootstrap-0.4.97',
-        decision: {
-          kind: 'leave',
-          reason: 'combat-hp-disadvantage-leave'
+      [
+        {
+          type: 'combat-frame',
+          at: baseAt + 3600,
+          version: 'bootstrap-0.4.97',
+          decision: {
+            kind: 'leave',
+            reason: 'combat-hp-disadvantage-leave'
+          },
+          exit: {
+            summary: 'top-level exit without reason',
+            pendingLoginSuppressDelayMs: 60000
+          }
         },
-        exit: {
-          summary: 'top-level exit without reason',
-          pendingLoginSuppressDelayMs: 60000
+        {
+          type: 'combat-frame',
+          at: baseAt + 3700,
+          version: 'bootstrap-0.4.97',
+          decision: {
+            kind: 'wait',
+            reason: 'combat-leave-retry'
+          },
+          exit: {
+            reason: 'cooldown',
+            summary: 'generic cooldown exit reason',
+            pendingLoginSuppressDelayMs: 60000
+          }
         }
-      }) + '\n'
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n'
     );
     const missingReasonReport = auditLogs({ dir: missingReasonLogsDir, manifestPath });
     cases += 1;
-    assertSelfTest(missingReasonReport.exitEvents.length === 1, `expected 1 missing-reason exit event, got ${missingReasonReport.exitEvents.length}`);
+    assertSelfTest(missingReasonReport.exitEvents.length === 2, `expected 2 missing/generic-reason exit events, got ${missingReasonReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(issueCount(missingReasonReport, 'missing-exit-reason') === 1, 'expected one missing exit reason issue');
+    cases += 1;
+    assertSelfTest(issueCount(missingReasonReport, 'generic-exit-reason') === 1, 'expected one generic exit reason issue');
     cases += 1;
     assertSelfTest(reportHasFailures(missingReasonReport), 'expected missing-reason report to count as failure');
 
