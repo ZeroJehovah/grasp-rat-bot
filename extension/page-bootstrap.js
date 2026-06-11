@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.18';
+  const BOOTSTRAP_VERSION = '0.1.19';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -56,6 +56,8 @@
     authorizeFallbackDelayMs: 10000,
     panelUpdateMs: 500,
     cloudflareErrorReloadMs: 5000,
+    combatLoggingEnabled: false,
+    combatLogEndpoint: 'http://127.0.0.1:18765/combat-log',
     cacheBust: true,
     autoLogin: true
   };
@@ -377,6 +379,8 @@
       authorizeFallbackDelayMs: Math.max(0, Number(readStored('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
       panelUpdateMs: Math.max(250, Number(readStored('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
       cloudflareErrorReloadMs: Math.max(1000, Number(readStored('cloudflareErrorReloadMs', DEFAULTS.cloudflareErrorReloadMs)) || DEFAULTS.cloudflareErrorReloadMs),
+      combatLoggingEnabled: Boolean(storedBoolean(readStored('combatLoggingEnabled', DEFAULTS.combatLoggingEnabled))),
+      combatLogEndpoint: String(readStored('combatLogEndpoint', DEFAULTS.combatLogEndpoint) || DEFAULTS.combatLogEndpoint),
       cacheBust: Boolean(storedBoolean(readStored('cacheBust', DEFAULTS.cacheBust))),
       autoLogin: Boolean(storedBoolean(readStored('autoLogin', DEFAULTS.autoLogin)))
     };
@@ -522,17 +526,17 @@
   function formatStamina(self) {
     if (!self) return '-';
     const stamina = self.stamina || {};
-    const percentText = (remaining, limit) => {
+    const pairText = (remaining, limit) => {
       const r = Number(remaining);
       const l = Number(limit);
-      if (!Number.isFinite(r) || !Number.isFinite(l) || l <= 0) return '-';
-      return Math.max(0, Math.min(100, Math.round((r / l) * 100))) + '%';
+      if (!Number.isFinite(r) || !Number.isFinite(l) || l <= 0) return '-/-';
+      return Math.max(0, Math.round(r)) + '/' + Math.round(l);
     };
     const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
     const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
-    return percentText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
-      + ' ' + percentText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
-      + ' ' + percentText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
+    return pairText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
+      + ' ' + pairText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
+      + ' ' + pairText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
       + suffix;
   }
 
@@ -962,7 +966,8 @@
       'body.grasp-rat-bot-sidebar-embedded .side>.bottom-dock>.dock-minimap{display:none!important}',
       'body.grasp-rat-bot-sidebar-embedded .side>.bottom-dock>.log-wrap{flex:1 1 auto!important;min-height:0!important;display:flex!important;flex-direction:column!important}',
       'body.grasp-rat-bot-sidebar-embedded .side .log{flex:1 1 auto!important;min-height:120px!important}',
-      'body.grasp-rat-bot-sidebar-embedded #' + PANEL_ID + '{margin:0!important;flex:0 0 auto!important;border-bottom:1px solid rgba(148,163,184,.20)!important}'
+      'body.grasp-rat-bot-sidebar-embedded #' + PANEL_ID + '{margin:0!important;flex:0 0 auto!important;border-bottom:1px solid rgba(148,163,184,.20)!important}',
+      '@keyframes grasp-rat-dot-pending{0%,100%{opacity:1;transform:translate(-50%,-50%) scale(1)}50%{opacity:.38;transform:translate(-50%,-50%) scale(.72)}}'
     ].join('\n');
   }
 
@@ -1146,6 +1151,34 @@
     } catch (_) {}
   }
 
+  function configureCombatLogging(options = {}) {
+    const next = options && typeof options === 'object' ? options : {};
+    const stored = {};
+    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+      cfg.combatLoggingEnabled = Boolean(next.enabled);
+      stored.combatLoggingEnabled = cfg.combatLoggingEnabled;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
+      cfg.combatLogEndpoint = String(next.endpoint || DEFAULTS.combatLogEndpoint);
+      stored.combatLogEndpoint = cfg.combatLogEndpoint;
+    }
+    if (Object.keys(stored).length) writeStored(stored);
+    try {
+      const bot = window.__graspRatBot;
+      if (bot && typeof bot.configureCombatLogging === 'function') {
+        bot.configureCombatLogging({
+          enabled: cfg.combatLoggingEnabled,
+          endpoint: cfg.combatLogEndpoint
+        });
+      }
+    } catch (_) {}
+    updateBootstrapPanel(true);
+    return {
+      enabled: cfg.combatLoggingEnabled,
+      endpoint: cfg.combatLogEndpoint
+    };
+  }
+
   function renderBootstrapPanel(force = false) {
     if (!isGamePage() || state.disabled) return;
     const t = Date.now();
@@ -1166,14 +1199,27 @@
     const aVersion = BOOTSTRAP_VERSION;
     const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
     const wsColor = control.wsOpen ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
+    const wsTitle = 'WS ' + wsLabel;
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
     const session = status?.session || {};
+    const combatLogStatus = status?.combatLogging || {};
+    const remoteLogEnabled = Boolean(cfg.combatLoggingEnabled || combatLogStatus.enabled);
+    const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
+    const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
+    const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
+    const remoteLogColor = remoteLogFailed > 0 ? '#fca5a5' : (remoteLogEnabled ? '#86efac' : '#fde68a');
+    const remoteLogHalo = remoteLogFailed > 0 ? 'rgba(251,113,133,.13)' : (remoteLogEnabled ? 'rgba(52,211,153,.13)' : 'rgba(251,191,36,.14)');
+    const remoteLogGlow = remoteLogFailed > 0 ? 'rgba(251,113,133,.45)' : (remoteLogEnabled ? 'rgba(52,211,153,.45)' : 'rgba(251,191,36,.45)');
+    const remoteLogTitle = '远程日志 ' + (remoteLogEnabled ? '开启' : '关闭')
+      + '，已发 ' + formatNumber(remoteLogSent, '0')
+      + '，待发 ' + formatNumber(remoteLogPending, '0')
+      + '，失败 ' + formatNumber(remoteLogFailed, '0');
     const persistent = activePersistentExitDetail(status);
     const reloginHold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
-    const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
+    const statusTitle = 'BOT ' + statusText + (paused && state.pauseReason ? '：' + state.pauseReason : '');
     const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
     const statusHalo = paused ? 'rgba(251,113,133,.13)' : (status?.running ? 'rgba(52,211,153,.13)' : 'rgba(251,191,36,.14)');
     const statusGlow = paused ? 'rgba(251,113,133,.45)' : (status?.running ? 'rgba(52,211,153,.45)' : 'rgba(251,191,36,.45)');
@@ -1248,15 +1294,14 @@
       grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + columns + ',minmax(0,1fr));gap:4px;margin:0';
       for (const metric of metrics) {
         const item = document.createElement('div');
-        item.style.cssText = 'min-height:34px;border:1px solid rgba(148,163,184,.18);border-radius:8px;background:rgba(15,23,42,.42);padding:5px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden';
+        item.title = String(metric.label ?? '');
+        item.setAttribute('aria-label', String(metric.label ?? ''));
+        item.style.cssText = 'min-height:30px;border:1px solid rgba(148,163,184,.18);border-radius:8px;background:rgba(15,23,42,.42);padding:5px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden;display:flex;align-items:center;justify-content:center';
         const value = document.createElement('b');
         value.textContent = String(metric.value ?? '-');
-        value.style.cssText = 'display:block;font-size:13px;line-height:1.05;font-weight:800;color:' + (metric.color || '#e0f2fe') + ';font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-        const label = document.createElement('span');
-        label.textContent = String(metric.label ?? '');
-        label.style.cssText = 'display:block;margin-top:2px;color:#94a3b8;font-size:8.5px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        value.title = String(metric.label ?? '');
+        value.style.cssText = 'display:block;font-size:13px;line-height:1.05;font-weight:800;color:' + (metric.color || '#e0f2fe') + ';font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;letter-spacing:0';
         item.appendChild(value);
-        item.appendChild(label);
         grid.appendChild(item);
       }
       appendParent.appendChild(grid);
@@ -1278,9 +1323,10 @@
       appendParent = section;
       return section;
     };
-    const createDotControl = (title, color, halo, glow, onClick) => {
-      const control = document.createElement('button');
-      control.type = 'button';
+    const createDot = (title, color, halo, glow, options = {}) => {
+      const onClick = typeof options.onClick === 'function' ? options.onClick : null;
+      const control = document.createElement(onClick ? 'button' : 'span');
+      if (onClick) control.type = 'button';
       control.title = title;
       control.setAttribute('aria-label', title);
       control.style.cssText = [
@@ -1293,18 +1339,20 @@
         'border:1px solid rgba(148,163,184,.24)',
         'border-radius:50%',
         'background:rgba(15,23,42,.50)',
-        'cursor:pointer',
+        'cursor:' + (onClick ? 'pointer' : 'default'),
         'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)'
       ].join(';');
       const dot = document.createElement('span');
       dot.setAttribute('aria-hidden', 'true');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:9px;height:9px;transform:translate(-50%,-50%);border-radius:50%;background:' + color + ';box-shadow:0 0 0 4px ' + halo + ',0 0 18px ' + glow;
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:9px;height:9px;transform:translate(-50%,-50%);border-radius:50%;background:' + color + ';box-shadow:0 0 0 4px ' + halo + ',0 0 18px ' + glow + (options.pending ? ';animation:grasp-rat-dot-pending .9s ease-in-out infinite' : '');
       control.appendChild(dot);
-      control.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        onClick();
-      }, { once: true });
+      if (onClick) {
+        control.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClick();
+        }, { once: true });
+      }
       return control;
     };
     appendSection();
@@ -1315,23 +1363,22 @@
     const title = document.createElement('div');
     title.style.cssText = 'font-weight:750;font-size:14px;line-height:1.15;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     title.textContent = 'BOT';
-    const statusDot = document.createElement('i');
-    statusDot.setAttribute('aria-hidden', 'true');
-    statusDot.style.cssText = 'flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:' + statusColor + ';box-shadow:0 0 0 4px ' + statusHalo + ',0 0 18px ' + statusGlow;
+    const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow, {
+      onClick: () => setPaused(!isPaused(), 'panel bot dot')
+    });
+    statusDot.setAttribute('aria-pressed', String(paused));
     titleWrap.appendChild(title);
     titleWrap.appendChild(statusDot);
     header.appendChild(titleWrap);
     const actions = document.createElement('div');
     actions.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto';
-    const pauseControl = createDotControl(
-      buttonTitle,
-      paused ? '#86efac' : '#fca5a5',
-      paused ? 'rgba(52,211,153,.13)' : 'rgba(251,113,133,.13)',
-      paused ? 'rgba(52,211,153,.45)' : 'rgba(251,113,133,.45)',
-      () => setPaused(!isPaused(), 'panel dot')
-    );
-    pauseControl.setAttribute('aria-pressed', String(paused));
-    actions.appendChild(pauseControl);
+    actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)')));
+    const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
+      pending: remoteLogPending > 0 && remoteLogFailed <= 0,
+      onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })
+    });
+    logDot.setAttribute('aria-pressed', String(remoteLogEnabled));
+    actions.appendChild(logDot);
     header.appendChild(actions);
     appendParent.appendChild(header);
     if (state.loaderUpdateAvailable) {
@@ -1346,30 +1393,6 @@
       ' / B ',
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
     ], 'font-size:10.5px;margin:-2px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
-    appendRichLine([
-      '状态：',
-      { text: statusText, style: 'color:' + statusColor + ';font-weight:700' },
-      ' / WS ',
-      { text: wsLabel, style: 'color:' + wsColor + ';font-weight:700' },
-      paused && state.pauseReason ? ' / ' + state.pauseReason : ''
-    ]);
-    const combatLogStatus = status?.combatLogging || {};
-    const remoteLogEnabled = Boolean(combatLogStatus.enabled);
-    const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
-    const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
-    const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
-    if (remoteLogEnabled || remoteLogSent || remoteLogPending || remoteLogFailed) {
-      appendRichLine([
-        '日志：',
-        { text: remoteLogEnabled ? '开' : '关', style: 'color:' + (remoteLogEnabled ? '#86efac' : '#fde68a') + ';font-weight:700' },
-        ' / 发 ',
-        { text: formatNumber(remoteLogSent, '0'), style: remoteLogSent > 0 ? 'color:#86efac;font-weight:700' : '' },
-        ' / 等 ',
-        { text: formatNumber(remoteLogPending, '0'), style: remoteLogPending > 0 ? 'color:#fde68a;font-weight:700' : '' },
-        ' / 失 ',
-        { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
-      ], 'font-size:10.5px;color:#94a3b8');
-    }
     appendSection();
     appendLine('当前行为：' + behaviorText(decision, status));
     appendLine('当前目标：' + targetSummaryText(decision, status));
@@ -1946,7 +1969,9 @@
       version: String(manifest.version || 'remote'),
       sourceHash: String(manifest.sha256 || ''),
       sourceUrl: String(manifest.scriptUrl || ''),
-      injectedBy: 'extension'
+      injectedBy: 'extension',
+      combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled),
+      combatLogEndpoint: cfg.combatLogEndpoint
     };
     const injectResult = await runInPage(source, manifest.scriptUrl);
     state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
@@ -2406,6 +2431,9 @@
       updatePanel() {
         updateBootstrapPanel(true);
         return true;
+      },
+      configureCombatLogging(options = {}) {
+        return configureCombatLogging(options);
       },
       setManifestUrl(url) {
         cfg.manifestUrl = String(url || '');
