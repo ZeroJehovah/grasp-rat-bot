@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.105"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.106"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1581,7 +1581,9 @@
       const combatLogExitSummaryFromDecision = function combatLogExitSummaryFromDecision(decision) {
   const leave = decision?.leave || null;
   const detail = leave || decision || {};
-  const reason = String(leave?.reason || decision?.reason || '');
+  const leaveReason = String(leave?.reason || '');
+  const decisionReason = String(decision?.reason || '');
+  const reason = leaveReason && leaveReason !== 'cooldown' ? leaveReason : (decisionReason || leaveReason);
   const isExit = Boolean(leave)
     || decision?.kind === 'leave'
     || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);

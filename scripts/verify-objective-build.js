@@ -231,6 +231,11 @@ function main() {
       assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
       assert(body.includes('manual-login'), 'manual-login suspend reason not found');
     });
+    check(`${file} keeps specific exit reason during leave cooldown`, () => {
+      const body = functionBody(text, 'combatLogExitSummaryFromDecision');
+      assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
+      assert(body.includes('decisionReason || leaveReason'), 'decision reason fallback not found for cooldown leave detail');
+    });
     check(`${file} keeps longest exit suppress delay`, () => {
       const confirmedBody = functionBody(text, 'setExitReloginSuppress');
       assert(
