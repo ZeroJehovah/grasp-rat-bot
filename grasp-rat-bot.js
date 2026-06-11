@@ -1510,13 +1510,20 @@ function runSelfTest() {
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const engagedCombatTarget = pickEngagedCombatTarget(self, entities);
     const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
-    if (defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
+    const recoveryCombatTarget = defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)
+      ? defensiveCombatTarget
+      : (engagedCombatTarget || defensiveCombatTarget);
+    if (recovery && recoveryCombatTarget) {
+      const recoveryLeave = chooseCombatAction(self, recoveryCombatTarget, bullets);
+      if (recoveryLeave?.kind === 'leave') return recoveryLeave;
+    }
+    if (!recovery && defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
       return chooseCombatAction(self, defensiveCombatTarget, bullets);
     }
-    if (engagedCombatTarget) return chooseCombatAction(self, engagedCombatTarget, bullets);
+    if (!recovery && engagedCombatTarget) return chooseCombatAction(self, engagedCombatTarget, bullets);
     if (fullHp && closeThreats.length) return { kind: 'flee' };
     if (fullHp && cautionThreats.length) return { kind: 'flee' };
-    if (defensiveCombatTarget) return chooseCombatAction(self, defensiveCombatTarget, bullets);
+    if (!recovery && defensiveCombatTarget) return chooseCombatAction(self, defensiveCombatTarget, bullets);
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
       : cfg.nearCoinPriorityDistance;
@@ -2054,12 +2061,12 @@ function runSelfTest() {
       want: 'combat-hp-disadvantage-leave'
     },
     {
-      name: 'high hp combat gap at threshold keeps fighting',
+      name: 'recovering combat gap at threshold avoids instead of fighting',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 90, firing: true }]
       }).kind,
-      want: 'attack'
+      want: 'flee'
     },
     {
       name: 'low hp no-damage combat leaves before bleeding out',
@@ -2096,7 +2103,7 @@ function runSelfTest() {
       want: 'flee'
     },
     {
-      name: 'recovering keeps fighting engaged stationary target in range',
+      name: 'recovering does not re-engage stationary target in range',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-attack' };
         const action = choose({
@@ -2104,9 +2111,22 @@ function runSelfTest() {
           local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100 }]
         });
         bot.combatTarget = null;
-        return action.kind + ':' + action.reason;
+        return action.kind;
       })(),
-      want: 'attack:combat-attack'
+      want: 'recover'
+    },
+    {
+      name: 'recovering flees instead of re-engaging active combat target',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-tangent-dodge' };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 77, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 14000, y: 0, current_join_mode: 'Active', hp: 97, vx: 50 }]
+        });
+        bot.combatTarget = null;
+        return action.kind;
+      })(),
+      want: 'flee'
     },
     {
       name: 'real incoming bullet shooter overrides engaged combat target',
@@ -5544,7 +5564,7 @@ function browserBotSource(config) {
   }
 
   function rememberPendingExit(scope, source, detail, selfLike = null) {
-    if (!detail?.attempted || detail.error) return null;
+    if (!detail?.attempted) return null;
     const t = Date.now();
     const previous = bot.pendingExit && bot.pendingExit.scope === scope ? bot.pendingExit : null;
     const summary = detail.summary || detail.exitSummary || detail.enemyLeaveSummary || previous?.summary || detail.reason || '';
@@ -5742,7 +5762,7 @@ function browserBotSource(config) {
     detail.exitConfirmation = state || null;
     recordPendingExitResult(pending.source, detail, t);
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted) {
       rememberPendingExit(pending.scope, pending.source, detail, detail.self || pending.self || null);
     } else {
       const next = {
@@ -6275,7 +6295,7 @@ function browserBotSource(config) {
 	    };
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted) {
       rememberPendingExit('enemy', 'combat', detail, selfSummary);
       bot.pendingCombatLeave = null;
     } else {
@@ -10227,12 +10247,24 @@ function browserBotSource(config) {
       } : null,
       conservingStamina: isConservingStamina(self)
     };
-    if (defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
+    const recoveryCombatTarget = defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)
+      ? defensiveCombatTarget
+      : (engagedCombatTarget || defensiveCombatTarget);
+    if (recovery && recoveryCombatTarget) {
+      const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets);
+      if (recoveryLeave?.kind === 'leave') {
+        bot.fleeLock = null;
+        bot.returnBlockScan = null;
+        return recoveryLeave;
+      }
+      clearCombatEngagement('recovery-hold');
+    }
+    if (!recovery && defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, defensiveCombatTarget, bullets);
     }
-    if (engagedCombatTarget) {
+    if (!recovery && engagedCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, engagedCombatTarget, bullets);
@@ -10259,7 +10291,7 @@ function browserBotSource(config) {
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), invulnerable: isInvulnerable(e), r: Math.round(e.cautionRadius) }))
       };
     }
-    if (defensiveCombatTarget) {
+    if (!recovery && defensiveCombatTarget) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, defensiveCombatTarget, bullets);
