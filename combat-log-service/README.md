@@ -79,3 +79,29 @@ curl http://127.0.0.1:18765/health
 ```text
 http://127.0.0.1:18765/combat-log
 ```
+
+## 退出/重连审计
+
+分析已收集的 JSONL，检查退出原因是否写入顶层 `exit`，以及非安全退出是否至少保留 60 秒重连等待：
+
+```bash
+cd combat-log-service
+npm run analyze
+```
+
+只查看最近的退出事件：
+
+```bash
+npm run analyze -- --latest 10
+```
+
+用于自动检查时可以让问题返回非零退出码：
+
+```bash
+npm run analyze -- --fail-on-issue
+```
+
+审计会标记：
+
+- `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
+- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待。

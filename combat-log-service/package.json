@@ -5,6 +5,7 @@
   "description": "Local JSONL combat log collector for Grasp Rat Bot",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "analyze": "node analyze-logs.js"
   }
 }
