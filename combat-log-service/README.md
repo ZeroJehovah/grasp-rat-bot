@@ -114,12 +114,30 @@ npm run monitor -- --watch-count 1
 npm run analyze:current
 npm run validate:current
 npm run monitor:current
+npm run monitor:current:strict
+npm run monitor:current:strict -- --since now --latest 10
 npm run monitor:current -- --since now --latest 10
 npm run monitor -- --min-version bootstrap-0.4.101 --latest 10
 npm run monitor -- --since now --min-version bootstrap-0.4.101 --latest 10
 ```
 
 `validate:current` 会额外要求至少存在一条当前 manifest 版本日志；没有匹配日志时返回非零退出码，用来区分“无问题”和“还没有验证证据”。
+
+需要验证刚发布的当前版本时，建议先启动收集服务并开启 Tampermonkey 战斗日志，然后从当前时间开始严格监控：
+
+```bash
+cd combat-log-service
+npm start
+```
+
+另开一个终端：
+
+```bash
+cd combat-log-service
+npm run monitor:current:strict -- --since now --latest 10
+```
+
+`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue；如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配日志时会返回非零退出码。
 
 用于自动检查时可以让问题返回非零退出码：
 
