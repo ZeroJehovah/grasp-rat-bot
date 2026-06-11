@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.30
+// @version      0.4.31
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.30';
+  const BOOTSTRAP_VERSION = '0.4.31';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -510,6 +510,7 @@
       'control-ws-offline': 'WebSocket 离线',
       'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
       'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+      'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
       'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
       'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
       'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
@@ -523,28 +524,83 @@
     return map[reason] || reason || '-';
   }
 
-  function actionText(decision, status) {
+  function isCombatDecision(decision, status) {
+    const reason = String(decision?.reason || '');
+    return Boolean(decision?.combat || decision?.combatState || /^combat-/.test(reason) || status?.combatTarget);
+  }
+
+  function behaviorText(decision, status) {
     if (status?.paused || isPaused()) return '已暂停';
-    if (state.cloudflareError) return '等待：' + state.cloudflareError.label;
+    if (state.cloudflareError) return '等待刷新错误页';
+    if (!status?.running) return '远端未运行';
     const kind = decision?.kind || (status?.running ? 'wait' : 'missing');
-    const target = decision?.target || null;
-    const threats = Array.isArray(decision?.threats) ? decision.threats : [];
-    const detail = decisionReasonDetail(decision, status);
-    if (kind === 'coin') return '拾取金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
-    if (kind === 'seek-coin') return '前往金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
-    if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' HP ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
-    if (kind === 'seek-enemy' || kind === 'seek-drop') return '前往目标 ' + (target?.name || ('#' + (target?.id ?? '-'))) + (target?.drop ? ' Drop ' + target.drop : '');
-    if (kind === 'flee') {
-      const threat = threats[0];
-      return '避险撤离' + (threat ? '：' + (threat.name || ('#' + threat.id)) + ' 距离 ' + formatDistance(threat.d ?? threat.distance) : '');
+    const reason = String(decision?.reason || '');
+    if (isCombatDecision(decision, status)) {
+      if (kind === 'attack') {
+        if (/spacing/.test(reason)) return '战斗中：拉距开火';
+        if (/dodge|tangent/.test(reason)) return '战斗中：规避开火';
+        return '战斗中：持续开火';
+      }
+      if (kind === 'seek-enemy') return '战斗中：重新接敌';
+      if (kind === 'leave') return '战斗中：退出';
+      if (kind === 'wait') return '战斗后等待';
+      return '战斗中';
     }
+    if (kind === 'coin') return '拾取金币';
+    if (kind === 'seek-coin') return '前往金币';
+    if (kind === 'attack') return '攻击目标';
+    if (kind === 'seek-enemy' || kind === 'seek-drop') return '前往目标';
+    if (kind === 'flee') return '避险撤离';
     if (kind === 'recover') return '恢复体力/血量';
-    if (kind === 'patrol') return target ? '巡航到 #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '巡航扫描';
-    if (kind === 'wait') return '等待：' + (detail || reasonText(decision?.reason));
-    if (kind === 'leave') return '退出：' + (detail || reasonText(decision?.reason));
+    if (kind === 'patrol') return '巡航扫描';
+    if (kind === 'wait') return '等待';
+    if (kind === 'leave') return '退出';
     if (kind === 'idle') return '待命';
     if (kind === 'missing') return '远端未运行';
     return kind;
+  }
+
+  function targetNameText(target) {
+    if (!target) return '-';
+    return target.name || ('#' + (target.id ?? '-'));
+  }
+
+  function targetSummaryText(decision, status) {
+    const target = decision?.target || null;
+    const kind = decision?.kind || '';
+    if (target) {
+      const parts = [];
+      const isCoin = kind === 'coin' || kind === 'seek-coin' || (target.amount !== undefined && target.drop === undefined && target.hp === undefined);
+      parts.push(isCoin ? '金币 ' : '目标 ');
+      parts.push(targetNameText(target));
+      if (target.distance !== undefined) parts.push(' 距离 ' + formatDistance(target.distance));
+      if (target.amount !== undefined) parts.push(' 金币 ' + target.amount);
+      if (target.hp !== undefined) parts.push(' HP ' + target.hp);
+      if (target.drop !== undefined) parts.push(' Drop ' + target.drop);
+      return parts.join('');
+    }
+    const threats = Array.isArray(decision?.threats) ? decision.threats : [];
+    if (kind === 'flee' && threats[0]) {
+      const threat = threats[0];
+      return '威胁 ' + (threat.name || ('#' + threat.id)) + ' 距离 ' + formatDistance(threat.d ?? threat.distance);
+    }
+    const combatTarget = status?.combatTarget;
+    if (isCombatDecision(decision, status) && combatTarget) {
+      return '目标 ' + targetNameText(combatTarget) + (combatTarget.hp !== undefined ? ' HP ' + combatTarget.hp : '');
+    }
+    return '-';
+  }
+
+  function hpText(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+  }
+
+  function combatHpSummary(decision, status, self) {
+    const target = decision?.target || status?.combatTarget || null;
+    const selfHp = Number(decision?.combatState?.selfHp ?? self?.hp ?? status?.self?.hp ?? NaN);
+    const targetHp = Number(decision?.combatState?.targetHp ?? target?.hp ?? NaN);
+    return { selfHp, targetHp };
   }
 
   function isGamePage() {
@@ -849,11 +905,12 @@
     const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     while (panel.firstChild) panel.removeChild(panel.firstChild);
+    let appendParent = panel;
     const appendLine = (text, style = '') => {
       const line = document.createElement('div');
       if (style) line.style.cssText = style;
       line.textContent = String(text ?? '');
-      panel.appendChild(line);
+      appendParent.appendChild(line);
       return line;
     };
     const appendRichLine = (parts, style = '') => {
@@ -869,14 +926,29 @@
           line.appendChild(document.createTextNode(String(part ?? '')));
         }
       }
-      panel.appendChild(line);
+      appendParent.appendChild(line);
       return line;
     };
+    const appendSection = titleText => {
+      const section = document.createElement('div');
+      section.style.cssText = 'padding:7px 0;border-top:1px solid rgba(148,163,184,.22)';
+      if (!panel.firstChild) section.style.borderTop = '0';
+      if (titleText) {
+        const titleLine = document.createElement('div');
+        titleLine.textContent = titleText;
+        titleLine.style.cssText = 'margin:0 0 4px;color:#93c5fd;font-size:10px;font-weight:700;letter-spacing:0';
+        section.appendChild(titleLine);
+      }
+      panel.appendChild(section);
+      appendParent = section;
+      return section;
+    };
+    appendSection('脚本信息');
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px';
     const title = document.createElement('div');
     title.style.cssText = 'font-weight:700;font-size:13px;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    title.textContent = 'BOT ' + actionText(decision, status);
+    title.textContent = 'BOT';
     const button = document.createElement('button');
     button.type = 'button';
     button.title = buttonTitle;
@@ -912,7 +984,7 @@
     }
     actions.appendChild(button);
     header.appendChild(actions);
-    panel.appendChild(header);
+    appendParent.appendChild(header);
     if (state.userscriptUpdateAvailable) {
       appendLine(
         '加载器A（篡改猴）有新版本：当前 ' + aVersion + ' / 最新 ' + (state.latestUserscriptVersion || '-') + '，请手动更新',
@@ -925,9 +997,6 @@
       ' / 远程 ',
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
     ], 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
-    if (state.lastUserscriptVersionStatus && !state.userscriptUpdateAvailable) {
-      appendLine('A更新检查：' + state.lastUserscriptVersionStatus, 'font-size:11px;margin:-2px 0 4px;color:#94a3b8;word-break:break-all');
-    }
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
     const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
     appendRichLine([
@@ -950,8 +1019,25 @@
       ' / 失败 ',
       { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
     ], 'font-size:11px;color:#cbd5e1;word-break:break-all');
+    appendSection('BOT行为');
+    appendLine('当前行为：' + behaviorText(decision, status));
+    appendLine('当前目标：' + targetSummaryText(decision, status));
+    appendLine('原因：' + reasonDetail);
+    if (isCombatDecision(decision, status)) {
+      const hp = combatHpSummary(decision, status, self);
+      appendRichLine([
+        '战斗血量：',
+        { text: hpText(hp.selfHp), style: 'color:#fca5a5;font-weight:800' },
+        ' vs ',
+        { text: hpText(hp.targetHp), style: 'color:#fde68a;font-weight:800' }
+      ], 'margin:4px 0 0;padding:5px 7px;border:1px solid rgba(248,113,113,.48);border-radius:6px;background:rgba(127,29,29,.36);color:#fee2e2;font-weight:700');
+      if (decision?.combat) {
+        appendLine('战斗细节：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
+      }
+    }
+    appendSection('统计信息');
     if (state.cloudflareError) {
-      appendLine('原因：' + reasonDetail);
+      appendLine('错误页：' + state.cloudflareError.label);
     } else if (status?.running) {
       const coinsGained = Number(session.coinsGained || 0) || 0;
       const kills = Number(session.kills || 0) || 0;
@@ -961,7 +1047,6 @@
         ' / ',
         { text: '击杀 ' + formatNumber(kills, '0'), style: kills > 0 ? 'color:#fde68a;font-weight:700' : '' }
       ]);
-      appendLine('原因：' + reasonDetail);
       const hpValue = Number(self?.hp);
       appendRichLine([
         'HP ',
@@ -969,12 +1054,8 @@
         ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-')
       ]);
       appendLine('WS ' + wsLabel + ' / Active ' + nearestActive);
-      if (decision?.target) {
-        const target = decision.target;
-        appendLine('目标：' + (target.name || ('#' + (target.id ?? '-'))) + ' 距离 ' + formatDistance(target.distance) + ' 金币 ' + (target.amount ?? '-') + ' Drop ' + (target.drop ?? '-'));
-      }
-      if (decision?.combat) {
-        appendLine('战斗：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
+      if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
+        appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }
       if (decision?.opportunisticShot) {
         const shot = decision.opportunisticShot;
