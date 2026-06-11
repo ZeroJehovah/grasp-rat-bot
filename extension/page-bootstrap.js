@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.13';
+  const BOOTSTRAP_VERSION = '0.1.14';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -520,24 +520,36 @@
   function formatStamina(self) {
     if (!self) return '-';
     const stamina = self.stamina || {};
-    const valueText = (remaining, limit) => {
-      const r = Number(remaining);
-      if (!Number.isFinite(r)) return '-';
-      const l = Number(limit);
-      return Math.floor(r / 1000) + '/' + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1000) : '-');
-    };
     const percentText = (remaining, limit) => {
       const r = Number(remaining);
       const l = Number(limit);
       if (!Number.isFinite(r) || !Number.isFinite(l) || l <= 0) return '-';
-      return Math.max(0, Math.round((r / l) * 100)) + '%';
+      return Math.max(0, Math.min(100, Math.round((r / l) * 100))) + '%';
     };
     const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
     const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
-    return '5s ' + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
-      + ' 1h ' + percentText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
-      + ' 1d ' + percentText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
+    return percentText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
+      + ' ' + percentText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
+      + ' ' + percentText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
       + suffix;
+  }
+
+  function sessionStaminaSpentMs(session, self) {
+    if (session && Object.prototype.hasOwnProperty.call(session, 'stamina1dSpentMs')) {
+      const spent = Number(session.stamina1dSpentMs);
+      if (Number.isFinite(spent)) return Math.max(0, spent);
+    }
+    const stamina = self?.stamina || {};
+    const remaining = Number(stamina.stamina1d ?? self?.stamina1d ?? self?.stamina_1d_remaining_milli ?? NaN);
+    const limit = Number(stamina.stamina1dLimit ?? self?.stamina1dLimit ?? self?.stamina_1d_limit_milli ?? NaN);
+    if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return null;
+    return Math.max(0, limit - remaining);
+  }
+
+  function formatStaminaSpent(session, self) {
+    const spent = sessionStaminaSpentMs(session, self);
+    if (!Number.isFinite(Number(spent))) return '-';
+    return formatNumber(Math.max(0, Number(spent)) / 1000, '0');
   }
 
   function reasonText(reason) {
@@ -909,14 +921,14 @@
       'max-height:calc(100vh - 32px)',
       'box-sizing:border-box',
       'padding:0',
-      'border:1px solid ' + (error ? 'rgba(251,113,133,.48)' : 'rgba(148,163,184,.22)'),
+      'border:1px solid ' + (error ? 'rgba(251,113,133,.48)' : 'rgba(148,163,184,.20)'),
       'border-radius:16px',
-      'background:rgba(15,23,42,.78)',
+      'background:rgba(15,23,42,.84)',
       'color:#e5edf7',
       'font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
-      'box-shadow:0 24px 70px rgba(0,0,0,.42)',
-      'backdrop-filter:blur(16px)',
-      '-webkit-backdrop-filter:blur(16px)',
+      'box-shadow:0 18px 48px rgba(0,0,0,.34)',
+      'backdrop-filter:blur(14px)',
+      '-webkit-backdrop-filter:blur(14px)',
       'pointer-events:auto',
       'white-space:normal',
       'overflow:auto'
@@ -924,7 +936,7 @@
   }
 
   function bootstrapButtonStyle(kind = 'neutral') {
-    const base = 'flex:0 0 auto;height:28px;border:1px solid rgba(148,163,184,.22);border-radius:6px;background:rgba(30,41,59,.74);color:#e5edf7;font:12px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;padding:0 10px;cursor:pointer;white-space:nowrap';
+    const base = 'flex:0 0 auto;height:30px;border:1px solid rgba(148,163,184,.24);border-radius:8px;background:rgba(30,41,59,.62);color:#e5edf7;font:12px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;padding:0 10px;cursor:pointer;white-space:nowrap';
     if (kind === 'join') return base + ';border-color:rgba(52,211,153,.42);background:rgba(16,185,129,.16);color:#a7f3d0;font-weight:750';
     if (kind === 'leave') return base + ';border-color:rgba(251,113,133,.42);background:rgba(244,63,94,.12);color:#fecdd3';
     return base;
@@ -971,6 +983,7 @@
     const bVersion = status?.version || manifest?.version || state.lastManifestVersion || '-';
     const aVersion = BOOTSTRAP_VERSION;
     const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
+    const wsColor = control.wsOpen ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
@@ -988,7 +1001,7 @@
     let appendParent = panel;
     const appendLine = (text, style = '') => {
       const line = document.createElement('div');
-      const baseStyle = 'min-width:0;overflow-wrap:anywhere';
+      const baseStyle = 'min-width:0;overflow-wrap:anywhere;font-size:12px;line-height:1.42;color:#e5edf7';
       line.style.cssText = style ? baseStyle + ';' + style : baseStyle;
       line.textContent = String(text ?? '');
       appendParent.appendChild(line);
@@ -996,7 +1009,7 @@
     };
     const appendRichLine = (parts, style = '') => {
       const line = document.createElement('div');
-      const baseStyle = 'min-width:0;overflow-wrap:anywhere';
+      const baseStyle = 'min-width:0;overflow-wrap:anywhere;font-size:12px;line-height:1.42;color:#e5edf7';
       line.style.cssText = style ? baseStyle + ';' + style : baseStyle;
       for (const part of parts) {
         if (part && typeof part === 'object') {
@@ -1013,10 +1026,11 @@
     };
     const appendMetricGrid = metrics => {
       const grid = document.createElement('div');
-      grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:1px 0 2px';
+      const columns = Math.min(4, Math.max(1, metrics.length));
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + columns + ',minmax(0,1fr));gap:6px;margin:1px 0 2px';
       for (const metric of metrics) {
         const item = document.createElement('div');
-        item.style.cssText = 'min-height:42px;border:1px solid rgba(148,163,184,.22);border-radius:8px;background:rgba(15,23,42,.72);padding:6px 7px;box-shadow:inset 0 1px 0 rgba(255,255,255,.035);overflow:hidden';
+        item.style.cssText = 'min-height:42px;border:1px solid rgba(148,163,184,.20);border-radius:8px;background:rgba(15,23,42,.50);padding:6px 7px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden';
         const value = document.createElement('b');
         value.textContent = String(metric.value ?? '-');
         value.style.cssText = 'display:block;font-size:14px;line-height:1.1;font-weight:800;color:' + (metric.color || '#e0f2fe') + ';font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
@@ -1034,14 +1048,12 @@
       const section = document.createElement('div');
       const first = !panel.firstChild;
       section.style.cssText = first
-        ? 'padding:14px 16px 12px;background:linear-gradient(135deg,rgba(30,41,59,.86),rgba(15,23,42,.54))'
-        : 'padding:12px 14px;border-top:1px solid rgba(148,163,184,.22);display:grid;gap:7px';
+        ? 'padding:14px 16px 12px;display:grid;gap:8px'
+        : 'padding:12px 16px;border-top:1px solid rgba(148,163,184,.20);display:grid;gap:8px';
       if (titleText) {
         const titleLine = document.createElement('div');
         titleLine.textContent = titleText;
-        titleLine.style.cssText = first
-          ? 'margin:0 0 7px;color:#38bdf8;font-size:11px;font-weight:700;letter-spacing:0'
-          : 'margin:0 0 2px;color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:0';
+        titleLine.style.cssText = 'margin:0;color:#cbd5e1;font-size:11px;font-weight:700;letter-spacing:0';
         section.appendChild(titleLine);
       }
       panel.appendChild(section);
@@ -1050,11 +1062,11 @@
     };
     appendSection('脚本信息');
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:1px';
     const titleWrap = document.createElement('div');
     titleWrap.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0';
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight:750;font-size:18px;line-height:1.2;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 0 24px rgba(56,189,248,.24)';
+    title.style.cssText = 'font-weight:750;font-size:16px;line-height:1.2;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     title.textContent = 'BOT';
     const statusDot = document.createElement('i');
     statusDot.setAttribute('aria-hidden', 'true');
@@ -1112,6 +1124,8 @@
     appendRichLine([
       '状态：',
       { text: statusText, style: 'color:' + statusColor + ';font-weight:700' },
+      ' / WS ',
+      { text: wsLabel, style: 'color:' + wsColor + ';font-weight:700' },
       paused && state.pauseReason ? ' / ' + state.pauseReason : ''
     ]);
     const combatLogStatus = status?.combatLogging || {};
@@ -1151,8 +1165,10 @@
     } else if (status?.running) {
       const coinsGained = Number(session.coinsGained || 0) || 0;
       const kills = Number(session.kills || 0) || 0;
+      const staminaSpent = sessionStaminaSpentMs(session, self);
       appendMetricGrid([
         { label: 'uptime', value: formatDuration(session.uptimeMs ?? status.uptimeMs), color: '#e0f2fe' },
+        { label: '消耗体力', value: formatStaminaSpent(session, self), color: Number(staminaSpent || 0) > 0 ? '#fde68a' : '#e0f2fe' },
         { label: 'coins', value: '+' + formatNumber(coinsGained, '0'), color: coinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
         { label: 'kills', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
@@ -1160,9 +1176,9 @@
       appendRichLine([
         'HP ',
         { text: self?.hp ?? '-', style: Number.isFinite(hpValue) && hpValue < 100 ? 'color:#fca5a5;font-weight:700' : (hpValue === 100 ? 'color:#86efac;font-weight:700' : '') },
-        ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-')
+        ' / 体力: ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-')
       ]);
-      appendLine('WS ' + wsLabel + ' / Active ' + nearestActive);
+      appendLine('Active ' + nearestActive);
       if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
         appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }
