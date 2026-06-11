@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.29
+// @version      0.4.30
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.29';
+  const BOOTSTRAP_VERSION = '0.4.30';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -434,6 +434,11 @@
     return Number.isFinite(n) ? String(Math.round(n)) : fallback;
   }
 
+  function displayVersion(value) {
+    const text = String(value || '-');
+    return text.replace(/^bootstrap-/, '');
+  }
+
   function formatStamina(self) {
     if (!self) return '-';
     const stamina = self.stamina || {};
@@ -443,11 +448,17 @@
       const l = Number(limit);
       return Math.floor(r / 1000) + '/' + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1000) : '-');
     };
+    const percentText = (remaining, limit) => {
+      const r = Number(remaining);
+      const l = Number(limit);
+      if (!Number.isFinite(r) || !Number.isFinite(l) || l <= 0) return '-';
+      return Math.max(0, Math.round((r / l) * 100)) + '%';
+    };
     const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
     const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
     return '5s ' + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli)
-      + ' 1h ' + valueText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
-      + ' 1d ' + valueText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
+      + ' 1h ' + percentText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli)
+      + ' 1d ' + percentText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli)
       + suffix;
   }
 
@@ -845,6 +856,22 @@
       panel.appendChild(line);
       return line;
     };
+    const appendRichLine = (parts, style = '') => {
+      const line = document.createElement('div');
+      if (style) line.style.cssText = style;
+      for (const part of parts) {
+        if (part && typeof part === 'object') {
+          const span = document.createElement('span');
+          span.textContent = String(part.text ?? '');
+          if (part.style) span.style.cssText = part.style;
+          line.appendChild(span);
+        } else {
+          line.appendChild(document.createTextNode(String(part ?? '')));
+        }
+      }
+      panel.appendChild(line);
+      return line;
+    };
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px';
     const title = document.createElement('div');
@@ -892,23 +919,55 @@
         'margin:0 0 6px;padding:6px 8px;border:1px solid rgba(248,113,113,.75);border-radius:6px;background:rgba(127,29,29,.72);color:#fee2e2;font-weight:700;word-break:break-all'
       );
     }
-    appendLine('版本：远程B ' + bVersion + ' / 加载器A：篡改猴 ' + aVersion, 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
+    appendRichLine([
+      '版本：加载器: 篡改猴 ',
+      { text: displayVersion(aVersion), style: 'color:' + (state.userscriptUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
+      ' / 远程 ',
+      { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
+    ], 'font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all');
     if (state.lastUserscriptVersionStatus && !state.userscriptUpdateAvailable) {
       appendLine('A更新检查：' + state.lastUserscriptVersionStatus, 'font-size:11px;margin:-2px 0 4px;color:#94a3b8;word-break:break-all');
     }
-    appendLine('状态：' + (paused ? '暂停' : (status?.running ? '运行' : '未运行')) + (paused && state.pauseReason ? ' / ' + state.pauseReason : ''));
+    const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
+    const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
+    appendRichLine([
+      '状态：',
+      { text: statusText, style: 'color:' + statusColor + ';font-weight:700' },
+      paused && state.pauseReason ? ' / ' + state.pauseReason : ''
+    ]);
     const combatLogStatus = status?.combatLogging || {};
-    appendLine(
-      '战斗日志：' + (cfg.combatLoggingEnabled ? '开' : '关')
-        + (cfg.combatLoggingEnabled ? ' / 待发 ' + (combatLogStatus.pending ?? 0) + ' / 失败 ' + (combatLogStatus.failed ?? 0) : ''),
-      'font-size:11px;color:#cbd5e1;word-break:break-all'
-    );
+    const remoteLogEnabled = Boolean(cfg.combatLoggingEnabled);
+    const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
+    const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
+    const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
+    appendRichLine([
+      '远程日志：',
+      { text: remoteLogEnabled ? '开' : '关', style: 'color:' + (remoteLogEnabled ? '#86efac' : '#fde68a') + ';font-weight:700' },
+      ' / 本次登录已发 ',
+      { text: formatNumber(remoteLogSent, '0'), style: remoteLogSent > 0 ? 'color:#86efac;font-weight:700' : '' },
+      ' / 待发 ',
+      { text: formatNumber(remoteLogPending, '0'), style: remoteLogPending > 0 ? 'color:#fde68a;font-weight:700' : '' },
+      ' / 失败 ',
+      { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
+    ], 'font-size:11px;color:#cbd5e1;word-break:break-all');
     if (state.cloudflareError) {
       appendLine('原因：' + reasonDetail);
     } else if (status?.running) {
-      appendLine('本次登录：' + formatDuration(session.uptimeMs ?? status.uptimeMs) + ' / 收获金币 +' + formatNumber(session.coinsGained, '0') + ' / 击杀 ' + formatNumber(session.kills, '0'));
+      const coinsGained = Number(session.coinsGained || 0) || 0;
+      const kills = Number(session.kills || 0) || 0;
+      appendRichLine([
+        '本次登录：' + formatDuration(session.uptimeMs ?? status.uptimeMs) + ' / ',
+        { text: '收获金币 +' + formatNumber(coinsGained, '0'), style: coinsGained > 0 ? 'color:#86efac;font-weight:700' : '' },
+        ' / ',
+        { text: '击杀 ' + formatNumber(kills, '0'), style: kills > 0 ? 'color:#fde68a;font-weight:700' : '' }
+      ]);
       appendLine('原因：' + reasonDetail);
-      appendLine('HP ' + (self?.hp ?? '-') + ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-'));
+      const hpValue = Number(self?.hp);
+      appendRichLine([
+        'HP ',
+        { text: self?.hp ?? '-', style: Number.isFinite(hpValue) && hpValue < 100 ? 'color:#fca5a5;font-weight:700' : (hpValue === 100 ? 'color:#86efac;font-weight:700' : '') },
+        ' / 体力 ' + formatStamina(self) + ' / Drop ' + (self?.drop ?? '-')
+      ]);
       appendLine('WS ' + wsLabel + ' / Active ' + nearestActive);
       if (decision?.target) {
         const target = decision.target;
