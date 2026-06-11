@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.106"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.107"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2734,15 +2734,30 @@
     return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina');
   }
 
-  function setOfflineLeaveSuppress(reason, detail, selfLike = null) {
-	    const staminaHold = staminaExitHoldUntilForDetail(detail);
-	    if (staminaHold && detail) {
-	      if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
-	      else detail.staminaReset = staminaHold;
-	    }
-	    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
-	      existingUntil: bot.offlineReloginUntil,
-	      minimumUntil: staminaHold?.until || 0,
+	  function setOfflineLeaveSuppress(reason, detail, selfLike = null) {
+		    const staminaHold = staminaExitHoldUntilForDetail(detail);
+		    if (staminaHold && detail) {
+		      if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
+		      else detail.staminaReset = staminaHold;
+		    }
+		    if (!staminaHold && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)) {
+		      bot.offlineReloginUntil = 0;
+		      bot.lastOfflineLeaveWaitMs = 0;
+		      if (detail) {
+		        detail.reloginUntil = 0;
+		        detail.holdRemainingMs = 0;
+		        detail.reloginDelayMs = 0;
+		        detail.safeReloginAllowed = true;
+		        detail.loginSuppressReason = '';
+		        finalizeLeaveDisplayReason(detail);
+		        bot.lastOfflineLeaveResult = detail;
+		      }
+		      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+		      return 0;
+		    }
+		    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
+		      existingUntil: bot.offlineReloginUntil,
+		      minimumUntil: staminaHold?.until || 0,
 	      minimumReason: staminaHold?.reason || (staminaHold ? 'stamina reset' : ''),
 	      fixedDelayMs: staminaHold?.fixed ? staminaHold.fixedDelayMs : 0
 	    });
