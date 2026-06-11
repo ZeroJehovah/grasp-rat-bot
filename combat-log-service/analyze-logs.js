@@ -8,6 +8,7 @@ const path = require('path');
 const DEFAULTS = {
   dir: path.join(__dirname, 'logs'),
   minUnsafeDelayMs: 60000,
+  combatAttackRange: 14500,
   eventGapMs: 30000,
   eventLineGap: 100,
   latest: 20,
@@ -33,6 +34,7 @@ function parseArgs(args) {
     const arg = args[i];
     if (arg === '--dir') out.dir = path.resolve(args[++i] || out.dir);
     else if (arg === '--min-unsafe-delay-ms') out.minUnsafeDelayMs = Math.max(0, Number(args[++i] || out.minUnsafeDelayMs) || out.minUnsafeDelayMs);
+    else if (arg === '--combat-attack-range') out.combatAttackRange = Math.max(0, Number(args[++i] || out.combatAttackRange) || out.combatAttackRange);
     else if (arg === '--event-gap-ms') out.eventGapMs = Math.max(0, Number(args[++i] || out.eventGapMs) || out.eventGapMs);
     else if (arg === '--event-line-gap') out.eventLineGap = Math.max(0, Number(args[++i] || out.eventLineGap) || out.eventLineGap);
     else if (arg === '--latest') out.latest = Math.max(0, Number(args[++i] || out.latest) || out.latest);
@@ -66,6 +68,7 @@ function printHelp() {
 Options:
   --dir <dir>                    Log directory. Default: ./logs
   --min-unsafe-delay-ms <ms>     Required delay for unsafe exits. Default: ${DEFAULTS.minUnsafeDelayMs}
+  --combat-attack-range <cm>     Range used for Active-player behavior audits. Default: ${DEFAULTS.combatAttackRange}
   --event-gap-ms <ms>            Split same-summary events after this time gap. Default: ${DEFAULTS.eventGapMs}
   --event-line-gap <count>       Split same-summary events after this line gap. Default: ${DEFAULTS.eventLineGap}
   --latest <count>               Number of recent exit events to print. Default: ${DEFAULTS.latest}
@@ -265,6 +268,65 @@ function isUnsafeExit(entry) {
   return /(combat|injury|pursuit|offline|reconnect|disconnect|control-ws|server-position|websocket|战斗|受伤|伤害|追击|离线|断连|重连)/i.test(text);
 }
 
+function decisionText(entry) {
+  const decision = entry?.decision || {};
+  return [
+    decision.kind,
+    decision.reason,
+    decision.displayReason,
+    decision.summary,
+    decision.target?.type,
+    decision.target?.reason,
+    decision.target?.source,
+    decision.opportunity?.type,
+    decision.opportunity?.reason
+  ].filter(Boolean).map(String);
+}
+
+function isAmbiguousOpportunityWait(entry) {
+  const decision = entry?.decision || {};
+  const text = decisionText(entry).join(' ');
+  return decision.reason === 'wait-for-clear-opportunity'
+    || /收益接近|clear opportunity|ambiguous opportunity/i.test(text);
+}
+
+function isCombatDecision(entry) {
+  const decision = entry?.decision || {};
+  const kind = String(decision.kind || '').toLowerCase();
+  const reason = String(decision.reason || '').toLowerCase();
+  return Boolean(decision.combat || decision.shoot || decision.forceShoot)
+    || kind === 'attack'
+    || kind === 'leave'
+    || /combat|attack|shoot|leave|exit|flee|recovery/.test(reason);
+}
+
+function isCoinDecision(entry) {
+  const decision = entry?.decision || {};
+  const text = decisionText(entry).join(' ');
+  return /coin|金币|pickup|collect|drop|visible-coin|snapshot-coin|known-coin|foot-coin|coin-field/i.test(text);
+}
+
+function activePlayersInAttackRange(entry, options) {
+  const range = Math.max(0, Number(options.combatAttackRange || DEFAULTS.combatAttackRange) || 0);
+  const entities = Array.isArray(entry?.nearbyEntities) ? entry.nearbyEntities : [];
+  return entities.filter(entity => {
+    if (!entity || entity.active === false || String(entity.mode || '').toLowerCase() === 'passive') return false;
+    if (String(entity.life || '').toLowerCase() === 'dead') return false;
+    if (entity.invulnerable) return false;
+    const distance = Number(entity.distance);
+    return Number.isFinite(distance) && distance <= range;
+  });
+}
+
+function behaviorIssues(entry, options) {
+  const issues = [];
+  if (isAmbiguousOpportunityWait(entry)) issues.push('ambiguous-opportunity-wait');
+  if (!isCombatDecision(entry) && isCoinDecision(entry) && activePlayersInAttackRange(entry, options).length) {
+    issues.push('coin-action-with-active-player-in-range');
+  }
+  return issues;
+}
+
 function delayMs(entry) {
   const decision = entry?.decision || {};
   const leave = decision?.leave || {};
@@ -366,6 +428,8 @@ function auditFile(file, rootDir, options) {
   const versions = new Set();
   const exitEvents = [];
   const activeBySignature = new Map();
+  const behaviorEvents = [];
+  const activeBehaviorBySignature = new Map();
   let includedEntries = 0;
   let firstAt = 0;
   let lastAt = 0;
@@ -377,6 +441,51 @@ function auditFile(file, rootDir, options) {
     if (t && (!firstAt || t < firstAt)) firstAt = t;
     if (t && t > lastAt) lastAt = t;
     if (entry?.version) versions.add(String(entry.version));
+    const currentBehaviorIssues = behaviorIssues(entry, options);
+    if (currentBehaviorIssues.length) {
+      const activeTarget = activePlayersInAttackRange(entry, options)[0] || null;
+      const activeTargetLabel = activeTarget ? String(activeTarget.name || activeTarget.id || activeTarget.user_id || '') : '';
+      const decision = entry?.decision || {};
+      const reason = String(decision.reason || decision.kind || currentBehaviorIssues[0] || '');
+      const summary = String(decision.displayReason || decision.summary || reason || '');
+      const target = activeTargetLabel || targetLabel(entry);
+      const signature = [
+        currentBehaviorIssues.join('+'),
+        reason,
+        summary,
+        target
+      ].join('|');
+      const existing = activeBehaviorBySignature.get(signature);
+      const timeGap = existing && t && existing.lastAt ? Math.abs(t - Number(existing.lastAt || 0)) : 0;
+      const lineGap = existing ? Math.max(0, item.line - Number(existing.lastLine || 0)) : 0;
+      const reuseExisting = Boolean(existing)
+        && lineGap <= Math.max(0, Number(options.eventLineGap || 0))
+        && (!timeGap || timeGap <= Math.max(0, Number(options.eventGapMs || 0)));
+      const event = reuseExisting ? existing : {
+        file: relFile,
+        firstLine: item.line,
+        lastLine: item.line,
+        firstAt: t,
+        lastAt: t,
+        version: entry?.version || '',
+        reason,
+        summary,
+        target,
+        count: 0,
+        issues: []
+      };
+      if (!reuseExisting) {
+        behaviorEvents.push(event);
+        activeBehaviorBySignature.set(signature, event);
+      }
+      event.lastLine = item.line;
+      if (t && (!event.firstAt || t < event.firstAt)) event.firstAt = t;
+      if (t && t > event.lastAt) event.lastAt = t;
+      event.count += 1;
+      for (const issue of currentBehaviorIssues) {
+        if (!event.issues.includes(issue)) event.issues.push(issue);
+      }
+    }
     if (!isExitish(entry)) continue;
     const signature = eventSignature(entry) || `${item.line}:${exitReason(entry)}`;
     const existing = activeBySignature.get(signature);
@@ -451,7 +560,8 @@ function auditFile(file, rootDir, options) {
     versions: Array.from(versions).sort(),
     firstAt,
     lastAt,
-    exitEvents
+    exitEvents,
+    behaviorEvents
   };
 }
 
@@ -461,7 +571,12 @@ function auditLogs(options) {
   const fileReports = files.map(file => auditFile(file, options.dir, options));
   const exitEvents = fileReports.flatMap(report => report.exitEvents)
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
-  const issues = exitEvents.flatMap(event => event.issues.map(issue => ({ issue, event })));
+  const behaviorEvents = fileReports.flatMap(report => report.behaviorEvents || [])
+    .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+  const issues = [
+    ...exitEvents.flatMap(event => event.issues.map(issue => ({ issue, event }))),
+    ...behaviorEvents.flatMap(event => event.issues.map(issue => ({ issue, event })))
+  ];
   const parseErrors = fileReports.flatMap(report => report.parseErrors.map(error => ({ file: report.file, ...error })));
   const entries = fileReports.reduce((sum, report) => sum + report.entries, 0);
   const report = {
@@ -480,6 +595,7 @@ function auditLogs(options) {
     parseErrors,
     versions: Array.from(new Set(fileReports.flatMap(report => report.versions))).sort(),
     exitEvents,
+    behaviorEvents,
     issues,
     evidenceIssues: []
   };
@@ -520,6 +636,7 @@ function reportHasFailures(report) {
 
 function reportFingerprint(report) {
   const latest = report.exitEvents[0] || {};
+  const latestBehavior = report.behaviorEvents?.[0] || {};
   return JSON.stringify({
     files: report.files,
     entries: report.entries,
@@ -534,6 +651,13 @@ function reportFingerprint(report) {
       at: latest.lastAt || 0,
       reason: latest.reason || '',
       issues: latest.issues || []
+    },
+    latestBehavior: {
+      file: latestBehavior.file || '',
+      line: latestBehavior.lastLine || 0,
+      at: latestBehavior.lastAt || 0,
+      reason: latestBehavior.reason || '',
+      issues: latestBehavior.issues || []
     }
   });
 }
@@ -551,7 +675,7 @@ function printHuman(report, options) {
     if (report.requireEntries) filters.push('requireEntries=true');
     console.log('Filters: ' + filters.join(', '));
   }
-  console.log(`Exit events: ${report.exitEvents.length}, issues: ${report.issues.length}, evidence issues: ${report.evidenceIssues.length}, parse errors: ${report.parseErrors.length}`);
+  console.log(`Exit events: ${report.exitEvents.length}, behavior events: ${report.behaviorEvents.length}, issues: ${report.issues.length}, evidence issues: ${report.evidenceIssues.length}, parse errors: ${report.parseErrors.length}`);
   if (report.issues.length) {
     console.log('Issue counts: ' + issueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
   }
@@ -579,6 +703,18 @@ function printHuman(report, options) {
       if (event.issues.length) flags.push(`issues=${event.issues.join('+')}`);
       console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
       if (event.summary) console.log(`  ${event.summary}`);
+    }
+  }
+  const latestBehavior = report.behaviorEvents.slice(0, options.latest);
+  if (latestBehavior.length) {
+    console.log('');
+    console.log(`Latest behavior events (${latestBehavior.length}):`);
+    for (const event of latestBehavior) {
+      const flags = [];
+      if (event.count > 1) flags.push(`count=${event.count}`);
+      if (event.issues.length) flags.push(`issues=${event.issues.join('+')}`);
+      console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
+      if (event.summary && event.summary !== event.reason) console.log(`  ${event.summary}`);
     }
   }
   if (report.parseErrors.length) {
@@ -645,10 +781,12 @@ function runSelfTest() {
   try {
     const logsDir = path.join(tempRoot, 'logs');
     const loginLogsDir = path.join(tempRoot, 'login-logs');
+    const behaviorLogsDir = path.join(tempRoot, 'behavior-logs');
     const emptyLogsDir = path.join(tempRoot, 'empty-logs');
     const manifestPath = path.join(tempRoot, 'manifest.json');
     fs.mkdirSync(logsDir, { recursive: true });
     fs.mkdirSync(loginLogsDir, { recursive: true });
+    fs.mkdirSync(behaviorLogsDir, { recursive: true });
     fs.mkdirSync(emptyLogsDir, { recursive: true });
     fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
 
@@ -822,6 +960,78 @@ function runSelfTest() {
     assertSelfTest(issueCount(reloginReport, 'manual-login-cleared-exit-hold') === 1, 'expected one manual login hold-clear issue');
     cases += 1;
     assertSelfTest(issueCount(reloginReport, 'missing-top-level-exit') === 0, 'expected relogin hold issues not to require top-level exit');
+
+    const behaviorEntries = [
+      {
+        type: 'combat-pre-frame',
+        at: baseAt + 6000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'wait-for-clear-opportunity',
+          displayReason: '收益接近，原地等待更明确目标'
+        }
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 7000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'move',
+          reason: 'visible-coin',
+          target: {
+            type: 'coin',
+            id: 123
+          }
+        },
+        nearbyEntities: [
+          {
+            id: 42,
+            name: 'ActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            invulnerable: false,
+            distance: 12000
+          }
+        ]
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 8000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'attack',
+          reason: 'combat-spacing',
+          combat: true,
+          shoot: true
+        },
+        nearbyEntities: [
+          {
+            id: 42,
+            name: 'ActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            invulnerable: false,
+            distance: 12000
+          }
+        ]
+      }
+    ];
+    fs.writeFileSync(
+      path.join(behaviorLogsDir, 'behavior.jsonl'),
+      behaviorEntries.map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    );
+    const behaviorReport = auditLogs({ dir: behaviorLogsDir, manifestPath });
+    cases += 1;
+    assertSelfTest(behaviorReport.behaviorEvents.length === 2, `expected 2 behavior events, got ${behaviorReport.behaviorEvents.length}`);
+    cases += 1;
+    assertSelfTest(issueCount(behaviorReport, 'ambiguous-opportunity-wait') === 1, 'expected one ambiguous opportunity wait issue');
+    cases += 1;
+    assertSelfTest(issueCount(behaviorReport, 'coin-action-with-active-player-in-range') === 1, 'expected one coin action with active player in range issue');
+    cases += 1;
+    assertSelfTest(issueCount(behaviorReport, 'missing-top-level-exit') === 0, 'expected behavior issues not to require top-level exit');
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {

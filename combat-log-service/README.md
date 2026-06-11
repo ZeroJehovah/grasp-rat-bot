@@ -157,6 +157,8 @@ npm test
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
 - `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
-- `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold。
+- `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；
+- `ambiguous-opportunity-wait`: 当前版本日志里重新出现“收益接近，原地等待更明确目标”；
+- `coin-action-with-active-player-in-range`: 射程内存在非无敌 Active 玩家时，决策仍在执行金币行动而不是战斗/退出。
 
 最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
