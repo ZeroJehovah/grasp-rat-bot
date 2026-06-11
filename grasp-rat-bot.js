@@ -143,6 +143,8 @@ function combatLogExitSummaryFromDecision(decision) {
     displayReason: leave?.displayReason || decision?.displayReason || '',
     attempted: leave ? Boolean(leave.attempted) : null,
     error: leave?.error || '',
+    safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed),
+    offlineSafety: detail.offlineSafety || decision?.offlineSafety || null,
     reloginUntil: detail.reloginUntil || 0,
     holdRemainingMs: detail.holdRemainingMs || 0,
     reloginDelayMs: detail.reloginDelayMs || 0,
@@ -3151,6 +3153,27 @@ function runSelfTest() {
 	        ].join('|');
 	      })(),
 	      want: 'combat-leave-retry|leave retry cooldown|false'
+	    },
+	    {
+	      name: 'combat log exit summary includes safe offline relogin marker',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'wait',
+	          reason: 'offline-leave',
+	          leave: {
+	            reason: 'websocket offline',
+	            summary: 'safe offline exit',
+	            safeReloginAllowed: true,
+	            offlineSafety: { unsafe: false }
+	          }
+	        });
+	        return [
+	          exit?.reason,
+	          String(exit?.safeReloginAllowed),
+	          String(exit?.offlineSafety?.unsafe)
+	        ].join('|');
+	      })(),
+	      want: 'websocket offline|true|false'
 	    },
 	    {
 	      name: 'combat log exit summary includes pending unsafe suppress',

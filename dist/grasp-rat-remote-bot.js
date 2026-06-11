@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.107"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.108"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1594,6 +1594,8 @@
     displayReason: leave?.displayReason || decision?.displayReason || '',
     attempted: leave ? Boolean(leave.attempted) : null,
     error: leave?.error || '',
+    safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed),
+    offlineSafety: detail.offlineSafety || decision?.offlineSafety || null,
     reloginUntil: detail.reloginUntil || 0,
     holdRemainingMs: detail.holdRemainingMs || 0,
     reloginDelayMs: detail.reloginDelayMs || 0,

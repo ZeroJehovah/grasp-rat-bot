@@ -284,6 +284,12 @@ function isGenericExitReason(reason) {
   return /^(?:cooldown|retry|leave|exit|unknown)$/i.test(String(reason || '').trim());
 }
 
+function safeReloginAllowed(entry) {
+  const decision = entry?.decision || {};
+  const leave = decision?.leave || {};
+  return Boolean(entry?.exit?.safeReloginAllowed || leave.safeReloginAllowed || decision.safeReloginAllowed);
+}
+
 function isSuspendedReloginEvent(entry) {
   const reason = String(entry?.reason || exitReason(entry) || '');
   return /^suspended:(?:login-suppressed|manual-login)$/i.test(reason);
@@ -301,6 +307,7 @@ function isExitish(entry) {
 }
 
 function isUnsafeExit(entry) {
+  if (safeReloginAllowed(entry)) return false;
   const text = textParts(entry).join(' ').toLowerCase();
   return /(combat|injury|pursuit|offline|reconnect|disconnect|control-ws|server-position|websocket|战斗|受伤|伤害|追击|离线|断连|重连)/i.test(text);
 }
@@ -642,6 +649,7 @@ function auditFile(file, rootDir, options) {
     const unsafe = isUnsafeExit(entry);
     const eventDelayMs = delayMs(entry);
     const eventRequiredDelayMs = requiredDelayMs(entry, options);
+    const currentSafeReloginAllowed = safeReloginAllowed(entry);
     const issues = [];
     const loginIssues = loginExitHoldIssues(entry);
     if (!topLevelExit && !loginIssues.length && !isSuspendedReloginEvent(entry)) issues.push('missing-top-level-exit');
@@ -661,6 +669,7 @@ function auditFile(file, rootDir, options) {
       target: targetLabel(entry),
       topLevelExit,
       unsafe,
+      safeReloginAllowed: currentSafeReloginAllowed,
       delayMs: eventDelayMs,
       requiredDelayMs: eventRequiredDelayMs,
       login: loginContext(entry),
@@ -676,6 +685,7 @@ function auditFile(file, rootDir, options) {
     if (t && t > event.lastAt) event.lastAt = t;
     event.topLevelExit = event.topLevelExit || topLevelExit;
     event.unsafe = event.unsafe || unsafe;
+    event.safeReloginAllowed = Boolean(event.safeReloginAllowed || currentSafeReloginAllowed);
     event.delayMs = Math.max(event.delayMs, eventDelayMs);
     event.requiredDelayMs = Math.max(Number(event.requiredDelayMs || 0), eventRequiredDelayMs);
     const currentLogin = loginContext(entry);
@@ -1056,6 +1066,7 @@ function printHuman(report, options) {
       const flags = [];
       if (!event.topLevelExit) flags.push('missing exit');
       if (event.unsafe) flags.push('unsafe');
+      if (event.safeReloginAllowed) flags.push('safeRelogin');
       if (event.delayMs) flags.push(`delay=${event.delayMs}ms`);
       if (event.requiredDelayMs) flags.push(`required=${event.requiredDelayMs}ms`);
       if (event.login?.suppressRemainingMs) flags.push(`suppress=${event.login.suppressRemainingMs}ms`);
@@ -1163,6 +1174,7 @@ function runSelfTest() {
     const behaviorLogsDir = path.join(tempRoot, 'behavior-logs');
     const requiredDelayLogsDir = path.join(tempRoot, 'required-delay-logs');
     const missingReasonLogsDir = path.join(tempRoot, 'missing-reason-logs');
+    const safeOfflineLogsDir = path.join(tempRoot, 'safe-offline-logs');
     const hashOkLogsDir = path.join(tempRoot, 'hash-ok-logs');
     const hashBadLogsDir = path.join(tempRoot, 'hash-bad-logs');
     const noExitLogsDir = path.join(tempRoot, 'no-exit-logs');
@@ -1174,6 +1186,7 @@ function runSelfTest() {
     fs.mkdirSync(behaviorLogsDir, { recursive: true });
     fs.mkdirSync(requiredDelayLogsDir, { recursive: true });
     fs.mkdirSync(missingReasonLogsDir, { recursive: true });
+    fs.mkdirSync(safeOfflineLogsDir, { recursive: true });
     fs.mkdirSync(hashOkLogsDir, { recursive: true });
     fs.mkdirSync(hashBadLogsDir, { recursive: true });
     fs.mkdirSync(noExitLogsDir, { recursive: true });
@@ -1400,6 +1413,38 @@ function runSelfTest() {
     assertSelfTest(issueCount(missingReasonReport, 'generic-exit-reason') === 1, 'expected one generic exit reason issue');
     cases += 1;
     assertSelfTest(reportHasFailures(missingReasonReport), 'expected missing-reason report to count as failure');
+
+    fs.writeFileSync(
+      path.join(safeOfflineLogsDir, 'safe-offline.jsonl'),
+      JSON.stringify({
+        type: 'combat-end',
+        at: baseAt + 3800,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'offline-leave',
+          leave: {
+            reason: 'websocket offline',
+            safeReloginAllowed: true,
+            offlineSafety: { unsafe: false }
+          }
+        },
+        exit: {
+          reason: 'websocket offline',
+          safeReloginAllowed: true,
+          offlineSafety: { unsafe: false }
+        }
+      }) + '\n'
+    );
+    const safeOfflineReport = auditLogs({ dir: safeOfflineLogsDir, manifestPath });
+    cases += 1;
+    assertSelfTest(safeOfflineReport.exitEvents.length === 1, `expected 1 safe offline exit event, got ${safeOfflineReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(safeOfflineReport.exitEvents[0]?.safeReloginAllowed === true, 'expected safe offline exit to mark safe relogin');
+    cases += 1;
+    assertSelfTest(issueCount(safeOfflineReport, 'unsafe-exit-delay-below-minimum') === 0, 'expected safe offline zero-delay exit not to be unsafe delay issue');
+    cases += 1;
+    assertSelfTest(safeOfflineReport.exitSafetyCounts.safe === 1, `expected 1 safe offline exit, got ${safeOfflineReport.exitSafetyCounts.safe}`);
 
     const reloginEntries = [
       {
