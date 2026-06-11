@@ -172,7 +172,7 @@ function runSelfTest() {
     combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
-    combatAimNoDamageMaxRadians: 0.34,
+    combatAimNoDamageMaxRadians: 0.16,
     combatAimLockMs: 450,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
@@ -394,6 +394,17 @@ function runSelfTest() {
     const evasionWidth = (dodgeSpeed * scale * travelTicks + hitRadius) * evasionScale;
     const evasionAngle = d > 0 ? Math.atan(evasionWidth / d) : maxJitter;
     return clampValue(Math.max(interpolated, evasionAngle), minJitter * minScale, maxJitter);
+  }
+  function combatAimNoDamageLevel(widenMs) {
+    const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
+    const elapsed = Math.max(0, Number(widenMs) || 0);
+    return elapsed > 0 ? Math.min(3, 1 + elapsed / stepMs) : 0;
+  }
+  function combatAimNoDamageJitterLimit(baseLimit, noDamageLevel) {
+    const base = Math.max(0, Number(baseLimit) || 0);
+    const level = Math.max(0, Number(noDamageLevel) || 0);
+    const maxNoDamageLimit = Math.max(base, Number(cfg.combatAimNoDamageMaxRadians) || base);
+    return level ? Math.min(maxNoDamageLimit, base * (1 + level * 0.45)) : base;
   }
   function combatAimMotionScale(target) {
     const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
@@ -1986,6 +1997,15 @@ function runSelfTest() {
       want: true
     },
     {
+      name: 'combat long no-damage aim widening stays capped',
+      got: (() => {
+        const baseLimit = combatAimJitterLimit(10000, 1);
+        const widened = combatAimNoDamageJitterLimit(baseLimit, combatAimNoDamageLevel(9000));
+        return widened <= cfg.combatAimNoDamageMaxRadians + 0.000001;
+      })(),
+      want: true
+    },
+    {
       name: 'combat very close target backs away while shooting',
       got: (() => {
         const action = chooseCombatAction(
@@ -2695,7 +2715,7 @@ function browserBotSource(config) {
     combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
-    combatAimNoDamageMaxRadians: 0.34,
+    combatAimNoDamageMaxRadians: 0.16,
     combatAimLockMs: 450,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
@@ -8416,6 +8436,19 @@ function browserBotSource(config) {
     };
   }
 
+  function combatAimNoDamageLevel(widenMs) {
+    const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
+    const elapsed = Math.max(0, Number(widenMs) || 0);
+    return elapsed > 0 ? Math.min(3, 1 + elapsed / stepMs) : 0;
+  }
+
+  function combatAimNoDamageJitterLimit(baseLimit, noDamageLevel) {
+    const base = Math.max(0, Number(baseLimit) || 0);
+    const level = Math.max(0, Number(noDamageLevel) || 0);
+    const maxNoDamageLimit = Math.max(base, Number(cfg.combatAimNoDamageMaxRadians) || base);
+    return level ? Math.min(maxNoDamageLimit, base * (1 + level * 0.45)) : base;
+  }
+
   function combatMovementAimMode(self, target, distance) {
     const vx = Number(target.vx) || 0;
     const vy = Number(target.vy) || 0;
@@ -8472,11 +8505,8 @@ function browserBotSource(config) {
     const baseLimit = combatAimJitterLimit(distance, motionScale);
     const damage = combatAimDamageState(target);
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
-    const noDamageLevel = damage.widenMs > 0 ? Math.min(3, 1 + damage.widenMs / stepMs) : 0;
-    const maxNoDamageLimit = Math.max(baseLimit, Number(cfg.combatAimNoDamageMaxRadians) || baseLimit);
-    const jitterLimit = noDamageLevel
-      ? Math.min(maxNoDamageLimit, baseLimit * (1 + noDamageLevel * 0.45))
-      : baseLimit;
+    const noDamageLevel = combatAimNoDamageLevel(damage.widenMs);
+    const jitterLimit = combatAimNoDamageJitterLimit(baseLimit, noDamageLevel);
     const movement = combatMovementAimMode(self, target, distance);
     const targetId = combatTargetId(target);
     const previousAim = bot.combatAim;
