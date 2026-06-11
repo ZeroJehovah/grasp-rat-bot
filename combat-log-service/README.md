@@ -115,8 +115,8 @@ npm run analyze:current
 npm run validate:current
 npm run monitor:current
 npm run monitor:current -- --since now --latest 10
-npm run monitor -- --min-version bootstrap-0.4.100 --latest 10
-npm run monitor -- --since now --min-version bootstrap-0.4.100 --latest 10
+npm run monitor -- --min-version bootstrap-0.4.101 --latest 10
+npm run monitor -- --since now --min-version bootstrap-0.4.101 --latest 10
 ```
 
 `validate:current` 会额外要求至少存在一条当前 manifest 版本日志；没有匹配日志时返回非零退出码，用来区分“无问题”和“还没有验证证据”。
