@@ -116,6 +116,7 @@ function staminaExhaustedWindowLabel(staminaState) {
 }
 
 function offlineLeaveSummaryText(reason, offlineSafety) {
+  if (offlineSafety?.staminaBudgetExit) return '1h体力不足以拾取最近金币，退出等待重连';
   const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
   if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
   const text = String(reason || '').toLowerCase();
@@ -286,6 +287,7 @@ function runSelfTest() {
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
     conserveStaminaThreshold: 6500,
+    staminaBudgetReloginDelayMs: 300000,
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
@@ -604,13 +606,18 @@ function runSelfTest() {
     const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
     return moveCost + shotCost;
   }
+  function opportunityWindowStaminaBudget(self, windowName) {
+    const remaining = staminaRemaining(self, windowName);
+    if (!Number.isFinite(remaining)) return Infinity;
+    const reserve = staminaExhaustedThreshold() + Math.max(0, Number(cfg.opportunityLongStaminaReserveMs || 0));
+    return Math.max(0, remaining - reserve);
+  }
   function opportunityLongStaminaBudget(self) {
     const values = ['1h', '1d']
-      .map(key => staminaRemaining(self, key))
+      .map(key => opportunityWindowStaminaBudget(self, key))
       .filter(value => Number.isFinite(value));
     if (!values.length) return Infinity;
-    const reserve = staminaExhaustedThreshold() + Math.max(0, Number(cfg.opportunityLongStaminaReserveMs || 0));
-    return Math.max(0, Math.min(...values) - reserve);
+    return Math.min(...values);
   }
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
@@ -671,6 +678,40 @@ function runSelfTest() {
       distance: Math.round(best.distance),
       snapshot: Boolean(best.snapshot),
       native: Boolean(best.native)
+    };
+  }
+  function summarizeNearestCoinStaminaBudgetExit(self, coins) {
+    const budget = opportunityWindowStaminaBudget(self, '1h');
+    if (!Number.isFinite(budget)) return null;
+    const candidates = (coins || [])
+      .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin?.distance)) ? Number(coin.distance) : dist(self, coin), amount: Number(coin?.amount || 0) }))
+      .filter(coin => coin.amount > 0 && Number.isFinite(coin.distance))
+      .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
+    const coin = candidates[0] || null;
+    if (!coin) return null;
+    const staminaCost = opportunityCoinStaminaCost(coin);
+    if (staminaCost <= budget) return null;
+    return {
+      type: 'coin',
+      window: '1h',
+      id: coin.drop_id,
+      amount: coin.amount,
+      distance: Math.round(coin.distance),
+      budgetMs: Math.max(0, Math.round(budget)),
+      requiredMs: Math.max(0, Math.round(staminaCost)),
+      shortageMs: Math.max(0, Math.round(staminaCost - budget)),
+      reloginDelayMs: Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000))
+    };
+  }
+  function staminaBudgetCoinLeaveAction(staminaBudgetExit) {
+    return {
+      kind: 'leave',
+      reason: 'stamina-budget-coin-leave',
+      dx: 0,
+      dy: 0,
+      offline: true,
+      staminaBudgetExit,
+      reloginDelayMs: staminaBudgetExit?.reloginDelayMs || Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000))
     };
   }
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
@@ -1541,6 +1582,11 @@ function runSelfTest() {
       .sort((a, b) => (a.distance - b.distance) || (b.amount - a.amount))[0];
     const postAttackCoin = pickPostAttackDropCoin(self, usableCoins, coinThreats, attacks, entities, { includeSingle: !recovery });
     if (postAttackCoin) return { kind: 'coin', reason: 'post-attack-drop-coin', id: postAttackCoin.drop_id, amount: postAttackCoin.amount };
+    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
+      self,
+      safeCoins(self, usableCoins, coinThreats, cfg.snapshotCoinMaxDistance)
+    );
+    if (staminaBudgetExit) return staminaBudgetCoinLeaveAction(staminaBudgetExit);
     if (recovery && nearCoin) return { kind: 'coin', id: nearCoin.drop_id, amount: nearCoin.amount };
     const nearbyHumans = entities
       .map(e => ({ ...e, distance: dist(self, e) }))
@@ -2243,7 +2289,7 @@ function runSelfTest() {
         attacks: [{ id: 7, x: 20000, y: 0, at: Date.now(), drop: 100 }],
         coins: [{ drop_id: 8, x: 20000, y: 0, amount: 100 }]
       }).kind,
-      want: 'wait'
+      want: 'leave'
     },
     {
       name: 'combat incoming fire uses tangent dodge',
@@ -2780,10 +2826,10 @@ function runSelfTest() {
         },
         coins: [{ drop_id: 1, x: 20000, y: 0, amount: 100 }]
       }).kind,
-      want: 'wait'
+      want: 'leave'
     },
     {
-      name: 'low long stamina visible coin reports stamina budget wait',
+      name: 'low 1h stamina visible coin exits instead of waiting',
       got: choose({
         self: {
           user_id: 1,
@@ -2796,7 +2842,7 @@ function runSelfTest() {
         },
         coins: [{ drop_id: 1, x: 20000, y: 0, amount: 100 }]
       }).reason,
-      want: 'wait-for-stamina-budget'
+      want: 'stamina-budget-coin-leave'
     },
     {
       name: 'low long stamina still takes foot coin',
@@ -2818,7 +2864,23 @@ function runSelfTest() {
       want: 1
     },
     {
-      name: 'low long stamina still uses snapshot idle fallback after timeout',
+      name: '1h budget below nearest foot coin exits',
+      got: choose({
+        self: {
+          user_id: 1,
+          x: 0,
+          y: 0,
+          hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_1h_remaining_milli: 2400,
+          stamina_1d_remaining_milli: 100000
+        },
+        coins: [{ drop_id: 1, x: 500, y: 0, amount: 1 }]
+      }).reason,
+      want: 'stamina-budget-coin-leave'
+    },
+    {
+      name: 'low 1h stamina exits before snapshot idle fallback',
       got: choose({
         self: {
           user_id: 1,
@@ -2832,7 +2894,7 @@ function runSelfTest() {
         coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true }],
         snapshotWaitAgeMs: 60000
       }).reason,
-      want: 'snapshot-coin-idle-timeout'
+      want: 'stamina-budget-coin-leave'
     },
     {
       name: 'low long stamina skips expensive afk drop target',
@@ -2846,21 +2908,26 @@ function runSelfTest() {
           stamina_1h_remaining_milli: 3500,
           stamina_1d_remaining_milli: 3500
         },
-	        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, death_reward_preview: 100 }]
-	      }).kind,
-	      want: 'wait'
-	    },
-	    {
-	      name: 'same enemy relogin repeat backoff steps up',
-	      got: [
-	        enemyRepeatDelayMsForCount(1),
-	        enemyRepeatDelayMsForCount(2),
+        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, death_reward_preview: 100 }]
+      }).kind,
+      want: 'wait'
+    },
+    {
+      name: 'stamina budget leave summary identifies nearest coin',
+      got: offlineLeaveSummaryText('stamina budget coin leave', { staminaBudgetExit: { window: '1h', distance: 20000 } }),
+      want: '1h体力不足以拾取最近金币，退出等待重连'
+    },
+    {
+      name: 'same enemy relogin repeat backoff steps up',
+      got: [
+        enemyRepeatDelayMsForCount(1),
+        enemyRepeatDelayMsForCount(2),
         enemyRepeatDelayMsForCount(3),
         enemyRepeatDelayMsForCount(4)
-	      ].join(','),
-	      want: '0,1800000,3600000,3600000'
-	    },
-	    {
+      ].join(','),
+      want: '0,1800000,3600000,3600000'
+    },
+    {
 	      name: 'stamina leave summary identifies hourly limit',
 	      got: offlineLeaveSummaryText('offline leave wait', { staminaExhausted: { longExhausted: ['1h'] } }),
 	      want: '1h体力到达限制，退出等待重连'
@@ -3223,6 +3290,7 @@ function browserBotSource(config) {
     staminaFullRatio: 0.98,
     staminaExhaustedThresholdMs: 1000,
     staminaResetGraceMs: 10000,
+    staminaBudgetReloginDelayMs: 300000,
     autoLogin: true,
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
@@ -3339,7 +3407,9 @@ function browserBotSource(config) {
 	    if (!detail || typeof detail !== 'object') return detail;
 	    const reloginUntil = Number(detail.reloginUntil || 0);
 	    if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
-	    if (detail.offlineSafety?.staminaExhausted) {
+	    if (detail.offlineSafety?.staminaBudgetExit) {
+	      detail.summary = offlineLeaveSummary(detail.reason || 'stamina budget coin leave', detail.offlineSafety);
+	    } else if (detail.offlineSafety?.staminaExhausted) {
 	      detail.summary = offlineLeaveSummary(detail.reason || 'stamina exhausted', detail.offlineSafety);
 	    }
 	    return finalizeLeaveDisplayReason(detail);
@@ -3848,10 +3918,6 @@ function browserBotSource(config) {
       mustLeave: longExhausted.length > 0
     };
   }
-  function nextHourlyStaminaResetAt(t = Date.now()) {
-    const hourMs = 60 * 60 * 1000;
-    return (Math.floor(t / hourMs) + 1) * hourMs;
-  }
   function dailyStaminaWindowStartAt(t = Date.now()) {
     const dayMs = 24 * 60 * 60 * 1000;
     const utc8OffsetMs = 8 * 60 * 60 * 1000;
@@ -3861,19 +3927,32 @@ function browserBotSource(config) {
     const dayMs = 24 * 60 * 60 * 1000;
     return dailyStaminaWindowStartAt(t) + dayMs;
   }
+  function staminaBudgetReloginDelayMs() {
+    return Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000));
+  }
   function staminaResetHoldUntil(staminaState, t = Date.now()) {
     const exhausted = Array.isArray(staminaState?.longExhausted)
       ? staminaState.longExhausted
       : [];
     let until = 0;
-    if (exhausted.includes('1h')) until = Math.max(until, nextHourlyStaminaResetAt(t));
-    if (exhausted.includes('1d')) until = Math.max(until, nextDailyStaminaResetAt(t));
+    let resetAt = 0;
+    let fixedDelayMs = 0;
+    if (exhausted.includes('1h')) {
+      fixedDelayMs = staminaBudgetReloginDelayMs();
+      until = Math.max(until, t + fixedDelayMs);
+    }
+    if (exhausted.includes('1d')) {
+      resetAt = nextDailyStaminaResetAt(t);
+      until = Math.max(until, resetAt);
+    }
     if (!until) return null;
-    const graceMs = Math.max(0, Number(cfg.staminaResetGraceMs || 0));
+    const graceMs = resetAt && until === resetAt ? Math.max(0, Number(cfg.staminaResetGraceMs || 0)) : 0;
     return {
       until: until + graceMs,
-      resetAt: until,
+      resetAt,
       graceMs,
+      fixedDelayMs: resetAt && resetAt >= t + fixedDelayMs ? 0 : fixedDelayMs,
+      fixed: Boolean(fixedDelayMs && !(resetAt && resetAt >= t + fixedDelayMs)),
       exhausted
     };
   }
@@ -4071,10 +4150,13 @@ function browserBotSource(config) {
 	      'scan-toward-distant-coin': '扫描远处金币',
 		      'snapshot-coin-field': '快照金币区域导航',
 		      'snapshot-coin-target': '快照金币导航',
-		      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
-		      'wait-for-stamina-budget': '长期体力预算不足',
-		      'wait-for-snapshot-coin': '等待快照金币',
-	      'maintain-safe-spacing': '避开附近玩家',
+			      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
+			      'wait-for-stamina-budget': '长期体力预算不足',
+			      'stamina-budget-coin-leave': '1h体力预算不足，退出等待恢复',
+			      'stamina-budget-coin-leave-retry': '1h体力预算不足，重试退出',
+			      'wait-for-snapshot-coin': '等待快照金币',
+		      'login-suppressed': '等待重连',
+		      'maintain-safe-spacing': '避开附近玩家',
 	      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
 	      'leave-stale-coin': '离开疑似卡住金币',
 	      'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
@@ -5285,9 +5367,12 @@ function browserBotSource(config) {
 	    return (actor ? '受到' + actorLabel(actor) + '伤害/附近威胁' : '检测到血量下降') + hpText + '，退出等待重连';
 	  }
 
-		  function offlineLeaveSummary(reason, offlineSafety) {
-		    const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
-		    if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
+			  function offlineLeaveSummary(reason, offlineSafety) {
+			    if (offlineSafety?.staminaBudgetExit) {
+			      return staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit);
+			    }
+			    const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
+			    if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
 		    const text = String(reason || '').toLowerCase();
 		    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
 		    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return 'WebSocket 反复重连，退出等待重连';
@@ -5354,10 +5439,22 @@ function browserBotSource(config) {
 		      return existingUntil;
 		    }
 	    if (storageReason === 'enemy leave') updateEnemyLeaveStreak(detail, t);
-	    const delay = reloginDelayForHp(selfLike, detail);
+	    const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
+	    const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1000, Math.round(fixedDelayRaw)) : 0;
+	    const delay = fixedDelayMs
+	      ? {
+	        delayMs: fixedDelayMs,
+	        hpDelayMs: fixedDelayMs,
+	        minMs: fixedDelayMs,
+	        maxMs: fixedDelayMs,
+	        baseMaxMs: fixedDelayMs,
+	        repeatMinMs: 0,
+	        hp: hpInfoForRelogin(selfLike, detail)
+	      }
+	      : reloginDelayForHp(selfLike, detail);
 	    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
-	    const reloginDelayMs = Math.max(delay.delayMs, minimumDelayMs);
-    const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
+	    const reloginDelayMs = fixedDelayMs || Math.max(delay.delayMs, minimumDelayMs);
+	    const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
     if (storageReason === 'enemy leave') {
       bot.pursuitReloginUntil = reloginUntil;
       bot.lastEnemyLeaveWaitMs = reloginDelayMs;
@@ -5374,12 +5471,13 @@ function browserBotSource(config) {
 	        baseMax: delay.baseMaxMs,
 	        repeatMin: delay.repeatMinMs
 	      };
-      if (minimumDelayMs) {
-        detail.reloginMinimumDelayMs = minimumDelayMs;
-        detail.reloginMinimumUntil = minimumUntil;
-        detail.reloginMinimumReason = options.minimumReason || '';
-      }
-      detail.reloginHp = delay.hp;
+	      if (minimumDelayMs) {
+	        detail.reloginMinimumDelayMs = minimumDelayMs;
+	        detail.reloginMinimumUntil = minimumUntil;
+	        detail.reloginMinimumReason = options.minimumReason || '';
+	      }
+	      if (fixedDelayMs) detail.reloginFixedDelayMs = fixedDelayMs;
+	      detail.reloginHp = delay.hp;
 	      detail.reloginUntil = reloginUntil;
 	      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
 		      detail.enemyLeaveReason = reason;
@@ -5396,19 +5494,60 @@ function browserBotSource(config) {
     return reloginUntil;
   }
 
-  function setEnemyLeaveSuppress(reason, detail, selfLike = null) {
-    return setExitReloginSuppress('enemy leave', reason, detail, selfLike);
-  }
+	  function setEnemyLeaveSuppress(reason, detail, selfLike = null) {
+	    return setExitReloginSuppress('enemy leave', reason, detail, selfLike);
+	  }
 
-  function setOfflineLeaveSuppress(reason, detail, selfLike = null) {
-    const staminaReset = staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted);
-    if (staminaReset && detail) detail.staminaReset = staminaReset;
-    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
-      existingUntil: bot.offlineReloginUntil,
-      minimumUntil: staminaReset?.until || 0,
-      minimumReason: staminaReset ? 'stamina reset' : ''
-    });
-  }
+	  function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
+	    if (!staminaBudgetExit) return null;
+	    const delayMs = staminaBudgetReloginDelayMs();
+	    return {
+	      until: t + delayMs,
+	      fixedDelayMs: delayMs,
+	      fixed: true,
+	      reason: 'stamina budget',
+	      staminaBudgetExit
+	    };
+	  }
+
+	  function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
+	    const holds = [
+	      staminaBudgetExitHoldUntil(detail?.offlineSafety?.staminaBudgetExit, t),
+	      staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted, t)
+	    ].filter(Boolean);
+	    if (!holds.length) return null;
+	    return holds.sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || null;
+	  }
+
+	  function setOfflineLeaveSuppress(reason, detail, selfLike = null) {
+	    const staminaHold = staminaExitHoldUntilForDetail(detail);
+	    if (staminaHold && detail) {
+	      if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
+	      else detail.staminaReset = staminaHold;
+	    }
+	    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
+	      existingUntil: bot.offlineReloginUntil,
+	      minimumUntil: staminaHold?.until || 0,
+	      minimumReason: staminaHold?.reason || (staminaHold ? 'stamina reset' : ''),
+	      fixedDelayMs: staminaHold?.fixed ? staminaHold.fixedDelayMs : 0
+	    });
+	  }
+
+	  function primePendingStaminaExitLoginSuppress(detail) {
+	    const hold = staminaExitHoldUntilForDetail(detail);
+	    if (!hold) return 0;
+	    const delayMs = hold.fixed
+	      ? hold.fixedDelayMs
+	      : Math.max(1000, Math.round(Number(hold.until || 0) - Date.now()));
+	    const until = setLoginSuppress('stamina leave pending', delayMs);
+	    if (detail) {
+	      detail.pendingLoginSuppressUntil = until;
+	      detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - Date.now()));
+	      if (hold.staminaBudgetExit) detail.staminaBudgetHold = hold;
+	      else detail.staminaReset = hold;
+	    }
+	    return until;
+	  }
 
   function enemyReloginHoldRemainingMs() {
     let until = Number(bot.pursuitReloginUntil || 0);
@@ -6189,9 +6328,12 @@ function browserBotSource(config) {
       summary: offlineLeaveSummary(reason, offlineSafety),
       error: ''
     };
-    bot.lastOfflineLeaveAt = t;
-    await issueLeaveCommand(detail);
-    if (detail.attempted && !detail.error) rememberPendingExit('offline', 'offline', detail, selfSummary);
+	    bot.lastOfflineLeaveAt = t;
+	    await issueLeaveCommand(detail);
+	    if (detail.attempted && !detail.error) {
+	      primePendingStaminaExitLoginSuppress(detail);
+	      rememberPendingExit('offline', 'offline', detail, selfSummary);
+	    }
     finalizeLeaveDisplayReason(detail);
     bot.lastOfflineLeaveResult = detail;
     return detail;
@@ -8929,14 +9071,20 @@ function browserBotSource(config) {
     return moveCost + shotCost;
   }
 
-  function opportunityLongStaminaBudget(self) {
-    const values = ['1h', '1d']
-      .map(key => staminaRemaining(self, key))
-      .filter(value => Number.isFinite(value));
-    if (!values.length) return Infinity;
-    const reserve = staminaExhaustedThreshold() + Math.max(0, Number(cfg.opportunityLongStaminaReserveMs || 0));
-    return Math.max(0, Math.min(...values) - reserve);
-  }
+	  function opportunityWindowStaminaBudget(self, windowName) {
+	    const remaining = staminaRemaining(self, windowName);
+	    if (!Number.isFinite(remaining)) return Infinity;
+	    const reserve = staminaExhaustedThreshold() + Math.max(0, Number(cfg.opportunityLongStaminaReserveMs || 0));
+	    return Math.max(0, remaining - reserve);
+	  }
+
+	  function opportunityLongStaminaBudget(self) {
+	    const values = ['1h', '1d']
+	      .map(key => opportunityWindowStaminaBudget(self, key))
+	      .filter(value => Number.isFinite(value));
+	    if (!values.length) return Infinity;
+	    return Math.min(...values);
+	  }
 
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
@@ -8945,7 +9093,7 @@ function browserBotSource(config) {
     return !Number.isFinite(budget) || cost <= budget;
   }
 
-  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
+	  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
     const budget = opportunityLongStaminaBudget(self);
     if (!Number.isFinite(budget)) return null;
     const items = [];
@@ -8997,8 +9145,66 @@ function browserBotSource(config) {
       distance: Math.round(best.distance),
       snapshot: Boolean(best.snapshot),
       native: Boolean(best.native)
-    };
-  }
+	    };
+	  }
+
+	  function summarizeNearestCoinStaminaBudgetExit(self, coins) {
+	    const budget = opportunityWindowStaminaBudget(self, '1h');
+	    if (!Number.isFinite(budget)) return null;
+	    const candidates = (coins || [])
+	      .map(coin => ({
+	        ...coin,
+	        distance: Number.isFinite(Number(coin?.distance)) ? Number(coin.distance) : dist(self, coin),
+	        amount: Number(coin?.amount || 0)
+	      }))
+	      .filter(coin => coin.amount > 0 && Number.isFinite(coin.distance))
+	      .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
+	    const coin = candidates[0] || null;
+	    if (!coin) return null;
+	    const staminaCost = opportunityCoinStaminaCost(coin);
+	    if (staminaCost <= budget) return null;
+	    return {
+	      type: 'coin',
+	      window: '1h',
+	      id: coin.drop_id,
+	      amount: coin.amount,
+	      distance: Math.round(coin.distance),
+	      budgetMs: Math.max(0, Math.round(budget)),
+	      requiredMs: Math.max(0, Math.round(staminaCost)),
+	      shortageMs: Math.max(0, Math.round(staminaCost - budget)),
+	      reloginDelayMs: staminaBudgetReloginDelayMs(),
+	      snapshot: Boolean(coin.snapshot),
+	      native: Boolean(coin.native)
+	    };
+	  }
+
+	  function staminaBudgetCoinLeaveSummary(staminaBudgetExit) {
+	    const detail = staminaBudgetExit || {};
+	    return '1h体力预算不足，最近金币距离' + Math.round(Number(detail.distance || 0))
+	      + '，预算' + formatDurationMs(detail.budgetMs)
+	      + '，需要' + formatDurationMs(detail.requiredMs)
+	      + '，差' + formatDurationMs(detail.shortageMs)
+	      + '，退出等待重连';
+	  }
+
+	  function staminaBudgetCoinLeaveDisplay(staminaBudgetExit) {
+	    return staminaBudgetCoinLeaveSummary(staminaBudgetExit)
+	      + '，等待' + formatDurationMs(staminaBudgetExit?.reloginDelayMs || staminaBudgetReloginDelayMs());
+	  }
+
+	  function staminaBudgetCoinLeaveAction(staminaBudgetExit) {
+	    return {
+	      kind: 'leave',
+	      reason: 'stamina-budget-coin-leave',
+	      dx: 0,
+	      dy: 0,
+	      offline: true,
+	      ignoreReturnBlock: true,
+	      displayReason: staminaBudgetCoinLeaveDisplay(staminaBudgetExit),
+	      staminaBudgetExit,
+	      reloginDelayMs: staminaBudgetExit?.reloginDelayMs || staminaBudgetReloginDelayMs()
+	    };
+	  }
 
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
     const amount = Number(value || 0);
@@ -10382,12 +10588,20 @@ function browserBotSource(config) {
         bot.lastTargetAt = 0;
       }
       const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
-      action.postAttackTarget = postAttackCoin.postAttackTarget;
-      return action;
-    }
-    if (recovery && nearCoin) {
-      bot.fleeLock = null;
-      const dir = coinDirectionTo(self, nearCoin);
+	      action.postAttackTarget = postAttackCoin.postAttackTarget;
+	      return action;
+	    }
+	    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
+	      self,
+	      safeCoinCandidates(allCoins, coinThreats, cfg.snapshotCoinMaxDistance)
+	    );
+	    if (staminaBudgetExit) {
+	      bot.fleeLock = null;
+	      return staminaBudgetCoinLeaveAction(staminaBudgetExit);
+	    }
+	    if (recovery && nearCoin) {
+	      bot.fleeLock = null;
+	      const dir = coinDirectionTo(self, nearCoin);
       return {
         kind: 'coin',
         reason: 'recovery-foot-coin',
@@ -10402,22 +10616,22 @@ function browserBotSource(config) {
       if (e.distance > (recovery ? cfg.recoveryAvoidRadius : cfg.passivePanicRadius)) return false;
       return recovery ? isRecoveryUnsafeHuman(e) : true;
     });
-    if (!fullHp && avoidHumans.length) {
-      const reason = recovery ? 'recovery-avoid-humans' : 'passive-panic-distance';
-      const flee = lockedFleeDirection(self, avoidHumans, reason);
-      return {
+	    if (!fullHp && avoidHumans.length) {
+	      const reason = recovery ? 'recovery-avoid-humans' : 'passive-panic-distance';
+	      const flee = lockedFleeDirection(self, avoidHumans, reason);
+	      return {
         kind: 'flee',
         reason,
         dx: flee.dx,
         dy: flee.dy,
         locked: flee.locked,
-        threats: avoidHumans.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), mode: e.current_join_mode, drop: e.drop, speed: Math.round(e.speed) }))
-      };
-    }
+	        threats: avoidHumans.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), mode: e.current_join_mode, drop: e.drop, speed: Math.round(e.speed) }))
+	      };
+	    }
 
-    if (recovery) {
-      bot.fleeLock = null;
-      return {
+			    if (recovery) {
+	      bot.fleeLock = null;
+	      return {
         kind: 'recover',
         reason: 'wait-for-full-stamina-and-hp',
         dx: 0,
@@ -10430,10 +10644,10 @@ function browserBotSource(config) {
       };
     }
 
-    if (!fullHp && cautionThreats.length) {
-      if (footCoin) {
-        bot.fleeLock = null;
-        const dir = coinDirectionTo(self, footCoin);
+	    if (!fullHp && cautionThreats.length) {
+	      if (footCoin) {
+	        bot.fleeLock = null;
+	        const dir = coinDirectionTo(self, footCoin);
         return {
           kind: 'coin',
           reason: 'foot-coin-before-active-caution',
@@ -10451,12 +10665,12 @@ function browserBotSource(config) {
         dy: flee.dy,
         locked: flee.locked,
         threats: cautionThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), drop: e.drop, speed: Math.round(e.speed), moving: Boolean(e.moving), r: Math.round(e.cautionRadius) }))
-      };
-    }
+	      };
+	    }
 
-    if (footCoin) {
-      bot.fleeLock = null;
-      const dir = coinDirectionTo(self, footCoin);
+			    if (footCoin) {
+	      bot.fleeLock = null;
+	      const dir = coinDirectionTo(self, footCoin);
       return attachOpportunisticShot({
         kind: 'coin',
         reason: 'foot-coin-priority',
@@ -10726,18 +10940,24 @@ function browserBotSource(config) {
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
         const control = summarizeControl();
         const gameSessionPending = !self && controlHasNativeGameSession(control);
-        const waitReason = login?.attempted
-          ? 'auto-login'
-          : (login?.needed
-            ? (login?.error ? 'login-control-missing' : 'login-cooldown')
-            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
-	        refreshGlobalState(false).catch(err => {
-	          bot.globalState.error = err.message || String(err);
-	        });
+	        const waitReason = login?.attempted
+	          ? 'auto-login'
+	          : (login?.needed
+	            ? (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : 'login-cooldown'))
+	            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
+	        const loginDisplayReason = waitReason === 'game-session-connecting'
+	          ? '已登录，等待游戏连接/自身实体'
+	          : (waitReason === 'login-suppressed'
+	            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
+	              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
+	            : '');
+		        refreshGlobalState(false).catch(err => {
+		          bot.globalState.error = err.message || String(err);
+		        });
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: waitReason,
-	          displayReason: waitReason === 'game-session-connecting' ? '已登录，等待游戏连接/自身实体' : '',
+		          displayReason: loginDisplayReason,
 	          currentUserId: getCurrentUserId(),
 	          control,
 		          visibleEntities: arrayCount(bot.globalState.entities),
@@ -10918,11 +11138,11 @@ function browserBotSource(config) {
         };
         bot.pendingInjuryLeave = null;
       }
-      if (action.kind === 'leave' && action.combat) {
-        sendActionVelocity(action);
-        if (action.shoot && action.target) {
-          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
-        }
+	      if (action.kind === 'leave' && action.combat) {
+	        sendActionVelocity(action);
+	        if (action.shoot && action.target) {
+	          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+	        }
         const leaveResult = await leaveForCombat(action, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
         const enemyDetail = activeEnemyLeaveDetail();
@@ -10950,10 +11170,39 @@ function browserBotSource(config) {
             holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
           };
         updateBotPanel(bot.lastDecision);
-        if (cfg.once) bot.stop('once');
-        return;
-      }
-      if (bot.pendingInjuryLeave) {
+	        if (cfg.once) bot.stop('once');
+	        return;
+	      }
+	      if (action.kind === 'leave') {
+	        bot.pursuit = null;
+	        stopMotionSafely(action.reason || 'leave');
+	        const offlineSafety = {
+	          ...assessOfflineSafety(self),
+	          staminaBudgetExit: action.staminaBudgetExit || null
+	        };
+	        bot.lastOfflineSafety = offlineSafety;
+	        const leaveResult = await leaveOffline(action.reason || 'stamina budget coin leave', currentSummary, offlineSafety);
+	        const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
+	        const offlineDetail = activeOfflineLeaveDetail();
+	        bot.lastDecision = {
+	          ...action,
+	          kind: 'wait',
+	          reason: leaveIssued ? action.reason : (action.reason ? action.reason + '-retry' : 'leave-retry'),
+	          dx: 0,
+	          dy: 0,
+	          source,
+	          control: summarizeControl(),
+	          self: currentSummary,
+	          offlineSafety,
+	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || action.displayReason || '',
+	          leave: leaveResult,
+	          holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
+	        };
+	        updateBotPanel(bot.lastDecision);
+	        if (cfg.once) bot.stop('once');
+	        return;
+	      }
+	      if (bot.pendingInjuryLeave) {
         bot.pursuit = null;
         stopMotionSafely('injury-leave');
         const injury = {
