@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.90"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.91"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -490,6 +490,12 @@
       coinPickupTotal: Math.max(0, Number(preserved.session?.coinPickupTotal || 0) || 0),
       coinPickupKeys: Array.isArray(preserved.session?.coinPickupKeys) ? preserved.session.coinPickupKeys.slice(-80) : [],
       kills: Math.max(0, Number(preserved.session?.kills || 0) || 0),
+      stamina1dSpentBeforeSegment: Math.max(0, Number(preserved.session?.stamina1dSpentBeforeSegment || 0) || 0),
+      stamina1dSpentMs: Math.max(0, Number(preserved.session?.stamina1dSpentMs || 0) || 0),
+      stamina1dSegmentStartedAt: Number(preserved.session?.stamina1dSegmentStartedAt || 0) || 0,
+      stamina1dSegmentBase: Number.isFinite(Number(preserved.session?.stamina1dSegmentBase)) ? Number(preserved.session.stamina1dSegmentBase) : null,
+      stamina1dLastRemaining: Number.isFinite(Number(preserved.session?.stamina1dLastRemaining)) ? Number(preserved.session.stamina1dLastRemaining) : null,
+      stamina1dLastLimit: Number.isFinite(Number(preserved.session?.stamina1dLastLimit)) ? Number(preserved.session.stamina1dLastLimit) : null,
       combatLogSentBase: Number.isFinite(Number(preserved.session?.combatLogSentBase)) ? Number(preserved.session.combatLogSentBase) : null,
       combatLogFailedBase: Number.isFinite(Number(preserved.session?.combatLogFailedBase)) ? Number(preserved.session.combatLogFailedBase) : null,
       missingSince: Number(preserved.session?.missingSince || 0) || 0
@@ -864,10 +870,14 @@
     const hourMs = 60 * 60 * 1000;
     return (Math.floor(t / hourMs) + 1) * hourMs;
   }
-  function nextDailyStaminaResetAt(t = Date.now()) {
+  function dailyStaminaWindowStartAt(t = Date.now()) {
     const dayMs = 24 * 60 * 60 * 1000;
     const utc8OffsetMs = 8 * 60 * 60 * 1000;
-    return (Math.floor((t + utc8OffsetMs) / dayMs) + 1) * dayMs - utc8OffsetMs;
+    return Math.floor((t + utc8OffsetMs) / dayMs) * dayMs - utc8OffsetMs;
+  }
+  function nextDailyStaminaResetAt(t = Date.now()) {
+    const dayMs = 24 * 60 * 60 * 1000;
+    return dailyStaminaWindowStartAt(t) + dayMs;
   }
   function staminaResetHoldUntil(staminaState, t = Date.now()) {
     const exhausted = Array.isArray(staminaState?.longExhausted)
@@ -4132,6 +4142,51 @@
     return summarizeServerPositionStall(state);
   }
 
+  function resetSessionStaminaStats(session, selfSummary, t = Date.now()) {
+    const remaining = Number(selfSummary?.stamina1d ?? selfSummary?.stamina?.stamina1d ?? NaN);
+    const limit = Number(selfSummary?.stamina1dLimit ?? selfSummary?.stamina?.stamina1dLimit ?? NaN);
+    const base = Number.isFinite(remaining) ? remaining : null;
+    session.stamina1dSpentBeforeSegment = 0;
+    session.stamina1dSpentMs = 0;
+    session.stamina1dSegmentStartedAt = dailyStaminaWindowStartAt(t);
+    session.stamina1dSegmentBase = base;
+    session.stamina1dLastRemaining = base;
+    session.stamina1dLastLimit = Number.isFinite(limit) && limit > 0 ? limit : null;
+  }
+
+  function updateSessionStaminaStats(session, selfSummary, t = Date.now()) {
+    const remaining = Number(selfSummary?.stamina1d ?? selfSummary?.stamina?.stamina1d ?? NaN);
+    if (!Number.isFinite(remaining)) return;
+    const limitRaw = Number(selfSummary?.stamina1dLimit ?? selfSummary?.stamina?.stamina1dLimit ?? NaN);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : null;
+    const dayStart = dailyStaminaWindowStartAt(t);
+    let segmentStart = Number(session.stamina1dSegmentStartedAt || 0);
+    let segmentBase = Number(session.stamina1dSegmentBase);
+    if (!segmentStart || !Number.isFinite(segmentBase)) {
+      session.stamina1dSegmentStartedAt = dayStart;
+      session.stamina1dSegmentBase = remaining;
+      session.stamina1dLastRemaining = remaining;
+      session.stamina1dLastLimit = limit;
+      session.stamina1dSpentBeforeSegment = Math.max(0, Number(session.stamina1dSpentBeforeSegment || 0) || 0);
+      session.stamina1dSpentMs = Math.max(0, Number(session.stamina1dSpentMs || 0) || 0);
+      return;
+    }
+    if (segmentStart !== dayStart) {
+      const lastRemaining = Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : segmentBase;
+      const previousSpent = Math.max(0, segmentBase - lastRemaining);
+      session.stamina1dSpentBeforeSegment = Math.max(0, Number(session.stamina1dSpentBeforeSegment || 0) || 0) + previousSpent;
+      session.stamina1dSegmentStartedAt = dayStart;
+      session.stamina1dSegmentBase = limit || Math.max(remaining, 0);
+      segmentStart = dayStart;
+      segmentBase = Number(session.stamina1dSegmentBase);
+    }
+    const segmentSpent = Math.max(0, segmentBase - remaining);
+    const totalSpent = Math.max(0, Number(session.stamina1dSpentBeforeSegment || 0) || 0) + segmentSpent;
+    session.stamina1dSpentMs = Math.max(0, Math.round(totalSpent));
+    session.stamina1dLastRemaining = remaining;
+    session.stamina1dLastLimit = limit;
+  }
+
   function updateSessionStats(selfSummary) {
     const t = Date.now();
     const session = bot.session || (bot.session = {});
@@ -4153,6 +4208,7 @@
       session.coinPickupTotal = 0;
       session.coinPickupKeys = [];
       session.kills = 0;
+      resetSessionStaminaStats(session, selfSummary, t);
       session.combatLogSentBase = Number(bot.combatLogging?.sent || 0) || 0;
       session.combatLogFailedBase = Number(bot.combatLogging?.failed || 0) || 0;
     } else if (session.userId === null && userId !== null) {
@@ -4170,6 +4226,7 @@
       Math.max(0, Number(session.coinPickupTotal || 0) || 0),
       coinDiff
     );
+    updateSessionStaminaStats(session, selfSummary, t);
     const killCount = bot.killHistory.filter(item => Number(item?.at || 0) >= Number(session.startedAt || 0)).length;
     session.kills = Math.max(Math.max(0, Number(session.kills || 0) || 0), killCount);
   }
@@ -4185,6 +4242,10 @@
       coinsGained: Math.max(0, Number(session.coinsGained || 0) || 0),
       coinPickupTotal: Math.max(0, Number(session.coinPickupTotal || 0) || 0),
       kills: Math.max(0, Number(session.kills || 0) || 0),
+      stamina1dSpentMs: Math.max(0, Math.round(Number(session.stamina1dSpentMs || 0) || 0)),
+      stamina1dSegmentStartedAt: Number(session.stamina1dSegmentStartedAt || 0) || 0,
+      stamina1dLastRemaining: Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : null,
+      stamina1dLastLimit: Number.isFinite(Number(session.stamina1dLastLimit)) ? Number(session.stamina1dLastLimit) : null,
       combatLogSent: Math.max(0, Math.round((Number(bot.combatLogging?.sent || 0) || 0) - (Number(session.combatLogSentBase || 0) || 0))),
       combatLogFailed: Math.max(0, Math.round((Number(bot.combatLogging?.failed || 0) || 0) - (Number(session.combatLogFailedBase || 0) || 0))),
       userId: session.userId ?? null
