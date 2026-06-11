@@ -1414,6 +1414,21 @@ function runSelfTest() {
           suppressRemainingMs: 30000,
           suppressReason: 'pending unsafe hostile exit'
         }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 5700,
+        version: 'bootstrap-0.4.97',
+        reason: 'suspended:manual-login',
+        decision: {
+          kind: 'wait',
+          reason: 'manual-login'
+        },
+        login: {
+          manualLogin: {
+            reason: 'panel immediate login'
+          }
+        }
       }
     ];
     fs.writeFileSync(
@@ -1422,7 +1437,7 @@ function runSelfTest() {
     );
     const reloginReport = auditLogs({ dir: loginLogsDir, manifestPath });
     cases += 1;
-    assertSelfTest(reloginReport.exitEvents.length === 4, `expected 4 relogin events, got ${reloginReport.exitEvents.length}`);
+    assertSelfTest(reloginReport.exitEvents.length === 5, `expected 5 relogin events, got ${reloginReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(issueCount(reloginReport, 'login-attempt-during-exit-hold') === 2, 'expected two login during hold issues');
     cases += 1;
@@ -1431,6 +1446,8 @@ function runSelfTest() {
     assertSelfTest(issueCount(reloginReport, 'missing-top-level-exit') === 0, 'expected relogin hold issues not to require top-level exit');
     cases += 1;
     assertSelfTest(reloginReport.exitReasonCounts.some(item => item.reason === 'suspended:login-suppressed' && item.events === 1), 'expected suspended login-suppressed reason count');
+    cases += 1;
+    assertSelfTest(reloginReport.exitReasonCounts.some(item => item.reason === 'suspended:manual-login' && item.events === 1), 'expected suspended manual-login reason count');
 
     const behaviorEntries = [
       {
