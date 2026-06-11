@@ -10,6 +10,10 @@ const DEFAULTS = {
   eventGapMs: 30000,
   eventLineGap: 100,
   latest: 20,
+  sinceMs: 0,
+  sinceLabel: '',
+  minVersion: '',
+  version: '',
   watch: false,
   watchIntervalMs: 10000,
   watchCount: 0,
@@ -26,6 +30,11 @@ function parseArgs(args) {
     else if (arg === '--event-gap-ms') out.eventGapMs = Math.max(0, Number(args[++i] || out.eventGapMs) || out.eventGapMs);
     else if (arg === '--event-line-gap') out.eventLineGap = Math.max(0, Number(args[++i] || out.eventLineGap) || out.eventLineGap);
     else if (arg === '--latest') out.latest = Math.max(0, Number(args[++i] || out.latest) || out.latest);
+    else if (arg === '--since') {
+      out.sinceLabel = String(args[++i] || '');
+      out.sinceMs = parseTimeArg(out.sinceLabel);
+    } else if (arg === '--min-version') out.minVersion = String(args[++i] || '').trim();
+    else if (arg === '--version') out.version = String(args[++i] || '').trim();
     else if (arg === '--watch') out.watch = true;
     else if (arg === '--watch-interval-ms') out.watchIntervalMs = Math.max(250, Number(args[++i] || out.watchIntervalMs) || out.watchIntervalMs);
     else if (arg === '--watch-count') out.watchCount = Math.max(0, Number(args[++i] || out.watchCount) || out.watchCount);
@@ -50,12 +59,28 @@ Options:
   --event-gap-ms <ms>            Split same-summary events after this time gap. Default: ${DEFAULTS.eventGapMs}
   --event-line-gap <count>       Split same-summary events after this line gap. Default: ${DEFAULTS.eventLineGap}
   --latest <count>               Number of recent exit events to print. Default: ${DEFAULTS.latest}
+  --since <time>                 Only audit entries at/after this time. Use "now", epoch ms, or ISO time.
+  --min-version <version>        Only audit entries at/above this bot version, e.g. bootstrap-0.4.97.
+  --version <version>            Only audit entries from this exact bot version.
   --watch                        Keep polling the log directory.
   --watch-interval-ms <ms>       Poll interval for --watch. Default: ${DEFAULTS.watchIntervalMs}
   --watch-count <count>          Stop after this many watch scans. Default: unlimited
   --json                         Print machine-readable JSON.
   --fail-on-issue                Exit with code 1 when issues are found.
 `);
+}
+
+function parseTimeArg(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  if (/^now$/i.test(text)) return Date.now();
+  if (/^\d+$/.test(text)) {
+    const n = Number(text);
+    return n > 0 && n < 1000000000000 ? n * 1000 : n;
+  }
+  const parsed = Date.parse(text);
+  if (Number.isFinite(parsed)) return parsed;
+  throw new Error(`Invalid --since time: ${value}`);
 }
 
 function walkJsonlFiles(rootDir) {
@@ -108,6 +133,34 @@ function isoTime(value) {
   const t = Number(value || 0);
   if (!Number.isFinite(t) || t <= 0) return '';
   return new Date(t).toISOString();
+}
+
+function versionParts(value) {
+  return String(value || '')
+    .match(/\d+/g)
+    ?.map(part => Number(part))
+    .filter(part => Number.isFinite(part)) || [];
+}
+
+function compareVersions(a, b) {
+  const pa = versionParts(a);
+  const pb = versionParts(b);
+  const length = Math.max(pa.length, pb.length);
+  for (let i = 0; i < length; i += 1) {
+    const av = pa[i] || 0;
+    const bv = pb[i] || 0;
+    if (av !== bv) return av > bv ? 1 : -1;
+  }
+  return 0;
+}
+
+function entryMatchesFilters(entry, options) {
+  const t = entryTime(entry);
+  if (options.sinceMs && (!t || t < Number(options.sinceMs))) return false;
+  const version = String(entry?.version || '');
+  if (options.version && version !== options.version) return false;
+  if (options.minVersion && (!version || compareVersions(version, options.minVersion) < 0)) return false;
+  return true;
 }
 
 function textParts(entry) {
@@ -227,10 +280,13 @@ function auditFile(file, rootDir, options) {
   const versions = new Set();
   const exitEvents = [];
   const activeBySignature = new Map();
+  let includedEntries = 0;
   let firstAt = 0;
   let lastAt = 0;
   for (const item of parsed.entries) {
     const entry = item.entry;
+    if (!entryMatchesFilters(entry, options)) continue;
+    includedEntries += 1;
     const t = entryTime(entry);
     if (t && (!firstAt || t < firstAt)) firstAt = t;
     if (t && t > lastAt) lastAt = t;
@@ -282,7 +338,8 @@ function auditFile(file, rootDir, options) {
   }
   return {
     file: relFile,
-    entries: parsed.entries.length,
+    entries: includedEntries,
+    scannedEntries: parsed.entries.length,
     parseErrors: parsed.errors,
     versions: Array.from(versions).sort(),
     firstAt,
@@ -301,8 +358,12 @@ function auditLogs(options) {
   return {
     dir: options.dir,
     minUnsafeDelayMs: options.minUnsafeDelayMs,
+    sinceMs: options.sinceMs || 0,
+    minVersion: options.minVersion || '',
+    version: options.version || '',
     files: fileReports.length,
     entries: fileReports.reduce((sum, report) => sum + report.entries, 0),
+    scannedEntries: fileReports.reduce((sum, report) => sum + report.scannedEntries, 0),
     parseErrors,
     versions: Array.from(new Set(fileReports.flatMap(report => report.versions))).sort(),
     exitEvents,
@@ -321,6 +382,7 @@ function reportFingerprint(report) {
   return JSON.stringify({
     files: report.files,
     entries: report.entries,
+    scannedEntries: report.scannedEntries,
     parseErrors: report.parseErrors.length,
     issues: issueCounts(report),
     latestExit: {
@@ -336,7 +398,14 @@ function reportFingerprint(report) {
 function printHuman(report, options) {
   console.log('Combat log audit');
   console.log(`Dir: ${report.dir}`);
-  console.log(`Files: ${report.files}, entries: ${report.entries}, versions: ${report.versions.join(', ') || '-'}`);
+  console.log(`Files: ${report.files}, entries: ${report.entries}/${report.scannedEntries}, versions: ${report.versions.join(', ') || '-'}`);
+  if (report.sinceMs || report.minVersion || report.version) {
+    const filters = [];
+    if (report.sinceMs) filters.push(`since=${isoTime(report.sinceMs) || report.sinceMs}`);
+    if (report.minVersion) filters.push(`minVersion=${report.minVersion}`);
+    if (report.version) filters.push(`version=${report.version}`);
+    console.log('Filters: ' + filters.join(', '));
+  }
   console.log(`Exit events: ${report.exitEvents.length}, issues: ${report.issues.length}, parse errors: ${report.parseErrors.length}`);
   if (report.issues.length) {
     console.log('Issue counts: ' + issueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
@@ -385,7 +454,7 @@ async function watchLogs(options) {
       printHuman(report, options);
       lastFingerprint = fingerprint;
     } else {
-      console.log(`${new Date().toISOString()} no change: files=${report.files} entries=${report.entries} issues=${report.issues.length}`);
+      console.log(`${new Date().toISOString()} no change: files=${report.files} entries=${report.entries}/${report.scannedEntries} issues=${report.issues.length}`);
     }
     if (options.watchCount && scans >= options.watchCount) break;
     await sleep(options.watchIntervalMs);
