@@ -118,6 +118,7 @@ npm run monitor:current
 npm run monitor:current:strict
 npm run monitor:objective
 npm run monitor:objective:fresh
+npm run monitor:objective:observe
 npm run monitor:objective -- --since now --latest 10
 npm run monitor:current:strict -- --since now --latest 10
 npm run monitor:current -- --since now --latest 10
@@ -143,7 +144,7 @@ cd combat-log-service
 npm run monitor:objective:fresh
 ```
 
-`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件、射程内 Active 战斗响应事件、血量劣势退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。`monitor:objective:fresh` 等同于 `monitor:objective -- --since now --latest 10`，用于刚发布后只监控未来日志。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
+`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件、射程内 Active 战斗响应事件、血量劣势退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。`monitor:objective:fresh` 等同于 `monitor:objective -- --since now --latest 10`，用于刚发布后只监控未来日志。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。`monitor:objective:observe` 也从当前时间开始监控未来日志并显示缺少证据的状态，但退出码只对真实审计问题或解析错误失败，适合长时间观察日志是否重新出现行为/重连问题。
 
 `stamina-budget-coin-leave` 默认要求 5 分钟等待；如果配置改变，可用 `--stamina-budget-delay-ms <ms>` 调整审计阈值。
 
@@ -151,6 +152,7 @@ npm run monitor:objective:fresh
 
 ```bash
 npm run analyze -- --fail-on-issue
+npm run analyze:current -- --require-entries --fail-on-audit-issue
 npm run analyze:current -- --require-entries --fail-on-issue
 npm run validate:objective
 ```

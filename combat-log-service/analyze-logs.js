@@ -26,6 +26,7 @@ const DEFAULTS = {
   watchCount: 0,
   json: false,
   failOnIssue: false,
+  failOnAuditIssue: false,
   requireEntries: false,
   requireExitEvents: false,
   requireActiveCombatEvents: false,
@@ -56,6 +57,7 @@ function parseArgs(args) {
     else if (arg === '--watch-count') out.watchCount = Math.max(0, Number(args[++i] || out.watchCount) || out.watchCount);
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-issue') out.failOnIssue = true;
+    else if (arg === '--fail-on-audit-issue') out.failOnAuditIssue = true;
     else if (arg === '--require-entries') out.requireEntries = true;
     else if (arg === '--require-exit-events') out.requireExitEvents = true;
     else if (arg === '--require-active-combat-events') out.requireActiveCombatEvents = true;
@@ -92,6 +94,7 @@ Options:
   --watch-count <count>          Stop after this many watch scans. Default: unlimited
   --json                         Print machine-readable JSON.
   --fail-on-issue                Exit with code 1 when issues are found.
+  --fail-on-audit-issue          Exit with code 1 for audit/parse issues, but not missing-evidence gaps.
   --require-entries              Treat zero matching log entries as an evidence failure.
   --require-exit-events          Treat zero matching exit events as an evidence failure.
   --require-active-combat-events Treat zero Active-in-range combat responses as an evidence failure.
@@ -940,6 +943,10 @@ function reportHasFailures(report) {
   return Boolean(report?.issues?.length || report?.parseErrors?.length || report?.evidenceIssues?.length);
 }
 
+function reportHasAuditFailures(report) {
+  return Boolean(report?.issues?.length || report?.parseErrors?.length);
+}
+
 function eventReasonCounts(events) {
   const byReason = new Map();
   for (const event of events || []) {
@@ -1215,7 +1222,10 @@ async function watchLogs(options) {
     if (options.watchCount && scans >= options.watchCount) break;
     await sleep(options.watchIntervalMs);
   }
-  if (options.failOnIssue && lastReport && reportHasFailures(lastReport)) process.exitCode = 1;
+  if (lastReport) {
+    if (options.failOnIssue && reportHasFailures(lastReport)) process.exitCode = 1;
+    if (options.failOnAuditIssue && reportHasAuditFailures(lastReport)) process.exitCode = 1;
+  }
 }
 
 async function main() {
@@ -1232,6 +1242,7 @@ async function main() {
   if (options.json) console.log(JSON.stringify(report, null, 2));
   else printHuman(report, options);
   if (options.failOnIssue && reportHasFailures(report)) process.exitCode = 1;
+  if (options.failOnAuditIssue && reportHasAuditFailures(report)) process.exitCode = 1;
 }
 
 function assertSelfTest(condition, message) {
@@ -1414,6 +1425,8 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(emptyRequiredReport, 'no-matching-entries') === 1, 'expected one no-matching-entries evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(emptyRequiredReport), 'expected empty required report to count as failure');
+    cases += 1;
+    assertSelfTest(!reportHasAuditFailures(emptyRequiredReport), 'expected empty required report not to count as audit failure');
 
     fs.writeFileSync(
       path.join(noExitLogsDir, 'no-exit.jsonl'),
@@ -1438,12 +1451,24 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(noExitRequiredReport, 'no-matching-exit-events') === 1, 'expected one no-matching-exit-events evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(noExitRequiredReport), 'expected no-exit required report to count as failure');
+    cases += 1;
+    assertSelfTest(!reportHasAuditFailures(noExitRequiredReport), 'expected no-exit required report not to count as audit failure');
 
     const noActiveEvidenceReport = auditLogs({ dir: noExitLogsDir, manifestPath, requireEntries: true, requireActiveCombatEvents: true });
     cases += 1;
     assertSelfTest(evidenceIssueCount(noActiveEvidenceReport, 'no-active-in-range-combat-events') === 1, 'expected one no-active-in-range-combat-events evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(noActiveEvidenceReport), 'expected no-active-combat required report to count as failure');
+    cases += 1;
+    assertSelfTest(!reportHasAuditFailures(noActiveEvidenceReport), 'expected no-active-combat required report not to count as audit failure');
+
+    const noHpEvidenceOnlyReport = auditLogs({ dir: noExitLogsDir, manifestPath, requireEntries: true, requireHpDisadvantageExitEvents: true });
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(noHpEvidenceOnlyReport, 'no-hp-disadvantage-exit-events') === 1, 'expected one evidence-only no-hp-disadvantage-exit-events issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(noHpEvidenceOnlyReport), 'expected evidence-only no-hp report to count as failure');
+    cases += 1;
+    assertSelfTest(!reportHasAuditFailures(noHpEvidenceOnlyReport), 'expected evidence-only no-hp report not to count as audit failure');
 
     fs.writeFileSync(
       path.join(missingReasonLogsDir, 'missing-reason.jsonl'),
@@ -1486,6 +1511,8 @@ function runSelfTest() {
     assertSelfTest(issueCount(missingReasonReport, 'generic-exit-reason') === 1, 'expected one generic exit reason issue');
     cases += 1;
     assertSelfTest(reportHasFailures(missingReasonReport), 'expected missing-reason report to count as failure');
+    cases += 1;
+    assertSelfTest(reportHasAuditFailures(missingReasonReport), 'expected missing-reason report to count as audit failure');
 
     fs.writeFileSync(
       path.join(safeOfflineLogsDir, 'safe-offline.jsonl'),
@@ -1734,6 +1761,8 @@ function runSelfTest() {
     assertSelfTest(issueCount(behaviorReport, 'coin-action-with-active-player-in-range') === 1, 'expected one coin action with active player in range issue');
     cases += 1;
     assertSelfTest(issueCount(behaviorReport, 'missing-top-level-exit') === 0, 'expected behavior issues not to require top-level exit');
+    cases += 1;
+    assertSelfTest(reportHasAuditFailures(behaviorReport), 'expected behavior report to count as audit failure');
     const waitReason = behaviorReport.behaviorReasonCounts.find(item => item.reason === 'wait-for-clear-opportunity') || null;
     cases += 1;
     assertSelfTest(waitReason?.events === 1, `expected 1 wait behavior reason event, got ${waitReason?.events}`);
@@ -1758,6 +1787,8 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(noHpEvidenceReport, 'no-hp-disadvantage-exit-events') === 1, 'expected one no-hp-disadvantage-exit-events evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(noHpEvidenceReport), 'expected no-hp-evidence required report to count as failure');
+    cases += 1;
+    assertSelfTest(reportHasAuditFailures(noHpEvidenceReport), 'expected no-hp behavior report to count as audit failure');
 
     const requiredDelayEntries = [
       {
@@ -1867,6 +1898,8 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(hashBadReport, 'manifest-source-hash-missing') === 1, 'expected one missing source hash evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(hashBadReport), 'expected hash mismatch report to count as failure');
+    cases += 1;
+    assertSelfTest(!reportHasAuditFailures(hashBadReport), 'expected hash mismatch evidence report not to count as audit failure');
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {
