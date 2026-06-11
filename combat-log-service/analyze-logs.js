@@ -25,6 +25,7 @@ const DEFAULTS = {
   json: false,
   failOnIssue: false,
   requireEntries: false,
+  requireExitEvents: false,
   selfTest: false
 };
 
@@ -51,6 +52,7 @@ function parseArgs(args) {
     else if (arg === '--json') out.json = true;
     else if (arg === '--fail-on-issue') out.failOnIssue = true;
     else if (arg === '--require-entries') out.requireEntries = true;
+    else if (arg === '--require-exit-events') out.requireExitEvents = true;
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -83,6 +85,7 @@ Options:
   --json                         Print machine-readable JSON.
   --fail-on-issue                Exit with code 1 when issues are found.
   --require-entries              Treat zero matching log entries as an evidence failure.
+  --require-exit-events          Treat zero matching exit events as an evidence failure.
   --self-test                    Run analyzer regression checks.
 `);
 }
@@ -583,6 +586,7 @@ function auditLogs(options) {
     dir: options.dir,
     minUnsafeDelayMs: options.minUnsafeDelayMs,
     requireEntries: Boolean(options.requireEntries),
+    requireExitEvents: Boolean(options.requireExitEvents),
     sinceMs: options.sinceMs || 0,
     minVersion: options.minVersion || '',
     version: options.version || '',
@@ -603,6 +607,12 @@ function auditLogs(options) {
     report.evidenceIssues.push({
       issue: 'no-matching-entries',
       message: 'No log entries matched the active filters.'
+    });
+  }
+  if (options.requireExitEvents && exitEvents.length === 0) {
+    report.evidenceIssues.push({
+      issue: 'no-matching-exit-events',
+      message: 'No exit events matched the active filters.'
     });
   }
   return report;
@@ -666,13 +676,14 @@ function printHuman(report, options) {
   console.log('Combat log audit');
   console.log(`Dir: ${report.dir}`);
   console.log(`Files: ${report.files}, entries: ${report.entries}/${report.scannedEntries}, versions: ${report.versions.join(', ') || '-'}`);
-  if (report.sinceMs || report.minVersion || report.version || report.requireEntries) {
+  if (report.sinceMs || report.minVersion || report.version || report.requireEntries || report.requireExitEvents) {
     const filters = [];
     if (report.sinceMs) filters.push(`since=${isoTime(report.sinceMs) || report.sinceMs}`);
     if (report.manifestVersion) filters.push(`manifest=${report.manifestVersion}${report.manifestMode ? `:${report.manifestMode}` : ''}`);
     if (report.minVersion) filters.push(`minVersion=${report.minVersion}`);
     if (report.version) filters.push(`version=${report.version}`);
     if (report.requireEntries) filters.push('requireEntries=true');
+    if (report.requireExitEvents) filters.push('requireExitEvents=true');
     console.log('Filters: ' + filters.join(', '));
   }
   console.log(`Exit events: ${report.exitEvents.length}, behavior events: ${report.behaviorEvents.length}, issues: ${report.issues.length}, evidence issues: ${report.evidenceIssues.length}, parse errors: ${report.parseErrors.length}`);
@@ -782,11 +793,13 @@ function runSelfTest() {
     const logsDir = path.join(tempRoot, 'logs');
     const loginLogsDir = path.join(tempRoot, 'login-logs');
     const behaviorLogsDir = path.join(tempRoot, 'behavior-logs');
+    const noExitLogsDir = path.join(tempRoot, 'no-exit-logs');
     const emptyLogsDir = path.join(tempRoot, 'empty-logs');
     const manifestPath = path.join(tempRoot, 'manifest.json');
     fs.mkdirSync(logsDir, { recursive: true });
     fs.mkdirSync(loginLogsDir, { recursive: true });
     fs.mkdirSync(behaviorLogsDir, { recursive: true });
+    fs.mkdirSync(noExitLogsDir, { recursive: true });
     fs.mkdirSync(emptyLogsDir, { recursive: true });
     fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
 
@@ -899,6 +912,12 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(requiredReport.evidenceIssues.length === 0, `expected no evidence issues with matching entries, got ${requiredReport.evidenceIssues.length}`);
 
+    const requiredExitReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true, requireExitEvents: true });
+    cases += 1;
+    assertSelfTest(requiredExitReport.exitEvents.length === 2, `expected 2 required exit events, got ${requiredExitReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(requiredExitReport.evidenceIssues.length === 0, `expected no evidence issues with matching exit events, got ${requiredExitReport.evidenceIssues.length}`);
+
     const emptyRequiredReport = auditLogs({ dir: emptyLogsDir, manifestPath, requireEntries: true });
     cases += 1;
     assertSelfTest(emptyRequiredReport.entries === 0, `expected 0 empty required entries, got ${emptyRequiredReport.entries}`);
@@ -906,6 +925,30 @@ function runSelfTest() {
     assertSelfTest(evidenceIssueCount(emptyRequiredReport, 'no-matching-entries') === 1, 'expected one no-matching-entries evidence issue');
     cases += 1;
     assertSelfTest(reportHasFailures(emptyRequiredReport), 'expected empty required report to count as failure');
+
+    fs.writeFileSync(
+      path.join(noExitLogsDir, 'no-exit.jsonl'),
+      JSON.stringify({
+        type: 'combat-frame',
+        at: baseAt + 3500,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'attack',
+          reason: 'combat-spacing',
+          combat: true,
+          shoot: true
+        }
+      }) + '\n'
+    );
+    const noExitRequiredReport = auditLogs({ dir: noExitLogsDir, manifestPath, requireEntries: true, requireExitEvents: true });
+    cases += 1;
+    assertSelfTest(noExitRequiredReport.entries === 1, `expected 1 no-exit entry, got ${noExitRequiredReport.entries}`);
+    cases += 1;
+    assertSelfTest(noExitRequiredReport.exitEvents.length === 0, `expected 0 no-exit events, got ${noExitRequiredReport.exitEvents.length}`);
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(noExitRequiredReport, 'no-matching-exit-events') === 1, 'expected one no-matching-exit-events evidence issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(noExitRequiredReport), 'expected no-exit required report to count as failure');
 
     const reloginEntries = [
       {
