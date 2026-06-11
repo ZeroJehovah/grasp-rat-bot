@@ -95,6 +95,19 @@ npm run analyze
 npm run analyze -- --latest 10
 ```
 
+持续监控新日志，发现退出/重连审计结果变化时打印更新：
+
+```bash
+npm run monitor
+```
+
+降低轮询频率或只跑一次监控扫描：
+
+```bash
+npm run monitor -- --watch-interval-ms 5000 --latest 5
+npm run monitor -- --watch-count 1
+```
+
 用于自动检查时可以让问题返回非零退出码：
 
 ```bash
