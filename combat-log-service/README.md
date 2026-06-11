@@ -126,7 +126,7 @@ npm run monitor -- --since now --min-version bootstrap-0.4.101 --latest 10
 
 `validate:current` 会额外要求至少存在一条当前 manifest 版本日志；没有匹配日志时返回非零退出码，用来区分“无问题”和“还没有验证证据”。使用 `--manifest` 时，审计也会核对日志 `sourceHash` 是否匹配 manifest SHA。
 
-`validate:objective` 更严格：它要求当前 manifest 版本既有日志，也至少有一个退出事件，并且没有退出/重连/行为回归问题。没有当前版本退出样本时会返回 `no-matching-exit-events`，避免把“还没发生退出”误判成“退出逻辑已验证”。
+`validate:objective` 更严格：它要求当前 manifest 版本既有日志，也至少有一个退出事件、至少一个射程内 Active 敌人触发战斗响应的事件、至少一个交战血量劣势退出事件，并且没有退出/重连/行为回归问题。没有当前版本退出样本时会返回 `no-matching-exit-events`，没有射程内 Active 战斗响应样本时会返回 `no-active-in-range-combat-events`，没有血量劣势退出样本时会返回 `no-hp-disadvantage-exit-events`，避免把“还没发生关键场景”误判成“逻辑已验证”。
 
 需要验证刚发布的当前版本时，建议先启动收集服务并开启 Tampermonkey 战斗日志，然后从当前时间开始严格监控：
 
@@ -142,7 +142,7 @@ cd combat-log-service
 npm run monitor:objective -- --since now --latest 10
 ```
 
-`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
+`monitor:current:strict` 会持续过滤到 `../dist/manifest.json` 当前版本，并把“没有当前版本日志”也显示为 evidence issue。`monitor:objective` 会额外要求当前版本退出事件、射程内 Active 战斗响应事件、血量劣势退出事件，用来验证退出原因、非安全退出重连等待，以及当前版本是否重新出现收益等待/射程内金币行动问题。如果加 `--watch-count 1`，发现审计问题、解析错误或缺少匹配证据时会返回非零退出码。
 
 `stamina-budget-coin-leave` 默认要求 5 分钟等待；如果配置改变，可用 `--stamina-budget-delay-ms <ms>` 调整审计阈值。
 
@@ -174,7 +174,9 @@ npm test
 
 - `no-matching-entries`: 当前过滤条件没有任何日志；
 - `no-matching-exit-events`: 当前过滤条件有日志，但没有退出事件；
+- `no-active-in-range-combat-events`: 当前过滤条件有日志，但没有射程内非无敌 Active 敌人触发战斗/攻击/战斗退出响应的样本；
+- `no-hp-disadvantage-exit-events`: 当前过滤条件有日志，但没有 `combat-hp-disadvantage-leave` 或 `combat-low-hp-leave` 退出样本；
 - `manifest-source-hash-missing`: 当前过滤条件有日志，但部分日志缺少 `sourceHash`，无法证明来自当前构建；
 - `manifest-source-hash-mismatch`: 日志 `sourceHash` 与 manifest SHA 不一致。
 
-审计输出会先汇总安全/非安全退出等待是否达标，再按退出 reason / 行为 reason 聚合计数，最后列出最新事件。最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
+审计输出会先汇总安全/非安全退出等待是否达标，再按退出 reason / 行为 reason / 射程内 Active 战斗响应 reason 聚合计数，最后列出最新事件。最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
