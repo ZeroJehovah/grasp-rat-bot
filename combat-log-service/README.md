@@ -124,6 +124,12 @@ npm run monitor -- --since now --min-version bootstrap-0.4.97 --latest 10
 npm run analyze -- --fail-on-issue
 ```
 
+验证审计器自身的版本过滤和问题识别逻辑：
+
+```bash
+npm test
+```
+
 审计会标记：
 
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
