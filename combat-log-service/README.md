@@ -172,4 +172,4 @@ npm test
 - `no-matching-entries`: 当前过滤条件没有任何日志；
 - `no-matching-exit-events`: 当前过滤条件有日志，但没有退出事件。
 
-最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。
+审计输出会先按退出 reason / 行为 reason 聚合计数，再列出最新事件。最新退出事件行也会显示登录/重连上下文，例如 `suppress=...`、`enemyHold=...`、`offlineHold=...`、`lastLogin=...`、`manualLogin=...`，用于判断退出后是否仍有重连抑制、是否被手动登录绕过、或登录逻辑是否忽略了 suppress。

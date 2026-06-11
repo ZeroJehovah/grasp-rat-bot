@@ -576,6 +576,8 @@ function auditLogs(options) {
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
   const behaviorEvents = fileReports.flatMap(report => report.behaviorEvents || [])
     .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+  const exitReasonCounts = eventReasonCounts(exitEvents);
+  const behaviorReasonCounts = eventReasonCounts(behaviorEvents);
   const issues = [
     ...exitEvents.flatMap(event => event.issues.map(issue => ({ issue, event }))),
     ...behaviorEvents.flatMap(event => event.issues.map(issue => ({ issue, event })))
@@ -600,6 +602,8 @@ function auditLogs(options) {
     versions: Array.from(new Set(fileReports.flatMap(report => report.versions))).sort(),
     exitEvents,
     behaviorEvents,
+    exitReasonCounts,
+    behaviorReasonCounts,
     issues,
     evidenceIssues: []
   };
@@ -644,6 +648,46 @@ function reportHasFailures(report) {
   return Boolean(report?.issues?.length || report?.parseErrors?.length || report?.evidenceIssues?.length);
 }
 
+function eventReasonCounts(events) {
+  const byReason = new Map();
+  for (const event of events || []) {
+    const reason = String(event?.reason || '-');
+    const existing = byReason.get(reason) || {
+      reason,
+      events: 0,
+      frames: 0,
+      unsafeEvents: 0,
+      issueEvents: 0,
+      maxDelayMs: 0,
+      latestAt: 0,
+      issues: []
+    };
+    existing.events += 1;
+    existing.frames += Math.max(1, Number(event?.count || 0) || 0);
+    if (event?.unsafe) existing.unsafeEvents += 1;
+    if (event?.issues?.length) existing.issueEvents += 1;
+    existing.maxDelayMs = Math.max(existing.maxDelayMs, Number(event?.delayMs || 0) || 0);
+    existing.latestAt = Math.max(existing.latestAt, Number(event?.lastAt || 0) || 0);
+    for (const issue of event?.issues || []) {
+      if (!existing.issues.includes(issue)) existing.issues.push(issue);
+    }
+    byReason.set(reason, existing);
+  }
+  return Array.from(byReason.values())
+    .sort((a, b) => (b.events - a.events) || (b.latestAt - a.latestAt) || a.reason.localeCompare(b.reason));
+}
+
+function formatReasonCounts(counts) {
+  return counts.map(item => {
+    const flags = [];
+    if (item.frames !== item.events) flags.push(`frames=${item.frames}`);
+    if (item.unsafeEvents) flags.push(`unsafe=${item.unsafeEvents}`);
+    if (item.issueEvents) flags.push(`issueEvents=${item.issueEvents}`);
+    if (item.maxDelayMs) flags.push(`maxDelay=${item.maxDelayMs}ms`);
+    return `${item.reason}=${item.events}${flags.length ? ` (${flags.join(', ')})` : ''}`;
+  }).join(', ');
+}
+
 function reportFingerprint(report) {
   const latest = report.exitEvents[0] || {};
   const latestBehavior = report.behaviorEvents?.[0] || {};
@@ -655,6 +699,8 @@ function reportFingerprint(report) {
     parseErrors: report.parseErrors.length,
     evidenceIssues: evidenceIssueCounts(report),
     issues: issueCounts(report),
+    exitReasonCounts: report.exitReasonCounts,
+    behaviorReasonCounts: report.behaviorReasonCounts,
     latestExit: {
       file: latest.file || '',
       line: latest.lastLine || 0,
@@ -692,6 +738,12 @@ function printHuman(report, options) {
   }
   if (report.evidenceIssues.length) {
     console.log('Evidence issue counts: ' + evidenceIssueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
+  }
+  if (report.exitReasonCounts.length) {
+    console.log('Exit reason counts: ' + formatReasonCounts(report.exitReasonCounts));
+  }
+  if (report.behaviorReasonCounts.length) {
+    console.log('Behavior reason counts: ' + formatReasonCounts(report.behaviorReasonCounts));
   }
   const latest = report.exitEvents.slice(0, options.latest);
   if (latest.length) {
@@ -888,6 +940,11 @@ function runSelfTest() {
     assertSelfTest(issueCount(allReport, 'missing-top-level-exit') === 1, 'expected one missing top-level exit issue');
     cases += 1;
     assertSelfTest(issueCount(allReport, 'unsafe-exit-delay-below-minimum') === 1, 'expected one unsafe-delay issue');
+    const allCombatReason = allReport.exitReasonCounts.find(item => item.reason === 'combat-hp-disadvantage-leave') || null;
+    cases += 1;
+    assertSelfTest(allCombatReason?.events === 2, `expected 2 combat reason events, got ${allCombatReason?.events}`);
+    cases += 1;
+    assertSelfTest(allCombatReason?.frames === 2, `expected 2 combat reason frames, got ${allCombatReason?.frames}`);
 
     const currentReport = auditLogs({ dir: logsDir, manifestPath });
     cases += 1;
@@ -905,6 +962,8 @@ function runSelfTest() {
     assertSelfTest(currentCombatExit?.login?.enemyHoldRemainingMs === 90000, 'expected current exit enemy hold context');
     cases += 1;
     assertSelfTest(currentReport.exitEvents.some(event => event.reason === 'enemy-leave-wait' && event.topLevelExit && event.delayMs === 180000), 'expected combat-end exit wait to keep top-level exit and delay');
+    cases += 1;
+    assertSelfTest(currentReport.exitReasonCounts.length === 2, `expected 2 current exit reason counts, got ${currentReport.exitReasonCounts.length}`);
 
     const requiredReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true });
     cases += 1;
@@ -1075,6 +1134,12 @@ function runSelfTest() {
     assertSelfTest(issueCount(behaviorReport, 'coin-action-with-active-player-in-range') === 1, 'expected one coin action with active player in range issue');
     cases += 1;
     assertSelfTest(issueCount(behaviorReport, 'missing-top-level-exit') === 0, 'expected behavior issues not to require top-level exit');
+    const waitReason = behaviorReport.behaviorReasonCounts.find(item => item.reason === 'wait-for-clear-opportunity') || null;
+    cases += 1;
+    assertSelfTest(waitReason?.events === 1, `expected 1 wait behavior reason event, got ${waitReason?.events}`);
+    const coinReason = behaviorReport.behaviorReasonCounts.find(item => item.reason === 'visible-coin') || null;
+    cases += 1;
+    assertSelfTest(coinReason?.events === 1, `expected 1 coin behavior reason event, got ${coinReason?.events}`);
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {
