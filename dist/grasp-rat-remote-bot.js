@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.82"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.83"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -86,7 +86,7 @@
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
     combatAimJitterMinRadians: 0.025,
-    combatAimJitterMaxRadians: 0.16,
+    combatAimJitterMaxRadians: 0.14,
     combatAimJitterCloseDistance: 2500,
     combatAimJitterFarDistance: 14500,
     combatAimLeadMinRadians: 0.035,
@@ -100,7 +100,7 @@
     combatBulletHitRadiusCm: 90,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
-    combatAimNoDamageMaxRadians: 0.16,
+    combatAimNoDamageMaxRadians: 0.14,
     combatAimLockMs: 450,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
