@@ -3612,6 +3612,7 @@ function browserBotSource(config) {
 	      'auto-login': '自动触发登录/加入',
 	      'login-cooldown': '登录已触发，等待页面跳转',
 	      'login-control-missing': '等待登录控件出现',
+	      'game-session-connecting': '已登录，等待游戏连接/自身实体',
 	      'no-self': '未读到自身实体',
 	      'not-alive': '不在存活状态',
 	      'bot-error': '脚本异常'
@@ -4042,7 +4043,7 @@ function browserBotSource(config) {
 	      function combatLogSuspendReason(decision) {
 	        const reason = String(decision?.reason || '');
 	        if (!reason) return '';
-	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|login-cooldown|login-control-missing)$/.test(reason)) return reason;
+	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|login-cooldown|login-control-missing|game-session-connecting)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
 	        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
@@ -4364,7 +4365,32 @@ function browserBotSource(config) {
 	    return localStorage.getItem('tmpGameSessionToken') || '';
 	  }
 
-  function isVisible(el) {
+  function wsReadyStateNumber(value) {
+    if (value === null || value === undefined || value === '') return NaN;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  function isWsConnectingOrOpen(value) {
+    const n = wsReadyStateNumber(value);
+    return n === 0 || n === 1;
+  }
+
+  function hasNativeGameSession(native = getNativeControl(), userId = getCurrentUserId()) {
+    return Boolean(userId && native?.ws && (native.wsOpen || isWsConnectingOrOpen(native.wsReadyState)));
+  }
+
+  function controlHasNativeGameSession(control) {
+    return Boolean(control?.currentUserId && (
+      control.rawWsOpen
+      || control.nativeWsOpen
+      || control.connecting
+      || isWsConnectingOrOpen(control.nativeWsReadyState)
+      || isWsConnectingOrOpen(control.wsReadyState)
+    ));
+  }
+
+	  function isVisible(el) {
     if (!el) return false;
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
@@ -5058,6 +5084,9 @@ function browserBotSource(config) {
     if (self) {
       return { known: true, alive: Boolean(isAlive(self)), source: 'tick-self', self: summarizeSelf(self) };
     }
+    if (hasNativeGameSession(getNativeControl(), userId)) {
+      return { known: false, alive: false, source: 'native-session-pending', self: null };
+    }
     if (hasLoginRequiredText() || findLoginControl()) {
       return { known: true, alive: false, source: 'login-required', self: null };
     }
@@ -5428,6 +5457,31 @@ function browserBotSource(config) {
     }
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
+    const userId = getCurrentUserId();
+    const hasToken = Boolean(getSessionToken());
+    const native = getNativeControl();
+    const hasNativeSession = hasNativeGameSession(native, userId);
+    const loginControl = findLoginControl();
+    const loginRequired = hasLoginRequiredText();
+    const self = getSelf();
+    const hasAliveSelf = Boolean(self && isAlive(self));
+    const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
+    const hasPageSession = Boolean(hasToken || hasNativeSession);
+    const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || (force && canStartLogin && !hasNativeSession));
+    if (!needsLogin) {
+      return force ? {
+        needed: false,
+        attempted: false,
+        reason: hasAliveSelf ? 'already-alive' : (hasNativeSession ? 'game-session-active' : 'already-logged-in'),
+        error: '',
+        forced: true,
+        hasToken,
+        hasNativeSession,
+        nativeWsReadyState: native?.wsReadyState ?? null,
+        currentUserId: userId,
+        self: hasAliveSelf ? summarizeSelf(self) : null
+      } : null;
+    }
     const suppressRemainingMs = loginSuppressRemainingMs();
     if (suppressRemainingMs > 0 && !ignoreSuppress) {
       return {
@@ -5437,29 +5491,11 @@ function browserBotSource(config) {
         cooldownRemainingMs: Math.round(suppressRemainingMs),
         error: '',
         suppressReason: localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || 'login flow',
-        hasToken: Boolean(getSessionToken()),
-        currentUserId: getCurrentUserId()
-      };
-    }
-    const userId = getCurrentUserId();
-    const hasToken = Boolean(getSessionToken());
-    const loginControl = findLoginControl();
-    const loginRequired = hasLoginRequiredText();
-    const self = getSelf();
-    const hasAliveSelf = Boolean(self && isAlive(self));
-    const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
-    const needsLogin = !hasAliveSelf && (!hasToken || loginRequired || (force && canStartLogin));
-    if (!needsLogin) {
-      return force ? {
-        needed: false,
-        attempted: false,
-        reason: hasAliveSelf ? 'already-alive' : 'already-logged-in',
-        error: '',
-        forced: true,
         hasToken,
-        currentUserId: userId,
-        self: hasAliveSelf ? summarizeSelf(self) : null
-      } : null;
+        hasNativeSession,
+        nativeWsReadyState: native?.wsReadyState ?? null,
+        currentUserId: userId
+      };
     }
     if (!ignoreLoginCooldown && t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
       const lastError = bot.lastLoginResult?.error || '';
@@ -5470,6 +5506,8 @@ function browserBotSource(config) {
         cooldownRemainingMs: Math.max(0, Math.round(cfg.loginCooldownMs - (t - Number(bot.lastLoginAt || 0)))),
         error: lastError,
         hasToken,
+        hasNativeSession,
+        nativeWsReadyState: native?.wsReadyState ?? null,
         currentUserId: userId
       };
     }
@@ -5478,6 +5516,8 @@ function browserBotSource(config) {
       attempted: false,
       reason,
       hasToken,
+      hasNativeSession,
+      nativeWsReadyState: native?.wsReadyState ?? null,
       currentUserId: userId,
       loginRequired,
       forced: force,
@@ -5889,16 +5929,21 @@ function browserBotSource(config) {
 	    const token = getSessionToken();
 	    bot.control.currentUserId = userId;
 	    bot.control.hasToken = Boolean(token);
-	    if (!userId || !token) {
-	      closeControlWs('missing login token');
+	    if (!userId) {
+	      closeControlWs('missing user id');
 	      return false;
 	    }
 	    const native = getNativeControl();
 	    if (native) {
 	      if (bot.control.ws) closeControlWs();
-	      if (syncNativeControl(native)) return true;
-	      if (native.wsReadyState === WebSocket.CONNECTING) return false;
+	      syncNativeControl(native);
+	      if (bot.control.wsOpen) return true;
+	      if (isWsConnectingOrOpen(native.wsReadyState)) return false;
 	      bot.control.lastError = 'native page websocket offline; page owns reconnect';
+	      return false;
+	    }
+	    if (!token) {
+	      closeControlWs('missing login token');
 	      return false;
 	    }
 	    if (bot.control.ws) closeControlWs('bot websocket fallback disabled');
@@ -9693,14 +9738,22 @@ function browserBotSource(config) {
 	        stopMotionSafely('no-self');
 	        if (!bot.waitSince) bot.waitSince = Date.now();
         const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
+        const control = summarizeControl();
+        const gameSessionPending = !self && controlHasNativeGameSession(control);
+        const waitReason = login?.attempted
+          ? 'auto-login'
+          : (login?.needed
+            ? (login?.error ? 'login-control-missing' : 'login-cooldown')
+            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
 	        refreshGlobalState(false).catch(err => {
 	          bot.globalState.error = err.message || String(err);
 	        });
 	        bot.lastDecision = {
 	          kind: 'wait',
-	          reason: login?.attempted ? 'auto-login' : (login?.needed ? (login?.error ? 'login-control-missing' : 'login-cooldown') : (self ? 'not-alive' : 'no-self')),
+	          reason: waitReason,
+	          displayReason: waitReason === 'game-session-connecting' ? '已登录，等待游戏连接/自身实体' : '',
 	          currentUserId: getCurrentUserId(),
-	          control: summarizeControl(),
+	          control,
 		          visibleEntities: arrayCount(bot.globalState.entities),
 	          self,
           login
