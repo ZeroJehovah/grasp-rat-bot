@@ -2145,7 +2145,7 @@
 
   function findGameLoginControl() {
     const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
-    if (direct && visible(direct)) return direct;
+    if (direct && (visible(direct) || direct.dataset.graspRatNativeLoginHidden === 'true')) return direct;
     const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(visible);
     return candidates.find(el => {
       const text = controlText(el);
