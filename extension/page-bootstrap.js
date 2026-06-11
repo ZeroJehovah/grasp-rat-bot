@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.8';
+  const BOOTSTRAP_VERSION = '0.1.9';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -36,7 +36,7 @@
   const DEFAULTS = {
     manifestUrl: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/manifest.json',
     loaderUpdateUrl: LOADER_UPDATE_URL,
-    pollMs: 5000,
+    pollMs: 10000,
     loaderVersionCheckMs: 300000,
     watchdogMs: 1000,
     busyLeaseMs: 12000,
@@ -357,7 +357,7 @@
     cfg = {
       manifestUrl: String(readStored('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
       loaderUpdateUrl: String(readStored('loaderUpdateUrl', DEFAULTS.loaderUpdateUrl) || DEFAULTS.loaderUpdateUrl),
-      pollMs: Math.max(5000, Number(readStored('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
+      pollMs: Math.max(10000, Number(readStored('pollMs', DEFAULTS.pollMs)) || DEFAULTS.pollMs),
       loaderVersionCheckMs: Math.max(60000, Number(readStored('loaderVersionCheckMs', DEFAULTS.loaderVersionCheckMs)) || DEFAULTS.loaderVersionCheckMs),
       watchdogMs: Math.max(250, Number(readStored('watchdogMs', DEFAULTS.watchdogMs)) || DEFAULTS.watchdogMs),
       busyLeaseMs: Math.max(3000, Number(readStored('busyLeaseMs', DEFAULTS.busyLeaseMs)) || DEFAULTS.busyLeaseMs),
@@ -1033,38 +1033,28 @@
   async function requestAcceptedTextWithFallback(label, urls, acceptText) {
     const candidates = uniqueUrls(urls);
     if (!candidates.length) throw new Error(`${label} fetch failed: no urls`);
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let completed = 0;
-      const errors = [];
-      const localTimers = candidates.map((url, i) => setTimeout(async () => {
-        if (settled || state.disabled) return;
-        try {
-          logBootstrap(`${label} fetch try`, { url, index: i + 1, total: candidates.length, delayMs: i * cfg.fallbackStaggerMs });
-          noteFetchStatus(label, `fetching ${i + 1}/${candidates.length}`);
-          const { text, url: finalUrl } = await requestText('GET', withCacheBust(url));
-          const accepted = acceptText ? await acceptText(text, url) : null;
-          if (settled) return;
-          settled = true;
-          localTimers.forEach(timer => clearTimeout(timer));
-          noteFetchStatus(label, 'ok via extension-fetch', true);
-          logBootstrap(`${label} fetch ok`, { url: finalUrl || url, index: i + 1, bytes: String(text || '').length });
-          resolve({ text, url: finalUrl || url, accepted, transport: 'extension-fetch' });
-        } catch (err) {
-          if (settled) return;
-          const error = err?.message || String(err);
-          errors[i] = `${url}: ${error}`;
-          completed += 1;
-          noteFetchStatus(label, `failed ${completed}/${candidates.length}: ${error}`);
-          logBootstrap(`${label} fetch failed`, { url, index: i + 1, total: candidates.length, error });
-          if (completed >= candidates.length) {
-            settled = true;
-            noteFetchStatus(label, `failed: ${errors.filter(Boolean).join(' | ')}`, true);
-            reject(new Error(`${label} fetch failed from ${candidates.length} url(s): ${errors.filter(Boolean).join(' | ')}`));
-          }
-        }
-      }, i * cfg.fallbackStaggerMs));
-    });
+    const errors = [];
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (state.disabled) throw new Error(`${label} fetch aborted: ${state.disabledReason || 'bootstrap disabled'}`);
+      const url = candidates[i];
+      if (i > 0 && cfg.fallbackStaggerMs > 0) await sleep(cfg.fallbackStaggerMs);
+      try {
+        logBootstrap(`${label} fetch try`, { url, index: i + 1, total: candidates.length, delayMs: i > 0 ? cfg.fallbackStaggerMs : 0 });
+        noteFetchStatus(label, `fetching ${i + 1}/${candidates.length}`);
+        const { text, url: finalUrl } = await requestText('GET', withCacheBust(url));
+        const accepted = acceptText ? await acceptText(text, url) : null;
+        noteFetchStatus(label, 'ok via extension-fetch', true);
+        logBootstrap(`${label} fetch ok`, { url: finalUrl || url, index: i + 1, bytes: String(text || '').length });
+        return { text, url: finalUrl || url, accepted, transport: 'extension-fetch' };
+      } catch (err) {
+        const error = err?.message || String(err);
+        errors[i] = `${url}: ${error}`;
+        noteFetchStatus(label, `failed ${i + 1}/${candidates.length}: ${error}`);
+        logBootstrap(`${label} fetch failed`, { url, index: i + 1, total: candidates.length, error });
+      }
+    }
+    noteFetchStatus(label, `failed: ${errors.filter(Boolean).join(' | ')}`, true);
+    throw new Error(`${label} fetch failed from ${candidates.length} url(s): ${errors.filter(Boolean).join(' | ')}`);
   }
 
   async function sha256Hex(text) {
