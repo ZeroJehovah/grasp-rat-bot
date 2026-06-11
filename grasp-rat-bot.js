@@ -2996,6 +2996,8 @@ function browserBotSource(config) {
       coinPickupTotal: Math.max(0, Number(preserved.session?.coinPickupTotal || 0) || 0),
       coinPickupKeys: Array.isArray(preserved.session?.coinPickupKeys) ? preserved.session.coinPickupKeys.slice(-80) : [],
       kills: Math.max(0, Number(preserved.session?.kills || 0) || 0),
+      combatLogSentBase: Number.isFinite(Number(preserved.session?.combatLogSentBase)) ? Number(preserved.session.combatLogSentBase) : null,
+      combatLogFailedBase: Number.isFinite(Number(preserved.session?.combatLogFailedBase)) ? Number(preserved.session.combatLogFailedBase) : null,
       missingSince: Number(preserved.session?.missingSince || 0) || 0
     },
 	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], bullets: [], coinDrops: [], messages: [], minimap: null, error: '' },
@@ -6461,11 +6463,15 @@ function browserBotSource(config) {
       session.coinPickupTotal = 0;
       session.coinPickupKeys = [];
       session.kills = 0;
+      session.combatLogSentBase = Number(bot.combatLogging?.sent || 0) || 0;
+      session.combatLogFailedBase = Number(bot.combatLogging?.failed || 0) || 0;
     } else if (session.userId === null && userId !== null) {
       session.userId = userId;
     }
     session.missingSince = 0;
     if (!Number.isFinite(Number(session.baseCoins))) session.baseCoins = Number.isFinite(coins) ? coins : 0;
+    if (!Number.isFinite(Number(session.combatLogSentBase))) session.combatLogSentBase = Number(bot.combatLogging?.sent || 0) || 0;
+    if (!Number.isFinite(Number(session.combatLogFailedBase))) session.combatLogFailedBase = Number(bot.combatLogging?.failed || 0) || 0;
     if (!Number.isFinite(Number(session.coinPickupTotal))) session.coinPickupTotal = 0;
     if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
     const coinDiff = Math.max(0, Math.round((Number.isFinite(coins) ? coins : 0) - Number(session.baseCoins || 0)));
@@ -6489,6 +6495,8 @@ function browserBotSource(config) {
       coinsGained: Math.max(0, Number(session.coinsGained || 0) || 0),
       coinPickupTotal: Math.max(0, Number(session.coinPickupTotal || 0) || 0),
       kills: Math.max(0, Number(session.kills || 0) || 0),
+      combatLogSent: Math.max(0, Math.round((Number(bot.combatLogging?.sent || 0) || 0) - (Number(session.combatLogSentBase || 0) || 0))),
+      combatLogFailed: Math.max(0, Math.round((Number(bot.combatLogging?.failed || 0) || 0) - (Number(session.combatLogFailedBase || 0) || 0))),
       userId: session.userId ?? null
     };
   }
