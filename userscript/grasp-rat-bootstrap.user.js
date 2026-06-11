@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.38
+// @version      0.4.39
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.38';
+  const BOOTSTRAP_VERSION = '0.4.39';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -1010,11 +1010,12 @@
         'border-radius:0',
         'background:transparent',
         'color:#e5edf7',
-        'font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+        'font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
         'box-shadow:none',
         'pointer-events:auto',
         'white-space:normal',
-        'overflow:visible'
+        'max-height:min(360px,calc(100vh - 24px))',
+        'overflow:auto'
       ].join(';');
     }
     return [
@@ -1039,13 +1040,6 @@
       'white-space:normal',
       'overflow:auto'
     ].join(';');
-  }
-
-  function bootstrapButtonStyle(kind = 'neutral') {
-    const base = 'flex:0 0 auto;height:30px;border:1px solid rgba(148,163,184,.24);border-radius:8px;background:rgba(30,41,59,.62);color:#e5edf7;font:12px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;padding:0 10px;cursor:pointer;white-space:nowrap';
-    if (kind === 'join') return base + ';border-color:rgba(52,211,153,.42);background:rgba(16,185,129,.16);color:#a7f3d0;font-weight:750';
-    if (kind === 'leave') return base + ';border-color:rgba(251,113,133,.42);background:rgba(244,63,94,.12);color:#fecdd3';
-    return base;
   }
 
   function ensureBootstrapPanel() {
@@ -1103,7 +1097,6 @@
     const session = status?.session || {};
     const persistent = activePersistentExitDetail(status);
     const reloginHold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
-    const buttonText = paused ? '继续' : '暂停';
     const buttonTitle = paused ? '恢复 bot 自动控制' : '暂停 bot，保留手动控制';
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
     const statusColor = paused ? '#fca5a5' : (status?.running ? '#86efac' : '#fde68a');
@@ -1113,7 +1106,7 @@
     let appendParent = panel;
     const appendLine = (text, style = '') => {
       const line = document.createElement('div');
-      const baseStyle = 'min-width:0;overflow-wrap:anywhere;font-size:12px;line-height:1.42;color:#e5edf7';
+      const baseStyle = 'min-width:0;overflow-wrap:anywhere;font-size:11.5px;line-height:1.34;color:#e5edf7';
       line.style.cssText = style ? baseStyle + ';' + style : baseStyle;
       line.textContent = String(text ?? '');
       appendParent.appendChild(line);
@@ -1121,7 +1114,7 @@
     };
     const appendRichLine = (parts, style = '') => {
       const line = document.createElement('div');
-      const baseStyle = 'min-width:0;overflow-wrap:anywhere;font-size:12px;line-height:1.42;color:#e5edf7';
+      const baseStyle = 'min-width:0;overflow-wrap:anywhere;font-size:11.5px;line-height:1.34;color:#e5edf7';
       line.style.cssText = style ? baseStyle + ';' + style : baseStyle;
       for (const part of parts) {
         if (part && typeof part === 'object') {
@@ -1140,7 +1133,7 @@
       const stamina = self?.stamina || {};
       const exhausted = Array.isArray(stamina.exhausted) && stamina.exhausted.length > 0;
       const line = document.createElement('div');
-      line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;line-height:1.42;color:#e5edf7';
+      line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:11.5px;line-height:1.3;color:#e5edf7';
       const hpLabel = document.createElement('span');
       const hpValue = Number(self?.hp);
       hpLabel.textContent = 'HP ' + (self?.hp ?? '-');
@@ -1153,14 +1146,14 @@
         'display:inline-flex',
         'align-items:center',
         'max-width:100%',
-        'min-height:22px',
+        'min-height:20px',
         'box-sizing:border-box',
-        'padding:2px 8px',
+        'padding:1px 7px',
         'border:1px solid ' + (exhausted ? 'rgba(251,113,133,.42)' : 'rgba(148,163,184,.24)'),
         'border-radius:999px',
         'background:' + (exhausted ? 'rgba(127,29,29,.28)' : 'rgba(15,23,42,.54)'),
         'color:' + (exhausted ? '#fecdd3' : '#cbd5e1'),
-        'font-size:11px',
+        'font-size:10.5px',
         'line-height:1.25',
         'font-variant-numeric:tabular-nums',
         'overflow-wrap:anywhere'
@@ -1177,16 +1170,16 @@
     const appendMetricGrid = metrics => {
       const grid = document.createElement('div');
       const columns = Math.min(4, Math.max(1, metrics.length));
-      grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + columns + ',minmax(0,1fr));gap:6px;margin:1px 0 2px';
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + columns + ',minmax(0,1fr));gap:4px;margin:0';
       for (const metric of metrics) {
         const item = document.createElement('div');
-        item.style.cssText = 'min-height:42px;border:1px solid rgba(148,163,184,.20);border-radius:8px;background:rgba(15,23,42,.50);padding:6px 7px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden';
+        item.style.cssText = 'min-height:34px;border:1px solid rgba(148,163,184,.18);border-radius:8px;background:rgba(15,23,42,.42);padding:5px 6px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03);overflow:hidden';
         const value = document.createElement('b');
         value.textContent = String(metric.value ?? '-');
-        value.style.cssText = 'display:block;font-size:14px;line-height:1.1;font-weight:800;color:' + (metric.color || '#e0f2fe') + ';font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        value.style.cssText = 'display:block;font-size:13px;line-height:1.05;font-weight:800;color:' + (metric.color || '#e0f2fe') + ';font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
         const label = document.createElement('span');
         label.textContent = String(metric.label ?? '');
-        label.style.cssText = 'display:block;margin-top:2px;color:#94a3b8;font-size:9px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        label.style.cssText = 'display:block;margin-top:2px;color:#94a3b8;font-size:8.5px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
         item.appendChild(value);
         item.appendChild(label);
         grid.appendChild(item);
@@ -1198,45 +1191,72 @@
       const section = document.createElement('div');
       const first = !panel.firstChild;
       section.style.cssText = first
-        ? 'padding:14px 16px 12px;display:grid;gap:8px'
-        : 'padding:12px 16px;border-top:1px solid rgba(148,163,184,.20);display:grid;gap:8px';
+        ? 'padding:10px 12px 9px;display:grid;gap:6px'
+        : 'padding:9px 12px;border-top:1px solid rgba(148,163,184,.18);display:grid;gap:6px';
       if (titleText) {
         const titleLine = document.createElement('div');
         titleLine.textContent = titleText;
-        titleLine.style.cssText = 'margin:0;color:#cbd5e1;font-size:11px;font-weight:700;letter-spacing:0';
+        titleLine.style.cssText = 'margin:0;color:#cbd5e1;font-size:10px;font-weight:700;letter-spacing:0';
         section.appendChild(titleLine);
       }
       panel.appendChild(section);
       appendParent = section;
       return section;
     };
-    appendSection('脚本信息');
+    const createDotControl = (title, color, halo, glow, onClick) => {
+      const control = document.createElement('button');
+      control.type = 'button';
+      control.title = title;
+      control.setAttribute('aria-label', title);
+      control.style.cssText = [
+        'position:relative',
+        'flex:0 0 24px',
+        'width:24px',
+        'height:24px',
+        'box-sizing:border-box',
+        'padding:0',
+        'border:1px solid rgba(148,163,184,.24)',
+        'border-radius:50%',
+        'background:rgba(15,23,42,.50)',
+        'cursor:pointer',
+        'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)'
+      ].join(';');
+      const dot = document.createElement('span');
+      dot.setAttribute('aria-hidden', 'true');
+      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:9px;height:9px;transform:translate(-50%,-50%);border-radius:50%;background:' + color + ';box-shadow:0 0 0 4px ' + halo + ',0 0 18px ' + glow;
+      control.appendChild(dot);
+      control.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      }, { once: true });
+      return control;
+    };
+    appendSection();
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:1px';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:0';
     const titleWrap = document.createElement('div');
-    titleWrap.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0';
+    titleWrap.style.cssText = 'display:flex;align-items:center;gap:7px;min-width:0';
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight:750;font-size:16px;line-height:1.2;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    title.style.cssText = 'font-weight:750;font-size:14px;line-height:1.15;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     title.textContent = 'BOT';
     const statusDot = document.createElement('i');
     statusDot.setAttribute('aria-hidden', 'true');
-    statusDot.style.cssText = 'flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:' + statusColor + ';box-shadow:0 0 0 4px ' + statusHalo + ',0 0 22px ' + statusGlow;
+    statusDot.style.cssText = 'flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:' + statusColor + ';box-shadow:0 0 0 4px ' + statusHalo + ',0 0 18px ' + statusGlow;
     titleWrap.appendChild(title);
     titleWrap.appendChild(statusDot);
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.title = buttonTitle;
-    button.style.cssText = bootstrapButtonStyle(paused ? 'join' : 'leave');
-    button.textContent = buttonText;
-    button.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      setPaused(!isPaused(), 'panel button');
-    }, { once: true });
     header.appendChild(titleWrap);
     const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;align-items:center;gap:6px;flex:0 0 auto';
-    actions.appendChild(button);
+    actions.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto';
+    const pauseControl = createDotControl(
+      buttonTitle,
+      paused ? '#86efac' : '#fca5a5',
+      paused ? 'rgba(52,211,153,.13)' : 'rgba(251,113,133,.13)',
+      paused ? 'rgba(52,211,153,.45)' : 'rgba(251,113,133,.45)',
+      () => setPaused(!isPaused(), 'panel dot')
+    );
+    pauseControl.setAttribute('aria-pressed', String(paused));
+    actions.appendChild(pauseControl);
     header.appendChild(actions);
     appendParent.appendChild(header);
     if (state.userscriptUpdateAvailable) {
@@ -1245,12 +1265,12 @@
         'margin:0 0 8px;padding:7px 9px;border:1px solid rgba(251,113,133,.42);border-radius:8px;background:rgba(127,29,29,.28);color:#fecdd3;font-weight:700'
       );
     }
-    appendRichLine([
-      '版本：加载器: 篡改猴 ',
-      { text: displayVersion(aVersion), style: 'color:' + (state.userscriptUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
-      ' / 远程 ',
-      { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
-    ], 'font-size:11px;margin:-2px 0 6px;color:#94a3b8');
+	    appendRichLine([
+	      'A 篡改猴 ',
+	      { text: displayVersion(aVersion), style: 'color:' + (state.userscriptUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
+	      ' / B ',
+	      { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
+	    ], 'font-size:10.5px;margin:-2px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
     appendRichLine([
       '状态：',
       { text: statusText, style: 'color:' + statusColor + ';font-weight:700' },
@@ -1263,17 +1283,19 @@
     const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
     const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
     const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
-    appendRichLine([
-      '远程日志：',
-      { text: remoteLogEnabled ? '开' : '关', style: 'color:' + (remoteLogEnabled ? '#86efac' : '#fde68a') + ';font-weight:700' },
-      ' / 本次登录已发 ',
-      { text: formatNumber(remoteLogSent, '0'), style: remoteLogSent > 0 ? 'color:#86efac;font-weight:700' : '' },
-      ' / 待发 ',
-      { text: formatNumber(remoteLogPending, '0'), style: remoteLogPending > 0 ? 'color:#fde68a;font-weight:700' : '' },
-      ' / 失败 ',
-      { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
-    ], 'font-size:11px;color:#94a3b8');
-    appendSection('BOT行为');
+    if (remoteLogEnabled || remoteLogSent || remoteLogPending || remoteLogFailed) {
+      appendRichLine([
+        '日志：',
+        { text: remoteLogEnabled ? '开' : '关', style: 'color:' + (remoteLogEnabled ? '#86efac' : '#fde68a') + ';font-weight:700' },
+        ' / 发 ',
+        { text: formatNumber(remoteLogSent, '0'), style: remoteLogSent > 0 ? 'color:#86efac;font-weight:700' : '' },
+        ' / 等 ',
+        { text: formatNumber(remoteLogPending, '0'), style: remoteLogPending > 0 ? 'color:#fde68a;font-weight:700' : '' },
+        ' / 失 ',
+        { text: formatNumber(remoteLogFailed, '0'), style: remoteLogFailed > 0 ? 'color:#fca5a5;font-weight:700' : '' }
+      ], 'font-size:10.5px;color:#94a3b8');
+    }
+    appendSection();
     appendLine('当前行为：' + behaviorText(decision, status));
     appendLine('当前目标：' + targetSummaryText(decision, status));
     appendLine('原因：' + reasonDetail);
@@ -1289,7 +1311,7 @@
         appendLine('战斗细节：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
       }
     }
-    appendSection('统计信息');
+    appendSection();
     if (state.cloudflareError) {
       appendLine('错误页：' + state.cloudflareError.label);
     } else if (status?.running) {
@@ -1303,7 +1325,7 @@
         { label: 'kills', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
       appendStaminaLine();
-      appendLine('Active ' + nearestActive);
+      if (nearestActive !== '-') appendLine('Active ' + nearestActive);
       if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
         appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }
