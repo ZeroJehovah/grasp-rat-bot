@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.93"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.94"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -145,16 +145,11 @@
     opportunityEstimatedDamagePerShot: 3,
     opportunityCoinPickupStaminaMs: 0,
     opportunityLongStaminaReserveMs: 1500,
-    opportunityStickBonus: 0,
-	    opportunitySwitchMargin: 3000,
-	    opportunitySwitchRelativeMargin: 0.1,
-	    opportunitySwitchHoldMs: 7000,
-	    opportunityAmbiguousWaitMargin: 3000,
-	    opportunityAmbiguousWaitRelativeMargin: 0.12,
-	    opportunityAmbiguousWaitMinDistance: 8000,
-	    opportunityAmbiguousWaitMinStaminaMs: 8000,
-	    opportunityAmbiguousWaitMaxMs: 12000,
-	    opportunityNearbyPriorityDistance: 18000,
+	    opportunityStickBonus: 0,
+		    opportunitySwitchMargin: 3000,
+		    opportunitySwitchRelativeMargin: 0.1,
+		    opportunitySwitchHoldMs: 7000,
+		    opportunityNearbyPriorityDistance: 18000,
 	    coinMaxDistance: 18000,
 	    coinDangerRadius: 25000,
 	    invulnerableActiveCoinDangerRadius: 36000,
@@ -471,11 +466,10 @@
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    lastSelf: null,
-	    lastSafety: null,
-	    actionThreats: [],
-	    opportunityChoice: preserved.opportunityChoice,
-	    opportunityWait: null,
-	    returnBlockLock: null,
+		    lastSafety: null,
+		    actionThreats: [],
+		    opportunityChoice: preserved.opportunityChoice,
+		    returnBlockLock: null,
     returnBlockScan: null,
     returnBlockCooldownUntil: 0,
     returnBlockRecentThreatId: '',
@@ -1108,8 +1102,7 @@
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 		      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
 		      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
-		      'wait-for-clear-opportunity': '收益接近，等待更明确目标',
-		      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
+			      'approach-profitable-drop-target': '综合收益最高：靠近高 Drop 目标',
 	      'approach-afk-drop-target': '综合收益最高：靠近挂机 Drop 目标',
 	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
@@ -6960,80 +6953,7 @@
 	    return String(item.type || '') + ':' + String(item.id ?? '');
 	  }
 
-	  function opportunityCanAmbiguousWait(item) {
-	    if (!item || item.actionKind === 'attack') return false;
-	    const distance = Number(item.distance);
-	    const staminaCost = Number(item.staminaCost);
-	    return Number.isFinite(distance)
-	      && distance >= Math.max(0, Number(cfg.opportunityAmbiguousWaitMinDistance || 0))
-	      && Number.isFinite(staminaCost)
-	      && staminaCost >= Math.max(0, Number(cfg.opportunityAmbiguousWaitMinStaminaMs || 0));
-	  }
-
-	  function opportunityScoresAreAmbiguous(best, competitor) {
-	    if (!opportunityCanAmbiguousWait(best) || !competitor) return false;
-	    if (Number(best.priorityTier || 0) !== Number(competitor.priorityTier || 0)) return false;
-	    const bestScore = Number(best.score || 0);
-	    const competingScore = Number(competitor.score || 0);
-	    if (!(bestScore > 0) || !(competingScore > 0) || bestScore < competingScore) return false;
-	    const margin = Math.max(0, Number(cfg.opportunityAmbiguousWaitMargin || 0));
-	    const relativeMargin = Math.max(0, Number(cfg.opportunityAmbiguousWaitRelativeMargin || 0));
-	    return bestScore - competingScore <= Math.max(margin, competingScore * relativeMargin);
-	  }
-
-	  function buildAmbiguousOpportunityWait(best, competitor, waitAgeMs, waitRemainingMs) {
-	    return {
-	      kind: 'wait',
-	      reason: 'wait-for-clear-opportunity',
-	      dx: 0,
-	      dy: 0,
-	      displayReason: '收益接近，原地等待更明确目标',
-	      opportunityWait: {
-	        best: {
-	          type: best.type,
-	          id: best.id,
-	          score: Math.round(Number(best.score || 0)),
-	          distance: Math.round(Number(best.distance || 0)),
-	          staminaCost: Math.round(Number(best.staminaCost || 0))
-	        },
-	        competitor: {
-	          type: competitor.type,
-	          id: competitor.id,
-	          score: Math.round(Number(competitor.score || 0)),
-	          distance: Math.round(Number(competitor.distance || 0)),
-	          staminaCost: Math.round(Number(competitor.staminaCost || 0))
-	        },
-	        waitAgeMs: Math.round(waitAgeMs),
-	        waitRemainingMs: Number.isFinite(Number(waitRemainingMs)) ? Math.max(0, Math.round(Number(waitRemainingMs))) : null
-	      }
-	    };
-	  }
-
-	  function ambiguousOpportunityWait(best, competitor) {
-	    if (!opportunityScoresAreAmbiguous(best, competitor)) {
-	      bot.opportunityWait = null;
-	      return null;
-	    }
-	    const t = now();
-	    const key = opportunityKey(best) + '|' + opportunityKey(competitor);
-	    const previous = bot.opportunityWait && bot.opportunityWait.key === key ? bot.opportunityWait : null;
-	    const startedAt = previous ? Number(previous.startedAt || t) : t;
-	    const maxMs = Math.max(0, Number(cfg.opportunityAmbiguousWaitMaxMs || 0));
-	    const waitAgeMs = Math.max(0, t - startedAt);
-	    if (maxMs && waitAgeMs >= maxMs) {
-	      bot.opportunityWait = null;
-	      return null;
-	    }
-	    bot.opportunityWait = { key, startedAt, lastSeenAt: t };
-	    return {
-	      ...best,
-	      waiting: true,
-	      competingScore: competitor.score,
-	      action: () => buildAmbiguousOpportunityWait(best, competitor, waitAgeMs, maxMs ? maxMs - waitAgeMs : null)
-	    };
-	  }
-
-	  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
+		  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
     if (!item) return action;
     const t = now();
     const key = opportunityKey(item);
@@ -7083,12 +7003,8 @@
 	        }
 	      }
 	    }
-	    const competitor = sorted.find(item => item !== best && Number(item.priorityTier || 0) === Number(best.priorityTier || 0)) || null;
-	    const waitChoice = ambiguousOpportunityWait(best, competitor);
-	    if (waitChoice) return waitChoice;
-	    bot.opportunityWait = null;
-	    return best;
-	  }
+		    return best;
+		  }
 
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups) {
     const opportunities = [];
@@ -7148,11 +7064,11 @@
       });
     }
 
-	    const best = chooseStableOpportunity(opportunities);
-	    if (!best) return null;
-	    const action = best.action();
-	    return best.waiting ? action : rememberOpportunityChoice(best, action);
-	  }
+		    const best = chooseStableOpportunity(opportunities);
+		    if (!best) return null;
+		    const action = best.action();
+		    return rememberOpportunityChoice(best, action);
+		  }
 
   function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
     if (scanCoin) {
