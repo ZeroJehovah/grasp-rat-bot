@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.108"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.109"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -6787,7 +6787,12 @@
       motionScale: Number(targetMotionScale.toFixed(2)),
       combatIntent: target.combatIntent || '',
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
-      competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
+      competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null,
+      mode: target.current_join_mode || target.mode || '',
+      life: target.life || '',
+      active: isCurrentlyActive(target),
+      firing: isFiringEntity(target),
+      invulnerable: isInvulnerable(target)
 	    };
 	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
 	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
