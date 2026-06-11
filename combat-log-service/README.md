@@ -111,6 +111,9 @@ npm run monitor -- --watch-count 1
 只监控当前/未来版本，避免历史旧日志干扰：
 
 ```bash
+npm run analyze:current
+npm run monitor:current
+npm run monitor:current -- --since now --latest 10
 npm run monitor -- --min-version bootstrap-0.4.97 --latest 10
 npm run monitor -- --since now --min-version bootstrap-0.4.97 --latest 10
 ```
