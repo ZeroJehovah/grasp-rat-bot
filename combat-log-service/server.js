@@ -113,6 +113,8 @@ async function appendCombatLog(options, payload, req) {
     const record = {
       ...entry,
       combatId: entry.combatId || payload.combatId || '',
+      version: entry.version || payload.version || '',
+      sourceHash: entry.sourceHash || payload.sourceHash || '',
       receivedAt,
       collector: {
         remoteAddress: req.socket.remoteAddress || '',

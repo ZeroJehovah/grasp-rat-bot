@@ -20,6 +20,7 @@ const DEFAULTS = {
   manifestPath: '',
   manifestMode: 'exact',
   manifestVersion: '',
+  manifestHash: '',
   watch: false,
   watchIntervalMs: 10000,
   watchCount: 0,
@@ -106,12 +107,13 @@ function parseTimeArg(value) {
   throw new Error(`Invalid --since time: ${value}`);
 }
 
-function manifestVersion(manifestPath) {
+function manifestInfo(manifestPath) {
   const text = fs.readFileSync(manifestPath, 'utf8');
   const parsed = JSON.parse(text);
   const version = String(parsed?.version || '').trim();
   if (!version) throw new Error(`Manifest version missing: ${manifestPath}`);
-  return version;
+  const hash = String(parsed?.sha256 || parsed?.hash || '').trim();
+  return { version, hash };
 }
 
 function resolveOptions(options) {
@@ -119,9 +121,11 @@ function resolveOptions(options) {
   if (!out.manifestPath) return out;
   const mode = String(out.manifestMode || DEFAULTS.manifestMode).trim().toLowerCase();
   if (mode !== 'exact' && mode !== 'min') throw new Error(`Invalid --manifest-mode: ${out.manifestMode}`);
-  const version = manifestVersion(out.manifestPath);
+  const manifest = manifestInfo(out.manifestPath);
+  const version = manifest.version;
   out.manifestMode = mode;
   out.manifestVersion = version;
+  out.manifestHash = manifest.hash;
   if (mode === 'min') out.minVersion = version;
   else out.version = version;
   return out;
@@ -456,6 +460,10 @@ function auditFile(file, rootDir, options) {
   const activeBySignature = new Map();
   const behaviorEvents = [];
   const activeBehaviorBySignature = new Map();
+  const sourceHashes = new Set();
+  const sourceHashMismatches = [];
+  let sourceHashMismatchEntries = 0;
+  let sourceHashMissingEntries = 0;
   let includedEntries = 0;
   let firstAt = 0;
   let lastAt = 0;
@@ -467,6 +475,23 @@ function auditFile(file, rootDir, options) {
     if (t && (!firstAt || t < firstAt)) firstAt = t;
     if (t && t > lastAt) lastAt = t;
     if (entry?.version) versions.add(String(entry.version));
+    const sourceHash = String(entry?.sourceHash || '').trim();
+    if (sourceHash) sourceHashes.add(sourceHash);
+    if (options.manifestHash) {
+      if (!sourceHash) {
+        sourceHashMissingEntries += 1;
+      } else if (sourceHash !== options.manifestHash) {
+        sourceHashMismatchEntries += 1;
+        if (sourceHashMismatches.length < 20) {
+          sourceHashMismatches.push({
+            line: item.line,
+            at: t,
+            version: entry?.version || '',
+            sourceHash
+          });
+        }
+      }
+    }
     const currentBehaviorIssues = behaviorIssues(entry, options);
     if (currentBehaviorIssues.length) {
       const activeTarget = activePlayersInAttackRange(entry, options)[0] || null;
@@ -593,6 +618,10 @@ function auditFile(file, rootDir, options) {
     scannedEntries: parsed.entries.length,
     parseErrors: parsed.errors,
     versions: Array.from(versions).sort(),
+    sourceHashes: Array.from(sourceHashes).sort(),
+    sourceHashMissingEntries,
+    sourceHashMismatchEntries,
+    sourceHashMismatches,
     firstAt,
     lastAt,
     exitEvents,
@@ -616,7 +645,10 @@ function auditLogs(options) {
     ...behaviorEvents.flatMap(event => event.issues.map(issue => ({ issue, event })))
   ];
   const parseErrors = fileReports.flatMap(report => report.parseErrors.map(error => ({ file: report.file, ...error })));
+  const sourceHashMismatches = fileReports.flatMap(report => (report.sourceHashMismatches || []).map(item => ({ file: report.file, ...item })));
   const entries = fileReports.reduce((sum, report) => sum + report.entries, 0);
+  const sourceHashMissingEntries = fileReports.reduce((sum, report) => sum + Number(report.sourceHashMissingEntries || 0), 0);
+  const sourceHashMismatchEntries = fileReports.reduce((sum, report) => sum + Number(report.sourceHashMismatchEntries || 0), 0);
   const report = {
     dir: options.dir,
     minUnsafeDelayMs: options.minUnsafeDelayMs,
@@ -628,11 +660,16 @@ function auditLogs(options) {
     manifestPath: options.manifestPath || '',
     manifestMode: options.manifestMode || '',
     manifestVersion: options.manifestVersion || '',
+    manifestHash: options.manifestHash || '',
     files: fileReports.length,
     entries,
     scannedEntries: fileReports.reduce((sum, report) => sum + report.scannedEntries, 0),
     parseErrors,
     versions: Array.from(new Set(fileReports.flatMap(report => report.versions))).sort(),
+    sourceHashes: Array.from(new Set(fileReports.flatMap(report => report.sourceHashes || []))).sort(),
+    sourceHashMissingEntries,
+    sourceHashMismatchEntries,
+    sourceHashMismatches,
     exitEvents,
     behaviorEvents,
     exitReasonCounts,
@@ -652,6 +689,23 @@ function auditLogs(options) {
       issue: 'no-matching-exit-events',
       message: 'No exit events matched the active filters.'
     });
+  }
+  if (options.manifestHash && entries > 0) {
+    if (sourceHashMissingEntries > 0) {
+      report.evidenceIssues.push({
+        issue: 'manifest-source-hash-missing',
+        message: 'Some matching log entries did not include sourceHash.',
+        count: sourceHashMissingEntries
+      });
+    }
+    if (sourceHashMismatchEntries > 0) {
+      report.evidenceIssues.push({
+        issue: 'manifest-source-hash-mismatch',
+        message: 'Some matching log entries reported a sourceHash different from the manifest hash.',
+        expected: options.manifestHash,
+        count: sourceHashMismatchEntries
+      });
+    }
   }
   return report;
 }
@@ -788,9 +842,13 @@ function reportFingerprint(report) {
     entries: report.entries,
     scannedEntries: report.scannedEntries,
     manifestVersion: report.manifestVersion || '',
+    manifestHash: report.manifestHash || '',
     parseErrors: report.parseErrors.length,
     evidenceIssues: evidenceIssueCounts(report),
     issues: issueCounts(report),
+    sourceHashes: report.sourceHashes || [],
+    sourceHashMissingEntries: report.sourceHashMissingEntries || 0,
+    sourceHashMismatchEntries: report.sourceHashMismatchEntries || 0,
     exitReasonCounts: report.exitReasonCounts,
     behaviorReasonCounts: report.behaviorReasonCounts,
     exitSafetyCounts: report.exitSafetyCounts,
@@ -819,6 +877,7 @@ function printHuman(report, options) {
     const filters = [];
     if (report.sinceMs) filters.push(`since=${isoTime(report.sinceMs) || report.sinceMs}`);
     if (report.manifestVersion) filters.push(`manifest=${report.manifestVersion}${report.manifestMode ? `:${report.manifestMode}` : ''}`);
+    if (report.manifestHash) filters.push(`manifestHash=${String(report.manifestHash).slice(0, 12)}`);
     if (report.minVersion) filters.push(`minVersion=${report.minVersion}`);
     if (report.version) filters.push(`version=${report.version}`);
     if (report.requireEntries) filters.push('requireEntries=true');
@@ -831,6 +890,16 @@ function printHuman(report, options) {
   }
   if (report.evidenceIssues.length) {
     console.log('Evidence issue counts: ' + evidenceIssueCounts(report).map(([issue, count]) => `${issue}=${count}`).join(', '));
+  }
+  if (report.manifestHash || report.sourceHashes.length) {
+    const hashes = report.sourceHashes.map(hash => String(hash).slice(0, 12)).join(', ') || '-';
+    const hashFlags = [
+      `manifest=${report.manifestHash ? String(report.manifestHash).slice(0, 12) : '-'}`,
+      `seen=${hashes}`,
+      `missing=${report.sourceHashMissingEntries || 0}`,
+      `mismatch=${report.sourceHashMismatchEntries || 0}`
+    ];
+    console.log('Source hash check: ' + hashFlags.join(', '));
   }
   if (report.exitEvents.length) {
     console.log('Exit safety counts: ' + formatExitSafetyCounts(report.exitSafetyCounts));
@@ -943,16 +1012,22 @@ function runSelfTest() {
     const loginLogsDir = path.join(tempRoot, 'login-logs');
     const behaviorLogsDir = path.join(tempRoot, 'behavior-logs');
     const requiredDelayLogsDir = path.join(tempRoot, 'required-delay-logs');
+    const hashOkLogsDir = path.join(tempRoot, 'hash-ok-logs');
+    const hashBadLogsDir = path.join(tempRoot, 'hash-bad-logs');
     const noExitLogsDir = path.join(tempRoot, 'no-exit-logs');
     const emptyLogsDir = path.join(tempRoot, 'empty-logs');
     const manifestPath = path.join(tempRoot, 'manifest.json');
+    const manifestHashPath = path.join(tempRoot, 'manifest-hash.json');
     fs.mkdirSync(logsDir, { recursive: true });
     fs.mkdirSync(loginLogsDir, { recursive: true });
     fs.mkdirSync(behaviorLogsDir, { recursive: true });
     fs.mkdirSync(requiredDelayLogsDir, { recursive: true });
+    fs.mkdirSync(hashOkLogsDir, { recursive: true });
+    fs.mkdirSync(hashBadLogsDir, { recursive: true });
     fs.mkdirSync(noExitLogsDir, { recursive: true });
     fs.mkdirSync(emptyLogsDir, { recursive: true });
     fs.writeFileSync(manifestPath, JSON.stringify({ version: 'bootstrap-0.4.97' }) + '\n');
+    fs.writeFileSync(manifestHashPath, JSON.stringify({ version: 'bootstrap-0.4.97', sha256: 'hash-ok' }) + '\n');
 
     const baseAt = 1760000000000;
     const entries = [
@@ -1299,6 +1374,67 @@ function runSelfTest() {
     assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayOk === 1, `expected 1 required-delay ok event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayOk}`);
     cases += 1;
     assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayBelowRequired === 1, `expected 1 required-delay below event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayBelowRequired}`);
+
+    fs.writeFileSync(
+      path.join(hashOkLogsDir, 'hash-ok.jsonl'),
+      [
+        {
+          type: 'combat-frame',
+          at: baseAt + 11000,
+          version: 'bootstrap-0.4.97',
+          sourceHash: 'hash-ok',
+          decision: {
+            kind: 'attack',
+            reason: 'combat-spacing',
+            combat: true,
+            shoot: true
+          }
+        }
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    );
+    const hashOkReport = auditLogs({ dir: hashOkLogsDir, manifestPath: manifestHashPath, requireEntries: true });
+    cases += 1;
+    assertSelfTest(hashOkReport.manifestHash === 'hash-ok', `expected manifest hash hash-ok, got ${hashOkReport.manifestHash}`);
+    cases += 1;
+    assertSelfTest(hashOkReport.sourceHashes.includes('hash-ok'), 'expected source hash hash-ok in report');
+    cases += 1;
+    assertSelfTest(hashOkReport.evidenceIssues.length === 0, `expected no hash evidence issues, got ${hashOkReport.evidenceIssues.length}`);
+
+    fs.writeFileSync(
+      path.join(hashBadLogsDir, 'hash-bad.jsonl'),
+      [
+        {
+          type: 'combat-frame',
+          at: baseAt + 12000,
+          version: 'bootstrap-0.4.97',
+          sourceHash: 'hash-bad',
+          decision: {
+            kind: 'attack',
+            reason: 'combat-spacing',
+            combat: true,
+            shoot: true
+          }
+        },
+        {
+          type: 'combat-frame',
+          at: baseAt + 13000,
+          version: 'bootstrap-0.4.97',
+          decision: {
+            kind: 'attack',
+            reason: 'combat-spacing',
+            combat: true,
+            shoot: true
+          }
+        }
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    );
+    const hashBadReport = auditLogs({ dir: hashBadLogsDir, manifestPath: manifestHashPath, requireEntries: true });
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(hashBadReport, 'manifest-source-hash-mismatch') === 1, 'expected one manifest source hash mismatch evidence issue');
+    cases += 1;
+    assertSelfTest(evidenceIssueCount(hashBadReport, 'manifest-source-hash-missing') === 1, 'expected one missing source hash evidence issue');
+    cases += 1;
+    assertSelfTest(reportHasFailures(hashBadReport), 'expected hash mismatch report to count as failure');
 
     console.log(JSON.stringify({ ok: true, cases }, null, 2));
   } finally {
