@@ -127,6 +127,31 @@ function offlineLeaveSummaryText(reason, offlineSafety) {
   return 'WebSocket 离线，退出等待重连';
 }
 
+function combatLogExitSummaryFromDecision(decision) {
+  const leave = decision?.leave || null;
+  const reason = String(leave?.reason || decision?.reason || '');
+  const isExit = Boolean(leave)
+    || decision?.kind === 'leave'
+    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
+  if (!isExit) return null;
+  return {
+    reason,
+    summary: leave?.summary || leave?.exitSummary || decision?.exitSummary || decision?.displayReason || '',
+    displayReason: leave?.displayReason || decision?.displayReason || '',
+    attempted: leave ? Boolean(leave.attempted) : null,
+    error: leave?.error || '',
+    reloginUntil: leave?.reloginUntil || 0,
+    holdRemainingMs: leave?.holdRemainingMs || 0,
+    reloginDelayMs: leave?.reloginDelayMs || 0,
+    pendingLoginSuppressUntil: leave?.pendingLoginSuppressUntil || 0,
+    pendingLoginSuppressDelayMs: leave?.pendingLoginSuppressDelayMs || 0,
+    pendingLoginSuppressReason: leave?.pendingLoginSuppressReason || '',
+    pendingLoginSuppressMinimumDelayMs: leave?.pendingLoginSuppressMinimumDelayMs || 0,
+    pendingLoginSuppressHpDelayMs: leave?.pendingLoginSuppressHpDelayMs || 0,
+    pendingLoginSuppressHp: leave?.pendingLoginSuppressHp || null
+  };
+}
+
 function runSelfTest() {
   const cfg = {
     dangerRadius: 17000,
@@ -3093,7 +3118,66 @@ function runSelfTest() {
 	      name: 'offline reconnect churn summary is explicit',
 	      got: offlineLeaveSummaryText('websocket reconnect churn', { reconnectChurn: { count: 3, windowMs: 10000 } }),
 	      want: 'WebSocket 反复重连，退出等待重连'
-		    }
+		    },
+	    {
+	      name: 'combat log exit summary ignores non-exit decisions',
+	      got: combatLogExitSummaryFromDecision({ kind: 'wait', reason: 'combat-spacing' }),
+	      want: null
+	    },
+	    {
+	      name: 'combat log exit summary includes pending unsafe suppress',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'leave',
+	          reason: 'combat-hp-disadvantage-leave',
+	          leave: {
+	            reason: 'combat-hp-disadvantage-leave',
+	            summary: 'HP disadvantage',
+	            attempted: true,
+	            pendingLoginSuppressReason: 'pending unsafe hostile exit',
+	            pendingLoginSuppressDelayMs: 60000,
+	            pendingLoginSuppressMinimumDelayMs: 60000,
+	            pendingLoginSuppressHpDelayMs: 90000,
+	            pendingLoginSuppressHp: { hp: 45, maxHp: 100 }
+	          }
+	        });
+	        return [
+	          exit?.reason,
+	          exit?.summary,
+	          String(exit?.attempted),
+	          exit?.pendingLoginSuppressReason,
+	          exit?.pendingLoginSuppressDelayMs,
+	          exit?.pendingLoginSuppressMinimumDelayMs,
+	          exit?.pendingLoginSuppressHpDelayMs,
+	          exit?.pendingLoginSuppressHp?.hp
+	        ].join('|');
+	      })(),
+	      want: 'combat-hp-disadvantage-leave|HP disadvantage|true|pending unsafe hostile exit|60000|60000|90000|45'
+	    },
+	    {
+	      name: 'combat log exit summary includes confirmed longer hold',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'wait',
+	          reason: 'enemy-leave-wait',
+	          leave: {
+	            reason: 'enemy-leave-wait',
+	            displayReason: 'hostile hold',
+	            reloginUntil: 123456789,
+	            holdRemainingMs: 599000,
+	            reloginDelayMs: 600000
+	          }
+	        });
+	        return [
+	          exit?.reason,
+	          exit?.displayReason,
+	          exit?.reloginUntil,
+	          exit?.holdRemainingMs,
+	          exit?.reloginDelayMs
+	        ].join('|');
+	      })(),
+	      want: 'enemy-leave-wait|hostile hold|123456789|599000|600000'
+	    }
 		  ];
   const failed = cases.filter(item => item.got !== item.want);
   if (failed.length) {
@@ -4713,25 +4797,10 @@ function browserBotSource(config) {
         };
       }
 
+      const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};
+
       function combatLogExitSummary(decision) {
-        const leave = decision?.leave || null;
-        const reason = String(leave?.reason || decision?.reason || '');
-        const isExit = Boolean(leave)
-          || decision?.kind === 'leave'
-          || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
-        if (!isExit) return null;
-        return {
-          reason,
-          summary: leave?.summary || leave?.exitSummary || decision?.exitSummary || decision?.displayReason || '',
-          displayReason: leave?.displayReason || decision?.displayReason || '',
-          attempted: leave ? Boolean(leave.attempted) : null,
-          error: leave?.error || '',
-          reloginUntil: leave?.reloginUntil || 0,
-          reloginDelayMs: leave?.reloginDelayMs || 0,
-          pendingLoginSuppressUntil: leave?.pendingLoginSuppressUntil || 0,
-          pendingLoginSuppressDelayMs: leave?.pendingLoginSuppressDelayMs || 0,
-          pendingLoginSuppressReason: leave?.pendingLoginSuppressReason || ''
-        };
+        return combatLogExitSummaryFromDecision(decision);
       }
 
       function buildCombatLogEntry(source, decision) {
