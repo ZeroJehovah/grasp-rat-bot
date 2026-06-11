@@ -668,6 +668,27 @@ function runSelfTest() {
           kind: 'wait',
           reason: 'combat-spacing'
         }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 3000,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'wait',
+          reason: 'enemy-leave-wait',
+          displayReason: 'confirmed hostile hold'
+        },
+        exit: {
+          reason: 'enemy-leave-wait',
+          displayReason: 'confirmed hostile hold',
+          holdRemainingMs: 120000,
+          reloginDelayMs: 180000
+        },
+        login: {
+          suppressRemainingMs: 120000,
+          suppressReason: 'enemy leave',
+          enemyHoldRemainingMs: 120000
+        }
       }
     ];
     fs.writeFileSync(
@@ -677,9 +698,9 @@ function runSelfTest() {
 
     const allReport = auditLogs({ dir: logsDir });
     cases += 1;
-    assertSelfTest(allReport.entries === 3, `expected 3 included entries, got ${allReport.entries}`);
+    assertSelfTest(allReport.entries === 4, `expected 4 included entries, got ${allReport.entries}`);
     cases += 1;
-    assertSelfTest(allReport.exitEvents.length === 2, `expected 2 exit events, got ${allReport.exitEvents.length}`);
+    assertSelfTest(allReport.exitEvents.length === 3, `expected 3 exit events, got ${allReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(issueCount(allReport, 'missing-top-level-exit') === 1, 'expected one missing top-level exit issue');
     cases += 1;
@@ -689,19 +710,22 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(currentReport.manifestVersion === 'bootstrap-0.4.97', `expected manifest version bootstrap-0.4.97, got ${currentReport.manifestVersion}`);
     cases += 1;
-    assertSelfTest(currentReport.entries === 2, `expected 2 current-version entries, got ${currentReport.entries}`);
+    assertSelfTest(currentReport.entries === 3, `expected 3 current-version entries, got ${currentReport.entries}`);
     cases += 1;
-    assertSelfTest(currentReport.exitEvents.length === 1, `expected 1 current-version exit event, got ${currentReport.exitEvents.length}`);
+    assertSelfTest(currentReport.exitEvents.length === 2, `expected 2 current-version exit events, got ${currentReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(currentReport.issues.length === 0, `expected no current-version issues, got ${currentReport.issues.length}`);
+    const currentCombatExit = currentReport.exitEvents.find(event => event.reason === 'combat-hp-disadvantage-leave') || null;
     cases += 1;
-    assertSelfTest(currentReport.exitEvents[0]?.login?.suppressRemainingMs === 60000, 'expected current exit login suppress context');
+    assertSelfTest(currentCombatExit?.login?.suppressRemainingMs === 60000, 'expected current exit login suppress context');
     cases += 1;
-    assertSelfTest(currentReport.exitEvents[0]?.login?.enemyHoldRemainingMs === 90000, 'expected current exit enemy hold context');
+    assertSelfTest(currentCombatExit?.login?.enemyHoldRemainingMs === 90000, 'expected current exit enemy hold context');
+    cases += 1;
+    assertSelfTest(currentReport.exitEvents.some(event => event.reason === 'enemy-leave-wait' && event.topLevelExit && event.delayMs === 180000), 'expected combat-end exit wait to keep top-level exit and delay');
 
     const requiredReport = auditLogs({ dir: logsDir, manifestPath, requireEntries: true });
     cases += 1;
-    assertSelfTest(requiredReport.entries === 2, `expected 2 required entries, got ${requiredReport.entries}`);
+    assertSelfTest(requiredReport.entries === 3, `expected 3 required entries, got ${requiredReport.entries}`);
     cases += 1;
     assertSelfTest(requiredReport.evidenceIssues.length === 0, `expected no evidence issues with matching entries, got ${requiredReport.evidenceIssues.length}`);
 

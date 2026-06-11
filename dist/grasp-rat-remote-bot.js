@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.100"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.101"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1774,6 +1774,7 @@
           decision: entry.decision,
           login: entry.login || null,
           nearbyEntities: entry.nearbyEntities,
+          exit: entry.exit || null,
           enemyExit: entry.enemyExit || null
 	        });
 	        for (const pre of prior) {
@@ -1796,6 +1797,7 @@
           self: entry?.self || null,
           decision: entry?.decision || null,
           login: entry?.login || null,
+          exit: entry?.exit || null,
           enemyExit: entry?.enemyExit || null,
           sent: state.sent,
           dropped: state.dropped

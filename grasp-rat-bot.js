@@ -5056,6 +5056,7 @@ function browserBotSource(config) {
           decision: entry.decision,
           login: entry.login || null,
           nearbyEntities: entry.nearbyEntities,
+          exit: entry.exit || null,
           enemyExit: entry.enemyExit || null
 	        });
 	        for (const pre of prior) {
@@ -5078,6 +5079,7 @@ function browserBotSource(config) {
           self: entry?.self || null,
           decision: entry?.decision || null,
           login: entry?.login || null,
+          exit: entry?.exit || null,
           enemyExit: entry?.enemyExit || null,
           sent: state.sent,
           dropped: state.dropped
