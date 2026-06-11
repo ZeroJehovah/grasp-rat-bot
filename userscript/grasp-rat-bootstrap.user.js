@@ -494,6 +494,7 @@
       'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
       'combat-attack': '战斗：持续开火',
       'combat-tangent-dodge': '战斗：切线规避并开火',
+      'combat-pressure-close': '战斗：久攻未中，压近开火',
       'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
       'combat-low-hp-leave': '战斗低血劣势，立即退出',
       'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
@@ -537,6 +538,7 @@
     const reason = String(decision?.reason || '');
     if (isCombatDecision(decision, status)) {
       if (kind === 'attack') {
+        if (/pressure-close/.test(reason)) return '战斗中：压近开火';
         if (/spacing/.test(reason)) return '战斗中：拉距开火';
         if (/dodge|tangent/.test(reason)) return '战斗中：规避开火';
         return '战斗中：持续开火';
