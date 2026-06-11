@@ -171,7 +171,7 @@ npm test
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
 - `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；
 - `ambiguous-opportunity-wait`: 当前版本日志里重新出现“收益接近，原地等待更明确目标”；
-- `coin-action-with-active-player-in-range`: 射程内存在非无敌 Active 玩家时，决策仍在执行金币行动而不是战斗/退出。
+- `coin-action-with-active-player-in-range`: 射程内存在非无敌 Active 玩家时，决策仍在执行金币行动而不是战斗/退出；审计会读取附近实体列表，也会读取当前决策目标里带有模式/距离的玩家证据。
 
 证据缺口会标记：
 

@@ -360,20 +360,93 @@ function isCoinDecision(entry) {
   return /coin|金币|pickup|collect|drop|visible-coin|snapshot-coin|known-coin|foot-coin|coin-field/i.test(text);
 }
 
+function loggedJoinMode(entity) {
+  return String(entity?.mode || entity?.current_join_mode || entity?.currentJoinMode || entity?.joinMode || '').trim().toLowerCase();
+}
+
+function loggedEntityDistance(entry, entity) {
+  const direct = Number(entity?.distance ?? entity?.distanceCm ?? entity?.distance_cm);
+  if (Number.isFinite(direct)) return direct;
+  const self = entry?.self || entry?.decision?.self || null;
+  const sx = Number(self?.x);
+  const sy = Number(self?.y);
+  const x = Number(entity?.x);
+  const y = Number(entity?.y);
+  if ([sx, sy, x, y].every(Number.isFinite)) return Math.hypot(x - sx, y - sy);
+  return NaN;
+}
+
+function loggedEntityInvulnerable(entity) {
+  return Boolean(
+    entity?.invulnerable
+    || entity?.isInvulnerable
+    || Number(entity?.invulnerableRemainingTicks ?? entity?.invulnerable_remaining_ticks ?? 0) > 0
+    || Number(entity?.invulnerableRemainingMs ?? entity?.invulnerable_remaining_ms ?? 0) > 0
+  );
+}
+
+function activePlayerCandidateSources(entry) {
+  const sources = [];
+  for (const entity of Array.isArray(entry?.nearbyEntities) ? entry.nearbyEntities : []) {
+    sources.push({ entity, strict: false });
+  }
+  const decision = entry?.decision || {};
+  const targetCandidates = [
+    entry?.target,
+    decision?.target,
+    decision?.combatCover?.target,
+    decision?.leave?.target,
+    entry?.combatState?.target,
+    decision?.combatState?.target,
+    entry?.pendingCombatLeave?.target
+  ];
+  for (const entity of targetCandidates) {
+    if (entity) sources.push({ entity, strict: true });
+  }
+  return sources;
+}
+
+function isActivePlayerCandidate(entry, entity, range, strict) {
+  if (!entity || typeof entity !== 'object') return false;
+  if (String(entity.type || '').toLowerCase() === 'coin') return false;
+  const joinMode = loggedJoinMode(entity);
+  const joinModeActive = joinMode === 'active';
+  if (!joinModeActive && entity.active === false) return false;
+  if (!joinModeActive && joinMode === 'passive') return false;
+  if (strict && !joinModeActive && entity.active !== true && entity.moving !== true && entity.firing !== true) return false;
+  if (String(entity.life || '').toLowerCase() === 'dead') return false;
+  if (loggedEntityInvulnerable(entity)) return false;
+  const distance = loggedEntityDistance(entry, entity);
+  return Number.isFinite(distance) && distance <= range;
+}
+
+function activePlayerCandidateKey(entity, index) {
+  const id = entity?.user_id ?? entity?.id ?? entity?.targetId;
+  if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
+  const name = String(entity?.name || entity?.label || '').trim();
+  if (name) return 'name:' + name;
+  const x = Number(entity?.x);
+  const y = Number(entity?.y);
+  if (Number.isFinite(x) && Number.isFinite(y)) return 'xy:' + Math.round(x) + ':' + Math.round(y);
+  return 'index:' + index;
+}
+
 function activePlayersInAttackRange(entry, options) {
   const range = Math.max(0, Number(options.combatAttackRange || DEFAULTS.combatAttackRange) || 0);
-  const entities = Array.isArray(entry?.nearbyEntities) ? entry.nearbyEntities : [];
-  return entities.filter(entity => {
-    if (!entity) return false;
-    const joinMode = String(entity.mode || entity.current_join_mode || entity.currentJoinMode || entity.joinMode || '').trim().toLowerCase();
-    const joinModeActive = joinMode === 'active';
-    if (!joinModeActive && entity.active === false) return false;
-    if (!joinModeActive && joinMode === 'passive') return false;
-    if (String(entity.life || '').toLowerCase() === 'dead') return false;
-    if (entity.invulnerable) return false;
-    const distance = Number(entity.distance);
-    return Number.isFinite(distance) && distance <= range;
+  const seen = new Set();
+  const out = [];
+  activePlayerCandidateSources(entry).forEach((source, index) => {
+    const entity = source.entity;
+    if (!isActivePlayerCandidate(entry, entity, range, source.strict)) return;
+    const key = activePlayerCandidateKey(entity, index);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      ...entity,
+      distance: loggedEntityDistance(entry, entity)
+    });
   });
+  return out;
 }
 
 function behaviorIssues(entry, options) {
@@ -1591,6 +1664,20 @@ function runSelfTest() {
       },
       {
         type: 'combat-frame',
+        at: baseAt + 7500,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'move',
+          reason: 'visible-coin',
+          target: {
+            type: 'coin',
+            id: 124,
+            distance: 1000
+          }
+        }
+      },
+      {
+        type: 'combat-frame',
         at: baseAt + 8000,
         version: 'bootstrap-0.4.97',
         decision: {
@@ -1612,6 +1699,26 @@ function runSelfTest() {
             stamina_5s_limit_milli: 10000
           }
         ]
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 8500,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'attack',
+          reason: 'combat-attack',
+          combat: true,
+          shoot: true,
+          target: {
+            id: 43,
+            name: 'TargetOnlyActive',
+            mode: 'Active',
+            life: 'Alive',
+            active: false,
+            invulnerable: false,
+            distance: 13000
+          }
+        }
       }
     ];
     fs.writeFileSync(
@@ -1634,10 +1741,13 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(coinReason?.events === 1, `expected 1 coin behavior reason event, got ${coinReason?.events}`);
     cases += 1;
-    assertSelfTest(behaviorReport.activeCombatEvents.length === 1, `expected 1 active combat evidence event, got ${behaviorReport.activeCombatEvents.length}`);
+    assertSelfTest(behaviorReport.activeCombatEvents.length === 2, `expected 2 active combat evidence events, got ${behaviorReport.activeCombatEvents.length}`);
     const activeCombatReason = behaviorReport.activeCombatReasonCounts.find(item => item.reason === 'combat-spacing') || null;
     cases += 1;
     assertSelfTest(activeCombatReason?.events === 1, `expected 1 active combat reason event, got ${activeCombatReason?.events}`);
+    const targetOnlyActiveCombatReason = behaviorReport.activeCombatReasonCounts.find(item => item.reason === 'combat-attack') || null;
+    cases += 1;
+    assertSelfTest(targetOnlyActiveCombatReason?.events === 1, `expected 1 target-only active combat reason event, got ${targetOnlyActiveCombatReason?.events}`);
 
     const activeEvidenceReport = auditLogs({ dir: behaviorLogsDir, manifestPath, requireEntries: true, requireActiveCombatEvents: true });
     cases += 1;

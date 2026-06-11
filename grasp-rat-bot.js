@@ -1396,7 +1396,13 @@ function runSelfTest() {
       id: target.user_id,
       name: target.name,
       hp: combatHpValue(target),
-      distance: Math.round(target.distance)
+      distance: Math.round(target.distance),
+      mode: target.current_join_mode || target.mode || '',
+      life: target.life || '',
+      active: isActive(target),
+      firing: isFiringEntity(target),
+      invulnerable: isInvulnerable(target),
+      combatIntent: target.combatIntent || ''
     };
     const cover = combatLeaveCoverAction(self, target, bullets);
     return {
@@ -1492,7 +1498,21 @@ function runSelfTest() {
       dy,
       aimMode: moving ? 'jitter' : 'exact',
       aimJitterLimit: moving ? Number(combatAimJitterLimit(target.distance, motionScale).toFixed(4)) : 0,
-      target: { id: target.user_id, name: target.name, x: target.x, y: target.y, hp: combatHpValue(target), drop: target.drop, distance: Math.round(target.distance) },
+      target: {
+        id: target.user_id,
+        name: target.name,
+        x: target.x,
+        y: target.y,
+        hp: combatHpValue(target),
+        drop: target.drop,
+        distance: Math.round(target.distance),
+        mode: target.current_join_mode || target.mode || '',
+        life: target.life || '',
+        active: isActive(target),
+        firing: isFiringEntity(target),
+        invulnerable: isInvulnerable(target),
+        combatIntent: target.combatIntent || ''
+      },
       combatState: {
         spacing: spacing.active ? {
           dx: spacing.dx,
@@ -10115,7 +10135,12 @@ function browserBotSource(config) {
       motionScale: Number(targetMotionScale.toFixed(2)),
       combatIntent: target.combatIntent || '',
       score: Number.isFinite(Number(target.combatOpportunityScore)) ? Number(target.combatOpportunityScore) : null,
-      competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null
+      competingCoinScore: Number.isFinite(Number(target.competingCoinScore)) ? Number(target.competingCoinScore) : null,
+      mode: target.current_join_mode || target.mode || '',
+      life: target.life || '',
+      active: isCurrentlyActive(target),
+      firing: isFiringEntity(target),
+      invulnerable: isInvulnerable(target)
 	    };
 	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
 	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));

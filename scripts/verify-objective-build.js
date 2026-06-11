@@ -250,6 +250,14 @@ function main() {
         'pending unsafe exit suppress does not take max(delay, minimum)'
       );
     });
+    check(`${file} logs combat target mode and safety fields`, () => {
+      const body = functionBody(text, 'buildCombatAction');
+      assert(body.includes("mode: target.current_join_mode || target.mode || ''"), 'combat target mode not logged');
+      assert(body.includes("life: target.life || ''"), 'combat target life not logged');
+      assert(body.includes('active: isCurrentlyActive(target)'), 'combat target active flag not logged');
+      assert(body.includes('firing: isFiringEntity(target)'), 'combat target firing flag not logged');
+      assert(body.includes('invulnerable: isInvulnerable(target)'), 'combat target invulnerable flag not logged');
+    });
     check(`${file} allows immediate relogin after safe offline exit`, () => {
       const body = functionBody(text, 'setOfflineLeaveSuppress');
       assert(
