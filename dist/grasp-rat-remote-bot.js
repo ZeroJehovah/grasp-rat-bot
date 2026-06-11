@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.88"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.89"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -211,18 +211,24 @@
     coinAxisFlipTolerance: 650,
     precisionPulseMaxMs: 260,
     coinPickupStopDistance: 30,
+    coinPickupStopPulseMs: 45,
     coinPickupMicroDistance: 120,
+    coinPickupMicroPulseMs: 60,
     coinPickupFineDistance: 320,
     coinPickupSweepDistance: 900,
     coinPickupPulseMs: 240,
     coinPickupSweepPulseMs: 150,
-    coinPickupFinePulseMs: 130,
+    coinPickupFinePulseMs: 75,
     coinAxisApproachMinDistance: 5000,
     coinAxisApproachRatio: 4,
     coinAxisApproachLaneTolerance: 1800,
     coinApproachBrakeDistance: 700,
     coinPickupBrakeDistance: 650,
-    coinPickupBrakePulseMs: 80,
+    coinPickupBrakePulseMs: 90,
+    coinPickupFailureSlowStepMs: 10,
+    coinPickupFailureMinPulseMs: 35,
+    coinPickupAttemptSlowEveryMs: 2500,
+    coinPickupAttemptSlowMaxCount: 3,
     shootEveryMs: 120,
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
@@ -4559,14 +4565,46 @@
     return null;
   }
 
-  function coinPickupPrecisionPulseMs(distance) {
+  function coinPickupPrecisionPulseMs(distance, failureCount = 0) {
     const d = Math.max(0, Number(distance) || 0);
-    if (d <= Math.max(0, Number(cfg.coinPickupBrakeDistance || 0))) {
-      return Math.max(25, Number(cfg.coinPickupBrakePulseMs) || Number(cfg.coinPickupFinePulseMs) || 80);
+    const stopDistance = Math.max(0, Number(cfg.coinPickupStopDistance || 0));
+    const microDistance = Math.max(stopDistance, Number(cfg.coinPickupMicroDistance || 0));
+    const fineDistance = Math.max(microDistance, Number(cfg.coinPickupFineDistance || 0));
+    const brakeDistance = Math.max(fineDistance, Number(cfg.coinPickupBrakeDistance || 0));
+    let pulse = Number(cfg.coinPickupSweepPulseMs) || 150;
+    if (d <= stopDistance) {
+      pulse = Number(cfg.coinPickupStopPulseMs) || Number(cfg.coinPickupMicroPulseMs) || 45;
+    } else if (d <= microDistance) {
+      pulse = Number(cfg.coinPickupMicroPulseMs) || Number(cfg.coinPickupFinePulseMs) || 60;
+    } else if (d <= fineDistance) {
+      pulse = Number(cfg.coinPickupFinePulseMs) || Number(cfg.coinPickupBrakePulseMs) || 75;
+    } else if (d <= brakeDistance) {
+      pulse = Number(cfg.coinPickupBrakePulseMs) || 90;
     }
-    return d <= cfg.coinPickupFineDistance
-      ? Math.max(25, Number(cfg.coinPickupFinePulseMs) || 45)
-      : Math.max(30, Number(cfg.coinPickupSweepPulseMs) || 80);
+    const slowStep = Math.max(0, Number(cfg.coinPickupFailureSlowStepMs || 0));
+    const minPulse = Math.max(20, Number(cfg.coinPickupFailureMinPulseMs || 35));
+    const slowMs = Math.max(0, Math.floor(Number(failureCount) || 0)) * slowStep;
+    return Math.max(minPulse, Math.round(pulse - slowMs));
+  }
+
+  function coinPickupFailureCount(id, t = now()) {
+    if (!id && id !== 0) return 0;
+    const failure = bot.coinFailures.get(String(id));
+    if (!failure) return 0;
+    const lastAt = Number(failure.lastAt || 0);
+    if (lastAt && t - lastAt > Number(cfg.coinFailureDecayMs || 0)) return 0;
+    return Math.max(0, Math.floor(Number(failure.count || 0)));
+  }
+
+  function coinPickupAttemptSlowCount(id, distance, t = now()) {
+    if (!id && id !== 0) return 0;
+    if (Number(distance) > Number(cfg.closeCoinStuckDistance || 0)) return 0;
+    const progress = bot.coinProgress;
+    if (!progress || String(progress.id) !== String(id)) return 0;
+    const lastImprovedAt = Number(progress.lastImprovedAt || progress.startedAt || t);
+    const everyMs = Math.max(1, Number(cfg.coinPickupAttemptSlowEveryMs || 2500));
+    const maxCount = Math.max(0, Math.floor(Number(cfg.coinPickupAttemptSlowMaxCount || 0)));
+    return clamp(Math.floor(Math.max(0, t - lastImprovedAt) / everyMs), 0, maxCount);
   }
 
   function coinAxisLockShouldHold(lock, dxRaw, dyRaw) {
@@ -4605,11 +4643,23 @@
 
     if (distance <= cfg.coinPickupSweepDistance) {
       const pulse = Math.max(60, Number(cfg.coinPickupPulseMs) || 180);
-      const precisionPulseMs = coinPickupPrecisionPulseMs(distance);
+      const pickupFailureCount = coinPickupFailureCount(id, t);
+      const pickupAttemptSlowLevel = coinPickupAttemptSlowCount(id, distance, t);
+      const pickupSlowCount = pickupFailureCount + pickupAttemptSlowLevel;
+      const precisionPulseMs = coinPickupPrecisionPulseMs(distance, pickupSlowCount);
       const locked = (next, extra = {}) => {
         if (next.dx || next.dy) {
           bot.coinApproachLock = { id, dx: next.dx, dy: next.dy, until: t + pulse };
-          return { ...next, distance, pickupSweep: true, locked: Boolean(sameLock), precisionPulseMs, ...extra };
+          return {
+            ...next,
+            distance,
+            pickupSweep: true,
+            locked: Boolean(sameLock),
+            precisionPulseMs,
+            pickupFailureCount,
+            pickupAttemptSlowCount: pickupAttemptSlowLevel,
+            ...extra
+          };
         }
         if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
         return { dx: 0, dy: 0, distance, pickupSweep: true, ...extra };
@@ -4676,6 +4726,11 @@
   function coinMotionMeta(dir) {
     const meta = {};
     if (dir?.precisionPulseMs) meta.precisionPulseMs = Math.round(Number(dir.precisionPulseMs));
+    const pickupFailureCount = Math.max(0, Math.floor(Number(dir?.pickupFailureCount || 0)));
+    const pickupAttemptSlowCount = Math.max(0, Math.floor(Number(dir?.pickupAttemptSlowCount || 0)));
+    if (pickupFailureCount) meta.pickupFailureCount = pickupFailureCount;
+    if (pickupAttemptSlowCount) meta.pickupAttemptSlowCount = pickupAttemptSlowCount;
+    if (pickupFailureCount || pickupAttemptSlowCount) meta.pickupSlowCount = pickupFailureCount + pickupAttemptSlowCount;
     if (dir?.pickupMicro) meta.pickupMode = dir.crossSweep ? 'micro-cross-sweep' : 'micro';
     else if (dir?.pickupFine) meta.pickupMode = 'fine';
     else if (dir?.pickupSweep) meta.pickupMode = 'sweep';
