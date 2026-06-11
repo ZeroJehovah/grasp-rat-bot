@@ -248,6 +248,16 @@ function main() {
         'pending unsafe exit suppress does not take max(delay, minimum)'
       );
     });
+    check(`${file} allows immediate relogin after safe offline exit`, () => {
+      const body = functionBody(text, 'setOfflineLeaveSuppress');
+      assert(
+        body.includes('!staminaHold && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'),
+        'safe offline exit does not bypass offline relogin suppress'
+      );
+      assert(body.includes('detail.safeReloginAllowed = true'), 'safe offline relogin marker not recorded');
+      assert(body.includes('clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'safe offline path does not clear persistent hold state');
+      assert(body.includes('return 0'), 'safe offline path does not return without suppress');
+    });
   }
 
   check('grasp-rat-bot.js covers stationary full-stamina Active combat self-test', () => {
