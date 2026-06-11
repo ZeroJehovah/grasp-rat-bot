@@ -138,6 +138,7 @@ node --check grasp-rat-bot.js
 node --check scripts/build-remote-bot.js
 node --check scripts/render-extension-icons.js
 node --check scripts/verify-objective-build.js
+node --check scripts/objective-status.js
 node --check userscript/grasp-rat-bootstrap.user.js
 node --check extension/background.js
 node --check extension/content-bridge.js
@@ -147,9 +148,12 @@ node --check combat-log-service/server.js
 node grasp-rat-bot.js --self-test
 node scripts/build-remote-bot.js
 node scripts/verify-objective-build.js
+node scripts/objective-status.js --fail-on-incomplete
 ```
 
 `verify-objective-build.js` is a static release check. It verifies that `dist/manifest.json` matches the generated remote bot hash/current source, that key objective constants are present in source and dist, and that bootstrap layout/source-hash/compact-panel/post-login zoom invariants are still present. It does not replace fresh `combat-log-service` current-version live validation.
+
+`objective-status.js` combines the static verifier with current-version objective log validation. It reports which objective requirements are proven and exits non-zero with `--fail-on-incomplete` until fresh matching logs include required exit, Active-in-range combat, and HP-disadvantage exit evidence.
 
 ## CDP Fallback
 
