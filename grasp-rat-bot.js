@@ -182,6 +182,7 @@ function runSelfTest() {
     combatStrafeLockMs: 700,
     combatStrafeDirectionLockMs: 2200,
     combatStrafeRandomJitterMs: 1100,
+    combatStrafePreciseLaneMin: 1,
     combatStrafeCarryMs: 1600,
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
@@ -427,6 +428,43 @@ function runSelfTest() {
       scale = Math.max(scale, recent * Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15)));
     }
     return scale;
+  }
+  function combatStrafeHoldMs() {
+    const base = Math.max(300, Number(cfg.combatStrafeDirectionLockMs ?? cfg.combatStrafeLockMs) || 700);
+    const jitter = Math.max(0, Number(cfg.combatStrafeRandomJitterMs) || 0);
+    return base + (jitter ? Math.floor(Math.random() * jitter) : 0);
+  }
+  function combatPreciseStrafeSign(pressure) {
+    const signedLane = Number(pressure?.signedLaneDistance);
+    const laneMin = Math.max(0, Number(cfg.combatStrafePreciseLaneMin ?? 1));
+    return !pressure?.synthetic && Number.isFinite(signedLane) && Math.abs(signedLane) > laneMin
+      ? -Math.sign(signedLane)
+      : 0;
+  }
+  function selectCombatStrafeSign(existing, key, preciseSign, t = Date.now()) {
+    let sign = 0;
+    let until = 0;
+    let locked = false;
+    let lockOverridden = false;
+    const existingUntil = Number(existing?.until || 0);
+    if (existing && existing.key === key && t < existingUntil) {
+      const existingSign = Math.sign(Number(existing.sign || 0));
+      const precise = Math.sign(Number(preciseSign || 0));
+      if (precise && existingSign && existingSign !== precise) {
+        sign = precise;
+        until = t + combatStrafeHoldMs();
+        lockOverridden = true;
+      } else {
+        sign = existingSign;
+        until = existingUntil;
+        locked = Boolean(sign);
+      }
+    }
+    if (!sign) {
+      sign = Math.sign(Number(preciseSign || 0)) || (Math.random() < 0.5 ? -1 : 1);
+      until = t + combatStrafeHoldMs();
+    }
+    return { sign, until, locked, lockOverridden };
   }
   function coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance = cfg.coinPrecisionTolerance) {
     const absX = Math.abs(dxRaw);
@@ -1980,6 +2018,19 @@ function runSelfTest() {
       want: 'combat-tangent-dodge'
     },
     {
+      name: 'combat precise incoming lane overrides stale strafe lock',
+      got: (() => {
+        const picked = selectCombatStrafeSign(
+          { key: 'owner:7', sign: -1, until: 2000 },
+          'owner:7',
+          combatPreciseStrafeSign({ ownerId: 7, synthetic: false, signedLaneDistance: -120 }),
+          1000
+        );
+        return picked.sign + ':' + picked.locked + ':' + picked.lockOverridden;
+      })(),
+      want: '1:false:true'
+    },
+    {
       name: 'combat moving target uses jitter aim',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -2752,6 +2803,7 @@ function browserBotSource(config) {
     combatStrafeLockMs: 700,
     combatStrafeDirectionLockMs: 2200,
     combatStrafeRandomJitterMs: 1100,
+    combatStrafePreciseLaneMin: 1,
     combatStrafeCarryMs: 1600,
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
@@ -8086,6 +8138,40 @@ function browserBotSource(config) {
     return strafe.targetId === key || strafe.key === 'target:' + key || strafe.key === 'owner:' + key;
   }
 
+  function combatPreciseStrafeSign(pressure) {
+    const signedLane = Number(pressure?.signedLaneDistance);
+    const laneMin = Math.max(0, Number(cfg.combatStrafePreciseLaneMin ?? 1));
+    return !pressure?.synthetic && Number.isFinite(signedLane) && Math.abs(signedLane) > laneMin
+      ? -Math.sign(signedLane)
+      : 0;
+  }
+
+  function selectCombatStrafeSign(existing, key, preciseSign, t = now()) {
+    let sign = 0;
+    let until = 0;
+    let locked = false;
+    let lockOverridden = false;
+    const existingUntil = Number(existing?.until || 0);
+    if (existing && existing.key === key && t < existingUntil) {
+      const existingSign = Math.sign(Number(existing.sign || 0));
+      const precise = Math.sign(Number(preciseSign || 0));
+      if (precise && existingSign && existingSign !== precise) {
+        sign = precise;
+        until = t + combatStrafeHoldMs();
+        lockOverridden = true;
+      } else {
+        sign = existingSign;
+        until = existingUntil;
+        locked = Boolean(sign);
+      }
+    }
+    if (!sign) {
+      sign = Math.sign(Number(preciseSign || 0)) || (Math.random() < 0.5 ? -1 : 1);
+      until = t + combatStrafeHoldMs();
+    }
+    return { sign, until, locked, lockOverridden };
+  }
+
   function combatStrafeVector(self, target, pressure, sign, options = {}) {
     let baseX = Number(pressure?.vx) || 0;
     let baseY = Number(pressure?.vy) || 0;
@@ -8137,20 +8223,10 @@ function browserBotSource(config) {
     }
 
     const key = combatStrafeKey(target, pressure);
-    const signedLane = Number(pressure?.signedLaneDistance);
-    const preciseSign = !pressure?.synthetic && Number.isFinite(signedLane) && Math.abs(signedLane) > 1
-      ? -Math.sign(signedLane)
-      : 0;
-    let sign = 0;
-    let until = 0;
-    if (existing && existing.key === key && t < Number(existing.until || 0)) {
-      sign = Number(existing.sign || 0);
-      until = Number(existing.until || 0);
-    }
-    if (!sign) {
-      sign = preciseSign || (Math.random() < 0.5 ? -1 : 1);
-      until = t + combatStrafeHoldMs();
-    }
+    const preciseSign = combatPreciseStrafeSign(pressure);
+    const strafeSign = selectCombatStrafeSign(existing, key, preciseSign, t);
+    const sign = strafeSign.sign;
+    const until = strafeSign.until;
 
     let { dx, dy } = combatStrafeVector(self, target, pressure, sign, options);
     if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
@@ -8172,7 +8248,8 @@ function browserBotSource(config) {
     return {
       dx,
       dy,
-      locked: Boolean(existing && existing.key === key && t < Number(existing.until || 0)),
+      locked: Boolean(strafeSign.locked),
+      lockOverridden: Boolean(strafeSign.lockOverridden),
       carried: false,
       active: true,
       sign,
@@ -8744,6 +8821,7 @@ function browserBotSource(config) {
           sign: strafe.sign,
           precise: Boolean(strafe.precise),
           locked: Boolean(strafe.locked),
+          lockOverridden: Boolean(strafe.lockOverridden),
           carried: Boolean(strafe.carried),
           holdRemainingMs: strafe.holdRemainingMs || 0,
           carryRemainingMs: strafe.carryRemainingMs || 0,
