@@ -129,6 +129,7 @@ function offlineLeaveSummaryText(reason, offlineSafety) {
 
 function combatLogExitSummaryFromDecision(decision) {
   const leave = decision?.leave || null;
+  const detail = leave || decision || {};
   const reason = String(leave?.reason || decision?.reason || '');
   const isExit = Boolean(leave)
     || decision?.kind === 'leave'
@@ -140,15 +141,15 @@ function combatLogExitSummaryFromDecision(decision) {
     displayReason: leave?.displayReason || decision?.displayReason || '',
     attempted: leave ? Boolean(leave.attempted) : null,
     error: leave?.error || '',
-    reloginUntil: leave?.reloginUntil || 0,
-    holdRemainingMs: leave?.holdRemainingMs || 0,
-    reloginDelayMs: leave?.reloginDelayMs || 0,
-    pendingLoginSuppressUntil: leave?.pendingLoginSuppressUntil || 0,
-    pendingLoginSuppressDelayMs: leave?.pendingLoginSuppressDelayMs || 0,
-    pendingLoginSuppressReason: leave?.pendingLoginSuppressReason || '',
-    pendingLoginSuppressMinimumDelayMs: leave?.pendingLoginSuppressMinimumDelayMs || 0,
-    pendingLoginSuppressHpDelayMs: leave?.pendingLoginSuppressHpDelayMs || 0,
-    pendingLoginSuppressHp: leave?.pendingLoginSuppressHp || null
+    reloginUntil: detail.reloginUntil || 0,
+    holdRemainingMs: detail.holdRemainingMs || 0,
+    reloginDelayMs: detail.reloginDelayMs || 0,
+    pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
+    pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
+    pendingLoginSuppressReason: detail.pendingLoginSuppressReason || '',
+    pendingLoginSuppressMinimumDelayMs: detail.pendingLoginSuppressMinimumDelayMs || 0,
+    pendingLoginSuppressHpDelayMs: detail.pendingLoginSuppressHpDelayMs || 0,
+    pendingLoginSuppressHp: detail.pendingLoginSuppressHp || null
   };
 }
 
@@ -3177,6 +3178,26 @@ function runSelfTest() {
 	        ].join('|');
 	      })(),
 	      want: 'enemy-leave-wait|hostile hold|123456789|599000|600000'
+	    },
+	    {
+	      name: 'combat log exit summary falls back to decision hold fields',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'wait',
+	          reason: 'offline-leave-wait',
+	          displayReason: 'offline hold active',
+	          leave: null,
+	          holdRemainingMs: 61000,
+	          reloginDelayMs: 120000
+	        });
+	        return [
+	          exit?.reason,
+	          exit?.displayReason,
+	          exit?.holdRemainingMs,
+	          exit?.reloginDelayMs
+	        ].join('|');
+	      })(),
+	      want: 'offline-leave-wait|offline hold active|61000|120000'
 	    }
 		  ];
   const failed = cases.filter(item => item.got !== item.want);

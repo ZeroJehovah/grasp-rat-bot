@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.98"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.99"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1514,6 +1514,7 @@
 
       const combatLogExitSummaryFromDecision = function combatLogExitSummaryFromDecision(decision) {
   const leave = decision?.leave || null;
+  const detail = leave || decision || {};
   const reason = String(leave?.reason || decision?.reason || '');
   const isExit = Boolean(leave)
     || decision?.kind === 'leave'
@@ -1525,15 +1526,15 @@
     displayReason: leave?.displayReason || decision?.displayReason || '',
     attempted: leave ? Boolean(leave.attempted) : null,
     error: leave?.error || '',
-    reloginUntil: leave?.reloginUntil || 0,
-    holdRemainingMs: leave?.holdRemainingMs || 0,
-    reloginDelayMs: leave?.reloginDelayMs || 0,
-    pendingLoginSuppressUntil: leave?.pendingLoginSuppressUntil || 0,
-    pendingLoginSuppressDelayMs: leave?.pendingLoginSuppressDelayMs || 0,
-    pendingLoginSuppressReason: leave?.pendingLoginSuppressReason || '',
-    pendingLoginSuppressMinimumDelayMs: leave?.pendingLoginSuppressMinimumDelayMs || 0,
-    pendingLoginSuppressHpDelayMs: leave?.pendingLoginSuppressHpDelayMs || 0,
-    pendingLoginSuppressHp: leave?.pendingLoginSuppressHp || null
+    reloginUntil: detail.reloginUntil || 0,
+    holdRemainingMs: detail.holdRemainingMs || 0,
+    reloginDelayMs: detail.reloginDelayMs || 0,
+    pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
+    pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
+    pendingLoginSuppressReason: detail.pendingLoginSuppressReason || '',
+    pendingLoginSuppressMinimumDelayMs: detail.pendingLoginSuppressMinimumDelayMs || 0,
+    pendingLoginSuppressHpDelayMs: detail.pendingLoginSuppressHpDelayMs || 0,
+    pendingLoginSuppressHp: detail.pendingLoginSuppressHp || null
   };
 };
 
