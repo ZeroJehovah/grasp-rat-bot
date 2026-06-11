@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.83"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.84"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -82,6 +82,9 @@
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatHighHpDisadvantageGap: 20,
+    combatLowHpNoDamageLeaveThreshold: 70,
+    combatLowHpNoDamageLeaveMs: 15000,
+    combatLowHpNoDamageMinGap: 0,
     combatShootEveryMs: 80,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
@@ -1087,6 +1090,7 @@
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
 	      'combat-low-hp-leave': '战斗低血劣势，立即退出',
+	      'combat-low-hp-no-damage-leave': '战斗低血且久攻未中，立即退出',
 	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'combat-leave': '战斗劣势退出后等待',
 	      'combat-leave-retry': '战斗退出失败，等待补发退出',
@@ -2229,6 +2233,12 @@
     if (reason === 'combat-hp-disadvantage-leave') {
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
     }
+    if (reason === 'combat-low-hp-no-damage-leave') {
+      const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
+        ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
+        : '';
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
+    }
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
 
@@ -3228,7 +3238,9 @@
       ? 'combat critical hp'
       : action?.reason === 'combat-hp-disadvantage-leave'
         ? 'combat hp disadvantage'
-        : 'combat low hp disadvantage';
+        : action?.reason === 'combat-low-hp-no-damage-leave'
+          ? 'combat low hp no damage'
+          : 'combat low hp disadvantage';
 	    const detail = {
 	      attempted: false,
 	      method: '',
@@ -5849,6 +5861,18 @@
     };
   }
 
+  function combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveThreshold || 0));
+    const waitMs = Math.max(0, Number(cfg.combatLowHpNoDamageLeaveMs || 0));
+    const minGap = Number.isFinite(Number(cfg.combatLowHpNoDamageMinGap))
+      ? Number(cfg.combatLowHpNoDamageMinGap)
+      : 0;
+    const hpGap = Number(targetHp) - Number(selfHp);
+    const noDamageMs = Number(damageState?.noDamageMs || 0);
+    if (!threshold || !waitMs || !(Number(selfHp) < threshold) || !(hpGap >= minGap) || !(noDamageMs >= waitMs)) return null;
+    return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
+  }
+
   function combatAimNoDamageLevel(widenMs) {
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const elapsed = Math.max(0, Number(widenMs) || 0);
@@ -6014,6 +6038,11 @@
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap });
 	    }
+    const damageState = combatAimDamageState(target);
+    const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState);
+    if (lowNoDamage) {
+      return combatLeaveAction('combat-low-hp-no-damage-leave', baseTarget, lowNoDamage);
+    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
       const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
@@ -6048,7 +6077,6 @@
         }
       };
     }
-    const damageState = combatAimDamageState(target);
     const pressureClose = combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
     const pressure = combatPressureThreat(self, target, bullets);
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
