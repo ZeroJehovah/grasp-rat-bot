@@ -112,16 +112,20 @@ npm run monitor -- --watch-count 1
 
 ```bash
 npm run analyze:current
+npm run validate:current
 npm run monitor:current
 npm run monitor:current -- --since now --latest 10
-npm run monitor -- --min-version bootstrap-0.4.97 --latest 10
-npm run monitor -- --since now --min-version bootstrap-0.4.97 --latest 10
+npm run monitor -- --min-version bootstrap-0.4.99 --latest 10
+npm run monitor -- --since now --min-version bootstrap-0.4.99 --latest 10
 ```
+
+`validate:current` 会额外要求至少存在一条当前 manifest 版本日志；没有匹配日志时返回非零退出码，用来区分“无问题”和“还没有验证证据”。
 
 用于自动检查时可以让问题返回非零退出码：
 
 ```bash
 npm run analyze -- --fail-on-issue
+npm run analyze:current -- --require-entries --fail-on-issue
 ```
 
 验证审计器自身的版本过滤和问题识别逻辑：

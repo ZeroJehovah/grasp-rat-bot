@@ -9,6 +9,7 @@
     "test": "node analyze-logs.js --self-test",
     "analyze": "node analyze-logs.js",
     "analyze:current": "node analyze-logs.js --manifest ../dist/manifest.json",
+    "validate:current": "node analyze-logs.js --manifest ../dist/manifest.json --require-entries --fail-on-issue",
     "monitor": "node analyze-logs.js --watch",
     "monitor:current": "node analyze-logs.js --watch --manifest ../dist/manifest.json"
   }
