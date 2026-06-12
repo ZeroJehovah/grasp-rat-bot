@@ -242,7 +242,7 @@ function printHuman(status) {
   console.log('Objective status');
   console.log(`Manifest: ${status.manifest.version || '-'} ${status.manifest.sha256 || '-'}`);
   console.log(`Static build: ${status.staticCheck.ok ? 'ok' : 'FAIL'} - ${status.staticCheck.summary}`);
-  console.log(`Live evidence: ${status.liveEvidence.ok ? 'ok' : 'missing/failing'} - entries=${status.liveEvidence.entries}/${status.liveEvidence.scannedEntries}, exits=${status.liveEvidence.exitEvents}, activeCombat=${status.liveEvidence.activeCombatEvents}, hpDisadvantageExits=${status.liveEvidence.hpDisadvantageExitEvents}`);
+  console.log(`Live evidence: ${status.liveEvidence.ok ? 'ok' : 'missing/failing'} - entries=${status.liveEvidence.entries}/${status.liveEvidence.scannedEntries}, exits=${status.liveEvidence.exitEvents}, unsafeOrRequiredDelayExits=${status.liveEvidence.unsafeOrRequiredDelayExitEvents}, activeCombat=${status.liveEvidence.activeCombatEvents}, hpDisadvantageExits=${status.liveEvidence.hpDisadvantageExitEvents}`);
   if (Object.keys(status.liveEvidence.issues).length) {
     console.log('Audit issues: ' + Object.entries(status.liveEvidence.issues).map(([key, value]) => `${key}=${value}`).join(', '));
   }
