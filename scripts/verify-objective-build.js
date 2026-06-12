@@ -36,6 +36,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'leaveCommandTimeoutMs', value: 10000 },
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
+  { key: 'loginSnapshotSuccessRequired', value: 3 },
+  { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatPressureCloseMinHp', value: 60 },
@@ -255,11 +257,12 @@ function main() {
         'combat target priority does not include join-mode Active'
       );
     });
-    check(`${file} ends combat logs on relogin wait/manual states`, () => {
-      const body = functionBody(text, 'combatLogSuspendReason');
-      assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
-      assert(body.includes('manual-login'), 'manual-login suspend reason not found');
-    });
+	    check(`${file} ends combat logs on relogin wait/manual states`, () => {
+	      const body = functionBody(text, 'combatLogSuspendReason');
+	      assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
+	      assert(body.includes('login-snapshot-gate'), 'login-snapshot-gate suspend reason not found');
+	      assert(body.includes('manual-login'), 'manual-login suspend reason not found');
+	    });
     check(`${file} keeps specific exit reason during leave cooldown`, () => {
       const body = functionBody(text, 'combatLogExitSummaryFromDecision');
       assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
@@ -417,6 +420,36 @@ function main() {
       const clearBody = functionBody(text, 'clearLeave403RiskHolds');
       assert(clearBody.includes('clearLoginSuppressMatching'), '403 snapshot recovery does not clear login suppress');
       assert(clearBody.includes('clearPersistentExitState'), '403 snapshot recovery does not clear persistent hold state');
+    });
+    check(`${file} gates relogin on consecutive snapshot success`, () => {
+      const gateBody = functionBody(text, 'ensureLoginSnapshotGate');
+      assert(gateBody.includes('await refreshGlobalState(true)'), 'login snapshot gate does not actively probe snapshot');
+      const refreshBody = functionBody(text, 'refreshGlobalState');
+      assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not advance login gate');
+      assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
+      const loginBody = functionBody(text, 'maybeStartAutoLogin');
+      assert(loginBody.includes('await ensureLoginSnapshotGate(reason)'), 'auto login does not wait for snapshot gate');
+      assert(loginBody.includes("reason: 'snapshot-gate'"), 'snapshot gate block reason not reported');
+      const manualBody = functionBody(text, 'forceLoginNow');
+      assert(manualBody.includes('await ensureLoginSnapshotGate(manualReason)'), 'manual login does not check snapshot gate');
+      assert(manualBody.includes("skipReason: 'snapshot-gate'"), 'manual login can clear holds before snapshot gate');
+      const triggerBody = functionBody(text, 'startExitAudit');
+      assert(triggerBody.includes("resetLoginSnapshotGate('exit-trigger:'"), 'exit trigger does not reset login snapshot gate');
+      const confirmBody = functionBody(text, 'confirmPendingExit');
+      assert(confirmBody.includes("resetLoginSnapshotGate('exit-confirmed:'"), 'exit confirmation does not reset login snapshot gate');
+      assert(text.includes('loginSnapshotGate: snapshotLoginGateStatus()'), 'status/logs do not expose login snapshot gate');
+    });
+    check(`${file} leaves broken no-self game sessions`, () => {
+      const noSelfBody = functionBody(text, 'noSelfGameSessionExitState');
+      assert(noSelfBody.includes('controlHasNativeGameSession(control)'), 'no-self session detection does not use native session evidence');
+      assert(noSelfBody.includes('control?.nativeReconnectChurn'), 'no-self session detection does not detect reconnect churn');
+      assert(noSelfBody.includes('cfg.gameSessionNoSelfLeaveMs'), 'no-self session detection does not use timeout');
+      assert(noSelfBody.includes('shouldLeave'), 'no-self helper does not return leave decision');
+      const tickBody = functionBody(text, 'tick');
+      assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
+      assert(tickBody.includes("stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session')"), 'no-self session exit does not stop motion with explicit reason');
+      assert(tickBody.includes('await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety)'), 'no-self session exit does not issue offline leave');
+      assert(text.includes("control-ws-no-self-game-session"), 'no-self session exit reason is not exposed');
     });
     check(`${file} logs combat target mode and safety fields`, () => {
       const body = functionBody(text, 'buildCombatAction');
