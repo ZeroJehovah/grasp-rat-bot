@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.128"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.129"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1102,16 +1102,117 @@
   }
 
   function targetOverlayPoint(point, self, view) {
-    const x = Number(point?.x);
-    const y = Number(point?.y);
-    const selfX = Number(self?.x);
-    const selfY = Number(self?.y);
+    const targetPoint = targetOverlayWorldPoint(point);
+    const selfPoint = targetOverlayWorldPoint(self);
+    const x = Number(targetPoint?.x);
+    const y = Number(targetPoint?.y);
+    const selfX = Number(selfPoint?.x);
+    const selfY = Number(selfPoint?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
     const scale = Math.min(view.width, view.height) / (Math.max(1, currentViewRadiusCm()) * 2);
     return {
       x: view.width / 2 + (x - selfX) * scale,
       y: view.height / 2 + (y - selfY) * scale
     };
+  }
+
+  function targetOverlayWorldPoint(value) {
+    if (!value || typeof value !== 'object') return null;
+    const point = value.position || value.pos || value.point || value.coord || null;
+    const x = firstFiniteNumber(
+      value.x,
+      value.pos_x,
+      value.posX,
+      value.world_x,
+      value.worldX,
+      value.coord_x,
+      value.coordX,
+      value.center_x,
+      value.centerX,
+      value.visual_x,
+      value.visualX,
+      value.render_x,
+      value.renderX,
+      point?.x
+    );
+    const y = firstFiniteNumber(
+      value.y,
+      value.pos_y,
+      value.posY,
+      value.world_y,
+      value.worldY,
+      value.coord_y,
+      value.coordY,
+      value.center_y,
+      value.centerY,
+      value.visual_y,
+      value.visualY,
+      value.render_y,
+      value.renderY,
+      point?.y
+    );
+    return Number.isFinite(x) && Number.isFinite(y) ? { ...value, x, y } : null;
+  }
+
+  function targetOverlayListFromValue(value) {
+    if (Array.isArray(value)) return value;
+    if (value instanceof Map || value instanceof Set) return Array.from(value.values());
+    if (value && typeof value === 'object') {
+      if (targetOverlayWorldPoint(value)) return [value];
+      const values = Object.values(value);
+      if (values.length && values.every(item => item && typeof item === 'object')) return values;
+    }
+    return [];
+  }
+
+  function targetOverlayCallList(label, fn, thisArg = null) {
+    if (typeof fn !== 'function') return [];
+    try {
+      return targetOverlayListFromValue(fn.call(thisArg)).map(item => item && typeof item === 'object' ? { ...item, overlaySource: label } : item);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function targetOverlayRenderEntities() {
+    const win = typeof window === 'object' && window ? window : null;
+    const nativeState = getNativeState();
+    return [
+      ...targetOverlayCallList('render', typeof getRenderEntities === 'function' ? getRenderEntities : win?.getRenderEntities, win),
+      ...targetOverlayCallList('state.getRenderEntities()', nativeState?.getRenderEntities, nativeState),
+      ...targetOverlayListFromValue(nativeState?.renderEntities).map(item => item && typeof item === 'object' ? { ...item, overlaySource: 'state.renderEntities' } : item),
+      ...targetOverlayListFromValue(nativeState?.render_entities).map(item => item && typeof item === 'object' ? { ...item, overlaySource: 'state.render_entities' } : item)
+    ].filter(Boolean);
+  }
+
+  function targetOverlayFindEntity(list, target) {
+    if (!Array.isArray(list) || !list.length || !target) return null;
+    const targetId = target?.id ?? target?.user_id ?? target?.userId;
+    if (targetId !== undefined && targetId !== null && targetId !== '') {
+      const exact = list.find(entity => String(entity?.user_id ?? entity?.userId ?? entity?.id ?? '') === String(targetId));
+      if (exact) return exact;
+    }
+    const name = String(target?.name || '');
+    if (name) {
+      const exactName = list.find(entity => String(entity?.name || '') === name);
+      if (exactName) return exactName;
+    }
+    return null;
+  }
+
+  function targetOverlayVisualSelf() {
+    const id = getCurrentUserId();
+    if (id) {
+      const renderSelf = targetOverlayFindEntity(targetOverlayRenderEntities(), { id });
+      if (renderSelf) return targetOverlayWorldPoint(renderSelf) || renderSelf;
+    }
+    const nativeState = getNativeState();
+    const visual = targetOverlayWorldPoint(nativeState?.localVisual)
+      || targetOverlayWorldPoint(nativeState?.local_visual)
+      || targetOverlayWorldPoint(nativeState?.visualSelf)
+      || targetOverlayWorldPoint(nativeState?.visual_self);
+    if (visual) return visual;
+    return getSelf();
   }
 
   function targetOverlayResolvedCoin(target) {
@@ -1142,6 +1243,8 @@
   function targetOverlayResolvedEntity(target) {
     const targetId = target?.id ?? target?.user_id ?? target?.userId;
     const name = String(target?.name || '');
+    const renderEntity = targetOverlayFindEntity(targetOverlayRenderEntities(), target);
+    if (renderEntity) return targetOverlayWorldPoint(renderEntity) || renderEntity;
     const entities = getNativeEntityList() || getEntities() || [];
     if (!Array.isArray(entities) || !entities.length) return null;
     if (targetId !== undefined && targetId !== null && targetId !== '') {
@@ -1167,7 +1270,7 @@
     try {
       const style = targetOverlayStyle(decision);
       const target = targetOverlayResolvedTarget(decision);
-      const self = getSelf() || decision?.self || bot.lastSelf;
+      const self = targetOverlayVisualSelf() || decision?.self || bot.lastSelf;
       if (!style || !target || !self) {
         const existing = document.getElementById(TARGET_OVERLAY_ID);
         if (existing) {
