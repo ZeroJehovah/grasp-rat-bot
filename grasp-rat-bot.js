@@ -121,6 +121,7 @@ function offlineLeaveSummaryText(reason, offlineSafety) {
   if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
   const text = String(reason || '').toLowerCase();
   if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+  if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
   if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return 'WebSocket 反复重连，退出等待重连';
   if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
   if (offlineSafety?.unsafe) return 'WebSocket 离线且周围危险，退出等待重连';
@@ -3762,9 +3763,10 @@ function browserBotSource(config) {
 	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
 	    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
 	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
-	    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
-	    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
-	    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
+		    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
+		    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
+		    loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
+		    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
 	    postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
 	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
 	      ? {
@@ -3990,10 +3992,12 @@ function browserBotSource(config) {
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
     staminaExhaustedThresholdMs: 1000,
-    staminaResetGraceMs: 10000,
-    staminaBudgetReloginDelayMs: 300000,
-    autoLogin: true,
-    loginCooldownMs: 5000,
+	    staminaResetGraceMs: 10000,
+	    staminaBudgetReloginDelayMs: 300000,
+	    loginSnapshotSuccessRequired: 3,
+	    loginSnapshotProbeMinMs: 5000,
+	    autoLogin: true,
+	    loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
 	    pursuitLeaveMs: 300000,
@@ -4008,9 +4012,10 @@ function browserBotSource(config) {
     offlineLeaveMs: 3000,
     offlineUnsafeLeaveMs: 0,
     offlineSafeLeaveMs: 3000,
-    offlineReconnectChurnWindowMs: 10000,
-    offlineReconnectChurnMinEvents: 3,
-    offlinePassiveDangerRadius: 2500,
+	    offlineReconnectChurnWindowMs: 10000,
+	    offlineReconnectChurnMinEvents: 3,
+	    gameSessionNoSelfLeaveMs: 30000,
+	    offlinePassiveDangerRadius: 2500,
     offlineLeaveRetryMs: 600,
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
@@ -4150,11 +4155,31 @@ function browserBotSource(config) {
     }).filter(Boolean);
   }
 
-	  const restoredFailures = restoredCoinFailures();
-	  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-	  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+		  const restoredFailures = restoredCoinFailures();
+		  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+		  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
 
-	  const bot = {
+		  function loginSnapshotSuccessRequired() {
+		    const raw = Number(cfg.loginSnapshotSuccessRequired ?? 3);
+		    return Math.max(0, Math.round(Number.isFinite(raw) ? raw : 3));
+		  }
+
+		  function normalizeLoginSnapshotGateState(state = null) {
+		    const required = loginSnapshotSuccessRequired();
+		    return {
+		      streak: Math.max(0, Math.round(Number(state?.streak || 0) || 0)),
+		      required,
+		      lastOkAt: Number(state?.lastOkAt || 0) || 0,
+		      lastErrorAt: Number(state?.lastErrorAt || 0) || 0,
+		      lastSampleAt: Number(state?.lastSampleAt || state?.lastOkAt || state?.lastErrorAt || 0) || 0,
+		      lastError: String(state?.lastError || ''),
+		      lastTick: Number(state?.lastTick || 0) || 0,
+		      resetAt: Number(state?.resetAt || 0) || 0,
+		      resetReason: String(state?.resetReason || '')
+		    };
+		  }
+
+		  const bot = {
 	    running: true,
 	    version: cfg.version,
 	    sourceHash: cfg.sourceHash,
@@ -4215,15 +4240,16 @@ function browserBotSource(config) {
       lastOkAt: Number(preserved.combatLogging?.lastOkAt || 0),
       sequence: Number(preserved.combatLogging?.sequence || 0)
 	    },
-    exitAudit: {
-      sequence: Number(preserved.exitAudit?.sequence || previousBot?.exitAudit?.sequence || 0),
-      requestSequence: Number(preserved.exitAudit?.requestSequence || previousBot?.exitAudit?.requestSequence || 0),
-      restored: 0,
-      lastBlockedReload: null,
-      lastBlockedLogin: null,
-      lastEvent: null
-    },
-    leave403SnapshotRecovery: {
+	    exitAudit: {
+	      sequence: Number(preserved.exitAudit?.sequence || previousBot?.exitAudit?.sequence || 0),
+	      requestSequence: Number(preserved.exitAudit?.requestSequence || previousBot?.exitAudit?.requestSequence || 0),
+	      restored: 0,
+	      lastBlockedReload: null,
+	      lastBlockedLogin: null,
+	      lastEvent: null
+	    },
+	    loginSnapshotGate: normalizeLoginSnapshotGateState(preserved.loginSnapshotGate),
+	    leave403SnapshotRecovery: {
       streak: Math.max(0, Number(preserved.leave403SnapshotRecovery?.streak || 0) || 0),
       required: Math.max(1, Math.round(Number(cfg.leave403SnapshotSuccessRequired || 5) || 5)),
       lastOkAt: Number(preserved.leave403SnapshotRecovery?.lastOkAt || 0) || 0,
@@ -4439,8 +4465,9 @@ function browserBotSource(config) {
 		          lastBlockedLogin: this.exitAudit?.lastBlockedLogin || null
 		        },
 		        opportunityChoice: this.opportunityChoice,
-        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
-        postLoginZoom: this.postLoginZoom,
+	        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
+	        loginSnapshotGate: snapshotLoginGateStatus(),
+	        postLoginZoom: this.postLoginZoom,
 		        self: displaySelf,
         session,
         safety: this.lastSafety,
@@ -4479,10 +4506,11 @@ function browserBotSource(config) {
 		          tick: this.globalState.tick,
 	          entities: arrayCount(this.globalState.entities),
 	          bullets: arrayCount(this.globalState.bullets),
-	          coinDrops: arrayCount(this.globalState.coinDrops),
-	          minimapPoints: this.globalState.minimap?.points?.length || 0,
-	          error: this.globalState.error
-	        },
+		          coinDrops: arrayCount(this.globalState.coinDrops),
+		          minimapPoints: this.globalState.minimap?.points?.length || 0,
+		          error: this.globalState.error,
+		          loginSnapshotGate: snapshotLoginGateStatus()
+		        },
         control: summarizeControl(),
         serverPositionStall: summarizeServerPositionStall(),
         login: {
@@ -4934,9 +4962,10 @@ function browserBotSource(config) {
 	      'combat-leave-retry': '战斗退出失败，等待补发退出',
 	      'control-ws-offline': 'WebSocket 离线',
 	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
-		      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
-		      'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
-		      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
+			      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
+			      'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
+			      'control-ws-no-self-game-session': '已登录但自身实体不可见，立即退出',
+			      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
 		      'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
 		      'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
 	      'offline-leave': 'WebSocket 离线，正在退出',
@@ -4944,9 +4973,10 @@ function browserBotSource(config) {
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
 	      'pursuit-leave-retry': '追击退出失败，等待补发退出',
 	      'pursuit-leave-wait': '追击退出后等待重新登录',
-	      'auto-login': '自动触发登录/加入',
-	      'login-cooldown': '登录已触发，等待页面跳转',
-	      'login-control-missing': '等待登录控件出现',
+		      'auto-login': '自动触发登录/加入',
+		      'login-cooldown': '登录已触发，等待页面跳转',
+		      'login-snapshot-gate': '等待snapshot连续成功',
+		      'login-control-missing': '等待登录控件出现',
 	      'game-session-connecting': '已登录，等待游戏连接/自身实体',
 	      'no-self': '未读到自身实体',
 	      'not-alive': '不在存活状态',
@@ -5251,8 +5281,9 @@ function browserBotSource(config) {
           pursuit: detail.pursuit || extra.pursuit || null,
           combat: detail.combat || extra.combat || null,
           offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
-          pendingExit: summarizePendingExit(bot.pendingExit),
-          request: extra.request || null,
+	          pendingExit: summarizePendingExit(bot.pendingExit),
+	          loginSnapshotGate: snapshotLoginGateStatus(),
+	          request: extra.request || null,
           leave: {
             attempted: Boolean(detail.attempted),
             method: detail.method || '',
@@ -5456,12 +5487,13 @@ function browserBotSource(config) {
           snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : null,
           tick: bot.globalState.tick,
           entities: arrayCount(bot.globalState.entities),
-          bullets: arrayCount(bot.globalState.bullets),
-          coinDrops: arrayCount(bot.globalState.coinDrops),
-          minimapPoints: bot.globalState.minimap?.points?.length || 0,
-          error: bot.globalState.error || ''
-        };
-      }
+	          bullets: arrayCount(bot.globalState.bullets),
+	          coinDrops: arrayCount(bot.globalState.coinDrops),
+	          minimapPoints: bot.globalState.minimap?.points?.length || 0,
+	          error: bot.globalState.error || '',
+	          loginSnapshotGate: snapshotLoginGateStatus()
+	        };
+	      }
 
       function combatLogDecisionSummary(decision) {
         const cloned = safeJsonClone(decision || {});
@@ -5500,13 +5532,14 @@ function browserBotSource(config) {
           cooldownRemainingMs: Number(result.cooldownRemainingMs || 0),
           suppressReason: result.suppressReason || '',
           ignoredSuppressMs: Number(result.ignoredSuppressMs || 0),
-          hasToken: Boolean(result.hasToken),
-          hasNativeSession: Boolean(result.hasNativeSession),
-          nativeWsReadyState: result.nativeWsReadyState ?? null,
-          loginRequired: Boolean(result.loginRequired),
-          currentUserId: result.currentUserId || null
-        };
-      }
+	          hasToken: Boolean(result.hasToken),
+	          hasNativeSession: Boolean(result.hasNativeSession),
+	          nativeWsReadyState: result.nativeWsReadyState ?? null,
+	          loginRequired: Boolean(result.loginRequired),
+	          currentUserId: result.currentUserId || null,
+	          snapshotGate: result.snapshotGate || null
+	        };
+	      }
 
       function combatLogManualLoginSummary(result) {
         if (!result || typeof result !== 'object') return null;
@@ -5540,9 +5573,10 @@ function browserBotSource(config) {
           suppressReason,
           enemyHoldUntil: Number(bot.pursuitReloginUntil || 0),
           enemyHoldRemainingMs: enemyReloginHoldRemainingMs(),
-          offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
-          offlineHoldRemainingMs: offlineReloginHoldRemainingMs(),
-          lastLoginAt: Number(bot.lastLoginAt || 0),
+	          offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
+	          offlineHoldRemainingMs: offlineReloginHoldRemainingMs(),
+	          snapshotGate: snapshotLoginGateStatus(),
+	          lastLoginAt: Number(bot.lastLoginAt || 0),
           lastLogin: combatLogLoginResultSummary(bot.lastLoginResult),
           decisionLogin: combatLogLoginResultSummary(decision?.login),
           manualLogin: combatLogManualLoginSummary(decision?.manualLogin || bot.lastManualLoginResult)
@@ -5641,9 +5675,9 @@ function browserBotSource(config) {
 	      function combatLogSuspendReason(decision) {
 	        const reason = String(decision?.reason || '');
 	        if (!reason) return '';
-	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-control-missing|game-session-connecting|exit-log-flush-pending)$/.test(reason)) return reason;
+		        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|game-session-connecting|exit-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
-	        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
+		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
 	      }
 
@@ -6051,17 +6085,72 @@ function browserBotSource(config) {
     return Boolean(userId && native?.ws && (native.wsOpen || isWsConnectingOrOpen(native.wsReadyState)));
   }
 
-  function controlHasNativeGameSession(control) {
-    return Boolean(control?.currentUserId && (
-      control.rawWsOpen
-      || control.nativeWsOpen
-      || control.connecting
+	  function controlHasNativeGameSession(control) {
+	    return Boolean(control?.currentUserId && (
+	      control.rawWsOpen
+	      || control.nativeWsOpen
+	      || control.connecting
       || isWsConnectingOrOpen(control.nativeWsReadyState)
-      || isWsConnectingOrOpen(control.wsReadyState)
-    ));
-  }
+	      || isWsConnectingOrOpen(control.wsReadyState)
+	    ));
+	  }
 
-	  function isVisible(el) {
+	  function noSelfGameSessionExitState(control, noSelfAgeMs = 0) {
+	    const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
+	    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+	    const hasSessionEvidence = Boolean(userId && !loginRequired && (
+	      control?.hasToken
+	      || controlHasNativeGameSession(control)
+	      || control?.transport === 'native-page'
+	      || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState))
+	      || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))
+	    ));
+	    const reconnectChurn = Boolean(control?.nativeReconnectChurn);
+	    const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
+	    const leaveMs = Math.max(0, Number(cfg.gameSessionNoSelfLeaveMs || 0) || 0);
+	    const timedOut = Boolean(leaveMs && ageMs >= leaveMs);
+	    const wsOfflineish = Boolean(
+	      !control?.wsOpen && (
+	        control?.connecting
+	        || isOfflineishWsReadyState(control?.nativeWsReadyState)
+	        || isOfflineishWsReadyState(control?.wsReadyState)
+	        || control?.rawWsOpen === false
+	      )
+	    );
+	    const shouldLeave = Boolean(hasSessionEvidence && (reconnectChurn || timedOut));
+	    const reason = reconnectChurn
+	      ? 'websocket reconnect churn missing self'
+	      : 'game session missing self';
+	    return {
+	      active: hasSessionEvidence,
+	      shouldLeave,
+	      reason,
+	      displayReason: reconnectChurn
+	        ? '已登录但自身实体不可见，WebSocket反复重连，正在退出'
+	        : '已登录但自身实体长期不可见，正在退出',
+	      userId: userId || null,
+	      ageMs,
+	      leaveMs,
+	      timedOut,
+	      reconnectChurn: reconnectChurn ? {
+	        count: Number(control?.nativeReconnectEventCount || 0),
+	        windowMs: Number(control?.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
+	      } : null,
+	      wsOfflineish,
+	      loginRequired,
+	      control: control ? {
+	        wsOpen: Boolean(control.wsOpen),
+	        rawWsOpen: Boolean(control.rawWsOpen),
+	        connecting: Boolean(control.connecting),
+	        wsReadyState: control.wsReadyState ?? null,
+	        nativeWsReadyState: control.nativeWsReadyState ?? null,
+	        hasToken: Boolean(control.hasToken),
+	        transport: control.transport || ''
+	      } : null
+	    };
+		  }
+
+			  function isVisible(el) {
     if (!el) return false;
     const style = getComputedStyle(el);
     const rect = el.getBoundingClientRect();
@@ -6222,22 +6311,102 @@ function browserBotSource(config) {
     return until;
   }
 
-  function loginSuppressRemainingMs() {
-    let until = 0;
-    try {
-      until = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-    } catch (_) {}
+	  function loginSuppressRemainingMs() {
+	    let until = 0;
+	    try {
+	      until = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+	    } catch (_) {}
     const remaining = Math.max(0, until - Date.now());
     if (!remaining && until) {
       try {
         localStorage.removeItem(LOGIN_SUPPRESS_KEY);
         localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
       } catch (_) {}
-    }
-    return remaining;
-  }
+	    }
+	    return remaining;
+	  }
 
-  function clearExitHoldDetail(detail, reason, t = Date.now()) {
+	  function snapshotLoginGateStatus(t = Date.now()) {
+	    const state = normalizeLoginSnapshotGateState(bot.loginSnapshotGate);
+	    const required = loginSnapshotSuccessRequired();
+	    state.required = required;
+	    if (state.streak > required) state.streak = required;
+	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
+	    return {
+	      ...state,
+	      lastSampleAt,
+	      satisfied: required <= 0 || state.streak >= required,
+	      remaining: Math.max(0, required - state.streak),
+	      lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
+	      lastErrorAgeMs: state.lastErrorAt ? Math.max(0, Math.round(t - Number(state.lastErrorAt || t))) : null,
+	      lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
+	    };
+	  }
+
+	  function resetLoginSnapshotGate(reason = 'exit') {
+	    const t = Date.now();
+	    bot.loginSnapshotGate = {
+	      ...normalizeLoginSnapshotGateState(bot.loginSnapshotGate),
+	      streak: 0,
+	      required: loginSnapshotSuccessRequired(),
+	      lastError: '',
+	      resetAt: t,
+	      resetReason: String(reason || 'exit')
+	    };
+	    return snapshotLoginGateStatus(t);
+	  }
+
+	  function noteLoginSnapshotProbe(success, detail = {}) {
+	    const t = Date.now();
+	    const required = loginSnapshotSuccessRequired();
+	    const state = normalizeLoginSnapshotGateState(bot.loginSnapshotGate);
+	    state.required = required;
+	    state.lastSampleAt = t;
+	    if (success) {
+	      state.streak = Math.min(required, Math.max(0, Number(state.streak || 0)) + 1);
+	      state.lastOkAt = t;
+	      state.lastTick = Number(detail.tick || state.lastTick || 0) || 0;
+	      state.lastError = '';
+	    } else {
+	      state.streak = 0;
+	      state.lastErrorAt = t;
+	      state.lastError = String(detail.error || detail.message || '');
+	    }
+	    bot.loginSnapshotGate = state;
+	    return snapshotLoginGateStatus(t);
+	  }
+
+	  async function ensureLoginSnapshotGate(reason = 'login') {
+	    let status = snapshotLoginGateStatus();
+	    if (status.satisfied) return status;
+	    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
+	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
+	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
+	      try {
+	        await refreshGlobalState(true);
+	      } catch (err) {
+	        const message = err?.message || String(err);
+	        bot.globalState.error = message;
+	        noteLoginSnapshotProbe(false, { error: message });
+	      }
+	      status = snapshotLoginGateStatus();
+	    }
+	    status.blockReason = String(reason || 'login');
+	    return status;
+	  }
+
+	  function loginSnapshotGateDisplayReason(snapshotGate = snapshotLoginGateStatus()) {
+	    const gate = snapshotGate || snapshotLoginGateStatus();
+	    if (gate.satisfied) return '';
+	    const pieces = [
+	      '等待snapshot连续成功',
+	      String(gate.streak || 0) + '/' + String(gate.required || 0)
+	    ];
+	    if (gate.lastError) pieces.push('最近错误：' + gate.lastError);
+	    return pieces.join('，');
+		  }
+
+	  function clearExitHoldDetail(detail, reason, t = Date.now()) {
     if (!detail || typeof detail !== 'object') return null;
     const reloginUntil = Number(detail.reloginUntil || 0) || 0;
     const previousHoldRemainingMs = Math.max(0, Math.round(reloginUntil - t));
@@ -6580,9 +6749,10 @@ function browserBotSource(config) {
 			    }
 			    const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
 			    if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
-		    const text = String(reason || '').toLowerCase();
-		    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
-		    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return 'WebSocket 反复重连，退出等待重连';
+			    const text = String(reason || '').toLowerCase();
+			    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+			    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
+			    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return 'WebSocket 反复重连，退出等待重连';
 		    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
 		    if (offlineSafety?.unsafe) return 'WebSocket 离线且周围危险，退出等待重连';
 		    return 'WebSocket 离线，退出等待重连';
@@ -6714,10 +6884,11 @@ function browserBotSource(config) {
     return 'pending unsafe exit';
   }
 
-  function startExitAudit(detail, meta = {}) {
-    if (!detail || typeof detail !== 'object') return null;
-    ensureExitAuditDetail(detail, meta);
-    recordExitAuditEvent('exit-trigger', detail, {
+	  function startExitAudit(detail, meta = {}) {
+	    if (!detail || typeof detail !== 'object') return null;
+	    detail.loginSnapshotGateReset = resetLoginSnapshotGate('exit-trigger:' + (meta.reason || detail.reason || ''));
+	    ensureExitAuditDetail(detail, meta);
+	    recordExitAuditEvent('exit-trigger', detail, {
       ...meta,
       at: Number(detail.exitTriggeredAt || detail.at || Date.now())
     });
@@ -6775,11 +6946,11 @@ function browserBotSource(config) {
   }
 
   function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
-    if (!offlineSafety) return false;
-    if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.staminaExhausted) return true;
-    const text = String(reason || '').toLowerCase();
-    return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina');
-  }
+	    if (!offlineSafety) return false;
+	    if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted) return true;
+	    const text = String(reason || '').toLowerCase();
+	    return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina') || text.includes('missing self');
+	  }
 
 	  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
 		    const staminaHold = staminaExitHoldUntilForDetail(detail);
@@ -7384,10 +7555,11 @@ function browserBotSource(config) {
     detail.attempted = Boolean(detail.attempted);
     detail.error = '';
     detail.exitPending = false;
-    detail.exitConfirmed = true;
-    detail.exitConfirmedAt = t;
-    detail.exitConfirmation = state || null;
-    detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
+	    detail.exitConfirmed = true;
+	    detail.exitConfirmedAt = t;
+	    detail.exitConfirmation = state || null;
+	    detail.loginSnapshotGateReset = resetLoginSnapshotGate('exit-confirmed:' + (detail.reason || pending.reason || ''));
+	    detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
     detail.pendingExitRetryCount = Number(pending.retryCount || 0);
     const http403 = Boolean(state?.http403 || leaveDetailHasHttp403(detail));
     const suppressOptions = http403
@@ -8001,11 +8173,12 @@ function browserBotSource(config) {
       return {
         needed: false,
         attempted: false,
-        reason: 'paused',
-        error: '',
-        hasToken: Boolean(getSessionToken()),
-        currentUserId: getCurrentUserId()
-      };
+	        reason: 'paused',
+	        error: '',
+	        hasToken: Boolean(getSessionToken()),
+	        currentUserId: getCurrentUserId(),
+	        snapshotGate: snapshotLoginGateStatus()
+	      };
     }
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
@@ -8019,12 +8192,13 @@ function browserBotSource(config) {
         reason: 'exit-log-flush-pending',
         cooldownRemainingMs: 0,
         error: '',
-        exitAuditFlush: blocked,
-        hasToken: Boolean(getSessionToken()),
-        hasNativeSession: false,
-        nativeWsReadyState: getNativeControl()?.wsReadyState ?? null,
-        currentUserId: getCurrentUserId()
-      };
+	        exitAuditFlush: blocked,
+	        hasToken: Boolean(getSessionToken()),
+	        hasNativeSession: false,
+	        nativeWsReadyState: getNativeControl()?.wsReadyState ?? null,
+	        currentUserId: getCurrentUserId(),
+	        snapshotGate: snapshotLoginGateStatus()
+	      };
     }
     const userId = getCurrentUserId();
     const hasToken = Boolean(getSessionToken());
@@ -8046,11 +8220,12 @@ function browserBotSource(config) {
         forced: true,
         hasToken,
         hasNativeSession,
-        nativeWsReadyState: native?.wsReadyState ?? null,
-        currentUserId: userId,
-        self: hasAliveSelf ? summarizeSelf(self) : null
-      } : null;
-    }
+	        nativeWsReadyState: native?.wsReadyState ?? null,
+	        currentUserId: userId,
+	        snapshotGate: snapshotLoginGateStatus(),
+	        self: hasAliveSelf ? summarizeSelf(self) : null
+	      } : null;
+	    }
     const suppressRemainingMs = loginSuppressRemainingMs();
     if (suppressRemainingMs > 0 && !ignoreSuppress) {
       return {
@@ -8060,12 +8235,13 @@ function browserBotSource(config) {
         cooldownRemainingMs: Math.round(suppressRemainingMs),
         error: '',
         suppressReason: localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || 'login flow',
-        hasToken,
-        hasNativeSession,
-        nativeWsReadyState: native?.wsReadyState ?? null,
-        currentUserId: userId
-      };
-    }
+	        hasToken,
+	        hasNativeSession,
+	        nativeWsReadyState: native?.wsReadyState ?? null,
+	        currentUserId: userId,
+	        snapshotGate: snapshotLoginGateStatus()
+	      };
+	    }
     if (!ignoreLoginCooldown && t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
       const lastError = bot.lastLoginResult?.error || '';
       return {
@@ -8074,24 +8250,41 @@ function browserBotSource(config) {
         reason: 'cooldown',
         cooldownRemainingMs: Math.max(0, Math.round(cfg.loginCooldownMs - (t - Number(bot.lastLoginAt || 0)))),
         error: lastError,
-        hasToken,
-        hasNativeSession,
-        nativeWsReadyState: native?.wsReadyState ?? null,
-        currentUserId: userId
-      };
-    }
-    const detail = {
-      needed: true,
-      attempted: false,
+	        hasToken,
+	        hasNativeSession,
+	        nativeWsReadyState: native?.wsReadyState ?? null,
+	        currentUserId: userId,
+	        snapshotGate: snapshotLoginGateStatus()
+	      };
+	    }
+	    const snapshotGate = await ensureLoginSnapshotGate(reason);
+	    if (!snapshotGate.satisfied) {
+	      return {
+	        needed: true,
+	        attempted: false,
+	        reason: 'snapshot-gate',
+	        cooldownRemainingMs: 0,
+	        error: '',
+	        snapshotGate,
+	        hasToken,
+	        hasNativeSession,
+	        nativeWsReadyState: native?.wsReadyState ?? null,
+	        currentUserId: userId
+	      };
+	    }
+	    const detail = {
+	      needed: true,
+	      attempted: false,
       reason,
       hasToken,
       hasNativeSession,
       nativeWsReadyState: native?.wsReadyState ?? null,
       currentUserId: userId,
-      loginRequired,
-      forced: force,
-      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
-      loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
+	      loginRequired,
+	      forced: force,
+	      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
+	      snapshotGate,
+	      loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
       method: '',
       error: ''
     };
@@ -8117,23 +8310,46 @@ function browserBotSource(config) {
     return detail;
   }
 
-  async function forceLoginNow(reason = 'panel immediate login') {
-    const manualReason = String(reason || 'panel immediate login');
-    const cleared = exitAuditFlushPending()
-      ? {
-        at: Date.now(),
-        reason: manualReason,
+	  async function forceLoginNow(reason = 'panel immediate login') {
+	    const manualReason = String(reason || 'panel immediate login');
+	    const snapshotGate = await ensureLoginSnapshotGate(manualReason);
+	    const snapshotBlocked = !snapshotGate.satisfied;
+	    const cleared = snapshotBlocked
+	      ? {
+	        at: Date.now(),
+	        reason: manualReason,
+	        skipped: true,
+	        skipReason: 'snapshot-gate',
+	        snapshotGate
+	      }
+	      : exitAuditFlushPending()
+	      ? {
+	        at: Date.now(),
+	        reason: manualReason,
         skipped: true,
         skipReason: 'exit-log-flush-pending',
-        exitAuditFlush: exitAuditFlushBlockDetail('manual-login:' + manualReason)
-      }
-      : clearCurrentReloginHold(manualReason);
-    bot.lastLoginAt = 0;
-    const login = await maybeStartAutoLogin(manualReason, {
-      force: true,
-      ignoreSuppress: true,
-      ignoreLoginCooldown: true
-    });
+	        exitAuditFlush: exitAuditFlushBlockDetail('manual-login:' + manualReason)
+	      }
+	      : clearCurrentReloginHold(manualReason);
+	    bot.lastLoginAt = 0;
+	    const login = snapshotBlocked
+	      ? {
+	        needed: true,
+	        attempted: false,
+	        reason: 'snapshot-gate',
+	        error: '',
+	        forced: true,
+	        snapshotGate,
+	        hasToken: Boolean(getSessionToken()),
+	        hasNativeSession: hasNativeGameSession(getNativeControl(), getCurrentUserId()),
+	        nativeWsReadyState: getNativeControl()?.wsReadyState ?? null,
+	        currentUserId: getCurrentUserId()
+	      }
+	      : await maybeStartAutoLogin(manualReason, {
+	        force: true,
+	        ignoreSuppress: true,
+	        ignoreLoginCooldown: true
+	      });
     const detail = {
       at: Date.now(),
       reason: manualReason,
@@ -9461,14 +9677,16 @@ function browserBotSource(config) {
 	      bot.globalState.entities = snapshot?.entities || [];
 	      bot.globalState.bullets = snapshot?.bullets || [];
 	      bot.globalState.coinDrops = snapshot?.coin_drops || [];
-	      bot.globalState.messages = snapshot?.messages || [];
-	      bot.globalState.snapshotRefreshedAt = Date.now();
-	      noteLeave403SnapshotProbe(true, { tick: bot.globalState.tick });
-	    } else {
-	      const message = snapshotRes.reason?.message || String(snapshotRes.reason || '');
-	      errors.push('snapshot: ' + message);
-	      noteLeave403SnapshotProbe(false, { error: message });
-	    }
+		      bot.globalState.messages = snapshot?.messages || [];
+		      bot.globalState.snapshotRefreshedAt = Date.now();
+		      noteLoginSnapshotProbe(true, { tick: bot.globalState.tick });
+		      noteLeave403SnapshotProbe(true, { tick: bot.globalState.tick });
+		    } else {
+		      const message = snapshotRes.reason?.message || String(snapshotRes.reason || '');
+		      errors.push('snapshot: ' + message);
+		      noteLoginSnapshotProbe(false, { error: message });
+		      noteLeave403SnapshotProbe(false, { error: message });
+		    }
 	    if (minimapRes.status === 'fulfilled') {
 	      bot.globalState.minimap = minimapRes.value || null;
 	    } else {
@@ -13174,27 +13392,76 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
       }
-				      if (!self || !isAlive(self)) {
-				        noteSelfUnavailableForPostLoginZoom();
-				        bot.pursuit = null;
-	        stopMotionSafely('no-self');
-	        if (!bot.waitSince) bot.waitSince = Date.now();
-        const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
-        const control = summarizeControl();
-        const gameSessionPending = !self && controlHasNativeGameSession(control);
-	        const waitReason = login?.attempted
-	          ? 'auto-login'
-	          : (login?.needed
-	            ? (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : 'login-cooldown')))
-	            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
-	        const loginDisplayReason = waitReason === 'game-session-connecting'
-	          ? '已登录，等待游戏连接/自身实体'
-	          : (waitReason === 'exit-log-flush-pending'
-	            ? '等待退出日志发送完成，暂不刷新或重新登录'
-	          : (waitReason === 'login-suppressed'
-	            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
-	              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
-	            : ''));
+					      if (!self || !isAlive(self)) {
+					        noteSelfUnavailableForPostLoginZoom();
+					        bot.pursuit = null;
+		        stopMotionSafely('no-self');
+		        if (!bot.waitSince) bot.waitSince = Date.now();
+	        const control = summarizeControl();
+	        const noSelfAgeMs = Math.max(0, Date.now() - Number(bot.waitSince || Date.now()));
+	        const noSelfExit = !self ? noSelfGameSessionExitState(control, noSelfAgeMs) : null;
+	        if (!cfg.dryRun && noSelfExit?.shouldLeave) {
+	          if (!bot.offlineSince) bot.offlineSince = Date.now();
+	          const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
+	          const offlineSafety = {
+	            unsafe: true,
+	            noSelfGameSession: noSelfExit,
+	            reconnectChurn: noSelfExit.reconnectChurn,
+	            passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0)),
+	            nearestHuman: null,
+	            nearestActive: null
+	          };
+	          bot.lastOfflineSafety = offlineSafety;
+	          stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session');
+	          const leaveResult = await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety);
+	          const offlineDetail = activeOfflineLeaveDetail();
+	          refreshGlobalState(false).catch(err => {
+	            bot.globalState.error = err.message || String(err);
+	          });
+	          bot.lastDecision = {
+	            kind: 'wait',
+	            reason: leaveResult?.attempted && !leaveResult?.error
+	              ? 'offline-leave'
+	              : (noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session'),
+	            dx: 0,
+	            dy: 0,
+	            currentUserId: getCurrentUserId(),
+	            control,
+	            visibleEntities: arrayCount(bot.globalState.entities),
+	            self: null,
+	            offlineAgeMs,
+	            noSelfAgeMs,
+	            noSelfGameSession: noSelfExit,
+	            offlineSafety,
+	            displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || noSelfExit.displayReason,
+	            leave: leaveResult
+	          };
+	          updateBotPanel(bot.lastDecision);
+	          if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
+	            requestReload('game session missing self too long');
+	          }
+	          if (cfg.once) bot.stop('once');
+	          return;
+	        }
+	        const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
+	        const gameSessionPending = !self && controlHasNativeGameSession(control);
+		        const waitReason = login?.attempted
+		          ? 'auto-login'
+		          : (login?.needed
+		            ? (login?.reason === 'snapshot-gate'
+		              ? 'login-snapshot-gate'
+		              : (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : 'login-cooldown'))))
+		            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
+		        const loginDisplayReason = waitReason === 'game-session-connecting'
+		          ? '已登录，等待游戏连接/自身实体'
+		          : (waitReason === 'exit-log-flush-pending'
+		            ? '等待退出日志发送完成，暂不刷新或重新登录'
+		          : (waitReason === 'login-snapshot-gate'
+		            ? loginSnapshotGateDisplayReason(login?.snapshotGate)
+		          : (waitReason === 'login-suppressed'
+		            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
+		              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
+		            : '')));
 		        refreshGlobalState(false).catch(err => {
 		          bot.globalState.error = err.message || String(err);
 		        });
@@ -13203,11 +13470,13 @@ function browserBotSource(config) {
 	          reason: waitReason,
 		          displayReason: loginDisplayReason,
 	          currentUserId: getCurrentUserId(),
-	          control,
-		          visibleEntities: arrayCount(bot.globalState.entities),
-	          self,
-          login
-	        };
+			          control,
+			          visibleEntities: arrayCount(bot.globalState.entities),
+		          self,
+		          noSelfAgeMs,
+		          noSelfGameSession: noSelfExit,
+	          login
+		        };
 	        updateBotPanel(bot.lastDecision);
 	        const loginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
 	        if (!loginPending && Date.now() - bot.waitSince > cfg.reloadAfterNoSelfMs) {
