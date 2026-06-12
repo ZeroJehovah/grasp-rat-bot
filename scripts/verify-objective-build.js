@@ -44,6 +44,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'attackApproachRange', value: 50000 },
   { key: 'globalAttackMaxDistance', value: 50000 },
   { key: 'globalCoinMaxDistance', value: 50000 },
+  { key: 'postAttackRecoveryDropMaxDistance', value: 50000 },
+  { key: 'postAttackRecoveryDropMinScore', value: 60000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatLowHpCloseRiskMargin', value: 5 },
@@ -228,6 +230,14 @@ function main() {
       const body = functionBody(text, 'opportunityEnemyStaminaCost');
       assert(body.includes('const moveCost = opportunityMoveStaminaCost(target?.distance, 0)'), 'enemy opportunity movement cost still stops at shooting range');
       assert(body.includes('estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500))'), 'enemy opportunity shooting cost missing');
+    });
+    check(`${file} lets high-value combat drops interrupt recovery`, () => {
+      const body = functionBody(text, 'pickPostAttackDropCoin');
+      assert(body.includes('options.maxDistance ?? cfg.postAttackDropCoinMaxDistance'), 'post-attack drop picker does not accept maxDistance override');
+      assert(body.includes('options.minScore ?? 0'), 'post-attack drop picker does not accept minScore override');
+      assert(body.includes('if (score < minScore) continue'), 'post-attack drop picker does not filter by recovery ROI score');
+      assert(text.includes('maxDistance: recovery ? cfg.postAttackRecoveryDropMaxDistance : cfg.postAttackDropCoinMaxDistance'), 'recovery post-attack drop max distance not wired');
+      assert(text.includes('minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0'), 'recovery post-attack drop min score not wired');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
       assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
@@ -591,6 +601,8 @@ function main() {
     assert(sourceBot.includes("name: 'visible high afk drop beats opposite one coin by stamina roi'"), 'visible AFK-vs-coin ROI self-test not found');
     assert(sourceBot.includes("name: '500m drop five afk loses to 100m one coin by pickup travel cost'"), 'full pickup travel cost self-test not found');
     assert(sourceBot.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
+    assert(sourceBot.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
+    assert(sourceBot.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
     assert(sourceBot.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
   });
 

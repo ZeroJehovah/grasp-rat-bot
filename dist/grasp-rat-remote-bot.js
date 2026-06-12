@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.137"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.138"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -223,6 +223,8 @@
     postAttackDropCoinPriorityMs: 45000,
     postAttackDropCoinRadius: 3500,
     postAttackDropCoinMaxDistance: 22000,
+    postAttackRecoveryDropMaxDistance: 50000,
+    postAttackRecoveryDropMinScore: 60000,
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
@@ -9804,8 +9806,10 @@
     const resolvedAttacks = recentAttacks.filter(attack => !recentAttackTargetStillAttackable(attack, entities));
     if (!resolvedAttacks.length) return null;
     const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
+    const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
+    const minScore = Math.max(0, Number(options.minScore ?? 0) || 0);
     const candidates = [];
-	    for (const coin of safeCoinCandidates(coins, activeThreats, cfg.postAttackDropCoinMaxDistance, self)
+	    for (const coin of safeCoinCandidates(coins, activeThreats, maxDistance, self)
       .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)))
       .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))) {
@@ -9813,9 +9817,11 @@
         .filter(item => dist(coin, item) <= cfg.postAttackDropCoinRadius)
         .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(b.at || 0) - Number(a.at || 0))[0] || null;
       if (!attack) continue;
+      const score = scoreCoinOpportunity(coin);
+      if (score < minScore) continue;
       candidates.push({
         ...coin,
-        postAttackScore: scoreCoinOpportunity(coin),
+        postAttackScore: score,
         postAttackTarget: {
           id: attack.id,
           name: attack.name || '',
@@ -10685,7 +10691,11 @@
       : cfg.nearCoinPriorityDistance;
     const nearCoin = pickCoin(self, coins, coinThreats, nearCoinLimit);
     const footCoin = pickCoin(self, coins, coinThreats, cfg.footCoinPriorityDistance);
-    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities, { includeSingle: !recovery });
+    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities, {
+      includeSingle: !recovery,
+      maxDistance: recovery ? cfg.postAttackRecoveryDropMaxDistance : cfg.postAttackDropCoinMaxDistance,
+      minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0
+    });
     if (postAttackCoin) {
       bot.fleeLock = null;
       if (bot.lastTarget?.kind === 'enemy') {
