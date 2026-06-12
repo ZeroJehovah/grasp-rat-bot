@@ -1696,8 +1696,8 @@ function runSelfTest() {
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     if (recovery && recoveryCombatTarget) {
-      const recoveryLeave = chooseCombatAction(self, recoveryCombatTarget, bullets);
-      if (recoveryLeave?.kind === 'leave') return recoveryLeave;
+      const recoveryCombatAction = chooseCombatAction(self, recoveryCombatTarget, bullets);
+      if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave') return recoveryCombatAction;
     }
     if (!recovery && defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
       return chooseCombatAction(self, defensiveCombatTarget, bullets);
@@ -2330,7 +2330,7 @@ function runSelfTest() {
       want: 'flee'
     },
     {
-      name: 'recovering does not re-engage stationary target in range',
+      name: 'recovering keeps engaged stationary target in combat',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-attack' };
         const action = choose({
@@ -2338,12 +2338,12 @@ function runSelfTest() {
           local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100 }]
         });
         bot.combatTarget = null;
-        return action.kind;
+        return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
       })(),
-      want: 'recover'
+      want: 'attack:true:7'
     },
     {
-      name: 'recovering flees instead of re-engaging active combat target',
+      name: 'recovering keeps engaged active combat target',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-tangent-dodge' };
         const action = choose({
@@ -2351,9 +2351,27 @@ function runSelfTest() {
           local: [{ user_id: 7, x: 14000, y: 0, current_join_mode: 'Active', hp: 97, vx: 50 }]
         });
         bot.combatTarget = null;
-        return action.kind;
+        return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
       })(),
-      want: 'flee'
+      want: 'attack:true:7'
+    },
+    {
+      name: 'recovering keeps grace-range combat target before flee mode',
+      got: (() => {
+        bot.combatTarget = {
+          id: 7,
+          at: Date.now() - 1000,
+          lastInRangeAt: Date.now() - 1000,
+          reason: 'combat-stamina-hold'
+        };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 18000, y: 0, current_join_mode: 'Active', hp: 94, vx: 50 }]
+        });
+        bot.combatTarget = null;
+        return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
+      })(),
+      want: 'attack:true:7'
     },
     {
       name: 'real incoming bullet shooter overrides engaged combat target',
@@ -12116,11 +12134,11 @@ function browserBotSource(config) {
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     if (recovery && recoveryCombatTarget) {
-      const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets);
-      if (recoveryLeave?.kind === 'leave') {
+      const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets);
+      if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave') {
         bot.fleeLock = null;
         bot.returnBlockScan = null;
-        return recoveryLeave;
+        return recoveryCombatAction;
       }
       clearCombatEngagement('recovery-hold');
     }
