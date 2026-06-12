@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.130"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.131"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -186,6 +186,7 @@
     fieldMigrationClusterRadius: 18000,
     fieldMigrationMinCoins: 3,
     fieldMigrationStaminaThreshold: 0,
+    fieldMigrationNearbyCoinBlockDistance: 30000,
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
 	    snapshotCoinClusterMinCoins: 2,
@@ -7250,6 +7251,31 @@
 	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
 	  }
 
+	  function nearestRealtimeCoinWithin(self, allCoins, activeThreats, maxDistance) {
+	    if (!(Number(maxDistance) > 0)) return null;
+	    return safeCoinCandidates((allCoins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance, self)
+	      .filter(coin => Number(coin.amount || 0) > 0)
+	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))
+	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+	        || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
+	  }
+
+	  function fieldMigrationBlockedByNearbyCoin(self, allCoins, activeThreats, fieldCoin = null) {
+	    const blockDistance = Math.max(0, Number(cfg.fieldMigrationNearbyCoinBlockDistance || 0));
+	    if (!(blockDistance > 0)) return false;
+	    const nearby = nearestRealtimeCoinWithin(self, allCoins, activeThreats, blockDistance);
+	    if (!nearby) return false;
+	    if (fieldCoin) {
+	      const nearbyId = nearby.drop_id ?? nearby.id;
+	      const fieldId = fieldCoin.drop_id ?? fieldCoin.id;
+	      if (nearbyId !== undefined && fieldId !== undefined && String(nearbyId) === String(fieldId)) return false;
+	      const nearbyDistance = Number(nearby.distance ?? dist(self, nearby));
+	      const fieldDistance = Number(fieldCoin.distance ?? dist(self, fieldCoin));
+	      if (Number.isFinite(nearbyDistance) && Number.isFinite(fieldDistance) && nearbyDistance >= fieldDistance) return false;
+	    }
+	    return true;
+	  }
+
 	  function pickCoin(self, coins, activeThreats, maxDistance) {
 	    const candidates = safeCoinCandidates(coins, activeThreats, maxDistance, self);
     if (!candidates.length) return null;
@@ -7285,7 +7311,7 @@
     if (current?.key && current.reason === 'migrate-to-known-field' && now() < Number(current.until || 0)) {
       const heldCoin = candidates.find(c => String(c.drop_id) === String(current.id));
       const held = heldCoin ? buildFieldItem(heldCoin) : null;
-      if (held) return held;
+      if (held && !fieldMigrationBlockedByNearbyCoin(self, allCoins, activeThreats, held)) return held;
     }
     let best = null;
     for (const coin of candidates.slice(0, 80)) {
@@ -7293,6 +7319,7 @@
       if (!item) continue;
       if (!best || item.fieldScore > best.fieldScore) best = item;
     }
+    if (best && fieldMigrationBlockedByNearbyCoin(self, allCoins, activeThreats, best)) return null;
     return best;
   }
 
