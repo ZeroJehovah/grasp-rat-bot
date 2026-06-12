@@ -3970,6 +3970,7 @@ function browserBotSource(config) {
 		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
 		  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
 	      const EXIT_AUDIT_PENDING_LOGS_KEY = 'graspRatExitAuditPendingLogs';
+	      const IMPORTANT_LOGS_KEY = 'graspRatImportantLogs';
 	      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
@@ -3989,6 +3990,17 @@ function browserBotSource(config) {
 	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
 		    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
 		    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
+		    importantLogging: previousBot?.importantLogging && typeof previousBot.importantLogging === 'object'
+		      ? {
+		        ...previousBot.importantLogging,
+		        activeCombat: previousBot.importantLogging.activeCombat && typeof previousBot.importantLogging.activeCombat === 'object'
+		          ? { ...previousBot.importantLogging.activeCombat }
+		          : null,
+		        queuedRemoteIds: Array.isArray(previousBot.importantLogging.queuedRemoteIds)
+		          ? previousBot.importantLogging.queuedRemoteIds.slice(-500)
+		          : []
+		      }
+		      : null,
 		    loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
 		    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
 	    postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
@@ -4481,6 +4493,15 @@ function browserBotSource(config) {
 	      lastBlockedLogin: null,
 	      lastEvent: null
 	    },
+	    importantLogging: {
+	      activeCombat: preserved.importantLogging?.activeCombat || null,
+	      queuedRemoteIds: Array.isArray(preserved.importantLogging?.queuedRemoteIds) ? preserved.importantLogging.queuedRemoteIds.slice(-500) : [],
+	      restoredRemote: 0,
+	      lastEventAt: Number(preserved.importantLogging?.lastEventAt || 0) || 0,
+	      lastRemoteQueuedAt: Number(preserved.importantLogging?.lastRemoteQueuedAt || 0) || 0,
+	      localWriteError: String(preserved.importantLogging?.localWriteError || ''),
+	      lastRemoteError: String(preserved.importantLogging?.lastRemoteError || '')
+	    },
 	    loginSnapshotGate: normalizeLoginSnapshotGateState(preserved.loginSnapshotGate),
 	    leave403SnapshotRecovery: {
       streak: Math.max(0, Number(preserved.leave403SnapshotRecovery?.streak || 0) || 0),
@@ -4540,6 +4561,12 @@ function browserBotSource(config) {
     session: {
       startedAt: Number(preserved.session?.startedAt || 0) || 0,
       userId: preserved.session?.userId ?? null,
+      importantSessionId: String(preserved.session?.importantSessionId || ''),
+      importantStartEventId: String(preserved.session?.importantStartEventId || ''),
+      importantEndEventId: String(preserved.session?.importantEndEventId || ''),
+      exitAt: Number(preserved.session?.exitAt || 0) || 0,
+      exitReason: String(preserved.session?.exitReason || ''),
+      exitSummary: String(preserved.session?.exitSummary || ''),
       baseCoins: Number.isFinite(Number(preserved.session?.baseCoins)) ? Number(preserved.session.baseCoins) : null,
       coinsGained: Math.max(0, Number(preserved.session?.coinsGained || 0) || 0),
       coinPickupTotal: Math.max(0, Number(preserved.session?.coinPickupTotal || 0) || 0),
@@ -4692,6 +4719,7 @@ function browserBotSource(config) {
 	        combatTarget: this.combatTarget,
 	        combatAim: this.combatAim,
 		        combatLogging: summarizeCombatLoggingStatus(),
+		        importantLogging: summarizeImportantLoggingStatus(),
 		        exitAudit: {
 		          pending: unresolvedExitAuditLogCount(),
 		          pendingIds: pendingExitAuditLogIds().slice(0, 12),
@@ -5619,6 +5647,7 @@ function browserBotSource(config) {
           bot.combatLogging.active = false;
           bot.combatLogging.combatId = '';
         }
+        restoreImportantLogsForRemote();
         return summarizeCombatLoggingStatus();
       }
 
@@ -6500,13 +6529,15 @@ function browserBotSource(config) {
         const state = bot.combatLogging;
         const snapshot = safeJsonClone(entry) || { at: Date.now(), type: 'combat-log-clone-error', originalType: entry?.type || '' };
         const critical = Boolean(options.critical || snapshot.exitAuditLogId);
-        if ((!state.enabled && !critical) || !state.endpoint) return false;
+        const important = Boolean(options.important || snapshot.importantLog || snapshot.type === 'important-log');
+        if ((!state.enabled && !critical && !important) || !state.endpoint) return false;
         if (!Array.isArray(state.pending)) state.pending = [];
         const queued = {
           ...snapshot,
-          combatId: state.combatId || snapshot.combatId || entry.combatId || '',
+          combatId: important ? (snapshot.combatId || entry.combatId || state.combatId || '') : (state.combatId || snapshot.combatId || entry.combatId || ''),
           sequence: ++state.sequence,
-          criticalLog: Boolean(snapshot.criticalLog || critical)
+          criticalLog: Boolean(snapshot.criticalLog || critical),
+          importantLog: Boolean(snapshot.importantLog || important)
         };
         if (critical && !queued.exitAuditLogId) {
           queued.exitAuditLogId = 'critical:' + queued.type + ':' + queued.at + ':' + queued.sequence;
@@ -6519,7 +6550,7 @@ function browserBotSource(config) {
         }
         const maxPending = Math.max(50, Number(cfg.combatLogMaxPendingEntries) || 1000);
         while (state.pending.length > maxPending) {
-          const dropIndex = state.pending.findIndex(item => !item?.criticalLog && !item?.exitAuditLogId);
+          const dropIndex = state.pending.findIndex(item => !item?.criticalLog && !item?.exitAuditLogId && !item?.importantLog);
           if (dropIndex < 0) break;
           state.pending.splice(dropIndex, 1);
           state.dropped += 1;
@@ -6591,7 +6622,8 @@ function browserBotSource(config) {
       function flushCombatLogs(force = false) {
         const state = bot.combatLogging;
         const hasCritical = Array.isArray(state?.pending) && state.pending.some(entry => entry?.criticalLog || entry?.exitAuditLogId);
-        if ((!state?.enabled && !hasCritical) || !state.endpoint || state.sending) return false;
+        const hasImportant = Array.isArray(state?.pending) && state.pending.some(entry => entry?.importantLog || entry?.type === 'important-log');
+        if ((!state?.enabled && !hasCritical && !hasImportant) || !state.endpoint || state.sending) return false;
         if (!Array.isArray(state.pending) || !state.pending.length) return false;
         const t = Date.now();
         if (!force && t - Number(state.lastFlushAt || 0) < Math.max(250, Number(cfg.combatLogFlushMs) || 1000)) return false;
@@ -6605,6 +6637,7 @@ function browserBotSource(config) {
           : Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50);
         const entries = state.pending.splice(0, batchSize);
         const exitAuditIds = entries.map(entry => entry?.exitAuditLogId).filter(Boolean);
+        const importantLogIds = entries.map(entry => entry?.importantLogId).filter(Boolean);
         if (exitAuditIds.length) {
           if (!Array.isArray(state.sendingExitAuditIds)) state.sendingExitAuditIds = [];
           for (const id of exitAuditIds) {
@@ -6640,10 +6673,12 @@ function browserBotSource(config) {
             state.lastOkAt = Date.now();
             state.lastError = '';
             if (exitAuditIds.length) removePersistedExitAuditLogs(exitAuditIds);
+            if (importantLogIds.length) markImportantLogsRemoteSent(importantLogIds, state.lastOkAt);
           })
           .catch(err => {
             state.failed += entries.length;
             state.lastError = err?.message || String(err);
+            if (importantLogIds.length) markImportantLogsRemoteError(importantLogIds, state.lastError, Date.now());
             state.pending = entries.concat(Array.isArray(state.pending) ? state.pending : []);
             if (exitAuditIds.length) {
               if (!Array.isArray(state.pendingExitAuditIds)) state.pendingExitAuditIds = [];
@@ -6653,7 +6688,7 @@ function browserBotSource(config) {
             }
             const maxPending = Math.max(50, Number(cfg.combatLogMaxPendingEntries) || 1000);
             while (state.pending.length > maxPending) {
-              const dropIndex = state.pending.findIndex(item => !item?.criticalLog && !item?.exitAuditLogId);
+              const dropIndex = state.pending.findIndex(item => !item?.criticalLog && !item?.exitAuditLogId && !item?.importantLog);
               if (dropIndex < 0) break;
               state.pending.splice(dropIndex, 1);
               state.dropped += 1;
@@ -8385,6 +8420,7 @@ function browserBotSource(config) {
       source: pending.source || detail.exitAuditSource || '',
       scope: pending.scope || detail.exitAuditScope || ''
     });
+    noteImportantSessionExit('exit-confirmed:' + (detail.reason || pending.reason || ''), detail.self || pending.self || bot.lastSelf, t, { exit: detail });
     return detail;
   }
 
@@ -8871,6 +8907,7 @@ function browserBotSource(config) {
 	    detail.lastLeaveRequest = request;
 	    if (leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) {
 	      stopMotionAfterExit(leaveDetailHasHttp403(detail) ? 'leave-http-403' : 'leave-success');
+	      noteImportantSessionExit((leaveDetailHasHttp403(detail) ? 'leave-http-403:' : 'leave-success:') + (detail.reason || ''), detail.self || bot.lastSelf, request.completedAt, { exit: detail });
 	    }
 	    updatePendingExitLastResult(detail);
 	    recordExitAuditEvent('leave-request', detail, {
@@ -10260,8 +10297,15 @@ function browserBotSource(config) {
   function updateSessionStats(selfSummary) {
     const t = Date.now();
     const session = bot.session || (bot.session = {});
-    if (!selfSummary || selfSummary.life === 'Dead' || selfSummary.life === 'WaitingRevive') {
+    if (!selfSummary) {
       if (session.startedAt && !session.missingSince) session.missingSince = t;
+      return;
+    }
+    if (selfSummary.life === 'Dead' || selfSummary.life === 'WaitingRevive') {
+      if (session.startedAt && !session.missingSince) {
+        session.missingSince = t;
+        noteImportantSessionExit('not-alive:' + (selfSummary.life || 'unknown'), selfSummary || bot.lastSelf, t);
+      }
       return;
     }
     const userId = selfSummary.id ?? null;
@@ -10271,8 +10315,17 @@ function browserBotSource(config) {
       || (userId !== null && session.userId !== null && String(session.userId) !== String(userId))
       || missingMs > Math.max(1000, Number(cfg.sessionResetMissingMs || 10000));
     if (reset) {
+      if (session.startedAt && session.importantSessionId && !session.exitAt) {
+        noteImportantSessionExit(userId !== null && session.userId !== null && String(session.userId) !== String(userId) ? 'user-changed' : 'session-reset', bot.lastSelf || selfSummary, session.missingSince || t);
+      }
       session.startedAt = t;
       session.userId = userId;
+      session.importantSessionId = '';
+      session.importantStartEventId = '';
+      session.importantEndEventId = '';
+      session.exitAt = 0;
+      session.exitReason = '';
+      session.exitSummary = '';
       session.baseCoins = Number.isFinite(coins) ? coins : 0;
       session.coinsGained = 0;
       session.coinPickupTotal = 0;
@@ -10281,10 +10334,15 @@ function browserBotSource(config) {
       resetSessionStaminaStats(session, selfSummary, t);
       session.combatLogSentBase = Number(bot.combatLogging?.sent || 0) || 0;
       session.combatLogFailedBase = Number(bot.combatLogging?.failed || 0) || 0;
+      startImportantSession(session, selfSummary, t);
     } else if (session.userId === null && userId !== null) {
       session.userId = userId;
     }
+    if (!session.importantSessionId) startImportantSession(session, selfSummary, Number(session.startedAt || t) || t);
     session.missingSince = 0;
+    session.exitAt = 0;
+    session.exitReason = '';
+    session.exitSummary = '';
     if (!Number.isFinite(Number(session.baseCoins))) session.baseCoins = Number.isFinite(coins) ? coins : 0;
     if (!Number.isFinite(Number(session.combatLogSentBase))) session.combatLogSentBase = Number(bot.combatLogging?.sent || 0) || 0;
     if (!Number.isFinite(Number(session.combatLogFailedBase))) session.combatLogFailedBase = Number(bot.combatLogging?.failed || 0) || 0;
@@ -10327,6 +10385,569 @@ function browserBotSource(config) {
   function pushBounded(list, item, max) {
     list.push(item);
     while (list.length > max) list.shift();
+  }
+
+  function importantLogDay(t = Date.now()) {
+    const d = new Date(Number(t) || Date.now());
+    const pad = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function importantLogId(prefix, t = Date.now(), label = '') {
+    const cleanPrefix = sanitizeCombatLogIdPart(prefix || 'important', 'important');
+    const cleanLabel = sanitizeCombatLogIdPart(label || getCurrentUserId() || 'event', 'event');
+    return cleanPrefix + '-' + importantLogDay(t).replace(/-/g, '') + '-' + (Number(t) || Date.now()).toString(36) + '-' + cleanLabel;
+  }
+
+  function importantLogFileId(t = Date.now()) {
+    return 'important-' + importantLogDay(t).replace(/-/g, '');
+  }
+
+  function normalizeImportantLogsStore(value) {
+    const raw = value && typeof value === 'object' ? value : {};
+    const cleanList = (list, max) => (Array.isArray(list) ? list.filter(item => item && typeof item === 'object').slice(-max) : []);
+    return {
+      schemaVersion: 1,
+      updatedAt: Number(raw.updatedAt || 0) || 0,
+      sessions: cleanList(raw.sessions, 240),
+      combats: cleanList(raw.combats, 600),
+      events: cleanList(raw.events, 1200)
+    };
+  }
+
+  function readImportantLogsStore() {
+    try {
+      return normalizeImportantLogsStore(JSON.parse(localStorage.getItem(IMPORTANT_LOGS_KEY) || 'null'));
+    } catch (_) {
+      return normalizeImportantLogsStore(null);
+    }
+  }
+
+  function trimImportantLogsStore(store) {
+    const next = normalizeImportantLogsStore(store);
+    next.sessions = next.sessions.slice(-240);
+    next.combats = next.combats.slice(-600);
+    next.events = next.events.slice(-1200);
+    return next;
+  }
+
+  function writeImportantLogsStore(store) {
+    try {
+      const next = trimImportantLogsStore({ ...store, updatedAt: Date.now() });
+      localStorage.setItem(IMPORTANT_LOGS_KEY, safeStringify(next));
+      if (bot.importantLogging) bot.importantLogging.localWriteError = '';
+      return next;
+    } catch (err) {
+      if (bot.importantLogging) bot.importantLogging.localWriteError = err?.message || String(err);
+      return null;
+    }
+  }
+
+  function updateImportantLogsStore(mutator) {
+    const store = readImportantLogsStore();
+    try {
+      mutator(store);
+    } catch (err) {
+      if (bot.importantLogging) bot.importantLogging.localWriteError = err?.message || String(err);
+    }
+    return writeImportantLogsStore(store);
+  }
+
+  function upsertImportantListItem(list, key, item) {
+    const id = item?.[key];
+    if (!id) return false;
+    const index = list.findIndex(existing => String(existing?.[key] || '') === String(id));
+    if (index >= 0) {
+      const previous = list[index] || {};
+      list[index] = {
+        ...previous,
+        ...item,
+        remoteSentAt: previous.remoteSentAt || item.remoteSentAt || 0,
+        remoteError: item.remoteError || previous.remoteError || ''
+      };
+    } else {
+      list.push(item);
+    }
+    return true;
+  }
+
+  function importantEventAlreadyPending(id) {
+    if (!id) return false;
+    const state = bot.combatLogging || {};
+    if ((Array.isArray(state.pending) ? state.pending : []).some(entry => String(entry?.importantLogId || '') === String(id))) return true;
+    return (Array.isArray(bot.importantLogging?.queuedRemoteIds) ? bot.importantLogging.queuedRemoteIds : []).includes(id);
+  }
+
+  function queueImportantLogRemote(event) {
+    if (!event?.importantLogId) return false;
+    const state = bot.combatLogging;
+    if (!state?.endpoint) return false;
+    if (importantEventAlreadyPending(event.importantLogId)) return false;
+    const queued = queueCombatLogEntry({
+      ...event,
+      type: 'important-log',
+      importantLog: true,
+      combatId: event.combatId || importantLogFileId(event.at)
+    }, { important: true });
+    if (queued) {
+      if (!Array.isArray(bot.importantLogging.queuedRemoteIds)) bot.importantLogging.queuedRemoteIds = [];
+      pushBounded(bot.importantLogging.queuedRemoteIds, event.importantLogId, 500);
+      bot.importantLogging.lastRemoteQueuedAt = Date.now();
+    }
+    return queued;
+  }
+
+  function markImportantLogsRemoteSent(ids, t = Date.now()) {
+    const idSet = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean).map(String));
+    if (!idSet.size) return;
+    updateImportantLogsStore(store => {
+      for (const event of store.events) {
+        if (idSet.has(String(event.importantLogId || ''))) {
+          event.remoteSentAt = t;
+          event.remoteError = '';
+        }
+      }
+    });
+    if (Array.isArray(bot.importantLogging?.queuedRemoteIds)) {
+      bot.importantLogging.queuedRemoteIds = bot.importantLogging.queuedRemoteIds.filter(id => !idSet.has(String(id)));
+    }
+  }
+
+  function markImportantLogsRemoteError(ids, error, t = Date.now()) {
+    const idSet = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean).map(String));
+    if (!idSet.size) return;
+    const message = String(error || 'remote send failed');
+    updateImportantLogsStore(store => {
+      for (const event of store.events) {
+        if (idSet.has(String(event.importantLogId || ''))) {
+          event.remoteError = message;
+          event.remoteErrorAt = t;
+        }
+      }
+    });
+    if (bot.importantLogging) bot.importantLogging.lastRemoteError = message;
+  }
+
+  function recordImportantEvent(importantType, payload = {}) {
+    const t = Number(payload.at || Date.now()) || Date.now();
+    const eventId = String(payload.importantLogId || importantLogId(importantType, t, payload.sessionId || payload.combatSummaryId || payload.name || payload.userId || 'event'));
+    const event = {
+      ...safeJsonClone(payload),
+      type: 'important-log',
+      importantLog: true,
+      importantType: String(importantType || 'event'),
+      importantLogId: eventId,
+      at: t,
+      day: importantLogDay(t),
+      combatId: payload.combatId || importantLogFileId(t),
+      version: cfg.version,
+      sourceHash: cfg.sourceHash,
+      injectedBy: cfg.injectedBy,
+      url: location.href,
+      userId: payload.userId ?? bot.session?.userId ?? getCurrentUserId() ?? null
+    };
+    updateImportantLogsStore(store => {
+      upsertImportantListItem(store.events, 'importantLogId', event);
+    });
+    bot.importantLogging.lastEventAt = t;
+    const state = bot.combatLogging || {};
+    const pending = Array.isArray(state.pending) ? state.pending : [];
+    const pendingIndex = pending.findIndex(entry => String(entry?.importantLogId || '') === event.importantLogId);
+    if (pendingIndex >= 0) pending[pendingIndex] = { ...pending[pendingIndex], ...event };
+    else queueImportantLogRemote(event);
+    return event;
+  }
+
+  function restoreImportantLogsForRemote() {
+    const state = bot.combatLogging;
+    if (!state?.endpoint) return 0;
+    const store = readImportantLogsStore();
+    const pending = store.events
+      .filter(event => event?.importantLogId && !event.remoteSentAt)
+      .slice(-250);
+    let queued = 0;
+    for (const event of pending) {
+      if (queueImportantLogRemote(event)) queued += 1;
+    }
+    bot.importantLogging.restoredRemote = queued;
+    if (queued) flushCombatLogs(true);
+    return queued;
+  }
+
+  function importantKillSummary(item) {
+    if (!item || typeof item !== 'object') return null;
+    const rewardRaw = item.rewardCoins ?? item.drop;
+    const rewardCoins = Number.isFinite(Number(rewardRaw)) ? Math.max(0, Math.round(Number(rewardRaw))) : null;
+    return {
+      at: Number(item.at || 0) || 0,
+      time: item.time || '',
+      name: item.victim || item.name || '',
+      id: item.id ?? item.userId ?? null,
+      rewardCoins,
+      matchedAttack: Boolean(item.matchedAttack),
+      attackDistance: Number.isFinite(Number(item.attackDistance)) ? Math.round(Number(item.attackDistance)) : null
+    };
+  }
+
+  function importantSessionKills(session) {
+    const startedAt = Number(session?.startedAt || 0);
+    const exitAt = Number(session?.exitAt || 0);
+    if (!startedAt) return [];
+    return bot.killHistory
+      .map(importantKillSummary)
+      .filter(Boolean)
+      .filter(item => item.at >= startedAt && (!exitAt || item.at <= exitAt + 30000));
+  }
+
+  function importantSessionRecord(session = bot.session || {}, selfSummary = null, extra = {}) {
+    const t = Number(extra.at || Date.now()) || Date.now();
+    const startedAt = Number(session.startedAt || 0) || t;
+    const exitAt = Number(extra.exitAt || session.exitAt || 0) || 0;
+    const kills = importantSessionKills({ ...session, exitAt });
+    const killRewardCoins = kills.reduce((sum, item) => sum + Math.max(0, Number(item.rewardCoins || 0) || 0), 0);
+    const pickedCoins = Math.max(0, Math.round(Number(session.coinPickupTotal || 0) || 0));
+    const coinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) || 0));
+    const pureRefreshCoins = Math.max(0, Math.round((pickedCoins || coinsGained) - killRewardCoins));
+    return {
+      sessionId: session.importantSessionId || importantLogId('session', startedAt, session.userId || getCurrentUserId() || 'user'),
+      userId: session.userId ?? selfSummary?.id ?? getCurrentUserId() ?? null,
+      loginAt: startedAt,
+      loginIso: new Date(startedAt).toISOString(),
+      exitAt,
+      exitIso: exitAt ? new Date(exitAt).toISOString() : '',
+      exitReason: String(extra.exitReason || session.exitReason || ''),
+      exitSummary: String(extra.exitSummary || session.exitSummary || ''),
+      loginDurationMs: startedAt ? Math.max(0, (exitAt || t) - startedAt) : 0,
+      staminaSpentMs: Math.max(0, Math.round(Number(session.stamina1dSpentMs || 0) || 0)),
+      pickedCoins,
+      coinsGained,
+      killRewardCoins,
+      pureRefreshCoins,
+      killCount: kills.length,
+      kills,
+      baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
+      currentCoins: Number(selfSummary?.coins ?? bot.lastSelf?.coins ?? 0) || 0,
+      stamina1dLastRemaining: Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : null,
+      stamina1dLastLimit: Number.isFinite(Number(session.stamina1dLastLimit)) ? Number(session.stamina1dLastLimit) : null,
+      version: cfg.version,
+      sourceHash: cfg.sourceHash,
+      updatedAt: t
+    };
+  }
+
+  function upsertImportantSessionRecord(session = bot.session || {}, selfSummary = null, extra = {}) {
+    if (!session?.startedAt) return null;
+    const record = importantSessionRecord(session, selfSummary, extra);
+    updateImportantLogsStore(store => {
+      upsertImportantListItem(store.sessions, 'sessionId', record);
+    });
+    return record;
+  }
+
+  function startImportantSession(session = bot.session || {}, selfSummary = null, t = Date.now()) {
+    if (!session.startedAt) return null;
+    if (!session.importantSessionId) session.importantSessionId = importantLogId('session', t, session.userId || selfSummary?.id || getCurrentUserId() || 'user');
+    if (!session.importantStartEventId) session.importantStartEventId = session.importantSessionId + ':start';
+    session.exitAt = 0;
+    session.exitReason = '';
+    session.exitSummary = '';
+    const record = upsertImportantSessionRecord(session, selfSummary, { at: t });
+    recordImportantEvent('session-start', {
+      importantLogId: session.importantStartEventId,
+      at: t,
+      sessionId: session.importantSessionId,
+      userId: record?.userId ?? null,
+      loginAt: t,
+      session: record
+    });
+    return record;
+  }
+
+  function importantExitReasonRank(reason) {
+    const text = String(reason || '').toLowerCase();
+    if (/exit-confirmed|leave-success|leave-http-403/.test(text)) return 90;
+    if (/combat|pursuit|injury|offline|stamina|control-ws/.test(text)) return 75;
+    if (/dead|not-alive|waitingrevive/.test(text)) return 65;
+    if (/no-self|missing self/.test(text)) return 45;
+    if (/session-reset|user-changed/.test(text)) return 25;
+    return text ? 35 : 0;
+  }
+
+  function noteImportantSessionExit(reason, selfSummary = null, t = Date.now(), extra = {}) {
+    const session = bot.session || null;
+    if (!session?.startedAt) return null;
+    if (!session.importantSessionId) session.importantSessionId = importantLogId('session', Number(session.startedAt || t), session.userId || selfSummary?.id || getCurrentUserId() || 'user');
+    const nextReason = String(reason || extra.exitReason || 'unknown');
+    const previousRank = importantExitReasonRank(session.exitReason);
+    const nextRank = importantExitReasonRank(nextReason);
+    if (!session.exitAt || nextRank >= previousRank) {
+      session.exitAt = Number(t || Date.now()) || Date.now();
+      session.exitReason = nextReason;
+      session.exitSummary = String(extra.exitSummary || extra.exit?.summary || extra.exit?.displayReason || session.exitSummary || '');
+    }
+    if (!session.importantEndEventId) session.importantEndEventId = session.importantSessionId + ':end';
+    const record = upsertImportantSessionRecord(session, selfSummary || bot.lastSelf, {
+      at: Date.now(),
+      exitAt: session.exitAt,
+      exitReason: session.exitReason,
+      exitSummary: session.exitSummary
+    });
+    recordImportantEvent('session-end', {
+      importantLogId: session.importantEndEventId,
+      at: session.exitAt || t,
+      sessionId: session.importantSessionId,
+      userId: record?.userId ?? null,
+      exitAt: session.exitAt || t,
+      exitReason: session.exitReason,
+      exitSummary: session.exitSummary,
+      exit: extra.exit ? safeJsonClone(extra.exit) : null,
+      session: record
+    });
+    return record;
+  }
+
+  function recordImportantKill(kill) {
+    const summary = importantKillSummary(kill);
+    if (!summary) return null;
+    const session = bot.session || {};
+    const sessionId = session.importantSessionId || '';
+    const record = upsertImportantSessionRecord(session, bot.lastSelf, { at: summary.at });
+    recordImportantEvent('kill', {
+      importantLogId: importantLogId('kill', summary.at, summary.name || summary.id || 'target'),
+      at: summary.at,
+      sessionId,
+      userId: session.userId ?? getCurrentUserId() ?? null,
+      kill: summary,
+      session: record
+    });
+    const active = bot.importantLogging?.activeCombat;
+    if (active && importantCombatMatchesKill(active, summary)) {
+      finishImportantCombat('kill', { at: summary.at, kill: summary });
+    }
+    return summary;
+  }
+
+  function importantHpValue(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function importantTargetKey(target) {
+    const id = target?.id ?? target?.user_id ?? target?.targetId;
+    if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
+    const name = String(target?.name || target?.label || '');
+    if (name) return 'name:' + name;
+    return '';
+  }
+
+  function importantCombatTargetSummary(target) {
+    if (!target) return null;
+    const hp = importantHpValue(knownHpValue(target));
+    return {
+      id: target.id ?? target.user_id ?? target.targetId ?? null,
+      name: target.name || target.label || '',
+      key: importantTargetKey(target),
+      hp,
+      displayHp: importantHpValue(target.hp),
+      maxHp: importantHpValue(target.maxHp ?? target.max_hp),
+      drop: Math.max(0, Math.round(Number(target.drop ?? dropValue(target) ?? 0) || 0)),
+      distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
+      mode: target.mode || target.current_join_mode || '',
+      life: target.life || ''
+    };
+  }
+
+  function updateImportantCombatHp(record, prefix, hp) {
+    const value = importantHpValue(hp);
+    if (value === null) return;
+    const startKey = prefix + 'HpStart';
+    const endKey = prefix + 'HpEnd';
+    const minKey = prefix + 'HpMin';
+    const maxKey = prefix + 'HpMax';
+    const deltaKey = prefix + 'HpDelta';
+    if (!Number.isFinite(Number(record[startKey]))) record[startKey] = value;
+    record[endKey] = value;
+    record[minKey] = Number.isFinite(Number(record[minKey])) ? Math.min(Number(record[minKey]), value) : value;
+    record[maxKey] = Number.isFinite(Number(record[maxKey])) ? Math.max(Number(record[maxKey]), value) : value;
+    record[deltaKey] = Number.isFinite(Number(record[startKey])) ? Math.round((value - Number(record[startKey])) * 100) / 100 : null;
+  }
+
+  function importantCombatSampleFromDecision(decision) {
+    const reason = String(decision?.reason || '');
+    const target = decision?.target || decision?.combatState?.target || decision?.pendingCombatLeave?.target || bot.combatTarget || null;
+    const combat = Boolean(decision?.combat || decision?.combatState || decision?.pendingCombatLeave || /^combat-/.test(reason));
+    if (!combat || !target) return null;
+    try {
+      if (combatLogIsAfkAttack({ decision, target }, decision)) return null;
+    } catch (_) {}
+    const self = decision?.self || bot.lastSelf || null;
+    const targetSummary = importantCombatTargetSummary(target);
+    if (!targetSummary?.key && !targetSummary?.name) return null;
+    return {
+      at: Date.now(),
+      reason,
+      source: decision?.source || '',
+      selfHp: importantHpValue(self?.hp),
+      target: targetSummary,
+      targetHp: targetSummary.hp ?? targetSummary.displayHp
+    };
+  }
+
+  function startImportantCombat(sample) {
+    const session = bot.session || {};
+    const id = importantLogId('combat', sample.at, sample.target?.name || sample.target?.id || 'target');
+    const record = {
+      combatSummaryId: id,
+      sessionId: session.importantSessionId || '',
+      userId: session.userId ?? getCurrentUserId() ?? null,
+      startedAt: sample.at,
+      endedAt: 0,
+      durationMs: 0,
+      enemy: sample.target,
+      enemyKey: sample.target?.key || '',
+      startReason: sample.reason || '',
+      lastReason: sample.reason || '',
+      lastSampleAt: sample.at,
+      sampleCount: 0,
+      selfHpStart: null,
+      selfHpEnd: null,
+      selfHpMin: null,
+      selfHpMax: null,
+      selfHpDelta: null,
+      enemyHpStart: null,
+      enemyHpEnd: null,
+      enemyHpMin: null,
+      enemyHpMax: null,
+      enemyHpDelta: null,
+      result: 'ongoing',
+      resultReason: '',
+      kill: null,
+      version: cfg.version,
+      sourceHash: cfg.sourceHash,
+      lastPersistAt: 0,
+      updatedAt: sample.at
+    };
+    bot.importantLogging.activeCombat = record;
+    updateImportantCombatRecord(record, sample);
+    return record;
+  }
+
+  function updateImportantCombatRecord(record, sample) {
+    if (!record || !sample) return null;
+    const previousSelfHp = importantHpValue(record.selfHpEnd);
+    const previousEnemyHp = importantHpValue(record.enemyHpEnd);
+    record.lastSampleAt = sample.at;
+    record.lastReason = sample.reason || record.lastReason || '';
+    record.sampleCount = Math.max(0, Number(record.sampleCount || 0) || 0) + 1;
+    record.enemy = { ...(record.enemy || {}), ...(sample.target || {}) };
+    record.enemyKey = record.enemyKey || sample.target?.key || '';
+    updateImportantCombatHp(record, 'self', sample.selfHp);
+    updateImportantCombatHp(record, 'enemy', sample.targetHp);
+    record.durationMs = Math.max(0, Math.round((record.endedAt || sample.at) - Number(record.startedAt || sample.at)));
+    record.updatedAt = sample.at;
+    const selfHpChanged = importantHpValue(record.selfHpEnd) !== previousSelfHp;
+    const enemyHpChanged = importantHpValue(record.enemyHpEnd) !== previousEnemyHp;
+    const persistDue = !record.lastPersistAt || sample.at - Number(record.lastPersistAt || 0) >= 1000 || selfHpChanged || enemyHpChanged;
+    if (persistDue) {
+      record.lastPersistAt = sample.at;
+      updateImportantLogsStore(store => {
+        upsertImportantListItem(store.combats, 'combatSummaryId', safeJsonClone(record) || record);
+      });
+    }
+    return record;
+  }
+
+  function importantCombatMatchesKill(record, kill) {
+    if (!record || !kill) return false;
+    const enemy = record.enemy || {};
+    if (enemy.id !== null && enemy.id !== undefined && kill.id !== null && kill.id !== undefined && String(enemy.id) === String(kill.id)) return true;
+    const enemyName = String(enemy.name || '').trim();
+    const killName = String(kill.name || '').trim();
+    return Boolean(enemyName && killName && enemyName === killName);
+  }
+
+  function importantCombatResult(record, reason, extra = {}) {
+    const text = String(reason || '').toLowerCase();
+    const enemyHp = importantHpValue(record.enemyHpEnd);
+    const selfHp = importantHpValue(record.selfHpEnd);
+    if (extra.kill || record.kill) return 'won';
+    if (enemyHp !== null && enemyHp <= 0) return 'won';
+    if ((selfHp !== null && selfHp <= 0) || /dead|not-alive|waitingrevive/.test(text)) return 'lost';
+    if (/leave|exit|offline|pursuit|injury|stamina|login|no-self|control-ws/.test(text)) return 'left';
+    if (/flee|recover|retreat/.test(text)) return 'retreated';
+    return 'disengaged';
+  }
+
+  function finishImportantCombat(reason = 'ended', extra = {}) {
+    const record = bot.importantLogging?.activeCombat;
+    if (!record) return null;
+    const t = Number(extra.at || Date.now()) || Date.now();
+    if (extra.kill) record.kill = safeJsonClone(extra.kill) || extra.kill;
+    if (extra.selfHp !== undefined) updateImportantCombatHp(record, 'self', extra.selfHp);
+    if (extra.targetHp !== undefined) updateImportantCombatHp(record, 'enemy', extra.targetHp);
+    record.endedAt = t;
+    record.durationMs = Math.max(0, Math.round(t - Number(record.startedAt || t)));
+    record.resultReason = String(reason || 'ended');
+    record.result = importantCombatResult(record, reason, extra);
+    record.updatedAt = t;
+    updateImportantLogsStore(store => {
+      upsertImportantListItem(store.combats, 'combatSummaryId', safeJsonClone(record) || record);
+    });
+    recordImportantEvent('combat-summary', {
+      importantLogId: record.combatSummaryId + ':summary',
+      at: t,
+      sessionId: record.sessionId || bot.session?.importantSessionId || '',
+      userId: record.userId ?? bot.session?.userId ?? getCurrentUserId() ?? null,
+      combatSummaryId: record.combatSummaryId,
+      combat: safeJsonClone(record) || record
+    });
+    bot.importantLogging.activeCombat = null;
+    return record;
+  }
+
+  function recordImportantCombatTick(source, decision = bot.lastDecision) {
+    const sample = importantCombatSampleFromDecision({ ...(decision || {}), source });
+    const active = bot.importantLogging?.activeCombat || null;
+    if (sample) {
+      if (active && active.enemyKey && sample.target?.key && active.enemyKey !== sample.target.key) {
+        finishImportantCombat('target-switched', { at: sample.at });
+      }
+      if (!bot.importantLogging.activeCombat) {
+        startImportantCombat(sample);
+      } else {
+        updateImportantCombatRecord(bot.importantLogging.activeCombat, sample);
+      }
+      return;
+    }
+    if (!active) return;
+    const reason = combatLogSuspendReason(decision || {}) || String(decision?.reason || '');
+    const ageMs = Math.max(0, Date.now() - Number(active.lastSampleAt || Date.now()));
+    if (reason && /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/.test(reason)) {
+      finishImportantCombat(reason, { at: Date.now() });
+    } else if (ageMs >= Math.max(1000, Number(cfg.combatLogPostBufferMs || 10000) || 10000)) {
+      finishImportantCombat('post-combat-timeout', { at: Date.now() });
+    }
+  }
+
+  function summarizeImportantLoggingStatus() {
+    const store = readImportantLogsStore();
+    return {
+      key: IMPORTANT_LOGS_KEY,
+      sessions: store.sessions.length,
+      combats: store.combats.length,
+      events: store.events.length,
+      pendingRemote: store.events.filter(event => event?.importantLogId && !event.remoteSentAt).length,
+      restoredRemote: Number(bot.importantLogging?.restoredRemote || 0),
+      activeCombat: bot.importantLogging?.activeCombat ? {
+        combatSummaryId: bot.importantLogging.activeCombat.combatSummaryId || '',
+        enemy: bot.importantLogging.activeCombat.enemy || null,
+        startedAt: Number(bot.importantLogging.activeCombat.startedAt || 0),
+        sampleCount: Number(bot.importantLogging.activeCombat.sampleCount || 0)
+      } : null,
+      localWriteError: bot.importantLogging?.localWriteError || '',
+      lastRemoteError: bot.importantLogging?.lastRemoteError || ''
+    };
   }
 
   function rememberAttack(self, target, actionKind) {
@@ -10404,14 +11025,19 @@ function browserBotSource(config) {
         .slice()
         .reverse()
         .find(item => item.name === victim || String(item.id) === victim);
-      pushBounded(bot.killHistory, {
+      const kill = {
         at: Date.now(),
         time,
         victim,
+        id: attack ? attack.id : null,
         drop: attack ? attack.drop : null,
+        rewardCoins: attack ? attack.drop : null,
         matchedAttack: Boolean(attack),
-        attackDistance: attack ? attack.distance : null
-      }, 40);
+        attackDistance: attack ? attack.distance : null,
+        sessionId: bot.session?.importantSessionId || ''
+      };
+      pushBounded(bot.killHistory, kill, 40);
+      recordImportantKill(kill);
       bot.seenKillKeys.add(key);
       pushBounded(bot.seenKillKeysList, key, 120);
     }
@@ -13797,6 +14423,7 @@ function browserBotSource(config) {
       Math.max(0, Number(session.coinPickupTotal || 0) || 0),
       coinDiff
     );
+    upsertImportantSessionRecord(session, currentSummary, { at: t });
     return true;
   }
 
@@ -14337,6 +14964,13 @@ function browserBotSource(config) {
         return;
       }
 					      if (!self || !isAlive(self)) {
+					        if (self && !isAlive(self)) {
+					          const unavailableSummary = summarizeSelf(self);
+					          updateSessionStats(unavailableSummary);
+					          finishImportantCombat('not-alive:' + (unavailableSummary.life || 'unknown'), { at: Date.now(), selfHp: unavailableSummary.hp });
+					        } else if (!self && bot.session?.startedAt && !bot.session.missingSince) {
+					          bot.session.missingSince = Date.now();
+					        }
 					        noteSelfUnavailableForPostLoginZoom();
 					        bot.pursuit = null;
 		        stopMotionSafely('no-self');
@@ -14358,6 +14992,7 @@ function browserBotSource(config) {
 	          bot.lastOfflineSafety = offlineSafety;
 	          stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session');
 	          const leaveResult = await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety);
+	          noteImportantSessionExit(noSelfExit.reason || 'no-self-game-session', bot.lastSelf, Date.now(), { exit: leaveResult });
 	          const offlineDetail = activeOfflineLeaveDetail();
 	          refreshGlobalState(false).catch(err => {
 	            bot.globalState.error = err.message || String(err);
@@ -14436,6 +15071,7 @@ function browserBotSource(config) {
 	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
       schedulePostLoginZoomOut(currentSummary);
+      updateSessionStats(currentSummary);
 		      const currentHp = Number(currentSummary.hp ?? NaN);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       if (staminaState.mustLeave && !bot.pendingExit) {
@@ -14859,6 +15495,13 @@ function browserBotSource(config) {
 		      } catch (_) {}
 		    } finally {
 		      try {
+		        recordImportantCombatTick(source, bot.lastDecision);
+		      } catch (importantErr) {
+		        try {
+		          bot.importantLogging.localWriteError = 'combat summary failed: ' + (importantErr?.message || String(importantErr));
+		        } catch (_) {}
+		      }
+		      try {
 		        recordCombatLogTick(source, bot.lastDecision);
 		      } catch (logErr) {
 		        try {
@@ -14870,6 +15513,7 @@ function browserBotSource(config) {
 		  }
 
 	  restorePersistedExitAuditLogs();
+	  restoreImportantLogsForRemote();
 
 	  window[BOT_KEY] = bot;
 	  if (previousBot && previousBot !== bot && previousBot.stop) {
