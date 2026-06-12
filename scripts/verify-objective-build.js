@@ -27,6 +27,7 @@ const BOOTSTRAP_FILES = [
 
 const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomOutClicks', value: 6 },
+  { key: 'postLoginZoomStartDelayMs', value: 350 },
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
   { key: 'unsafeExitReloginMinDelayMs', value: 60000 },
@@ -34,6 +35,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'leaveRetryMinMs', value: 10000 },
   { key: 'leaveCommandTimeoutMs', value: 10000 },
   { key: 'leave403ReloginDelayMs', value: 3600000 },
+  { key: 'leave403SnapshotSuccessRequired', value: 5 },
+  { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 }
 ];
 
@@ -197,6 +200,8 @@ function main() {
       assert(scheduleBody.includes('state.appliedKey === key || state.scheduledKey === key'), 'duplicate session zoom guard not found');
       assert(scheduleBody.includes('state.armed = false'), 'zoom not disarmed after scheduling');
       assert(scheduleBody.includes('requestedClicks: clicks'), 'requested click count not recorded');
+      assert(scheduleBody.includes('cfg.postLoginZoomStartDelayMs'), 'zoom start delay config not used');
+      assert(scheduleBody.includes('requestNativeViewportResize'), 'zoom scheduling does not request native viewport resize');
       assert(scheduleBody.includes('cfg.postLoginZoomOutIntervalMs'), 'zoom click interval config not used');
       assert(scheduleBody.includes('for (let index = 0; index < clicks; index += 1)'), 'per-click scheduling loop not found');
       assert(scheduleBody.includes('clickZoomOutControl()'), 'scheduled callback does not click zoom-out control');
@@ -332,15 +337,25 @@ function main() {
       assert(text.includes("pendingExitIntentForSkippedLeave('injury'"), 'injury skip intent is not logged on normal action');
       assert(text.includes("pendingExitIntentForSkippedLeave('pursuit'"), 'pursuit skip intent is not logged on normal action');
     });
-    check(`${file} treats leave HTTP 403 as confirmed exit with one hour hold`, () => {
+    check(`${file} treats leave HTTP 403 as confirmed exit with snapshot recovery`, () => {
       const requestBody = functionBody(text, 'leaveRequestHasHttp403');
       assert(requestBody.includes('status === 403'), 'leave 403 status detector not found');
       const confirmBody = functionBody(text, 'confirmPendingExit');
-      assert(confirmBody.includes('leave403ReloginDelayMs()'), '403 confirmation does not use one hour delay helper');
+      assert(confirmBody.includes('leave403ReloginDelayMs()'), '403 confirmation does not keep one hour fallback helper');
       assert(confirmBody.includes("minimumReason: 'leave HTTP 403 risk control'"), '403 risk-control minimum reason not recorded');
       assert(confirmBody.includes('detail.http403RiskControl = true'), '403 risk-control marker not recorded');
       const pendingBody = functionBody(text, 'handlePendingExit');
       assert(pendingBody.includes("source: 'leave-http-403'"), 'pending exit does not confirm on leave HTTP 403');
+      const refreshBody = functionBody(text, 'refreshGlobalState');
+      assert(refreshBody.includes("fetchJsonNoStore('/snapshot')"), 'snapshot refresh request not found');
+      assert(refreshBody.includes('noteLeave403SnapshotProbe(true'), 'snapshot success does not update 403 recovery probe');
+      assert(refreshBody.includes('noteLeave403SnapshotProbe(false'), 'snapshot failure does not reset 403 recovery probe');
+      const probeBody = functionBody(text, 'noteLeave403SnapshotProbe');
+      assert(probeBody.includes('clearLeave403RiskHolds'), 'snapshot success streak does not clear 403 hold');
+      assert(probeBody.includes('leave403SnapshotSuccessRequired()'), 'snapshot success threshold helper not used');
+      const clearBody = functionBody(text, 'clearLeave403RiskHolds');
+      assert(clearBody.includes('clearLoginSuppressMatching'), '403 snapshot recovery does not clear login suppress');
+      assert(clearBody.includes('clearPersistentExitState'), '403 snapshot recovery does not clear persistent hold state');
     });
     check(`${file} logs combat target mode and safety fields`, () => {
       const body = functionBody(text, 'buildCombatAction');
@@ -392,6 +407,11 @@ function main() {
       assert(/\.workspace\{[^'"\r\n]*inset:auto!important[^'"\r\n]*transform:none!important[^'"\r\n]*flex:1 1 0!important/.test(text), 'workspace inset/transform/flex reset not found');
       assert(/\.workspace>\.map-shell\{[^'"\r\n]*width:100%!important[^'"\r\n]*height:100%!important/.test(text), 'map-shell fill rule not found');
       assert(/\.workspace #world\{[^'"\r\n]*width:100%!important[^'"\r\n]*height:100%!important[^'"\r\n]*display:block!important/.test(text), 'world fill rule not found');
+      assert(functionBody(text, 'dispatchNativeViewportResize').includes("window.dispatchEvent(new Event('resize'))"), 'native resize dispatch helper not found');
+      const syncBody = functionBody(text, 'syncNativeSidebarStructure');
+      assert(syncBody.includes("scheduleNativeViewportResize('sidebar-structure')"), 'sidebar layout changes do not schedule native resize');
+      const placeBody = functionBody(text, 'placeBootstrapPanel');
+      assert(placeBody.includes("scheduleNativeViewportResize('panel-insert')"), 'panel insertion does not schedule native resize');
     });
     check(`${file} uses compact dot panel controls`, () => {
       assert(text.includes('const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow'), 'BOT status dot not found');
