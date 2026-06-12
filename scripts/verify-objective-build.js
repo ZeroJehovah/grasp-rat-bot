@@ -330,7 +330,11 @@ function main() {
       assert(text.includes("recordExitAuditEvent('exit-confirmed'"), 'exit confirmation audit event not recorded');
       const queueBody = functionBody(text, 'queueCombatLogEntry');
       assert(queueBody.includes('const critical = Boolean(options.critical || snapshot.exitAuditLogId)'), 'critical exit audit queue marker not found');
-      assert(queueBody.includes('(!state.enabled && !critical)'), 'critical exit audit logs still depend on combat logging enabled');
+      assert(
+        queueBody.includes('(!state.enabled && !critical && !important)')
+          || queueBody.includes('(!state.enabled && !critical)'),
+        'critical exit audit logs still depend on combat logging enabled'
+      );
       assert(queueBody.includes('persistExitAuditLogEntry(queued)'), 'critical exit audit logs are not persisted before flush');
       const pendingIdsBody = functionBody(text, 'pendingExitAuditLogIds');
       assert(pendingIdsBody.includes('if (!state.endpoint) return []'), 'unconfigured log endpoint can still block on persisted exit audit logs');
@@ -344,6 +348,24 @@ function main() {
       const manualLoginBody = functionBody(text, 'forceLoginNow');
       assert(manualLoginBody.includes('skipped: true'), 'manual login can clear exit holds while audit logs are pending');
       assert(manualLoginBody.includes("skipReason: 'exit-log-flush-pending'"), 'manual login hold-clear skip reason not reported');
+    });
+    check(`${file} persists important daily summary logs locally and remotely`, () => {
+      assert(text.includes('IMPORTANT_LOGS_KEY'), 'important local log key not found');
+      assert(text.includes("'graspRatImportantLogs'"), 'important logs are not stored under the expected localStorage key');
+      assert(text.includes("recordImportantEvent('session-start'"), 'session-start important log not recorded');
+      assert(text.includes("recordImportantEvent('session-end'"), 'session-end important log not recorded');
+      assert(text.includes("recordImportantEvent('kill'"), 'kill important log not recorded');
+      assert(text.includes("recordImportantEvent('combat-summary'"), 'combat-summary important log not recorded');
+      const queueBody = functionBody(text, 'queueCombatLogEntry');
+      assert(queueBody.includes('const important = Boolean('), 'important log queue marker not found');
+      assert(queueBody.includes('!state.enabled && !critical && !important'), 'important logs cannot flush while combat logging is disabled');
+      const flushBody = functionBody(text, 'flushCombatLogs');
+      assert(flushBody.includes('const hasImportant ='), 'flush does not detect important logs');
+      assert(flushBody.includes('markImportantLogsRemoteSent(importantLogIds'), 'important logs are not marked sent after remote flush');
+      assert(text.includes('restoreImportantLogsForRemote();'), 'unsent important logs are not restored for remote flush');
+      assert(text.includes('pureRefreshCoins'), 'session logs do not include pure refreshed coin totals');
+      assert(text.includes('staminaSpentMs'), 'session logs do not include stamina spent');
+      assert(text.includes('selfHpDelta') && text.includes('enemyHpDelta'), 'combat summaries do not include HP deltas');
     });
     check(`${file} keeps failed leave attempts pending until confirmed`, () => {
       assert(countMatches(text, /if \(detail\.attempted \|\| detail\.exitAuditId\)/g) >= 4, 'failed/non-attempted exit audit leaves are not remembered as pending exits');
