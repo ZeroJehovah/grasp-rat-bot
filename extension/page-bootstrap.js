@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.21';
+  const BOOTSTRAP_VERSION = '0.1.22';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -535,7 +535,7 @@
       const r = Number(remaining);
       const l = Number(limit);
       if (!Number.isFinite(r) || !Number.isFinite(l) || l <= 0) return '-/-';
-      return Math.max(0, Math.round(r)) + '/' + Math.round(l);
+      return Math.max(0, Math.round(r / 1000)) + '/' + Math.round(l / 1000);
     };
     const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
     const suffix = exhausted.length ? ' !' + exhausted.join('/') : '';
@@ -1010,7 +1010,8 @@
       'body.grasp-rat-bot-sidebar-embedded .side>.bottom-dock>.log-wrap{flex:1 1 auto!important;min-height:0!important;display:flex!important;flex-direction:column!important}',
       'body.grasp-rat-bot-sidebar-embedded .side .log{flex:1 1 auto!important;min-height:120px!important}',
       'body.grasp-rat-bot-sidebar-embedded #' + PANEL_ID + '{margin:0!important;flex:0 0 auto!important;border-bottom:1px solid rgba(148,163,184,.20)!important}',
-      '@keyframes grasp-rat-dot-pending{0%,100%{opacity:1;transform:translate(-50%,-50%) scale(1)}50%{opacity:.38;transform:translate(-50%,-50%) scale(.72)}}'
+      '@keyframes grasp-rat-dot-pending{0%,100%{opacity:1;transform:translate(-50%,-50%) scale(1)}50%{opacity:.38;transform:translate(-50%,-50%) scale(.72)}}',
+      '@keyframes grasp-rat-dot-pending-inline{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.38;transform:scale(.72)}}'
     ].join('\n');
     if (style.textContent !== text) {
       style.textContent = text;
@@ -1075,13 +1076,14 @@
       if (loginButton) loginButton.remove();
       return;
     }
+    const anchor = nativeJoin || document.getElementById('leaveBtn') || null;
     if (!loginButton) {
       loginButton = document.createElement('button');
       loginButton.id = INLINE_LOGIN_BUTTON_ID;
       loginButton.type = 'button';
-      grid.insertBefore(loginButton, document.getElementById('leaveBtn') || null);
-    } else if (loginButton.parentElement !== grid) {
-      grid.insertBefore(loginButton, document.getElementById('leaveBtn') || null);
+      grid.insertBefore(loginButton, anchor);
+    } else if (loginButton.parentElement !== grid || loginButton.nextSibling !== anchor) {
+      grid.insertBefore(loginButton, anchor);
     }
     loginButton.className = nativeJoin?.className || 'join';
     loginButton.textContent = loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录';
@@ -1319,15 +1321,29 @@
       const stamina = self?.stamina || {};
       const exhausted = Array.isArray(stamina.exhausted) && stamina.exhausted.length > 0;
       const line = document.createElement('div');
-      line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:11.5px;line-height:1.3;color:#e5edf7';
+      line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow:hidden;font-size:11.5px;line-height:1.3;color:#e5edf7';
       const hpLabel = document.createElement('span');
       const hpValue = Number(self?.hp);
       hpLabel.textContent = 'HP ' + (self?.hp ?? '-');
       if (Number.isFinite(hpValue) && hpValue < 100) hpLabel.style.cssText = 'color:#fca5a5;font-weight:700';
       else if (hpValue === 100) hpLabel.style.cssText = 'color:#86efac;font-weight:700';
+      const dropLabel = document.createElement('span');
+      dropLabel.textContent = 'Drop ' + (self?.drop ?? '-');
+      dropLabel.style.cssText = 'color:#e5edf7';
+      const activeLabel = document.createElement('span');
+      activeLabel.textContent = 'Active ' + nearestActive;
+      activeLabel.title = activeLabel.textContent;
+      activeLabel.style.cssText = 'color:#cbd5e1;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      line.appendChild(hpLabel);
+      line.appendChild(dropLabel);
+      line.appendChild(activeLabel);
+      appendParent.appendChild(line);
+      const staminaLine = document.createElement('div');
+      staminaLine.style.cssText = 'min-width:0;display:flex;align-items:center;font-size:11.5px;line-height:1.3;color:#e5edf7';
       const staminaPill = document.createElement('span');
       staminaPill.className = 'pill compact' + (exhausted ? ' exhausted' : '');
       staminaPill.textContent = '体力: ' + formatStamina(self);
+      staminaPill.title = '体力，单位秒：5s / 1h / 1d';
       staminaPill.style.cssText = [
         'display:inline-flex',
         'align-items:center',
@@ -1344,13 +1360,8 @@
         'font-variant-numeric:tabular-nums',
         'overflow-wrap:anywhere'
       ].join(';');
-      const dropLabel = document.createElement('span');
-      dropLabel.textContent = 'Drop ' + (self?.drop ?? '-');
-      dropLabel.style.cssText = 'color:#e5edf7';
-      line.appendChild(hpLabel);
-      line.appendChild(staminaPill);
-      line.appendChild(dropLabel);
-      appendParent.appendChild(line);
+      staminaLine.appendChild(staminaPill);
+      appendParent.appendChild(staminaLine);
       return line;
     };
     const appendMetricGrid = metrics => {
@@ -1390,26 +1401,42 @@
     };
     const createDot = (title, color, halo, glow, options = {}) => {
       const onClick = typeof options.onClick === 'function' ? options.onClick : null;
+      const label = String(options.label || '');
       const control = document.createElement(onClick ? 'button' : 'span');
       if (onClick) control.type = 'button';
       control.title = title;
       control.setAttribute('aria-label', title);
       control.style.cssText = [
         'position:relative',
-        'flex:0 0 24px',
-        'width:24px',
+        'flex:0 0 auto',
+        'width:auto',
         'height:24px',
         'box-sizing:border-box',
-        'padding:0',
+        'padding:' + (label ? '0 8px' : '0'),
         'border:1px solid rgba(148,163,184,.24)',
-        'border-radius:50%',
+        'border-radius:' + (label ? '999px' : '50%'),
         'background:rgba(15,23,42,.50)',
         'cursor:' + (onClick ? 'pointer' : 'default'),
-        'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)'
+        'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)',
+        'display:inline-flex',
+        'align-items:center',
+        'gap:6px',
+        'font:700 10.5px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+        'color:#e5edf7',
+        'letter-spacing:0'
       ].join(';');
+      if (label) {
+        const labelNode = document.createElement('span');
+        labelNode.textContent = label;
+        labelNode.style.cssText = 'display:inline-block;white-space:nowrap';
+        control.appendChild(labelNode);
+      }
       const dot = document.createElement('span');
       dot.setAttribute('aria-hidden', 'true');
-      dot.style.cssText = 'position:absolute;left:50%;top:50%;width:9px;height:9px;transform:translate(-50%,-50%);border-radius:50%;background:' + color + ';box-shadow:0 0 0 4px ' + halo + ',0 0 18px ' + glow + (options.pending ? ';animation:grasp-rat-dot-pending .9s ease-in-out infinite' : '');
+      dot.style.cssText = (label ? 'display:inline-block;flex:0 0 auto;' : 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);')
+        + 'width:9px;height:9px;border-radius:50%;background:' + color
+        + ';box-shadow:0 0 0 4px ' + halo + ',0 0 18px ' + glow
+        + (options.pending ? ';animation:' + (label ? 'grasp-rat-dot-pending-inline' : 'grasp-rat-dot-pending') + ' .9s ease-in-out infinite' : '');
       control.appendChild(dot);
       if (onClick) {
         control.addEventListener('click', event => {
@@ -1422,23 +1449,20 @@
     };
     appendSection();
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:0';
-    const titleWrap = document.createElement('div');
-    titleWrap.style.cssText = 'display:flex;align-items:center;gap:7px;min-width:0';
-    const title = document.createElement('div');
-    title.style.cssText = 'font-weight:750;font-size:14px;line-height:1.15;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    title.textContent = 'BOT';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:flex-start;gap:7px;margin-bottom:0;min-width:0;overflow:hidden';
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;align-items:center;gap:7px;flex:0 1 auto;min-width:0;overflow:hidden';
     const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow, {
+      label: 'BOT',
       onClick: () => setPaused(!isPaused(), 'panel bot dot')
     });
     statusDot.setAttribute('aria-pressed', String(paused));
-    titleWrap.appendChild(title);
-    titleWrap.appendChild(statusDot);
-    header.appendChild(titleWrap);
-    const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto';
-    actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)')));
+    actions.appendChild(statusDot);
+    actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)'), {
+      label: 'WS'
+    }));
     const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
+      label: '日志',
       pending: remoteLogPending > 0 && remoteLogFailed <= 0,
       onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })
     });
@@ -1453,9 +1477,9 @@
       );
     }
     appendRichLine([
-      'A 扩展 ',
+      '加载器 扩展 v',
       { text: displayVersion(aVersion), style: 'color:' + (state.loaderUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
-      ' / B ',
+      ' / 远程脚本 v',
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
     ], 'font-size:10.5px;margin:-2px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
     appendSection();
@@ -1488,7 +1512,6 @@
         { label: 'kills', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
       appendStaminaLine();
-      if (nearestActive !== '-') appendLine('Active ' + nearestActive);
       if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
         appendLine('重连：' + formatNumber(control.nativeReconnectEventCount, '0') + ' / ' + formatDuration(control.nativeReconnectWindowMs || 0), control.nativeReconnectChurn ? 'color:#fca5a5;font-weight:700' : 'color:#cbd5e1');
       }

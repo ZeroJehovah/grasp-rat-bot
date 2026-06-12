@@ -463,10 +463,14 @@ function main() {
     });
     check(`${file} uses compact dot panel controls`, () => {
       assert(text.includes('const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow'), 'BOT status dot not found');
+      assert(text.includes("label: 'BOT'"), 'BOT status dot visible label not found');
       assert(text.includes("onClick: () => setPaused(!isPaused(), 'panel bot dot')"), 'BOT status dot pause toggle not found');
       assert(text.includes("statusDot.setAttribute('aria-pressed', String(paused))"), 'BOT status dot aria-pressed not found');
       assert(text.includes('actions.appendChild(createDot(wsTitle, wsColor'), 'WS state dot not found');
+      assert(text.includes("label: 'WS'"), 'WS state dot visible label not found');
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
+      assert(text.includes("label: '日志'"), 'remote-log dot visible label not found');
+      assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');
       assert(text.includes('pending: remoteLogPending > 0 && remoteLogFailed <= 0'), 'remote-log pending blink state not found');
       assert(text.includes('onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })'), 'remote-log dot toggle not found');
       assert(text.includes("logDot.setAttribute('aria-pressed', String(remoteLogEnabled))"), 'remote-log dot aria-pressed not found');
@@ -489,10 +493,10 @@ function main() {
       assert(!/textContent\s*=\s*String\(metric\.label/.test(text), 'metric label appears as visible textContent');
       assert(!/appendChild\(label\)/.test(text), 'metric label element append found');
     });
-    check(`${file} formats stamina as raw remaining/limit values`, () => {
+    check(`${file} formats stamina as second-scale remaining/limit values`, () => {
       const body = functionBody(text, 'formatStamina');
       assert(countMatches(body, /\bpairText\(/g) === 3, 'formatStamina should use exactly three pairText calls');
-      assert(body.includes("Math.max(0, Math.round(r)) + '/' + Math.round(l)"), 'remaining/limit pair formatting not found');
+      assert(body.includes("Math.max(0, Math.round(r / 1000)) + '/' + Math.round(l / 1000)"), 'second-scale remaining/limit pair formatting not found');
       assert(!body.includes('%'), 'percent stamina formatting found');
       assert(text.includes("staminaPill.textContent = '") && text.includes("' + formatStamina(self)"), 'stamina line does not render formatStamina output');
     });
