@@ -308,13 +308,29 @@ function main() {
       assert(issueBody.includes('detail.leaveRequestPending = true'), 'async leave requests are not marked pending');
       assert(issueBody.includes('setTimeout(() =>'), 'async leave requests do not have a timeout gate');
       assert(issueBody.includes('detail.leaveRequestTimeoutMs'), 'leave timeout metadata is not recorded');
-      const completeBody = functionBody(text, 'completeLeaveRequest');
-      assert(completeBody.includes('request.durationMs'), 'leave request duration is not recorded');
-      assert(completeBody.includes('detail.leaveRequests.push(request)'), 'leave request history is not stored on leave detail');
-    });
-    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
-      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
-      assert(localBody.includes('tokenCleared && chatLeftUser && ownEntity.disappeared'), 'token/chat/self-missing exit confirmation is not enforced');
+	      const completeBody = functionBody(text, 'completeLeaveRequest');
+	      assert(completeBody.includes('request.durationMs'), 'leave request duration is not recorded');
+	      assert(completeBody.includes('detail.leaveRequests.push(request)'), 'leave request history is not stored on leave detail');
+	    });
+	    check(`${file} stops native motion immediately after confirmed exits`, () => {
+	      const completeBody = functionBody(text, 'completeLeaveRequest');
+	      assert(
+	        completeBody.includes("stopMotionAfterExit(leaveDetailHasHttp403(detail) ? 'leave-http-403' : 'leave-success')"),
+	        'successful/403 leave completion does not stop motion immediately'
+	      );
+	      const confirmBody = functionBody(text, 'confirmPendingExit');
+	      assert(confirmBody.includes("stopMotionAfterExit('exit-confirmed')"), 'pending exit confirmation does not stop motion');
+	      assert(confirmBody.includes("clearCombatEngagement('exit-confirmed')"), 'pending exit confirmation does not clear combat engagement');
+	      const clearBody = functionBody(text, 'clearNativeMotionState');
+	      assert(clearBody.includes("nativeState.lastVel = '0 0'"), 'native lastVel is not cleared on stop');
+	      assert(clearBody.includes("const vectorFields = ['currentVel', 'targetVel', 'velocity']"), 'native velocity vector fields are not cleared on stop');
+	      const stopBody = functionBody(text, 'stopMotionSafely');
+	      assert(stopBody.includes('const sent = sendNativeVelocity(0, 0, true);'), 'stopMotionSafely does not send forced zero velocity');
+	      assert(stopBody.includes('stopLocalMotionOnly(reason);'), 'stopMotionSafely does not clear local motion after native stop');
+	    });
+	    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
+	      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
+	      assert(localBody.includes('tokenCleared && chatLeftUser && ownEntity.disappeared'), 'token/chat/self-missing exit confirmation is not enforced');
       assert(text.includes("'token-chat-left-user-self-missing'"), 'local exit confirmation source not logged');
       const chatBody = functionBody(text, 'chatLeftUserMessageSeen');
       assert(/left\\{2,4}s\+user/.test(chatBody), 'left user chat message matcher not found');

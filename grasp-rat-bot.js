@@ -7120,12 +7120,13 @@ function browserBotSource(config) {
     return false;
   }
 
-  function confirmPendingExit(pending, state) {
-    const t = Date.now();
-    const detail = cloneForPendingExit(pending.lastResult || {}) || {};
-    detail.reason = detail.reason || pending.reason || '';
-    detail.summary = detail.summary || pending.summary || detail.reason || '';
-    detail.userId = detail.userId || pending.userId || getCurrentUserId() || null;
+	  function confirmPendingExit(pending, state) {
+	    const t = Date.now();
+	    const detail = cloneForPendingExit(pending.lastResult || {}) || {};
+	    stopMotionAfterExit('exit-confirmed');
+	    detail.reason = detail.reason || pending.reason || '';
+	    detail.summary = detail.summary || pending.summary || detail.reason || '';
+	    detail.userId = detail.userId || pending.userId || getCurrentUserId() || null;
     detail.self = detail.self || pending.self || null;
     detail.attempted = Boolean(detail.attempted);
     detail.error = '';
@@ -7146,18 +7147,19 @@ function browserBotSource(config) {
       detail.http403RiskControl = true;
       detail.riskControlReloginDelayMs = leave403ReloginDelayMs();
     }
-    if (pending.scope === 'offline') {
-      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);
-    } else {
-      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
-      if (pending.source === 'combat') bot.lastCombatLeaveResult = detail;
-      if (pending.source === 'pursuit') bot.lastPursuitLeaveResult = detail;
-      if (pending.source === 'injury') bot.lastInjuryLeaveResult = detail;
-      bot.pendingCombatLeave = null;
-      bot.pendingInjuryLeave = null;
-      bot.pursuit = null;
-      if (bot.lastSafety) bot.lastSafety.pursuit = null;
-    }
+	    bot.pendingCombatLeave = null;
+	    bot.pendingInjuryLeave = null;
+	    bot.pursuit = null;
+	    if (bot.lastSafety) bot.lastSafety.pursuit = null;
+	    clearCombatEngagement('exit-confirmed');
+	    if (pending.scope === 'offline') {
+	      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);
+	    } else {
+	      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
+	      if (pending.source === 'combat') bot.lastCombatLeaveResult = detail;
+	      if (pending.source === 'pursuit') bot.lastPursuitLeaveResult = detail;
+	      if (pending.source === 'injury') bot.lastInjuryLeaveResult = detail;
+	    }
     bot.pendingExit = null;
     recordExitAuditEvent('exit-confirmed', detail, {
       at: t,
@@ -7644,15 +7646,18 @@ function browserBotSource(config) {
     request.attempted = Boolean(detail.attempted);
     request.method = detail.method || '';
     request.error = detail.error || '';
-    request.result = summarizeLeaveCommandResult(rawResult);
-    request.pending = false;
-    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
-    detail.leaveRequests.push(request);
-    detail.leaveRequests = detail.leaveRequests.slice(-20);
-    detail.lastLeaveRequest = request;
-    updatePendingExitLastResult(detail);
-    recordExitAuditEvent('leave-request', detail, {
-      at: request.completedAt,
+	    request.result = summarizeLeaveCommandResult(rawResult);
+	    request.pending = false;
+	    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
+	    detail.leaveRequests.push(request);
+	    detail.leaveRequests = detail.leaveRequests.slice(-20);
+	    detail.lastLeaveRequest = request;
+	    if (leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) {
+	      stopMotionAfterExit(leaveDetailHasHttp403(detail) ? 'leave-http-403' : 'leave-success');
+	    }
+	    updatePendingExitLastResult(detail);
+	    recordExitAuditEvent('leave-request', detail, {
+	      at: request.completedAt,
       request,
       source: detail.exitAuditSource || detail.reason || 'leave-command',
       scope: detail.exitAuditScope || ''
@@ -9233,38 +9238,74 @@ function browserBotSource(config) {
 	    return true;
 	  }
 
-  function stopLocalMotionOnly(reason = '') {
-    const nativeState = getNativeState();
-    if (nativeState) {
-      setNativeKeys(nativeState, 0, 0);
-      if (nativeState.currentVel && typeof nativeState.currentVel === 'object') {
-        nativeState.currentVel.dx = 0;
-        nativeState.currentVel.dy = 0;
-      }
-      if (nativeState.touchMove) {
-        nativeState.touchMove.active = false;
-        nativeState.touchMove.dx = 0;
-        nativeState.touchMove.dy = 0;
-      }
-    }
-    bot.control.lastVelocity = '0 0';
-    bot.control.lastVelocityAt = now();
-    bot.control.nonZeroVelocitySince = 0;
+	  function cancelVelocityStopTimer() {
+	    if (bot.velocityStopTimer) {
+	      clearTimeout(bot.velocityStopTimer);
+	      bot.velocityStopTimer = 0;
+	    }
+	    bot.velocityPulseToken += 1;
+	  }
+
+	  function clearNativeMotionState(nativeState) {
+	    if (!nativeState) return false;
+	    setNativeKeys(nativeState, 0, 0);
+	    const vectorFields = ['currentVel', 'targetVel', 'velocity'];
+	    for (const field of vectorFields) {
+	      const value = nativeState[field];
+	      if (value && typeof value === 'object') {
+	        if ('dx' in value) value.dx = 0;
+	        if ('dy' in value) value.dy = 0;
+	        if ('x' in value) value.x = 0;
+	        if ('y' in value) value.y = 0;
+	      }
+	    }
+	    if (nativeState.lastVel && typeof nativeState.lastVel === 'object') {
+	      if ('dx' in nativeState.lastVel) nativeState.lastVel.dx = 0;
+	      if ('dy' in nativeState.lastVel) nativeState.lastVel.dy = 0;
+	      if ('x' in nativeState.lastVel) nativeState.lastVel.x = 0;
+	      if ('y' in nativeState.lastVel) nativeState.lastVel.y = 0;
+	    } else if (Object.prototype.hasOwnProperty.call(nativeState, 'lastVel')) {
+	      nativeState.lastVel = '0 0';
+	    }
+	    if (nativeState.touchMove) {
+	      nativeState.touchMove.active = false;
+	      nativeState.touchMove.dx = 0;
+	      nativeState.touchMove.dy = 0;
+	    }
+	    return true;
+	  }
+
+	  function stopLocalMotionOnly(reason = '') {
+	    cancelVelocityStopTimer();
+	    const nativeState = getNativeState();
+	    if (nativeState) clearNativeMotionState(nativeState);
+	    bot.control.lastVelocity = '0 0';
+	    bot.control.lastVelocityAt = now();
+	    bot.control.nonZeroVelocitySince = 0;
     bot.control.lastNonZeroVelocityAt = 0;
     if (reason !== 'server-position-stalled') resetServerPositionStall(reason || 'local-stop');
     if (reason) bot.control.lastLocalStopReason = reason;
     return true;
   }
 
-  function stopMotionSafely(reason = '') {
-    const native = getNativeControl();
-    if (native?.wsOpen) {
-      bot.control.lastVelocity = '0 0';
-      bot.control.lastVelocityAt = now();
-      return sendNativeVelocity(0, 0, true) || stopLocalMotionOnly(reason);
-    }
-    return stopLocalMotionOnly(reason);
-  }
+	  function stopMotionSafely(reason = '') {
+	    const native = getNativeControl();
+	    if (native?.wsOpen) {
+	      bot.control.lastVelocity = '0 0';
+	      bot.control.lastVelocityAt = now();
+	      const sent = sendNativeVelocity(0, 0, true);
+	      stopLocalMotionOnly(reason);
+	      return Boolean(sent);
+	    }
+	    return stopLocalMotionOnly(reason);
+	  }
+
+	  function stopMotionAfterExit(reason = 'exit-confirmed') {
+	    stopMotionSafely(reason);
+	    bot.lastExitMotionStopAt = Date.now();
+	    bot.lastExitMotionStopReason = reason;
+	    return true;
+	  }
 
 	  function sendNativeVelocity(dx, dy, force = false) {
 	    const native = getNativeControl();
