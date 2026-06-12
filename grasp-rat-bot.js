@@ -188,9 +188,9 @@ function runSelfTest() {
     attackDangerRadius: 25000,
     attackRange: 14500,
     attackEngageRange: 11000,
-    attackApproachRange: 26000,
+    attackApproachRange: 50000,
     attackPreferredRange: 14500,
-    globalAttackMaxDistance: 26000,
+    globalAttackMaxDistance: 50000,
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
@@ -282,7 +282,8 @@ function runSelfTest() {
     opportunitySwitchHoldMs: 7000,
     opportunityMissingHoldMs: 7000,
     opportunitySameCoinRadius: 1200,
-    opportunityNearbyPriorityDistance: 18000,
+    opportunityVisibleDistance: 50000,
+    opportunityNearbyPriorityDistance: 50000,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     invulnerableActiveCoinDangerRadius: 36000,
@@ -291,7 +292,7 @@ function runSelfTest() {
     invulnerableActiveCoinHeadingCosMin: 0.55,
     invulnerableActiveCoinHeadingMinDistance: 1500,
     stationaryActiveCoinDangerRadius: 12000,
-    globalCoinMaxDistance: 22000,
+    globalCoinMaxDistance: 50000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
     distantCoinMaxDistance: 35000,
@@ -1045,8 +1046,8 @@ function runSelfTest() {
 
   function opportunityPriorityTier(item) {
     const distance = Number(item?.distance ?? Infinity);
-    const nearDistance = Math.max(0, Number(cfg.opportunityNearbyPriorityDistance || 0));
-    if (Number.isFinite(distance) && distance <= nearDistance) return 1;
+    const visibleDistance = Math.max(0, Number(cfg.opportunityVisibleDistance || cfg.opportunityNearbyPriorityDistance || 0));
+    if (Number.isFinite(distance) && distance <= visibleDistance) return 1;
     if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
     return 0;
   }
@@ -1856,10 +1857,23 @@ function runSelfTest() {
 
   function pickBestOpportunity(self, entities, coins, activeThreats, snapshotCompetitionCoin = null, fieldCompetitionCoin = null) {
     const opportunities = [];
+    const upsertCoinOpportunity = item => {
+      const index = opportunities.findIndex(existing => existing.type === 'coin' && String(existing.id) === String(item.id));
+      if (index < 0) {
+        opportunities.push(item);
+        return;
+      }
+      const previous = opportunities[index];
+      if (Number(item.score || -Infinity) > Number(previous.score || -Infinity)
+        || (Number(item.score || -Infinity) === Number(previous.score || -Infinity) && Number(item.amount || 0) > Number(previous.amount || 0))
+        || (Number(item.score || -Infinity) === Number(previous.score || -Infinity) && Number(item.distance || Infinity) < Number(previous.distance || Infinity))) {
+        opportunities[index] = item;
+      }
+    };
     for (const coin of safeCoins(self, coins, activeThreats, cfg.globalCoinMaxDistance)) {
       const staminaCost = opportunityCoinStaminaCost(coin);
       if (!opportunityStaminaAffordable(self, staminaCost)) continue;
-      opportunities.push({
+      upsertCoinOpportunity({
         type: 'coin',
         kind: coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
         actionKind: coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
@@ -1874,10 +1888,10 @@ function runSelfTest() {
         maxDistance: cfg.globalCoinMaxDistance
       });
     }
-    if (snapshotCompetitionCoin && !opportunities.some(item => item.type === 'coin' && String(item.id) === String(snapshotCompetitionCoin.drop_id))) {
+    if (snapshotCompetitionCoin) {
       const staminaCost = opportunityCoinStaminaCost(snapshotCompetitionCoin);
       if (opportunityStaminaAffordable(self, staminaCost)) {
-        opportunities.push({
+        upsertCoinOpportunity({
           type: 'coin',
           kind: 'seek-coin',
           actionKind: 'seek-coin',
@@ -1894,10 +1908,10 @@ function runSelfTest() {
         });
       }
     }
-    if (fieldCompetitionCoin && !opportunities.some(item => item.type === 'coin' && String(item.id) === String(fieldCompetitionCoin.drop_id))) {
+    if (fieldCompetitionCoin) {
       const staminaCost = opportunityCoinStaminaCost(fieldCompetitionCoin);
       if (opportunityStaminaAffordable(self, staminaCost)) {
-        opportunities.push({
+        upsertCoinOpportunity({
           type: 'coin',
           kind: 'seek-coin',
           actionKind: 'seek-coin',
@@ -2264,7 +2278,7 @@ function runSelfTest() {
       want: 1
     },
     {
-      name: '150m coin beats richer 200m coin by nearby priority',
+      name: 'higher roi 200m coin beats 150m coin inside visible pool',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [
@@ -2272,7 +2286,7 @@ function runSelfTest() {
           { drop_id: 2, x: 20000, y: 0, amount: 20 }
         ]
       }).id,
-      want: 1
+      want: 2
     },
     {
       name: 'similar stamina roi targets choose immediately',
@@ -2432,13 +2446,25 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'drop three afk target in range beats 400m visible coin',
+      name: '400m high-value visible coin beats low in-range afk drop by roi',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 33, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 3 }],
         coins: [{ drop_id: 1, x: 40000, y: 0, amount: 50, native: true }]
       }).reason,
-      want: 'best-opportunity-afk-drop-target'
+      want: 'best-opportunity-visible-coin'
+    },
+    {
+      name: 'visible high afk drop beats opposite one coin by stamina roi',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          global: [{ user_id: 33, x: 49000, y: 0, current_join_mode: 'Passive', death_reward_preview: 20 }],
+          coins: [{ drop_id: 1, x: -5000, y: 0, amount: 1, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'seek-enemy:approach-afk-drop-target'
     },
     {
       name: 'near high afk drop beats low coin by value',
@@ -4047,9 +4073,9 @@ function browserBotSource(config) {
     attackRange: 14500,
     attackPreferredRange: 14500,
     attackEngageRange: 11000,
-    attackApproachRange: 26000,
+    attackApproachRange: 50000,
     attackDangerRadius: 25000,
-    globalAttackMaxDistance: 26000,
+    globalAttackMaxDistance: 50000,
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
@@ -4136,7 +4162,8 @@ function browserBotSource(config) {
 			    opportunitySwitchHoldMs: 7000,
 			    opportunityMissingHoldMs: 7000,
 			    opportunitySameCoinRadius: 1200,
-			    opportunityNearbyPriorityDistance: 18000,
+				    opportunityVisibleDistance: 50000,
+				    opportunityNearbyPriorityDistance: 50000,
 	    coinMaxDistance: 18000,
 	    coinDangerRadius: 25000,
 	    invulnerableActiveCoinDangerRadius: 36000,
@@ -4145,7 +4172,7 @@ function browserBotSource(config) {
 	    invulnerableActiveCoinHeadingCosMin: 0.55,
 	    invulnerableActiveCoinHeadingMinDistance: 1500,
 	    stationaryActiveCoinDangerRadius: 12000,
-    globalCoinMaxDistance: 22000,
+    globalCoinMaxDistance: 50000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
     distantCoinMaxDistance: 35000,
@@ -13656,8 +13683,8 @@ function browserBotSource(config) {
 
   function opportunityPriorityTier(item) {
     const distance = Number(item?.distance ?? Infinity);
-    const nearDistance = Math.max(0, Number(cfg.opportunityNearbyPriorityDistance || 0));
-    if (Number.isFinite(distance) && distance <= nearDistance) return 1;
+    const visibleDistance = Math.max(0, Number(cfg.opportunityVisibleDistance || cfg.opportunityNearbyPriorityDistance || 0));
+    if (Number.isFinite(distance) && distance <= visibleDistance) return 1;
     if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
     return 0;
   }
