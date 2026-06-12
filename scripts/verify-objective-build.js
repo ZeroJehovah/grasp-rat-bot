@@ -504,6 +504,27 @@ function main() {
       assert(body.includes('firing: isFiringEntity(target)'), 'combat target firing flag not logged');
       assert(body.includes('invulnerable: isInvulnerable(target)'), 'combat target invulnerable flag not logged');
     });
+    check(`${file} logs per-frame combat metrics`, () => {
+      assert(text.includes('function combatLogFrameMetrics'), 'combat metrics helper not found');
+      const buildBody = functionBody(text, 'buildCombatLogEntry');
+      assert(buildBody.includes('const combatMetrics = combatLogFrameMetrics('), 'combat log entry does not compute metrics');
+      assert(buildBody.includes('combatMetrics,'), 'combat log entry does not include combatMetrics');
+      const metricsBody = functionBody(text, 'combatLogFrameMetrics');
+      assert(metricsBody.includes('selfDamageTaken'), 'combat metrics do not expose self damage delta');
+      assert(metricsBody.includes('targetDamageTaken'), 'combat metrics do not expose target damage delta');
+      assert(metricsBody.includes('shotSincePreviousFrame'), 'combat metrics do not expose per-frame shot timing');
+      assert(metricsBody.includes('combatMetricBulletStats(bullets)'), 'combat metrics do not include bullet stats');
+      assert(functionBody(text, 'combatMetricBulletStats').includes('threatBulletCount'), 'combat bullet stats do not expose bullet threat count');
+      assert(metricsBody.includes('serverPositionStall: serverPositionStall ?'), 'combat metrics do not expose server-position stall state');
+      const shotBody = functionBody(text, 'recordCombatShotAttempt');
+      assert(shotBody.includes('blockedByCadence'), 'shot telemetry does not record cadence-blocked attempts');
+      assert(shotBody.includes('sent: Boolean(detail.sent)'), 'shot telemetry does not record sent status');
+      assert(functionBody(text, 'shootAt').includes('recordCombatShotAttempt(self, target'), 'shootAt does not record shot attempts');
+      assert(text.includes('lastCombatLogMetric: preserved.lastCombatLogMetric'), 'combat metric frame state is not attached to bot');
+      assert(text.includes('lastCombatShot: preserved.lastCombatShot'), 'shot telemetry state is not attached to bot');
+      assert(functionBody(text, 'startCombatLogSession').includes('combatMetrics: entry.combatMetrics || null'), 'combat-start does not include combatMetrics');
+      assert(functionBody(text, 'endCombatLogSession').includes('combatMetrics: entry?.combatMetrics || null'), 'combat-end does not include combatMetrics');
+    });
     check(`${file} logs source hash on combat session boundaries`, () => {
       assert(functionBody(text, 'startCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-start does not include sourceHash');
       assert(functionBody(text, 'endCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-end does not include sourceHash');
