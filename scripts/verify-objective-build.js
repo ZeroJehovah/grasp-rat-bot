@@ -42,6 +42,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootEveryMs', value: 160 },
   { key: 'combatShootReserveMs', value: 5600 },
   { key: 'combatShootDodgeReserveMs', value: 3800 },
+  { key: 'combatShootHighHpDodgeReserveMs', value: 3000 },
+  { key: 'combatShootHighHpMinHp', value: 90 },
   { key: 'combatShootHardReserveMs', value: 1800 },
   { key: 'combatShootConserveEveryMs', value: 360 },
   { key: 'combatShootRecoveryEveryMs', value: 700 }
@@ -365,6 +367,8 @@ function main() {
       const shootingBody = functionBody(text, 'combatShootingPlan');
       assert(shootingBody.includes("staminaRemaining(self, '5s')"), 'combat shooting plan does not read 5s stamina');
       assert(shootingBody.includes('reserve-for-dodge'), 'combat shooting plan does not reserve stamina for dodge');
+      assert(shootingBody.includes('highHpFireWindow'), 'combat shooting plan does not expose high-HP fire window');
+      assert(shootingBody.includes('combatShootHighHpDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for high HP');
       assert(shootingBody.includes('stamina-rebuild'), 'combat shooting plan does not stop fire for stamina rebuild');
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
