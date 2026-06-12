@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.125"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.126"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -13,6 +13,7 @@
 		  const config = { ...baseConfig, ...runtimeConfig };
 		  const BOT_KEY = '__graspRatBot';
 		  const PANEL_ID = 'grasp-rat-bot-panel';
+		  const TARGET_OVERLAY_ID = 'grasp-rat-target-overlay';
 		  const PAUSED_KEY = 'graspRatBotPaused';
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
 		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
@@ -645,7 +646,10 @@
 	        if (!String(reason || '').startsWith('replaced by ')) flushCombatLogs(true);
 	      } catch (_) {}
 	      logStatus('stopped: ' + reason);
-	      if (window[BOT_KEY] === this) removeBotPanel();
+	      if (window[BOT_KEY] === this) {
+	        removeBotPanel();
+	        removeTargetOverlay();
+	      }
 	    },
 	    setPaused(paused, reason = 'external') {
 	      const next = Boolean(paused);
@@ -1019,6 +1023,124 @@
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
   };
 
+  function removeTargetOverlay() {
+    const overlay = document.getElementById(TARGET_OVERLAY_ID);
+    if (overlay) overlay.remove();
+  }
+
+  function targetOverlayStyle(decision) {
+    const target = decision?.target || null;
+    if (!target) return null;
+    if (decision?.combat) return { stroke: 'rgba(248,113,113,.48)' };
+    const kind = String(decision?.kind || '');
+    const coinLike = kind === 'coin' || kind === 'seek-coin'
+      || (target.amount !== undefined && target.amount !== null && Number.isFinite(Number(target.amount)));
+    if (coinLike) return { stroke: 'rgba(250,204,21,.44)' };
+    const playerLike = kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop'
+      || target.name
+      || (target.drop !== undefined && target.drop !== null && Number.isFinite(Number(target.drop)));
+    if (playerLike) return { stroke: 'rgba(74,222,128,.44)' };
+    return null;
+  }
+
+  function ensureTargetOverlayCanvas(world, shell) {
+    if (!world || !shell || !document.body) return null;
+    const worldRect = world.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    if (!(worldRect.width > 0) || !(worldRect.height > 0) || !(shellRect.width > 0) || !(shellRect.height > 0)) return null;
+    let overlay = document.getElementById(TARGET_OVERLAY_ID);
+    if (!overlay) {
+      overlay = document.createElement('canvas');
+      overlay.id = TARGET_OVERLAY_ID;
+      overlay.setAttribute('aria-hidden', 'true');
+    }
+    if (overlay.parentElement !== shell) shell.appendChild(overlay);
+    const shellPosition = getComputedStyle(shell).position;
+    if (!shellPosition || shellPosition === 'static') shell.style.position = 'relative';
+    const left = worldRect.left - shellRect.left;
+    const top = worldRect.top - shellRect.top;
+    overlay.style.cssText = [
+      'position:absolute',
+      'left:' + left + 'px',
+      'top:' + top + 'px',
+      'width:' + worldRect.width + 'px',
+      'height:' + worldRect.height + 'px',
+      'z-index:5',
+      'pointer-events:none'
+    ].join(';');
+    const dpr = Math.max(1, Number(window.devicePixelRatio || 1));
+    const width = Math.max(1, Math.round(worldRect.width * dpr));
+    const height = Math.max(1, Math.round(worldRect.height * dpr));
+    if (overlay.width !== width) overlay.width = width;
+    if (overlay.height !== height) overlay.height = height;
+    return { overlay, width: worldRect.width, height: worldRect.height, dpr };
+  }
+
+  function currentViewRadiusCm() {
+    const nativeState = getNativeState();
+    const values = [
+      nativeState?.viewRadiusCm,
+      nativeState?.view_radius_cm,
+      nativeState?.viewRadius,
+      nativeState?.view_radius
+    ];
+    for (const value of values) {
+      const radius = Number(value);
+      if (Number.isFinite(radius) && radius > 0) return radius;
+    }
+    return 10000;
+  }
+
+  function targetOverlayPoint(point, self, view) {
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    const selfX = Number(self?.x);
+    const selfY = Number(self?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
+    const scale = Math.min(view.width, view.height) / (Math.max(1, currentViewRadiusCm()) * 2);
+    return {
+      x: view.width / 2 + (x - selfX) * scale,
+      y: view.height / 2 + (y - selfY) * scale
+    };
+  }
+
+  function renderTargetOverlay(decision = bot.lastDecision) {
+    try {
+      const style = targetOverlayStyle(decision);
+      const target = decision?.target || null;
+      const self = decision?.self || bot.lastSelf || getSelf();
+      if (!style || !target || !self) {
+        const existing = document.getElementById(TARGET_OVERLAY_ID);
+        if (existing) {
+          const ctx = existing.getContext('2d');
+          if (ctx) ctx.clearRect(0, 0, existing.width, existing.height);
+        }
+        return;
+      }
+      const world = document.getElementById('world');
+      const shell = world?.closest?.('.map-shell') || world?.parentElement || null;
+      const view = ensureTargetOverlayCanvas(world, shell);
+      if (!view) return;
+      const ctx = view.overlay.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+      ctx.clearRect(0, 0, view.width, view.height);
+      const start = targetOverlayPoint(self, self, view);
+      const end = targetOverlayPoint(target, self, view);
+      if (!start || !end) return;
+      ctx.save();
+      ctx.strokeStyle = style.stroke;
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.setLineDash([10, 8]);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      ctx.restore();
+    } catch (_) {}
+  }
+
 	  function ensureBotPanel() {
 	    return null;
 	    if (!document.body) return null;
@@ -1257,6 +1379,7 @@
 	  }
 
 	  function updateBotPanel(decision = bot.lastDecision) {
+	    renderTargetOverlay(decision);
 	    return;
 	    const panel = ensureBotPanel();
 	    if (!panel) return;
