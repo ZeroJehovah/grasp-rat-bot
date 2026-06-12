@@ -306,6 +306,15 @@ function main() {
       assert(text.includes('controlOffline && !pendingExitAlive'), 'offline branch can still block live pending exits');
       assert(text.includes("pendingExitIntent:") && text.includes("reason: 'injury-leave'"), 'injury leave no longer preserves normal control action');
     });
+    check(`${file} suppresses ordinary injury leave while combat state is active`, () => {
+      const body = functionBody(text, 'isCombatStateForInjuryLeave');
+      assert(body.includes('action?.combat'), 'combat action does not suppress ordinary injury leave');
+      assert(body.includes('bot.pendingCombatLeave'), 'pending combat leave does not suppress ordinary injury leave');
+      assert(body.includes('bot.lastSafety?.engagedCombat'), 'engaged combat safety state does not suppress ordinary injury leave');
+      assert(body.includes('hasRecentCombatEngagementForInjuryLeave()'), 'recent combat engagement does not suppress ordinary injury leave');
+      assert(text.includes('bot.pendingInjuryLeave && isCombatStateForInjuryLeave(action)'), 'main loop does not use combat-state injury suppression');
+      assert(text.includes("suppressedReason: 'combat-state'"), 'combat-state injury suppression is not logged');
+    });
     check(`${file} treats leave HTTP 403 as confirmed exit with one hour hold`, () => {
       const requestBody = functionBody(text, 'leaveRequestHasHttp403');
       assert(requestBody.includes('status === 403'), 'leave 403 status detector not found');

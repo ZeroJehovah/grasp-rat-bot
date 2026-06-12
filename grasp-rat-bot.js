@@ -7083,8 +7083,25 @@ function browserBotSource(config) {
       displayReason: pending.displayReason || pending.exitSummary || '',
 	      target: pending.target || null,
       combatCover: pending.combatCover || null,
-	      combatState: pending.combatState || null
+      combatState: pending.combatState || null
     };
+  }
+
+  function hasRecentCombatEngagementForInjuryLeave() {
+    const engaged = bot.combatTarget;
+    if (!engaged?.id) return false;
+    const maxAgeMs = Math.max(0, Number(cfg.targetStickMs || 0), Number(cfg.combatEngageStickMs || 0));
+    if (!maxAgeMs) return true;
+    return Date.now() - Number(engaged.at || 0) <= maxAgeMs;
+  }
+
+  function isCombatStateForInjuryLeave(action) {
+    return Boolean(
+      action?.combat
+      || bot.pendingCombatLeave
+      || bot.lastSafety?.engagedCombat
+      || hasRecentCombatEngagementForInjuryLeave()
+    );
   }
 
   function actionThreatId(action) {
@@ -12448,14 +12465,15 @@ function browserBotSource(config) {
 
       let action = chooseAction(self);
 	      action = blockThreatReturnAction(self, bot.actionThreats || [], action);
-      if (bot.pendingInjuryLeave && action.combat) {
+      if (bot.pendingInjuryLeave && isCombatStateForInjuryLeave(action)) {
         action = {
           ...action,
           injury: {
             ...bot.pendingInjuryLeave,
             self: currentSummary,
             currentHp,
-            suppressedByCombat: true
+            suppressedByCombat: true,
+            suppressedReason: 'combat-state'
           }
         };
         bot.pendingInjuryLeave = null;
