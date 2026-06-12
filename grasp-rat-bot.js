@@ -133,17 +133,28 @@ function combatLogExitSummaryFromDecision(decision) {
   const detail = leave || decision || {};
   const leaveReason = String(leave?.reason || '');
   const decisionReason = String(decision?.reason || '');
-  const reason = leaveReason && leaveReason !== 'cooldown' ? leaveReason : (decisionReason || leaveReason);
+  const pendingExit = decision?.pendingExit && typeof decision.pendingExit === 'object' ? decision.pendingExit : null;
+  const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : '';
+  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(decisionReason)
+    ? decisionReason
+    : '';
+  const reason = canonicalCombatReason
+    || (leaveReason && leaveReason !== 'cooldown' ? leaveReason : '')
+    || (pendingExit ? 'pending-exit-active' : '')
+    || exitishDecisionReason
+    || decisionReason
+    || leaveReason;
   const isExit = Boolean(leave)
+    || Boolean(pendingExit)
     || decision?.kind === 'leave'
     || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
   if (!isExit) return null;
   return {
     reason,
-    summary: leave?.summary || leave?.exitSummary || decision?.exitSummary || decision?.displayReason || '',
-    displayReason: leave?.displayReason || decision?.displayReason || '',
+    summary: leave?.summary || leave?.exitSummary || pendingExit?.summary || decision?.exitSummary || decision?.displayReason || '',
+    displayReason: leave?.displayReason || pendingExit?.displayReason || decision?.displayReason || '',
     attempted: leave ? Boolean(leave.attempted) : null,
-    error: leave?.error || '',
+    error: leave?.error || pendingExit?.lastError || '',
     safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed),
     offlineSafety: detail.offlineSafety || decision?.offlineSafety || null,
     reloginUntil: detail.reloginUntil || 0,
@@ -185,6 +196,7 @@ function runSelfTest() {
     combatAttackRange: 14500,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
+    combatLowHpCloseRiskMargin: 5,
     combatHighHpDisadvantageGap: 20,
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
@@ -231,6 +243,8 @@ function runSelfTest() {
     combatEngageGraceRange: 22000,
     combatSpacingMinRange: 4500,
     combatSpacingPreferredRange: 6500,
+    combatSpacingEmergencyRange: 3000,
+    combatSpacingLowHpThreshold: 70,
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
     combatPressureCloseMinHp: 60,
@@ -1485,6 +1499,37 @@ function runSelfTest() {
     };
   }
 
+  function combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp) {
+    if (!spacing?.active || spacing.reason !== 'too-close') return false;
+    const distance = Number(spacing.distance);
+    const emergencyRange = Math.max(0, Number(cfg.combatSpacingEmergencyRange || 0));
+    const lowHpThreshold = Math.max(0, Number(cfg.combatSpacingLowHpThreshold || cfg.combatLowHpLeaveThreshold || 0));
+    const hp = Number(selfHp);
+    const emergencyClose = emergencyRange > 0 && Number.isFinite(distance) && distance <= emergencyRange;
+    const lowHpClose = lowHpThreshold > 0 && Number.isFinite(hp) && hp < lowHpThreshold;
+    return Boolean(emergencyClose || lowHpClose);
+  }
+
+  function combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure = false) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpLeaveThreshold || 0));
+    const margin = Math.max(0, Number(cfg.combatLowHpCloseRiskMargin || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    if (!threshold || !margin || !Number.isFinite(hp) || !Number.isFinite(enemyHp)) return null;
+    if (!(hp < threshold) || !(hp <= enemyHp + margin)) return null;
+    if (!spacing?.active || spacing.reason !== 'too-close') return null;
+    if (!realBulletPressure && !combatSpacingShouldOverrideBullet(spacing, hp, enemyHp)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap: enemyHp - hp,
+      margin,
+      distance: Math.round(Number(spacing.distance || 0)),
+      realBulletPressure: Boolean(realBulletPressure)
+    };
+  }
+
   function combatPressureCloseVector(self, target, targetDistance, selfHp) {
     const previous = bot.combatTarget || null;
     const targetId = target?.user_id ?? target?.id;
@@ -1539,13 +1584,22 @@ function runSelfTest() {
         : '';
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
     }
+    if (reason === 'combat-low-hp-leave' && combatState?.closeRisk) {
+      const distanceText = Number.isFinite(Number(combatState.closeRisk.distance))
+        ? '，距离' + Math.round(Number(combatState.closeRisk.distance) / 100) + '米'
+        : '';
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + distanceText + '，低血近身风险退出';
+    }
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
   function combatLeaveCoverAction(self, target, bullets = []) {
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
-    const spacing = incoming ? { active: false, dx: 0, dy: 0 } : combatSpacingVector(self, target, target.distance);
-    const requestedDx = incoming ? 1 : spacing.dx;
-    const requestedDy = incoming ? 1 : spacing.dy;
+    const spacing = combatSpacingVector(self, target, target.distance);
+    const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
+    const requestedDx = spacingOverride ? spacing.dx : (incoming ? 1 : spacing.dx);
+    const requestedDy = spacingOverride ? spacing.dy : (incoming ? 1 : spacing.dy);
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(requestedDx || requestedDy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -1559,21 +1613,28 @@ function runSelfTest() {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
       realBulletPressure: incoming,
-      targetHp: combatHpValue(target)
+      targetHp
     });
     return {
       reason: movementSuppressed
         ? 'combat-stamina-hold'
         : (shooting.suppressed
           ? 'combat-stamina-conserve'
-          : (incoming ? 'combat-leave-dodge' : (spacing.active ? 'combat-leave-spacing' : 'combat-leave-cover'))),
+          : (incoming && !spacingOverride ? 'combat-leave-dodge' : (spacing.active ? 'combat-leave-spacing' : 'combat-leave-cover'))),
       dx: movementSuppressed ? 0 : requestedDx,
       dy: movementSuppressed ? 0 : requestedDy,
       shoot: shooting.shoot,
       forceShoot: shooting.forceShoot,
       shootEveryMs: shooting.shootEveryMs,
       movementSuppressed,
-      shooting
+      shooting,
+      spacing: spacing.active ? {
+        dx: spacing.dx,
+        dy: spacing.dy,
+        reason: spacing.reason,
+        distance: Math.round(spacing.distance),
+        overrideBullet: Boolean(spacingOverride)
+      } : null
     };
   }
 
@@ -1710,10 +1771,15 @@ function runSelfTest() {
     const moving = speed(target) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
-    const spacing = incoming ? { active: false, dx: 0, dy: 0 } : combatSpacingVector(self, target, target.distance);
+    const spacing = combatSpacingVector(self, target, target.distance);
+    const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, incoming);
+    if (closeRisk) {
+      return combatLeaveAction('combat-low-hp-leave', self, target, { closeRisk }, bullets);
+    }
     const pressureClose = combatPressureCloseVector(self, target, target.distance, selfHp);
-    const requestedDx = pressureClose.active ? pressureClose.dx : (incoming ? 1 : spacing.dx);
-    const requestedDy = pressureClose.active ? pressureClose.dy : (incoming ? 1 : spacing.dy);
+    const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
+    const requestedDx = pressureClose.active ? pressureClose.dx : (spacingOverride ? spacing.dx : (incoming ? 1 : spacing.dx));
+    const requestedDy = pressureClose.active ? pressureClose.dy : (spacingOverride ? spacing.dy : (incoming ? 1 : spacing.dy));
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(requestedDx || requestedDy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -1732,7 +1798,7 @@ function runSelfTest() {
       targetHp
     });
     const baseReason = incoming
-      ? 'combat-tangent-dodge'
+      ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
       : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack'));
     return {
       kind: 'attack',
@@ -1770,7 +1836,8 @@ function runSelfTest() {
           reason: spacing.reason,
           distance: Math.round(spacing.distance),
           minRange: Math.round(spacing.minRange),
-          preferredRange: Math.round(spacing.preferredRange)
+          preferredRange: Math.round(spacing.preferredRange),
+          overrideBullet: Boolean(spacingOverride)
         } : null,
         pressureClose: pressureClose.active ? {
           dx: pressureClose.dx,
@@ -2566,7 +2633,7 @@ function runSelfTest() {
 	      want: 'leave'
 	    },
     {
-      name: 'combat leave keeps dodge cover while exit is pending',
+      name: 'combat leave uses emergency spacing cover while exit is pending',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
@@ -2575,7 +2642,7 @@ function runSelfTest() {
         });
         return action.kind + ':' + action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.reason;
       })(),
-      want: 'leave:combat-low-hp-leave:1:1:true:combat-leave-dodge'
+      want: 'leave:combat-low-hp-leave:-1:0:true:combat-leave-spacing'
     },
     {
       name: 'active combat hp disadvantage leaves before taking a bullet',
@@ -2946,6 +3013,28 @@ function runSelfTest() {
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot);
       })(),
       want: 'combat-spacing:-1:0:true'
+    },
+    {
+      name: 'combat emergency close spacing overrides incoming bullet strafe',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 2500, y: 0, distance: 2500, current_join_mode: 'Active', hp: 100, firing: true, drop: 20 }
+        );
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.spacing?.reason + ':' + Boolean(action.combatState?.spacing?.overrideBullet);
+      })(),
+      want: 'combat-spacing-dodge:-1:0:too-close:true'
+    },
+    {
+      name: 'combat low hp close risk exits before losing hp disadvantage',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 49, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 1900, y: 0, distance: 1900, current_join_mode: 'Active', hp: 46, firing: true, drop: 20 }
+        );
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combatState?.closeRisk) + ':' + action.combatState?.closeRisk?.distance;
+      })(),
+      want: 'leave:combat-low-hp-leave:true:1900'
     },
     {
       name: 'combat mid range target does not back away',
@@ -3618,6 +3707,49 @@ function runSelfTest() {
 	      want: 'combat-leave-retry|leave retry cooldown|false'
 	    },
 	    {
+	      name: 'combat log exit summary prefers canonical combat leave reason',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'leave',
+	          reason: 'combat-low-hp-leave',
+	          displayReason: 'low hp leave',
+	          leave: {
+	            reason: 'combat low hp disadvantage',
+	            summary: 'low hp normalized leave',
+	            attempted: true
+	          }
+	        });
+	        return [
+	          exit?.reason,
+	          exit?.summary,
+	          String(exit?.attempted)
+	        ].join('|');
+	      })(),
+	      want: 'combat-low-hp-leave|low hp normalized leave|true'
+	    },
+	    {
+	      name: 'combat log exit summary covers pending exit decisions',
+	      got: (() => {
+	        const exit = combatLogExitSummaryFromDecision({
+	          kind: 'attack',
+	          reason: 'combat-stamina-conserve',
+	          pendingExit: {
+	            reason: 'combat low hp disadvantage',
+	            summary: 'pending hostile exit',
+	            displayReason: 'pending hostile exit wait',
+	            lastError: 'retry later'
+	          }
+	        });
+	        return [
+	          exit?.reason,
+	          exit?.summary,
+	          exit?.displayReason,
+	          exit?.error
+	        ].join('|');
+	      })(),
+	      want: 'pending-exit-active|pending hostile exit|pending hostile exit wait|retry later'
+	    },
+	    {
 	      name: 'combat log exit summary includes safe offline relogin marker',
 	      got: (() => {
 	        const exit = combatLogExitSummaryFromDecision({
@@ -3908,6 +4040,7 @@ function browserBotSource(config) {
     combatAttackRange: 14500,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
+    combatLowHpCloseRiskMargin: 5,
     combatHighHpDisadvantageGap: 20,
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
@@ -3954,6 +4087,8 @@ function browserBotSource(config) {
     combatEngageGraceRange: 22000,
     combatSpacingMinRange: 4500,
     combatSpacingPreferredRange: 6500,
+    combatSpacingEmergencyRange: 3000,
+    combatSpacingLowHpThreshold: 70,
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
     combatPressureCloseMinHp: 60,
@@ -6142,6 +6277,8 @@ function browserBotSource(config) {
           triggerReason,
           source: entry.source,
           version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
           self: entry.self,
           target: entry.target || null,
           decision: entry.decision,
@@ -6167,6 +6304,9 @@ function browserBotSource(config) {
           at: entry?.at || Date.now(),
           reason,
           source: entry?.source || '',
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
           self: entry?.self || null,
           decision: entry?.decision || null,
           login: entry?.login || null,
@@ -7073,6 +7213,12 @@ function browserBotSource(config) {
         ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
         : '';
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
+    }
+    if (reason === 'combat-low-hp-leave' && combatState?.closeRisk) {
+      const distanceText = Number.isFinite(Number(combatState.closeRisk.distance))
+        ? '，距离' + Math.round(Number(combatState.closeRisk.distance) / 100) + '米'
+        : '';
+      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + distanceText + '，低血近身风险退出';
     }
     return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
   }
@@ -11608,6 +11754,37 @@ function browserBotSource(config) {
     };
   }
 
+  function combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp) {
+    if (!spacing?.active || spacing.reason !== 'too-close') return false;
+    const distance = Number(spacing.distance);
+    const emergencyRange = Math.max(0, Number(cfg.combatSpacingEmergencyRange || 0));
+    const lowHpThreshold = Math.max(0, Number(cfg.combatSpacingLowHpThreshold || cfg.combatLowHpLeaveThreshold || 0));
+    const hp = Number(selfHp);
+    const emergencyClose = emergencyRange > 0 && Number.isFinite(distance) && distance <= emergencyRange;
+    const lowHpClose = lowHpThreshold > 0 && Number.isFinite(hp) && hp < lowHpThreshold;
+    return Boolean(emergencyClose || lowHpClose);
+  }
+
+  function combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure = false) {
+    const threshold = Math.max(0, Number(cfg.combatLowHpLeaveThreshold || 0));
+    const margin = Math.max(0, Number(cfg.combatLowHpCloseRiskMargin || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    if (!threshold || !margin || !Number.isFinite(hp) || !Number.isFinite(enemyHp)) return null;
+    if (!(hp < threshold) || !(hp <= enemyHp + margin)) return null;
+    if (!spacing?.active || spacing.reason !== 'too-close') return null;
+    if (!realBulletPressure && !combatSpacingShouldOverrideBullet(spacing, hp, enemyHp)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap: enemyHp - hp,
+      margin,
+      distance: Math.round(Number(spacing.distance || 0)),
+      realBulletPressure: Boolean(realBulletPressure)
+    };
+  }
+
   function combatPressureCloseVector(self, target, targetDistance, noDamageMs, selfHp) {
     const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
@@ -12114,13 +12291,16 @@ function browserBotSource(config) {
 
   function combatLeaveCoverAction(self, target, bullets, targetDistance = null) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
     const pressure = combatPressureThreat(self, target, bullets);
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: false });
     const dodging = Boolean(pressure || strafe.active);
     const spacing = combatSpacingVector(self, target, distance);
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let combatMove = dodging
-      ? mergeCombatMove(strafe, spacing, !realBulletPressure)
+      ? mergeCombatMove(strafe, spacing, !realBulletPressure || spacingOverride)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
     const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
@@ -12138,14 +12318,14 @@ function browserBotSource(config) {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
       realBulletPressure,
-      targetHp: combatHpValue(target)
+      targetHp
     });
     return {
       reason: movementSuppressed
         ? 'combat-stamina-hold'
         : (shooting.suppressed
           ? 'combat-stamina-conserve'
-          : (realBulletPressure
+          : (realBulletPressure && !spacingOverride
             ? 'combat-leave-dodge'
             : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover'))),
       dx: combatMove.dx,
@@ -12193,7 +12373,8 @@ function browserBotSource(config) {
         distance: Math.round(spacing.distance),
         minRange: Math.round(spacing.minRange),
         preferredRange: Math.round(spacing.preferredRange),
-        merged: Boolean(combatMove.spacingMerged)
+        merged: Boolean(combatMove.spacingMerged),
+        overrideBullet: Boolean(spacingOverride)
       } : null
     };
   }
@@ -12239,6 +12420,13 @@ function browserBotSource(config) {
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
+    const pressure = combatPressureThreat(self, target, bullets);
+    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    const spacing = combatSpacingVector(self, target, targetDistance);
+    const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
+    if (closeRisk) {
+      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+    }
     const damageState = combatAimDamageState(target);
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
@@ -12275,13 +12463,11 @@ function browserBotSource(config) {
       };
     }
     const pressureClose = combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
-    const pressure = combatPressureThreat(self, target, bullets);
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
-    const spacing = combatSpacingVector(self, target, targetDistance);
-    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let combatMove = dodging
-      ? mergeCombatMove(strafe, spacing, !realBulletPressure)
+      ? mergeCombatMove(strafe, spacing, !realBulletPressure || spacingOverride)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
     combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
     const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
@@ -12306,7 +12492,7 @@ function browserBotSource(config) {
       targetHp
     });
     const baseReason = realBulletPressure
-      ? 'combat-tangent-dodge'
+      ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
       : (spacingActive
         ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
         : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
@@ -12377,7 +12563,8 @@ function browserBotSource(config) {
           minRange: Math.round(spacing.minRange),
           preferredRange: Math.round(spacing.preferredRange),
           radialSpeed: Number.isFinite(Number(spacing.radialSpeed)) ? Math.round(Number(spacing.radialSpeed)) : null,
-          merged: Boolean(combatMove.spacingMerged)
+          merged: Boolean(combatMove.spacingMerged),
+          overrideBullet: Boolean(spacingOverride)
         } : null,
         pressureClose: pressureClose.active ? {
           dx: pressureClose.dx,

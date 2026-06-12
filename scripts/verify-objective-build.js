@@ -41,6 +41,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
+  { key: 'combatLowHpCloseRiskMargin', value: 5 },
+  { key: 'combatSpacingEmergencyRange', value: 3000 },
+  { key: 'combatSpacingLowHpThreshold', value: 70 },
   { key: 'combatPressureCloseMinHp', value: 60 },
   { key: 'combatShootEveryMs', value: 160 },
   { key: 'combatShootReserveMs', value: 5600 },
@@ -302,7 +305,8 @@ function main() {
     check(`${file} keeps specific exit reason during leave cooldown`, () => {
       const body = functionBody(text, 'combatLogExitSummaryFromDecision');
       assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
-      assert(body.includes('decisionReason || leaveReason'), 'decision reason fallback not found for cooldown leave detail');
+      assert(body.includes('exitishDecisionReason'), 'decision exit reason fallback not found for cooldown leave detail');
+      assert(body.includes("pendingExit ? 'pending-exit-active'"), 'pending exit fallback not found for active pending exit frames');
       assert(body.includes('safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed)'), 'safe relogin marker not included in top-level exit summary');
       assert(body.includes('offlineSafety: detail.offlineSafety || decision?.offlineSafety || null'), 'offline safety not included in top-level exit summary');
     });
@@ -411,6 +415,11 @@ function main() {
       assert(shootingBody.includes('stamina-rebuild'), 'combat shooting plan does not stop fire for stamina rebuild');
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
+      assert(text.includes('function combatSpacingShouldOverrideBullet'), 'combat spacing cannot override real bullet dodge when too close');
+      assert(text.includes('function combatLowHpCloseRiskState'), 'low-HP close-risk exit helper not found');
+      assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
+      assert(combatBody.includes('!realBulletPressure || spacingOverride'), 'combat action does not merge spacing during emergency real-bullet pressure');
+      assert(combatBody.includes('overrideBullet: Boolean(spacingOverride)'), 'combat logs do not expose bullet spacing override');
       assert(combatBody.includes('const shooting = combatShootingPlan(self'), 'combat action does not use shooting plan');
       assert(combatBody.includes('shoot: shooting.shoot'), 'combat action does not expose planned shoot flag');
       assert(combatBody.includes('forceShoot: shooting.forceShoot'), 'combat action does not expose planned force flag');
@@ -495,6 +504,10 @@ function main() {
       assert(body.includes('firing: isFiringEntity(target)'), 'combat target firing flag not logged');
       assert(body.includes('invulnerable: isInvulnerable(target)'), 'combat target invulnerable flag not logged');
     });
+    check(`${file} logs source hash on combat session boundaries`, () => {
+      assert(functionBody(text, 'startCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-start does not include sourceHash');
+      assert(functionBody(text, 'endCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-end does not include sourceHash');
+    });
     check(`${file} allows immediate relogin after safe offline exit`, () => {
       const body = functionBody(text, 'setOfflineLeaveSuppress');
       assert(
@@ -522,6 +535,9 @@ function main() {
     assert(sourceBot.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
     assert(sourceBot.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
     assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
+    assert(sourceBot.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
+    assert(sourceBot.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
+    assert(sourceBot.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');
   });
 
   const obsoleteReason = ['wait', 'for', 'clear', 'opportunity'].join('-');
