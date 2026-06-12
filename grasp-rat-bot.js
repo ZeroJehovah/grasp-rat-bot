@@ -3414,6 +3414,7 @@ function browserBotSource(config) {
 	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
 	    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
 	    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
+	    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
 	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
 	      ? {
 	        ...previousBot.combatLogging,
@@ -3654,6 +3655,7 @@ function browserBotSource(config) {
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
     leave403ReloginDelayMs: 3600000,
+    leave403SnapshotSuccessRequired: 5,
     offlineLeaveCooldownMs: 60000,
     serverPositionStallEnabled: true,
     serverPositionStallOfflineEnabled: false,
@@ -3669,6 +3671,7 @@ function browserBotSource(config) {
 	    reloadAfterNoSelfMs: 45000,
 	    reloadAfterOfflineMs: 20000,
 	    cloudflareErrorReloadMs: 5000,
+	    page403ErrorReloadMs: 600000,
 	    globalRefreshTimeoutMs: 1500,
 	    combatLoggingEnabled: Boolean(config.combatLoggingEnabled),
 	    combatLogEndpoint: String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log'),
@@ -3680,6 +3683,7 @@ function browserBotSource(config) {
 	    combatLogMaxBulletEntries: 24,
 		    combatLogMaxEntityEntries: 12,
     postLoginZoomOutClicks: 6,
+    postLoginZoomStartDelayMs: 350,
     postLoginZoomOutIntervalMs: 80,
     postLoginZoomArmMissingMs: 1000,
 	    status: '',
@@ -3858,6 +3862,15 @@ function browserBotSource(config) {
       lastBlockedReload: null,
       lastBlockedLogin: null,
       lastEvent: null
+    },
+    leave403SnapshotRecovery: {
+      streak: Math.max(0, Number(preserved.leave403SnapshotRecovery?.streak || 0) || 0),
+      required: Math.max(1, Math.round(Number(cfg.leave403SnapshotSuccessRequired || 5) || 5)),
+      lastOkAt: Number(preserved.leave403SnapshotRecovery?.lastOkAt || 0) || 0,
+      lastErrorAt: Number(preserved.leave403SnapshotRecovery?.lastErrorAt || 0) || 0,
+      lastError: String(preserved.leave403SnapshotRecovery?.lastError || ''),
+      clearedAt: Number(preserved.leave403SnapshotRecovery?.clearedAt || 0) || 0,
+      clearedReason: String(preserved.leave403SnapshotRecovery?.clearedReason || '')
     },
     postLoginZoom: {
       armed: true,
@@ -4064,6 +4077,7 @@ function browserBotSource(config) {
 		          lastBlockedLogin: this.exitAudit?.lastBlockedLogin || null
 		        },
 		        opportunityChoice: this.opportunityChoice,
+        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
         postLoginZoom: this.postLoginZoom,
 		        self: displaySelf,
         session,
@@ -5598,7 +5612,10 @@ function browserBotSource(config) {
 	      && (/\\b403\\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\\s+error/i.test(combined) || /Access\\s+is\\s+forbidden/i.test(combined));
 	    if (!isCloudflareError && !isBunkerWebError) return null;
 	    const t = Date.now();
-	    const intervalMs = Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
+	    const provider = isBunkerWebError ? 'bunkerweb' : 'cloudflare';
+	    const intervalMs = provider === 'bunkerweb'
+	      ? Math.max(60000, Number(cfg.page403ErrorReloadMs) || 600000)
+	      : Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
 	    let lastReloadAt = 0;
 	    try {
 	      lastReloadAt = Number(localStorage.getItem(CLOUDFLARE_RELOAD_KEY) || 0) || 0;
@@ -5611,7 +5628,7 @@ function browserBotSource(config) {
 	      error: true,
 	      code,
 	      label,
-	      provider: isBunkerWebError ? 'bunkerweb' : 'cloudflare',
+	      provider,
 	      intervalMs,
 	      lastReloadAt,
 	      remainingMs,
@@ -5699,6 +5716,24 @@ function browserBotSource(config) {
     return String(el.tagName || '').toLowerCase();
   }
 
+  function requestNativeViewportResize(reason = 'bot') {
+    try {
+      window.dispatchEvent(new Event('resize'));
+      bot.lastNativeViewportResizeRequest = {
+        at: Date.now(),
+        reason: String(reason || 'bot')
+      };
+      return true;
+    } catch (err) {
+      bot.lastNativeViewportResizeRequest = {
+        at: Date.now(),
+        reason: String(reason || 'bot'),
+        error: err?.message || String(err)
+      };
+      return false;
+    }
+  }
+
   function findZoomOutControl() {
     const direct = document.querySelector('#zoomOutBtn, [data-testid="zoom-out"], [aria-label="zoom out"], [aria-label="Zoom out"]');
     if (direct) return direct;
@@ -5759,15 +5794,19 @@ function browserBotSource(config) {
     state.lastResult = {
       key,
       scheduledAt: t,
+      startDelayMs: Math.max(0, Number(cfg.postLoginZoomStartDelayMs || 0) || 0),
       requestedClicks: clicks,
       completedClicks: 0,
       failedClicks: 0,
       lastError: ''
     };
+    requestNativeViewportResize('post-login-zoom-schedule');
+    setTimeout(() => requestNativeViewportResize('post-login-zoom-before-clicks'), state.lastResult.startDelayMs);
     const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
     for (let index = 0; index < clicks; index += 1) {
       setTimeout(() => {
         if (window[BOT_KEY] !== bot || !bot.running) return;
+        requestNativeViewportResize('post-login-zoom-click-' + (index + 1));
         const result = clickZoomOutControl();
         const latest = state.lastResult || {};
         latest.completedClicks = Number(latest.completedClicks || 0) + (result.clicked ? 1 : 0);
@@ -5776,7 +5815,8 @@ function browserBotSource(config) {
         latest.control = result.control || latest.control || '';
         latest.finishedAt = Date.now();
         state.lastResult = latest;
-      }, index * intervalMs);
+        requestNativeViewportResize('post-login-zoom-after-click-' + (index + 1));
+      }, state.lastResult.startDelayMs + index * intervalMs);
     }
     return state.lastResult;
   }
@@ -6825,6 +6865,148 @@ function browserBotSource(config) {
 
   function leave403ReloginDelayMs() {
     return Math.max(3600000, Number(cfg.leave403ReloginDelayMs || 0) || 0);
+  }
+
+  function leave403SnapshotSuccessRequired() {
+    return Math.max(1, Math.round(Number(cfg.leave403SnapshotSuccessRequired || 5) || 5));
+  }
+
+  function leaveDetailHasHttp403RiskControl(detail) {
+    if (!detail || typeof detail !== 'object') return false;
+    return Boolean(
+      detail.http403RiskControl
+        || detail.http403RiskControlCleared
+        || String(detail.reloginMinimumReason || '').includes('leave HTTP 403')
+        || leaveDetailHasHttp403(detail)
+    );
+  }
+
+  function leave403RiskHoldActive(detail, t = Date.now()) {
+    return Boolean(
+      leaveDetailHasHttp403RiskControl(detail)
+        && Number(detail?.reloginUntil || 0) > t
+    );
+  }
+
+  function currentLeave403RiskHolds(t = Date.now()) {
+    const enemy = activeEnemyLeaveDetail(t);
+    const offline = activeOfflineLeaveDetail(t);
+    const enemyActive = leave403RiskHoldActive(enemy, t);
+    const offlineActive = leave403RiskHoldActive(offline, t);
+    return {
+      enemy: enemyActive ? enemy : null,
+      offline: offlineActive ? offline : null,
+      active: Boolean(enemyActive || offlineActive)
+    };
+  }
+
+  function clearLeave403RiskDetail(detail, reason, recovery, t = Date.now()) {
+    if (!leaveDetailHasHttp403RiskControl(detail)) return false;
+    const reloginUntil = Number(detail.reloginUntil || 0) || 0;
+    const previousHoldMs = Math.max(0, Math.round(reloginUntil - t));
+    if (reloginUntil && !detail.leave403PreviousReloginUntil) detail.leave403PreviousReloginUntil = reloginUntil;
+    if (previousHoldMs && !detail.leave403PreviousHoldMs) detail.leave403PreviousHoldMs = previousHoldMs;
+    detail.leave403SnapshotRecoveredAt = t;
+    detail.leave403SnapshotRecoveryReason = reason;
+    detail.leave403SnapshotSuccessStreak = Number(recovery?.streak || 0);
+    detail.leave403SnapshotSuccessRequired = leave403SnapshotSuccessRequired();
+    detail.http403RiskControlCleared = true;
+    detail.reloginUntil = 0;
+    detail.holdRemainingMs = 0;
+    detail.reloginDelayMs = 0;
+    detail.reloginHpDelayMs = 0;
+    detail.reloginMinimumDelayMs = 0;
+    detail.reloginMinimumUntil = 0;
+    detail.reloginMinimumReason = '';
+    finalizeLeaveDisplayReason(detail);
+    return true;
+  }
+
+  function clearLeave403RiskHolds(reason = 'snapshot success streak') {
+    const t = Date.now();
+    const recovery = bot.leave403SnapshotRecovery || {};
+    const enemyPersistent = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
+    const offlinePersistent = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY, t);
+    const enemyDetails = [
+      bot.lastEnemyLeaveResult,
+      bot.lastCombatLeaveResult,
+      bot.lastPursuitLeaveResult,
+      bot.lastInjuryLeaveResult,
+      enemyPersistent
+    ].filter(Boolean);
+    const offlineDetails = [bot.lastOfflineLeaveResult, offlinePersistent].filter(Boolean);
+    let clearedEnemy = false;
+    let clearedOffline = false;
+    for (const detail of enemyDetails) {
+      if (leave403RiskHoldActive(detail, t) && clearLeave403RiskDetail(detail, reason, recovery, t)) clearedEnemy = true;
+    }
+    for (const detail of offlineDetails) {
+      if (leave403RiskHoldActive(detail, t) && clearLeave403RiskDetail(detail, reason, recovery, t)) clearedOffline = true;
+    }
+    if (!clearedEnemy && !clearedOffline) return false;
+    if (clearedEnemy) {
+      bot.pursuitReloginUntil = 0;
+      bot.lastEnemyLeaveWaitMs = 0;
+      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+    }
+    if (clearedOffline) {
+      bot.offlineReloginUntil = 0;
+      bot.lastOfflineLeaveWaitMs = 0;
+      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+    }
+    clearLoginSuppressMatching(
+      clearedEnemy && clearedOffline
+        ? /enemy leave|offline.*leave|combat leave|pursuit leave/i
+        : (clearedEnemy ? /enemy leave|combat leave|pursuit leave/i : /offline.*leave/i)
+    );
+    bot.leave403SnapshotRecovery = {
+      ...recovery,
+      required: leave403SnapshotSuccessRequired(),
+      clearedAt: t,
+      clearedReason: reason,
+      lastError: ''
+    };
+    logStatus('leave 403 risk control cleared by snapshot success', {
+      kind: 'wait',
+      reason: 'leave-403-snapshot-recovered',
+      leave403SnapshotRecovery: bot.leave403SnapshotRecovery,
+      clearedEnemy,
+      clearedOffline
+    });
+    return true;
+  }
+
+  function noteLeave403SnapshotProbe(success, detail = {}) {
+    const t = Date.now();
+    const recovery = bot.leave403SnapshotRecovery || {};
+    const required = leave403SnapshotSuccessRequired();
+    bot.leave403SnapshotRecovery = {
+      streak: Math.max(0, Number(recovery.streak || 0) || 0),
+      required,
+      lastOkAt: Number(recovery.lastOkAt || 0) || 0,
+      lastErrorAt: Number(recovery.lastErrorAt || 0) || 0,
+      lastError: String(recovery.lastError || ''),
+      clearedAt: Number(recovery.clearedAt || 0) || 0,
+      clearedReason: String(recovery.clearedReason || '')
+    };
+    const holds = currentLeave403RiskHolds(t);
+    if (!holds.active) {
+      bot.leave403SnapshotRecovery.streak = 0;
+      return false;
+    }
+    if (success) {
+      bot.leave403SnapshotRecovery.streak = Math.min(required, bot.leave403SnapshotRecovery.streak + 1);
+      bot.leave403SnapshotRecovery.lastOkAt = t;
+      bot.leave403SnapshotRecovery.lastError = '';
+      if (bot.leave403SnapshotRecovery.streak >= required) {
+        return clearLeave403RiskHolds('snapshot success streak');
+      }
+      return false;
+    }
+    bot.leave403SnapshotRecovery.streak = 0;
+    bot.leave403SnapshotRecovery.lastErrorAt = t;
+    bot.leave403SnapshotRecovery.lastError = String(detail.error || detail.message || '');
+    return false;
   }
 
   function confirmPendingExit(pending, state) {
@@ -8429,7 +8611,15 @@ function browserBotSource(config) {
         reject(new Error(url + ' timed out after ' + ms + 'ms'));
       }, ms);
     });
-    const request = fetch(url, options).then(res => res.json());
+    const request = fetch(url, options).then(res => {
+      if (!res.ok) {
+        const error = new Error(url + ' HTTP ' + res.status + (res.statusText ? ' ' + res.statusText : ''));
+        error.status = res.status;
+        error.statusText = res.statusText || '';
+        throw error;
+      }
+      return res.json();
+    });
     return Promise.race([request, timeout]).finally(() => clearTimeout(timer));
   }
 
@@ -8867,23 +9057,31 @@ function browserBotSource(config) {
 	    const t = Date.now();
 	    if (!force && t - bot.globalState.refreshedAt < cfg.globalRefreshMs) return;
 	    bot.globalState.refreshedAt = t;
-	    try {
-      const [snapshotRes, minimapRes] = await Promise.all([
-        fetchJsonNoStore('/snapshot'),
-        fetchJsonNoStore('/minimap')
-	      ]);
-		      const [snapshot, minimap] = [snapshotRes, minimapRes];
-			      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
-			      bot.globalState.entities = snapshot?.entities || [];
-			      bot.globalState.bullets = snapshot?.bullets || [];
-			      bot.globalState.coinDrops = snapshot?.coin_drops || [];
-		      bot.globalState.messages = snapshot?.messages || [];
-      bot.globalState.snapshotRefreshedAt = Date.now();
-		      bot.globalState.minimap = minimap || null;
-	      bot.globalState.error = '';
-	    } catch (err) {
-	      bot.globalState.error = err.message || String(err);
+	    const [snapshotRes, minimapRes] = await Promise.allSettled([
+	      fetchJsonNoStore('/snapshot'),
+	      fetchJsonNoStore('/minimap')
+	    ]);
+	    const errors = [];
+	    if (snapshotRes.status === 'fulfilled') {
+	      const snapshot = snapshotRes.value;
+	      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
+	      bot.globalState.entities = snapshot?.entities || [];
+	      bot.globalState.bullets = snapshot?.bullets || [];
+	      bot.globalState.coinDrops = snapshot?.coin_drops || [];
+	      bot.globalState.messages = snapshot?.messages || [];
+	      bot.globalState.snapshotRefreshedAt = Date.now();
+	      noteLeave403SnapshotProbe(true, { tick: bot.globalState.tick });
+	    } else {
+	      const message = snapshotRes.reason?.message || String(snapshotRes.reason || '');
+	      errors.push('snapshot: ' + message);
+	      noteLeave403SnapshotProbe(false, { error: message });
 	    }
+	    if (minimapRes.status === 'fulfilled') {
+	      bot.globalState.minimap = minimapRes.value || null;
+	    } else {
+	      errors.push('minimap: ' + (minimapRes.reason?.message || String(minimapRes.reason || '')));
+	    }
+	    bot.globalState.error = errors.join('; ');
 	  }
 	
 	  function wsSend(message) {

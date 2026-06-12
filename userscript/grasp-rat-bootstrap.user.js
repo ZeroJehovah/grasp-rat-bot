@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.40
+// @version      0.4.41
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.40';
+  const BOOTSTRAP_VERSION = '0.4.41';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -76,6 +76,7 @@
     authorizeFallbackDelayMs: 10000,
     panelUpdateMs: 500,
     cloudflareErrorReloadMs: 5000,
+    page403ErrorReloadMs: 600000,
     combatLoggingEnabled: false,
     combatLogEndpoint: 'http://127.0.0.1:18765/combat-log',
     cacheBust: true,
@@ -108,6 +109,7 @@
     authorizeFallbackDelayMs: Math.max(0, Number(GM_getValue('authorizeFallbackDelayMs', DEFAULTS.authorizeFallbackDelayMs)) || DEFAULTS.authorizeFallbackDelayMs),
     panelUpdateMs: Math.max(250, Number(GM_getValue('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
     cloudflareErrorReloadMs: Math.max(1000, Number(GM_getValue('cloudflareErrorReloadMs', DEFAULTS.cloudflareErrorReloadMs)) || DEFAULTS.cloudflareErrorReloadMs),
+    page403ErrorReloadMs: Math.max(60000, Number(GM_getValue('page403ErrorReloadMs', DEFAULTS.page403ErrorReloadMs)) || DEFAULTS.page403ErrorReloadMs),
     combatLoggingEnabled: Boolean(GM_getValue('combatLoggingEnabled', DEFAULTS.combatLoggingEnabled)),
     combatLogEndpoint: String(GM_getValue('combatLogEndpoint', DEFAULTS.combatLogEndpoint) || DEFAULTS.combatLogEndpoint),
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
@@ -395,7 +397,10 @@
       return null;
     }
     const t = Date.now();
-    const intervalMs = Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
+    const provider = isBunkerWebError ? 'bunkerweb' : 'cloudflare';
+    const intervalMs = provider === 'bunkerweb'
+      ? Math.max(60000, Number(cfg.page403ErrorReloadMs) || 600000)
+      : Math.max(1000, Number(cfg.cloudflareErrorReloadMs) || 5000);
     let lastReloadAt = 0;
     try {
       lastReloadAt = Number(localStorage.getItem(CLOUDFLARE_RELOAD_KEY) || 0) || 0;
@@ -408,7 +413,7 @@
       error: true,
       code,
       label,
-      provider: isBunkerWebError ? 'bunkerweb' : 'cloudflare',
+      provider,
       intervalMs,
       lastReloadAt,
       remainingMs,
@@ -852,7 +857,10 @@
   }
 
   function setDisplayNone(el) {
-    if (!el) return;
+    if (!el) return false;
+    const changed = el.dataset.graspRatHiddenNativeBlock !== 'true'
+      || el.getAttribute('aria-hidden') !== 'true'
+      || el.style.display !== 'none';
     el.dataset.graspRatHiddenNativeBlock = 'true';
     el.setAttribute('aria-hidden', 'true');
     try {
@@ -860,17 +868,51 @@
     } catch (_) {
       el.style.display = 'none';
     }
+    return changed;
+  }
+
+  function dispatchNativeViewportResize(reason = 'layout') {
+    try {
+      window.dispatchEvent(new Event('resize'));
+      state.lastNativeViewportResizeAt = Date.now();
+      state.lastNativeViewportResizeReason = String(reason || 'layout');
+    } catch (err) {
+      noteBootstrapError('native viewport resize dispatch failed', err);
+    }
+  }
+
+  function scheduleNativeViewportResize(reason = 'layout') {
+    const t = Date.now();
+    if (state.nativeViewportResizeScheduled && t - Number(state.nativeViewportResizeScheduledAt || 0) < 1200) return;
+    state.nativeViewportResizeScheduled = true;
+    state.nativeViewportResizeScheduledAt = t;
+    const run = phase => dispatchNativeViewportResize(`${reason}:${phase}`);
+    try {
+      requestAnimationFrame(() => {
+        run('raf1');
+        requestAnimationFrame(() => run('raf2'));
+      });
+    } catch (_) {
+      setTimeout(() => run('timeout-0'), 0);
+    }
+    setTimeout(() => run('timeout-80'), 80);
+    setTimeout(() => {
+      run('timeout-320');
+      state.nativeViewportResizeScheduled = false;
+    }, 320);
   }
 
   function ensureHostLayoutStyle() {
     if (!document.head) return;
     let style = document.getElementById(HOST_LAYOUT_STYLE_ID);
+    let changed = false;
     if (!style) {
       style = document.createElement('style');
       style.id = HOST_LAYOUT_STYLE_ID;
       document.head.appendChild(style);
+      changed = true;
     }
-    style.textContent = [
+    const text = [
       'body.grasp-rat-bot-sidebar-embedded{margin:0!important;overflow:hidden!important}',
       'body.grasp-rat-bot-sidebar-embedded .app{display:flex!important;flex-direction:row!important;width:100vw!important;max-width:100vw!important;height:100vh!important;min-height:100vh!important;margin:0!important;padding:0!important;gap:0!important;align-items:stretch!important;overflow:hidden!important}',
       'body.grasp-rat-bot-sidebar-embedded .side{position:relative!important;left:0!important;top:0!important;bottom:0!important;transform:none!important;align-self:stretch!important;flex:0 0 min(336px,100vw)!important;width:min(336px,100vw)!important;min-width:min(336px,100vw)!important;max-width:min(336px,100vw)!important;height:100vh!important;min-height:100vh!important;max-height:100vh!important;margin:0!important;border-radius:0!important;display:flex!important;flex-direction:column!important;overflow-y:auto!important}',
@@ -886,6 +928,12 @@
       'body.grasp-rat-bot-sidebar-embedded #' + PANEL_ID + '{margin:0!important;flex:0 0 auto!important;border-bottom:1px solid rgba(148,163,184,.20)!important}',
       '@keyframes grasp-rat-dot-pending{0%,100%{opacity:1;transform:translate(-50%,-50%) scale(1)}50%{opacity:.38;transform:translate(-50%,-50%) scale(.72)}}'
     ].join('\n');
+    if (style.textContent !== text) {
+      style.textContent = text;
+      changed = true;
+    }
+    if (changed) scheduleNativeViewportResize('host-layout-style');
+    return changed;
   }
 
   function syncNativeSidebarStructure() {
@@ -894,11 +942,14 @@
       document.body?.classList.remove('grasp-rat-bot-sidebar-embedded');
       return null;
     }
-    ensureHostLayoutStyle();
+    let changed = Boolean(ensureHostLayoutStyle());
+    const hadClass = document.body.classList.contains('grasp-rat-bot-sidebar-embedded');
     document.body.classList.add('grasp-rat-bot-sidebar-embedded');
-    setDisplayNone(nativeSidebarBlock(side, el => el.classList?.contains('brand')));
-    setDisplayNone(nativeSidebarBlock(side, el => el.querySelector?.('#status,#inGame,#entities,#visibleCount,#cells') || /Runtime Metrics/i.test(el.textContent || '')));
-    setDisplayNone(nativeSidebarBlock(side, el => el.classList?.contains('view-control') || el.querySelector?.('#densityText,#scaleText,#staminaText,#teleportInput,#zoomOutBtn,#zoomInBtn')));
+    changed = changed || !hadClass;
+    changed = setDisplayNone(nativeSidebarBlock(side, el => el.classList?.contains('brand'))) || changed;
+    changed = setDisplayNone(nativeSidebarBlock(side, el => el.querySelector?.('#status,#inGame,#entities,#visibleCount,#cells') || /Runtime Metrics/i.test(el.textContent || ''))) || changed;
+    changed = setDisplayNone(nativeSidebarBlock(side, el => el.classList?.contains('view-control') || el.querySelector?.('#densityText,#scaleText,#staminaText,#teleportInput,#zoomOutBtn,#zoomInBtn'))) || changed;
+    if (changed) scheduleNativeViewportResize('sidebar-structure');
     return side;
   }
 
@@ -982,13 +1033,26 @@
     const bottomDock = nativeSidebarBlock(side, el => el.classList?.contains('bottom-dock'));
     const logWrap = bottomDock?.querySelector?.('.log-wrap') || null;
     if (bottomDock && logWrap) {
-      if (panel.parentElement !== bottomDock || panel.nextSibling !== logWrap) bottomDock.insertBefore(panel, logWrap);
+      if (panel.parentElement !== bottomDock || panel.nextSibling !== logWrap) {
+        bottomDock.insertBefore(panel, logWrap);
+        scheduleNativeViewportResize('panel-insert');
+      }
     } else if (bottomDock) {
-      if (panel.parentElement !== side || panel.nextSibling !== bottomDock) side.insertBefore(panel, bottomDock);
+      if (panel.parentElement !== side || panel.nextSibling !== bottomDock) {
+        side.insertBefore(panel, bottomDock);
+        scheduleNativeViewportResize('panel-insert');
+      }
     } else {
       const entityBlock = nativeSidebarBlock(side, el => el.querySelector?.('#userId,#leaveBtn,#joinBtn'));
-      if (entityBlock?.nextSibling) side.insertBefore(panel, entityBlock.nextSibling);
-      else side.appendChild(panel);
+      if (entityBlock?.nextSibling) {
+        if (panel.parentElement !== side || panel.previousSibling !== entityBlock) {
+          side.insertBefore(panel, entityBlock.nextSibling);
+          scheduleNativeViewportResize('panel-insert');
+        }
+      } else if (panel.parentElement !== side) {
+        side.appendChild(panel);
+        scheduleNativeViewportResize('panel-insert');
+      }
     }
     panel.dataset.graspRatEmbedded = 'true';
     return true;
@@ -2595,6 +2659,8 @@
   const renderPanelWhenReady = () => updateBootstrapPanel(true);
   if (document.body) renderPanelWhenReady();
   else document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded panel render', renderPanelWhenReady), { once: true });
+  document.addEventListener('DOMContentLoaded', () => runSafely('DOMContentLoaded viewport resize', () => scheduleNativeViewportResize('dom-content-loaded')), { once: true });
+  window.addEventListener('load', () => runSafely('load viewport resize', () => scheduleNativeViewportResize('window-load')), { once: true });
   setSafeInterval('panel interval', () => updateBootstrapPanel(), cfg.panelUpdateMs);
   runAsyncSafely('startup userscript version check', () => checkUserscriptVersion('startup', { force: true }));
   setSafeInterval('userscript version interval', () => runAsyncSafely('userscript version interval', () => checkUserscriptVersion('interval')), cfg.userscriptVersionCheckMs);
