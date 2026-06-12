@@ -4811,15 +4811,27 @@ function browserBotSource(config) {
     const target = decision?.target || null;
     if (!target) return null;
     if (decision?.combat) return { stroke: 'rgba(248,113,113,.48)' };
-    const kind = String(decision?.kind || '');
-    const coinLike = kind === 'coin' || kind === 'seek-coin'
-      || (target.amount !== undefined && target.amount !== null && Number.isFinite(Number(target.amount)));
+    const coinLike = targetOverlayCoinLike(decision, target);
     if (coinLike) return { stroke: 'rgba(250,204,21,.44)' };
-    const playerLike = kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop'
-      || target.name
-      || (target.drop !== undefined && target.drop !== null && Number.isFinite(Number(target.drop)));
+    const playerLike = targetOverlayPlayerLike(decision, target);
     if (playerLike) return { stroke: 'rgba(74,222,128,.44)' };
     return null;
+  }
+
+  function targetOverlayCoinLike(decision, target = decision?.target || null) {
+    const kind = String(decision?.kind || '');
+    return Boolean(target && (kind === 'coin' || kind === 'seek-coin'
+      || (target.amount !== undefined && target.amount !== null && Number.isFinite(Number(target.amount)))));
+  }
+
+  function targetOverlayPlayerLike(decision, target = decision?.target || null) {
+    const kind = String(decision?.kind || '');
+    return Boolean(target && (decision?.combat
+      || kind === 'attack'
+      || kind === 'seek-enemy'
+      || kind === 'seek-drop'
+      || target.name
+      || (target.drop !== undefined && target.drop !== null && Number.isFinite(Number(target.drop)))));
   }
 
   function ensureTargetOverlayCanvas(world, shell) {
@@ -4881,11 +4893,60 @@ function browserBotSource(config) {
     };
   }
 
+  function targetOverlayResolvedCoin(target) {
+    const nativeCoins = (getNativeCoinList() || [])
+      .map(coin => normalizeCoinDrop(coin, 'native'))
+      .filter(Boolean);
+    if (!nativeCoins.length) return null;
+    const targetId = target?.id ?? target?.drop_id ?? target?.dropId ?? target?.coin_id ?? target?.coinId;
+    if (targetId !== undefined && targetId !== null && targetId !== '') {
+      const exact = nativeCoins.find(coin => String(coin.drop_id ?? coin.id ?? '') === String(targetId));
+      if (exact) return exact;
+    }
+    const targetX = Number(target?.x);
+    const targetY = Number(target?.y);
+    if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return null;
+    const targetAmount = Number(target?.amount);
+    const maxDistance = 1400;
+    return nativeCoins
+      .map(coin => ({
+        coin,
+        distance: dist({ x: targetX, y: targetY }, coin),
+        amountMatches: !Number.isFinite(targetAmount) || Math.round(Number(coin.amount || 0)) === Math.round(targetAmount)
+      }))
+      .filter(item => item.amountMatches && item.distance <= maxDistance)
+      .sort((a, b) => a.distance - b.distance)[0]?.coin || null;
+  }
+
+  function targetOverlayResolvedEntity(target) {
+    const targetId = target?.id ?? target?.user_id ?? target?.userId;
+    const name = String(target?.name || '');
+    const entities = getNativeEntityList() || getEntities() || [];
+    if (!Array.isArray(entities) || !entities.length) return null;
+    if (targetId !== undefined && targetId !== null && targetId !== '') {
+      const exact = entities.find(entity => String(entity.user_id ?? entity.id ?? '') === String(targetId));
+      if (exact) return exact;
+    }
+    if (name) {
+      const exactName = entities.find(entity => String(entity.name || '') === name);
+      if (exactName) return exactName;
+    }
+    return null;
+  }
+
+  function targetOverlayResolvedTarget(decision) {
+    const target = decision?.target || null;
+    if (!target) return null;
+    if (targetOverlayCoinLike(decision, target)) return targetOverlayResolvedCoin(target) || target;
+    if (targetOverlayPlayerLike(decision, target)) return targetOverlayResolvedEntity(target) || target;
+    return target;
+  }
+
   function renderTargetOverlay(decision = bot.lastDecision) {
     try {
       const style = targetOverlayStyle(decision);
-      const target = decision?.target || null;
-      const self = decision?.self || bot.lastSelf || getSelf();
+      const target = targetOverlayResolvedTarget(decision);
+      const self = getSelf() || decision?.self || bot.lastSelf;
       if (!style || !target || !self) {
         const existing = document.getElementById(TARGET_OVERLAY_ID);
         if (existing) {
