@@ -224,6 +224,11 @@ function main() {
       assert(text.includes('if (localRealtimeCoin) {'), 'local realtime coin fallback action not found');
       assert(text.includes('if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs)'), 'snapshot idle fallback is not blocked by local realtime coins');
     });
+    check(`${file} prices player drops with full pickup travel cost`, () => {
+      const body = functionBody(text, 'opportunityEnemyStaminaCost');
+      assert(body.includes('const moveCost = opportunityMoveStaminaCost(target?.distance, 0)'), 'enemy opportunity movement cost still stops at shooting range');
+      assert(body.includes('estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500))'), 'enemy opportunity shooting cost missing');
+    });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
       assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
       assert(text.includes('armed: preserved.postLoginZoom ? Boolean(preserved.postLoginZoom.armed) : true'), 'post-login zoom armed state does not reuse preserved state');
@@ -584,6 +589,8 @@ function main() {
   check('grasp-rat-bot.js covers visible opportunity ROI self-tests', () => {
     assert(sourceBot.includes("name: 'higher roi 200m coin beats 150m coin inside visible pool'"), 'visible coin ROI self-test not found');
     assert(sourceBot.includes("name: 'visible high afk drop beats opposite one coin by stamina roi'"), 'visible AFK-vs-coin ROI self-test not found');
+    assert(sourceBot.includes("name: '500m drop five afk loses to 100m one coin by pickup travel cost'"), 'full pickup travel cost self-test not found');
+    assert(sourceBot.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
     assert(sourceBot.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
   });
 
