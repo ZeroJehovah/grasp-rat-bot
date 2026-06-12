@@ -5131,7 +5131,10 @@ function browserBotSource(config) {
 
 	  function formatDistance(value) {
 	    const n = Number(value);
-	    return Number.isFinite(n) ? String(Math.round(n)) : '-';
+	    if (!Number.isFinite(n)) return '-';
+	    const meters = n / 100;
+	    if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + '米';
+	    return Math.round(meters) + '米';
 	  }
 
   function formatStaminaDisplay(self) {
@@ -7064,7 +7067,7 @@ function browserBotSource(config) {
     const duration = Number(target.durationMs);
     const durationText = Number.isFinite(duration) && duration > 0 ? '，持续' + formatDurationMs(duration) : '';
     const distance = Number(target.distance);
-    const distanceText = Number.isFinite(distance) ? '，距离' + Math.round(distance) : '';
+    const distanceText = Number.isFinite(distance) ? '，距离' + formatDistance(distance) : '';
     return '被' + actorLabel(target) + '持续追击' + durationText + distanceText + '，退出等待重连';
   }
 
@@ -9847,9 +9850,11 @@ function browserBotSource(config) {
   function summarizeSessionStats(selfSummary) {
     const session = bot.session || {};
     const startedAt = Number(session.startedAt || 0);
+    const stoppedAt = Number(session.missingSince || 0) || 0;
     return {
       startedAt,
-      uptimeMs: startedAt ? Math.max(0, Date.now() - startedAt) : 0,
+      uptimeMs: startedAt ? Math.max(0, (stoppedAt || Date.now()) - startedAt) : 0,
+      uptimeStoppedAt: stoppedAt,
       baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
       coins: Number(selfSummary?.coins || 0),
       coinsGained: Math.max(0, Number(session.coinsGained || 0) || 0),
@@ -11783,7 +11788,7 @@ function browserBotSource(config) {
 
 	  function staminaBudgetCoinLeaveSummary(staminaBudgetExit) {
 	    const detail = staminaBudgetExit || {};
-	    return '1h体力预算不足，最近金币距离' + Math.round(Number(detail.distance || 0))
+	    return '1h体力预算不足，最近金币距离' + formatDistance(detail.distance)
 	      + '，预算' + formatDurationMs(detail.budgetMs)
 	      + '，需要' + formatDurationMs(detail.requiredMs)
 	      + '，差' + formatDurationMs(detail.shortageMs)

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.43
+// @version      0.4.44
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.43';
+  const BOOTSTRAP_VERSION = '0.4.44';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -1134,7 +1134,7 @@
         document.body.appendChild(panel);
       }
       const embedded = placeBootstrapPanel(panel);
-      panel.style.cssText = bootstrapPanelShellStyle(true, embedded) + ';padding:12px 14px;color:#fee2e2';
+      panel.style.cssText = bootstrapPanelShellStyle(true, embedded) + ';padding:12px 16px;color:#fee2e2';
       panel.textContent = `BOT 面板错误：${message || state.lastError || 'unknown error'}`;
     } catch (_) {}
   }
@@ -1306,8 +1306,8 @@
       const section = document.createElement('div');
       const first = !panel.firstChild;
       section.style.cssText = first
-        ? 'padding:10px 12px 9px;display:grid;gap:6px'
-        : 'padding:9px 12px;border-top:1px solid rgba(148,163,184,.18);display:grid;gap:6px';
+        ? 'padding:10px 16px 9px;display:grid;gap:6px'
+        : 'padding:9px 16px;border-top:1px solid rgba(148,163,184,.18);display:grid;gap:6px';
       if (titleText) {
         const titleLine = document.createElement('div');
         titleLine.textContent = titleText;
@@ -1396,13 +1396,14 @@
       );
     }
     appendRichLine([
-      '加载器 篡改猴 v',
+      '加载器 篡改猴 ',
       { text: displayVersion(aVersion), style: 'color:' + (state.userscriptUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
-      ' / 远程脚本 v',
+      ' / 远程脚本 ',
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
     ], 'font-size:10.5px;margin:-2px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
     appendSection();
-    appendLine('当前行为：' + behaviorText(decision, status));
+    const hold = reloginHold;
+    appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''));
     appendLine('当前目标：' + targetSummaryText(decision, status));
     appendLine('原因：' + reasonDetail);
     if (isCombatDecision(decision, status)) {
@@ -1442,8 +1443,6 @@
       if (pursuit) {
         appendLine('追击：' + (pursuit.name || ('#' + pursuit.id)) + ' ' + formatDistance(pursuit.distance) + ' / ' + Math.round((pursuit.durationMs || 0) / 1000) + 's');
       }
-      const hold = reloginHold;
-      if (hold > 0) appendLine('等待重连：' + formatDuration(hold));
       if (Array.isArray(status.errors) && status.errors.length) {
         appendLine('BOT错误：' + (status.errors[status.errors.length - 1]?.message || ''), 'color:#fca5a5');
       }
