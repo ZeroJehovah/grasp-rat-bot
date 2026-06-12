@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.126"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.127"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1057,23 +1057,21 @@
     if (overlay.parentElement !== shell) shell.appendChild(overlay);
     const shellPosition = getComputedStyle(shell).position;
     if (!shellPosition || shellPosition === 'static') shell.style.position = 'relative';
-    const left = worldRect.left - shellRect.left;
-    const top = worldRect.top - shellRect.top;
     overlay.style.cssText = [
       'position:absolute',
-      'left:' + left + 'px',
-      'top:' + top + 'px',
-      'width:' + worldRect.width + 'px',
-      'height:' + worldRect.height + 'px',
+      'left:0',
+      'top:0',
+      'width:' + shellRect.width + 'px',
+      'height:' + shellRect.height + 'px',
       'z-index:5',
       'pointer-events:none'
     ].join(';');
     const dpr = Math.max(1, Number(window.devicePixelRatio || 1));
-    const width = Math.max(1, Math.round(worldRect.width * dpr));
-    const height = Math.max(1, Math.round(worldRect.height * dpr));
+    const width = Math.max(1, Math.round(shellRect.width * dpr));
+    const height = Math.max(1, Math.round(shellRect.height * dpr));
     if (overlay.width !== width) overlay.width = width;
     if (overlay.height !== height) overlay.height = height;
-    return { overlay, width: worldRect.width, height: worldRect.height, dpr };
+    return { overlay, width: shellRect.width, height: shellRect.height, dpr };
   }
 
   function currentViewRadiusCm() {
