@@ -3393,6 +3393,7 @@ function browserBotSource(config) {
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
 		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
 		  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
+	      const EXIT_AUDIT_PENDING_LOGS_KEY = 'graspRatExitAuditPendingLogs';
 	      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
@@ -3409,6 +3410,7 @@ function browserBotSource(config) {
 	    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
 	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
 	    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
+	    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
 	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
 	      ? {
 	        ...previousBot.combatLogging,
@@ -3838,10 +3840,20 @@ function browserBotSource(config) {
       sent: Number(preserved.combatLogging?.sent || 0),
       failed: Number(preserved.combatLogging?.failed || 0),
       sending: false,
+      sendingExitAuditIds: [],
+      pendingExitAuditIds: [],
       lastError: String(preserved.combatLogging?.lastError || ''),
       lastOkAt: Number(preserved.combatLogging?.lastOkAt || 0),
       sequence: Number(preserved.combatLogging?.sequence || 0)
 	    },
+    exitAudit: {
+      sequence: Number(preserved.exitAudit?.sequence || previousBot?.exitAudit?.sequence || 0),
+      requestSequence: Number(preserved.exitAudit?.requestSequence || previousBot?.exitAudit?.requestSequence || 0),
+      restored: 0,
+      lastBlockedReload: null,
+      lastBlockedLogin: null,
+      lastEvent: null
+    },
     postLoginZoom: {
       armed: true,
       missingSince: 0,
@@ -4038,6 +4050,14 @@ function browserBotSource(config) {
 	        combatTarget: this.combatTarget,
 	        combatAim: this.combatAim,
 		        combatLogging: summarizeCombatLoggingStatus(),
+		        exitAudit: {
+		          pending: unresolvedExitAuditLogCount(),
+		          pendingIds: pendingExitAuditLogIds().slice(0, 12),
+		          restored: Number(this.exitAudit?.restored || 0),
+		          lastEvent: this.exitAudit?.lastEvent || null,
+		          lastBlockedReload: this.exitAudit?.lastBlockedReload || null,
+		          lastBlockedLogin: this.exitAudit?.lastBlockedLogin || null
+		        },
 		        opportunityChoice: this.opportunityChoice,
         postLoginZoom: this.postLoginZoom,
 		        self: displaySelf,
@@ -4510,6 +4530,7 @@ function browserBotSource(config) {
 			      'stamina-budget-coin-leave-retry': '1h体力预算不足，重试退出',
 			      'wait-for-snapshot-coin': '等待快照金币',
 		      'login-suppressed': '等待重连',
+		      'exit-log-flush-pending': '等待退出日志发送完成',
 		      'maintain-safe-spacing': '避开附近玩家',
 	      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
 	      'leave-stale-coin': '离开疑似卡住金币',
@@ -4667,6 +4688,7 @@ function browserBotSource(config) {
       function summarizeCombatLoggingStatus() {
         const state = bot.combatLogging || {};
         const t = Date.now();
+        const exitAuditPending = unresolvedExitAuditLogCount();
         return {
           enabled: Boolean(state.enabled),
           endpoint: String(state.endpoint || ''),
@@ -4677,6 +4699,8 @@ function browserBotSource(config) {
           lastCombatAgeMs: state.lastCombatAt ? Math.max(0, Math.round(t - Number(state.lastCombatAt || t))) : null,
           pending: Array.isArray(state.pending) ? state.pending.length : 0,
           preBuffer: Array.isArray(state.preBuffer) ? state.preBuffer.length : 0,
+          exitAuditPending,
+          exitAuditBlocking: exitAuditPending > 0,
           dropped: Number(state.dropped || 0),
           sent: Number(state.sent || 0),
 	          failed: Number(state.failed || 0),
@@ -4686,6 +4710,194 @@ function browserBotSource(config) {
 	          lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null
 	        };
 	      }
+
+      function readPersistedExitAuditLogs() {
+        try {
+          const raw = localStorage.getItem(EXIT_AUDIT_PENDING_LOGS_KEY) || '[]';
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object') : [];
+        } catch (_) {
+          return [];
+        }
+      }
+
+      function writePersistedExitAuditLogs(entries) {
+        try {
+          const list = Array.isArray(entries) ? entries.filter(item => item && typeof item === 'object') : [];
+          localStorage.setItem(EXIT_AUDIT_PENDING_LOGS_KEY, safeStringify(list.slice(-250)));
+        } catch (_) {}
+      }
+
+      function persistExitAuditLogEntry(entry) {
+        if (!entry?.exitAuditLogId) return;
+        const existing = readPersistedExitAuditLogs();
+        if (!existing.some(item => item.exitAuditLogId === entry.exitAuditLogId)) {
+          existing.push(safeJsonClone(entry) || entry);
+          writePersistedExitAuditLogs(existing);
+        }
+      }
+
+      function removePersistedExitAuditLogs(ids) {
+        const idSet = new Set((Array.isArray(ids) ? ids : [ids]).filter(Boolean));
+        if (!idSet.size) return;
+        const remaining = readPersistedExitAuditLogs().filter(item => !idSet.has(item.exitAuditLogId));
+        writePersistedExitAuditLogs(remaining);
+      }
+
+      function pendingExitAuditLogIds() {
+        const state = bot.combatLogging || {};
+        const ids = new Set();
+        for (const entry of Array.isArray(state.pending) ? state.pending : []) {
+          if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);
+        }
+        for (const id of Array.isArray(state.pendingExitAuditIds) ? state.pendingExitAuditIds : []) {
+          if (id) ids.add(id);
+        }
+        for (const id of Array.isArray(state.sendingExitAuditIds) ? state.sendingExitAuditIds : []) {
+          if (id) ids.add(id);
+        }
+        for (const entry of readPersistedExitAuditLogs()) {
+          if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);
+        }
+        return Array.from(ids);
+      }
+
+      function unresolvedExitAuditLogCount() {
+        return pendingExitAuditLogIds().length;
+      }
+
+      function exitAuditFlushPending() {
+        return unresolvedExitAuditLogCount() > 0;
+      }
+
+      function exitAuditFlushBlockDetail(reason) {
+        const state = bot.combatLogging || {};
+        return {
+          blocked: true,
+          reason: String(reason || ''),
+          pending: unresolvedExitAuditLogCount(),
+          pendingIds: pendingExitAuditLogIds().slice(0, 12),
+          sending: Boolean(state.sending),
+          endpoint: String(state.endpoint || cfg.combatLogEndpoint || ''),
+          lastError: state.lastError || '',
+          lastOkAt: Number(state.lastOkAt || 0)
+        };
+      }
+
+      function restorePersistedExitAuditLogs() {
+        const state = bot.combatLogging;
+        if (!state || !state.endpoint) return 0;
+        if (!Array.isArray(state.pending)) state.pending = [];
+        const restored = readPersistedExitAuditLogs();
+        let added = 0;
+        const existing = new Set(state.pending.map(entry => entry?.exitAuditLogId).filter(Boolean));
+        for (const entry of restored) {
+          if (!entry?.exitAuditLogId || existing.has(entry.exitAuditLogId)) continue;
+          state.pending.unshift(entry);
+          existing.add(entry.exitAuditLogId);
+          added += 1;
+        }
+        if (!Array.isArray(state.pendingExitAuditIds)) state.pendingExitAuditIds = [];
+        for (const entry of state.pending) {
+          if (entry?.exitAuditLogId && !state.pendingExitAuditIds.includes(entry.exitAuditLogId)) {
+            state.pendingExitAuditIds.push(entry.exitAuditLogId);
+          }
+        }
+        bot.exitAudit.restored = added;
+        if (added) flushCombatLogs(true);
+        return added;
+      }
+
+      function newExitAuditId(source, reason) {
+        bot.exitAudit.sequence = Number(bot.exitAudit.sequence || 0) + 1;
+        const clean = String(source || 'exit').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'exit';
+        const why = String(reason || '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'reason';
+        return clean + '-' + Date.now().toString(36) + '-' + bot.exitAudit.sequence + '-' + why;
+      }
+
+      function newExitAuditRequestId(exitAuditId) {
+        bot.exitAudit.requestSequence = Number(bot.exitAudit.requestSequence || 0) + 1;
+        return String(exitAuditId || 'exit') + '-req-' + bot.exitAudit.requestSequence;
+      }
+
+      function ensureExitAuditDetail(detail, meta = {}) {
+        if (!detail || typeof detail !== 'object') return null;
+        const source = String(meta.source || detail.exitAuditSource || detail.source || detail.reason || 'exit');
+        const reason = String(meta.reason || detail.reason || '');
+        if (!detail.exitAuditId) detail.exitAuditId = newExitAuditId(source, reason);
+        if (!detail.exitTriggeredAt) detail.exitTriggeredAt = Number(detail.at || Date.now());
+        detail.exitAuditSource = source;
+        detail.exitAuditScope = meta.scope || detail.exitAuditScope || '';
+        return detail.exitAuditId;
+      }
+
+      function exitAuditSelfSummary(selfLike) {
+        return combatLogSelfSummary(selfLike || bot.lastSelf || null);
+      }
+
+      function recordExitAuditEvent(kind, detail = {}, extra = {}) {
+        const state = bot.combatLogging;
+        if (!state || !state.endpoint) return false;
+        const auditId = ensureExitAuditDetail(detail, extra);
+        const t = Number(extra.at || Date.now());
+        const entry = {
+          type: 'exit-audit',
+          auditKind: kind,
+          exitAuditId: auditId,
+          exitAuditLogId: String(auditId || 'exit') + ':' + kind + ':' + t + ':' + (Number(bot.exitAudit.requestSequence || 0) || 0),
+          at: t,
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          url: location.href,
+          visibilityState: document.visibilityState || '',
+          scope: extra.scope || detail.exitAuditScope || '',
+          source: extra.source || detail.exitAuditSource || '',
+          reason: extra.reason || detail.reason || '',
+          summary: detail.summary || detail.exitSummary || detail.enemyLeaveSummary || '',
+          displayReason: detail.displayReason || '',
+          triggeredAt: Number(detail.exitTriggeredAt || detail.at || t),
+          confirmedAt: Number(extra.confirmedAt || detail.exitConfirmedAt || 0),
+          successDurationMs: extra.confirmedAt || detail.exitConfirmedAt
+            ? Math.max(0, Math.round(Number(extra.confirmedAt || detail.exitConfirmedAt) - Number(detail.exitTriggeredAt || detail.at || t)))
+            : 0,
+          currentUserId: getCurrentUserId() || null,
+          self: exitAuditSelfSummary(extra.self || detail.self || detail.injury?.self || null),
+          target: detail.target || extra.target || null,
+          injury: detail.injury || extra.injury || null,
+          pursuit: detail.pursuit || extra.pursuit || null,
+          combat: detail.combat || extra.combat || null,
+          offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
+          pendingExit: summarizePendingExit(bot.pendingExit),
+          request: extra.request || null,
+          leave: {
+            attempted: Boolean(detail.attempted),
+            method: detail.method || '',
+            error: detail.error || '',
+            exitPending: Boolean(detail.exitPending),
+            exitConfirmed: Boolean(detail.exitConfirmed),
+            pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
+            pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
+            pendingLoginSuppressReason: detail.pendingLoginSuppressReason || '',
+            reloginUntil: detail.reloginUntil || 0,
+            reloginDelayMs: detail.reloginDelayMs || 0,
+            holdRemainingMs: detail.holdRemainingMs || 0
+          },
+          confirmation: extra.confirmation || detail.exitConfirmation || null,
+          control: summarizeControl(),
+          globalState: combatLogGlobalStateSummary()
+        };
+        bot.exitAudit.lastEvent = {
+          kind,
+          exitAuditId: auditId,
+          at: t,
+          reason: entry.reason,
+          error: entry.leave.error
+        };
+        const queued = queueCombatLogEntry(entry, { critical: true });
+        if (queued) flushCombatLogs(true);
+        return queued;
+      }
 
       function combatLogSelfSummary(selfLike) {
         if (!selfLike) return null;
@@ -5046,7 +5258,7 @@ function browserBotSource(config) {
 	      function combatLogSuspendReason(decision) {
 	        const reason = String(decision?.reason || '');
 	        if (!reason) return '';
-	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-control-missing|game-session-connecting)$/.test(reason)) return reason;
+	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-control-missing|game-session-connecting|exit-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
 	        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
@@ -5088,20 +5300,32 @@ function browserBotSource(config) {
         while (state.preBuffer.length > maxEntries) state.preBuffer.shift();
       }
 
-      function queueCombatLogEntry(entry) {
+      function queueCombatLogEntry(entry, options = {}) {
         const state = bot.combatLogging;
-        if (!state.enabled || !state.endpoint) return false;
-        if (!Array.isArray(state.pending)) state.pending = [];
         const snapshot = safeJsonClone(entry) || { at: Date.now(), type: 'combat-log-clone-error', originalType: entry?.type || '' };
+        const critical = Boolean(options.critical || snapshot.exitAuditLogId);
+        if ((!state.enabled && !critical) || !state.endpoint) return false;
+        if (!Array.isArray(state.pending)) state.pending = [];
         const queued = {
           ...snapshot,
           combatId: state.combatId || snapshot.combatId || entry.combatId || '',
-          sequence: ++state.sequence
+          sequence: ++state.sequence,
+          criticalLog: Boolean(snapshot.criticalLog || critical)
         };
+        if (critical && !queued.exitAuditLogId) {
+          queued.exitAuditLogId = 'critical:' + queued.type + ':' + queued.at + ':' + queued.sequence;
+        }
         state.pending.push(queued);
+        if (queued.exitAuditLogId) {
+          if (!Array.isArray(state.pendingExitAuditIds)) state.pendingExitAuditIds = [];
+          if (!state.pendingExitAuditIds.includes(queued.exitAuditLogId)) state.pendingExitAuditIds.push(queued.exitAuditLogId);
+          persistExitAuditLogEntry(queued);
+        }
         const maxPending = Math.max(50, Number(cfg.combatLogMaxPendingEntries) || 1000);
         while (state.pending.length > maxPending) {
-          state.pending.shift();
+          const dropIndex = state.pending.findIndex(item => !item?.criticalLog && !item?.exitAuditLogId);
+          if (dropIndex < 0) break;
+          state.pending.splice(dropIndex, 1);
           state.dropped += 1;
         }
         return true;
@@ -5163,7 +5387,8 @@ function browserBotSource(config) {
 
       function flushCombatLogs(force = false) {
         const state = bot.combatLogging;
-        if (!state?.enabled || !state.endpoint || state.sending) return false;
+        const hasCritical = Array.isArray(state?.pending) && state.pending.some(entry => entry?.criticalLog || entry?.exitAuditLogId);
+        if ((!state?.enabled && !hasCritical) || !state.endpoint || state.sending) return false;
         if (!Array.isArray(state.pending) || !state.pending.length) return false;
         const t = Date.now();
         if (!force && t - Number(state.lastFlushAt || 0) < Math.max(250, Number(cfg.combatLogFlushMs) || 1000)) return false;
@@ -5176,6 +5401,16 @@ function browserBotSource(config) {
           ? Math.min(state.pending.length, Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50) * 4)
           : Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50);
         const entries = state.pending.splice(0, batchSize);
+        const exitAuditIds = entries.map(entry => entry?.exitAuditLogId).filter(Boolean);
+        if (exitAuditIds.length) {
+          if (!Array.isArray(state.sendingExitAuditIds)) state.sendingExitAuditIds = [];
+          for (const id of exitAuditIds) {
+            if (!state.sendingExitAuditIds.includes(id)) state.sendingExitAuditIds.push(id);
+          }
+          if (Array.isArray(state.pendingExitAuditIds)) {
+            state.pendingExitAuditIds = state.pendingExitAuditIds.filter(id => !exitAuditIds.includes(id));
+          }
+        }
         const payload = {
           combatId: entries[0]?.combatId || state.combatId || '',
           startedAt: state.startedAt || entries[0]?.at || t,
@@ -5201,18 +5436,30 @@ function browserBotSource(config) {
             state.sent += entries.length;
             state.lastOkAt = Date.now();
             state.lastError = '';
+            if (exitAuditIds.length) removePersistedExitAuditLogs(exitAuditIds);
           })
           .catch(err => {
             state.failed += entries.length;
             state.lastError = err?.message || String(err);
             state.pending = entries.concat(Array.isArray(state.pending) ? state.pending : []);
+            if (exitAuditIds.length) {
+              if (!Array.isArray(state.pendingExitAuditIds)) state.pendingExitAuditIds = [];
+              for (const id of exitAuditIds) {
+                if (!state.pendingExitAuditIds.includes(id)) state.pendingExitAuditIds.push(id);
+              }
+            }
             const maxPending = Math.max(50, Number(cfg.combatLogMaxPendingEntries) || 1000);
             while (state.pending.length > maxPending) {
-              state.pending.pop();
+              const dropIndex = state.pending.findIndex(item => !item?.criticalLog && !item?.exitAuditLogId);
+              if (dropIndex < 0) break;
+              state.pending.splice(dropIndex, 1);
               state.dropped += 1;
             }
           })
           .finally(() => {
+            if (exitAuditIds.length && Array.isArray(state.sendingExitAuditIds)) {
+              state.sendingExitAuditIds = state.sendingExitAuditIds.filter(id => !exitAuditIds.includes(id));
+            }
             state.sending = false;
             if (sentOk && (force || state.pending.length >= Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50)) && state.pending.length) {
               flushCombatLogs(force);
@@ -5314,9 +5561,24 @@ function browserBotSource(config) {
 		  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
+	    if (exitAuditFlushPending()) {
+	      const blocked = exitAuditFlushBlockDetail('reload:' + (reason || ''));
+	      bot.exitAudit.lastBlockedReload = blocked;
+	      flushCombatLogs(true);
+	      logStatus('reload blocked until exit audit logs flush: ' + (reason || ''), {
+	        kind: 'wait',
+	        reason: 'exit-log-flush-pending',
+	        dx: 0,
+	        dy: 0,
+	        self: bot.lastSelf,
+	        exitAuditFlush: blocked
+	      });
+	      return false;
+	    }
 	    bot.reloadRequestedAt = Date.now();
 	    logStatus('reload: ' + reason);
 	    location.reload();
+	    return true;
 	  }
 
 	  function cloudflareErrorInfo() {
@@ -5355,6 +5617,22 @@ function browserBotSource(config) {
 	  function maybeReloadCloudflareError(info) {
 	    if (!info || cfg.dryRun || cfg.once) return false;
 	    if (Number(info.remainingMs || 0) > 0) return false;
+	    if (exitAuditFlushPending()) {
+	      const blocked = exitAuditFlushBlockDetail('reload:cloudflare error');
+	      bot.exitAudit.lastBlockedReload = blocked;
+	      flushCombatLogs(true);
+	      logStatus('reload blocked until exit audit logs flush: cloudflare error', {
+	        kind: 'wait',
+	        reason: 'exit-log-flush-pending',
+	        dx: 0,
+	        dy: 0,
+	        self: bot.lastSelf,
+	        cloudflare: info,
+	        exitAuditFlush: blocked,
+	        displayReason: '等待退出日志发送完成，暂不刷新错误页'
+	      });
+	      return false;
+	    }
 	    try {
 	      localStorage.setItem(CLOUDFLARE_RELOAD_KEY, String(Date.now()));
 	    } catch (_) {}
@@ -6027,6 +6305,16 @@ function browserBotSource(config) {
     return 'pending unsafe exit';
   }
 
+  function startExitAudit(detail, meta = {}) {
+    if (!detail || typeof detail !== 'object') return null;
+    ensureExitAuditDetail(detail, meta);
+    recordExitAuditEvent('exit-trigger', detail, {
+      ...meta,
+      at: Number(detail.exitTriggeredAt || detail.at || Date.now())
+    });
+    return detail.exitAuditId;
+  }
+
   function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
     if (!detail || !detail.attempted) return 0;
     const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
@@ -6296,7 +6584,7 @@ function browserBotSource(config) {
   }
 
   function rememberPendingExit(scope, source, detail, selfLike = null) {
-    if (!detail?.attempted) return null;
+    if (!detail?.attempted && !detail?.exitAuditId) return null;
     const t = Date.now();
     const previous = bot.pendingExit && bot.pendingExit.scope === scope ? bot.pendingExit : null;
     const summary = detail.summary || detail.exitSummary || detail.enemyLeaveSummary || previous?.summary || detail.reason || '';
@@ -6400,6 +6688,13 @@ function browserBotSource(config) {
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
     }
     bot.pendingExit = null;
+    recordExitAuditEvent('exit-confirmed', detail, {
+      at: t,
+      confirmedAt: t,
+      confirmation: state || null,
+      source: pending.source || detail.exitAuditSource || '',
+      scope: pending.scope || detail.exitAuditScope || ''
+    });
     return detail;
   }
 
@@ -6522,6 +6817,14 @@ function browserBotSource(config) {
     }
     const state = pendingExitSelfState(self);
     if (state.known && !state.alive) {
+      const lastError = String(pending.lastResult?.error || '');
+      const weakConfirmation = /^(login-required|no-current-user-id)$/.test(String(state.source || ''));
+      if (lastError && weakConfirmation) {
+        bot.pursuit = null;
+        if (!applyCombatExitCover(pending, self)) stopMotionSafely('pending-exit-unconfirmed-auth-state');
+        const detail = await retryPendingExit(pending, self, { ...state, weakConfirmation: true, ignoredBecauseLastLeaveError: lastError });
+        return pendingExitWaitDecision(pending, self, detail, { ...state, weakConfirmation: true }, false);
+      }
       const detail = confirmPendingExit(pending, state);
       return pendingExitWaitDecision(pending, self, detail, state, true);
     }
@@ -6733,7 +7036,39 @@ function browserBotSource(config) {
     return '';
   }
 
+  function summarizeLeaveCommandResult(value) {
+    if (value === undefined) return { type: 'undefined' };
+    if (value === null) return { type: 'null' };
+    if (value === false || value === true) return { type: 'boolean', value: Boolean(value) };
+    if (typeof value !== 'object') return { type: typeof value, value: String(value).slice(0, 200) };
+    return {
+      type: Array.isArray(value) ? 'array' : 'object',
+      ok: value.ok ?? null,
+      success: value.success ?? null,
+      status: value.status ?? value.statusCode ?? null,
+      statusText: value.statusText || '',
+      message: value.message || '',
+      error: value.error || ''
+    };
+  }
+
 	  async function issueLeaveCommand(detail) {
+    ensureExitAuditDetail(detail, {
+      source: detail?.exitAuditSource || detail?.reason || 'leave-command',
+      scope: detail?.exitAuditScope || ''
+    });
+    const request = {
+      requestId: newExitAuditRequestId(detail.exitAuditId),
+      exitAuditId: detail.exitAuditId || '',
+      sentAt: Date.now(),
+      completedAt: 0,
+      durationMs: 0,
+      attempted: false,
+      method: '',
+      error: '',
+      result: null
+    };
+    let rawResult;
 	    try {
 	      if (typeof leave === 'function') {
 	        detail.attempted = true;
@@ -6742,6 +7077,7 @@ function browserBotSource(config) {
 	        if (result && typeof result.then === 'function') {
 	          result = await waitWithTimeout(result, cfg.leaveCommandTimeoutMs, 'leave request');
 	        }
+        rawResult = result;
 	        const failure = leaveCommandFailureMessage(result);
 	        if (failure) detail.error = failure;
 	      } else {
@@ -6756,7 +7092,24 @@ function browserBotSource(config) {
 	      }
 	    } catch (err) {
 	      detail.error = err?.message || String(err);
+      rawResult = { error: detail.error };
 	    }
+    request.completedAt = Date.now();
+    request.durationMs = Math.max(0, Math.round(request.completedAt - request.sentAt));
+    request.attempted = Boolean(detail.attempted);
+    request.method = detail.method || '';
+    request.error = detail.error || '';
+    request.result = summarizeLeaveCommandResult(rawResult);
+    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
+    detail.leaveRequests.push(request);
+    detail.leaveRequests = detail.leaveRequests.slice(-20);
+    detail.lastLeaveRequest = request;
+    recordExitAuditEvent('leave-request', detail, {
+      at: request.completedAt,
+      request,
+      source: detail.exitAuditSource || detail.reason || 'leave-command',
+      scope: detail.exitAuditScope || ''
+    });
 	    return detail;
 	  }
 
@@ -6776,6 +7129,23 @@ function browserBotSource(config) {
     }
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
+    if (exitAuditFlushPending()) {
+      const blocked = exitAuditFlushBlockDetail('login:' + (reason || ''));
+      bot.exitAudit.lastBlockedLogin = blocked;
+      flushCombatLogs(true);
+      return {
+        needed: true,
+        attempted: false,
+        reason: 'exit-log-flush-pending',
+        cooldownRemainingMs: 0,
+        error: '',
+        exitAuditFlush: blocked,
+        hasToken: Boolean(getSessionToken()),
+        hasNativeSession: false,
+        nativeWsReadyState: getNativeControl()?.wsReadyState ?? null,
+        currentUserId: getCurrentUserId()
+      };
+    }
     const userId = getCurrentUserId();
     const hasToken = Boolean(getSessionToken());
     const native = getNativeControl();
@@ -6869,7 +7239,15 @@ function browserBotSource(config) {
 
   async function forceLoginNow(reason = 'panel immediate login') {
     const manualReason = String(reason || 'panel immediate login');
-    const cleared = clearCurrentReloginHold(manualReason);
+    const cleared = exitAuditFlushPending()
+      ? {
+        at: Date.now(),
+        reason: manualReason,
+        skipped: true,
+        skipReason: 'exit-log-flush-pending',
+        exitAuditFlush: exitAuditFlushBlockDetail('manual-login:' + manualReason)
+      }
+      : clearCurrentReloginHold(manualReason);
     bot.lastLoginAt = 0;
     const login = await maybeStartAutoLogin(manualReason, {
       force: true,
@@ -6928,6 +7306,7 @@ function browserBotSource(config) {
       summary: offlineLeaveSummary(reason, offlineSafety),
       error: ''
     };
+    startExitAudit(detail, { scope: 'offline', source: 'offline', reason, self: selfSummary, offlineSafety });
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -6936,7 +7315,7 @@ function browserBotSource(config) {
         primePendingUnsafeExitLoginSuppress('offline leave', reason, detail, selfSummary);
       }
     }
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('offline', 'offline', detail, selfSummary);
     }
     finalizeLeaveDisplayReason(detail);
@@ -6967,12 +7346,13 @@ function browserBotSource(config) {
       summary: injuryLeaveSummary(injury),
       error: ''
     };
+    startExitAudit(detail, { scope: 'enemy', source: 'injury', reason: detail.reason, self: injury?.self || injury, injury });
     bot.lastInjuryLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
       primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, injury?.self || injury);
     }
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('enemy', 'injury', detail, injury?.self || injury);
       bot.pendingInjuryLeave = null;
     }
@@ -7005,12 +7385,13 @@ function browserBotSource(config) {
       summary: pursuitLeaveSummary(pursuitSummary),
       error: ''
     };
+    startExitAudit(detail, { scope: 'enemy', source: 'pursuit', reason: detail.reason, self: selfSummary, pursuit: pursuitSummary });
     bot.lastPursuitLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
       primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, selfSummary);
     }
-    if (detail.attempted && !detail.error) {
+    if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('enemy', 'pursuit', detail, selfSummary);
       bot.pursuit = null;
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
@@ -7056,12 +7437,13 @@ function browserBotSource(config) {
       summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {}),
       error: ''
     };
+    startExitAudit(detail, { scope: 'enemy', source: 'combat', reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null });
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
       primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, selfSummary);
     }
-    if (detail.attempted) {
+    if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('enemy', 'combat', detail, selfSummary);
       bot.pendingCombatLeave = null;
     } else {
@@ -7100,6 +7482,7 @@ function browserBotSource(config) {
       reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0,
 	      error: ''
 	    };
+    startExitAudit(detail, { scope: 'enemy', source: 'enemy-hold-retry', reason });
     bot.lastEnemyLeaveRetryAt = t;
     await issueLeaveCommand(detail);
 	    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
@@ -11603,14 +11986,16 @@ function browserBotSource(config) {
 	        const waitReason = login?.attempted
 	          ? 'auto-login'
 	          : (login?.needed
-	            ? (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : 'login-cooldown'))
+	            ? (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : 'login-cooldown')))
 	            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
 	        const loginDisplayReason = waitReason === 'game-session-connecting'
 	          ? '已登录，等待游戏连接/自身实体'
+	          : (waitReason === 'exit-log-flush-pending'
+	            ? '等待退出日志发送完成，暂不刷新或重新登录'
 	          : (waitReason === 'login-suppressed'
 	            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
 	              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
-	            : '');
+	            : ''));
 		        refreshGlobalState(false).catch(err => {
 		          bot.globalState.error = err.message || String(err);
 		        });
@@ -12030,6 +12415,8 @@ function browserBotSource(config) {
 		      bot.ticking = false;
 		    }
 		  }
+
+	  restorePersistedExitAuditLogs();
 
 	  window[BOT_KEY] = bot;
 	  if (previousBot && previousBot !== bot && previousBot.stop) {
