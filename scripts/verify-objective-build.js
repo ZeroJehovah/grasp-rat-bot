@@ -193,6 +193,21 @@ function main() {
     check(`${file} accepts injected sourceHash`, () => {
       assert(text.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
     });
+    check(`${file} formats display distances in meters`, () => {
+      const distanceBody = functionBody(text, 'formatDistance');
+      assert(distanceBody.includes('const meters = n / 100'), 'formatDistance does not convert cm to meters');
+      assert(distanceBody.includes("+ '米'"), 'formatDistance does not append meter unit');
+      const staminaSummaryBody = functionBody(text, 'staminaBudgetCoinLeaveSummary');
+      assert(staminaSummaryBody.includes("最近金币距离' + formatDistance(detail.distance)"), 'stamina budget leave summary does not use meter distance formatting');
+      const pursuitSummaryBody = functionBody(text, 'pursuitLeaveSummary');
+      assert(pursuitSummaryBody.includes("'，距离' + formatDistance(distance)"), 'pursuit leave summary does not use meter distance formatting');
+    });
+    check(`${file} freezes session uptime while self is missing`, () => {
+      const sessionBody = functionBody(text, 'summarizeSessionStats');
+      assert(sessionBody.includes('const stoppedAt = Number(session.missingSince || 0) || 0'), 'session stopped-at marker not used');
+      assert(sessionBody.includes('uptimeMs: startedAt ? Math.max(0, (stoppedAt || Date.now()) - startedAt) : 0'), 'session uptime does not freeze at missingSince');
+      assert(sessionBody.includes('uptimeStoppedAt: stoppedAt'), 'session uptime stopped-at status is not exposed');
+    });
     check(`${file} keeps 500m realtime coins ahead of snapshot travel`, () => {
       assert(text.includes('function pickRealtimeLocalCoin'), 'realtime local coin picker not found');
       assert(text.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'realtime local coin picker can include snapshot-only coins');
@@ -577,6 +592,17 @@ function main() {
       assert(body.includes("Math.max(0, Math.round(r / 1000)) + '/' + Math.round(l / 1000)"), 'second-scale remaining/limit pair formatting not found');
       assert(!body.includes('%'), 'percent stamina formatting found');
       assert(text.includes("staminaPill.textContent = '") && text.includes("' + formatStamina(self)"), 'stamina line does not render formatStamina output');
+    });
+    check(`${file} keeps compact panel spacing and wait countdown inline`, () => {
+      assert(text.includes('padding:10px 16px 9px'), 'first panel section does not use 16px horizontal padding');
+      assert(text.includes('padding:9px 16px'), 'panel sections do not use 16px horizontal padding');
+      assert(text.includes("appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''))"), 'relogin countdown is not inline with current behavior');
+      assert(!text.includes("appendLine('等待重连：' + formatDuration(hold))"), 'standalone relogin countdown line is still present');
+    });
+    check(`${file} shows script versions without v prefix`, () => {
+      assert(!text.includes('远程脚本 v'), 'remote script visible version still has v prefix');
+      assert(!text.includes('加载器 篡改猴 v'), 'userscript visible version still has v prefix');
+      assert(!text.includes('加载器 扩展 v'), 'extension visible version still has v prefix');
     });
   }
 
