@@ -173,13 +173,13 @@ npm test
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
 - `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；
 - `ambiguous-opportunity-wait`: 当前版本日志里重新出现“收益接近，原地等待更明确目标”；
-- `coin-action-with-active-player-in-range`: 射程内存在非无敌 Active 玩家时，决策仍在执行金币行动而不是战斗/退出；审计会读取附近实体列表，也会读取当前决策目标里带有模式/距离的玩家证据。
+- `coin-action-with-active-player-in-range`: 射程内存在非无敌且有移动、开火、非满体力或显式 active 标记的 Active 玩家时，决策仍在执行金币行动而不是战斗/退出；纯 join-mode Active、满体力、静止、无开火证据的站桩目标不会触发此问题。审计会读取附近实体列表，也会读取当前决策目标里带有模式/距离的玩家证据。
 
 证据缺口会标记：
 
 - `no-matching-entries`: 当前过滤条件没有任何日志；
 - `no-matching-exit-events`: 当前过滤条件有日志，但没有退出事件；
-- `no-active-in-range-combat-events`: 当前过滤条件有日志，但没有射程内非无敌 Active 敌人触发战斗/攻击/战斗退出响应的样本；
+- `no-active-in-range-combat-events`: 当前过滤条件有日志，但没有射程内非无敌且有真实活动证据的 Active 敌人触发战斗/攻击/战斗退出响应的样本；
 - `no-hp-disadvantage-exit-events`: 当前过滤条件有日志，但没有 `combat-hp-disadvantage-leave` 或 `combat-low-hp-leave` 退出样本；
 - `manifest-source-hash-missing`: 当前过滤条件有日志，但部分日志缺少 `sourceHash`，无法证明来自当前构建；
 - `manifest-source-hash-mismatch`: 日志 `sourceHash` 与 manifest SHA 不一致。
