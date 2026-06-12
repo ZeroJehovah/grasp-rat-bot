@@ -250,6 +250,37 @@ function main() {
         'pending unsafe exit suppress does not take max(delay, minimum)'
       );
     });
+    check(`${file} records exit audit events and blocks login/reload until flushed`, () => {
+      assert(text.includes('EXIT_AUDIT_PENDING_LOGS_KEY'), 'exit audit persistence key not found');
+      assert(text.includes("type: 'exit-audit'"), 'exit audit event type not found');
+      assert(text.includes("recordExitAuditEvent('exit-trigger'"), 'exit trigger audit event not recorded');
+      assert(text.includes("recordExitAuditEvent('leave-request'"), 'leave request audit event not recorded');
+      assert(text.includes("recordExitAuditEvent('exit-confirmed'"), 'exit confirmation audit event not recorded');
+      const queueBody = functionBody(text, 'queueCombatLogEntry');
+      assert(queueBody.includes('const critical = Boolean(options.critical || snapshot.exitAuditLogId)'), 'critical exit audit queue marker not found');
+      assert(queueBody.includes('(!state.enabled && !critical)'), 'critical exit audit logs still depend on combat logging enabled');
+      assert(queueBody.includes('persistExitAuditLogEntry(queued)'), 'critical exit audit logs are not persisted before flush');
+      const flushBody = functionBody(text, 'flushCombatLogs');
+      assert(flushBody.includes('removePersistedExitAuditLogs(exitAuditIds)'), 'persisted exit audit logs are not cleared on successful flush');
+      const reloadBody = functionBody(text, 'requestReload');
+      assert(reloadBody.includes('if (exitAuditFlushPending())'), 'requestReload does not block on pending exit audit logs');
+      const loginBody = functionBody(text, 'maybeStartAutoLogin');
+      assert(loginBody.includes('if (exitAuditFlushPending())'), 'auto login does not block on pending exit audit logs');
+      assert(loginBody.includes("reason: 'exit-log-flush-pending'"), 'blocked login reason not reported');
+      const manualLoginBody = functionBody(text, 'forceLoginNow');
+      assert(manualLoginBody.includes('skipped: true'), 'manual login can clear exit holds while audit logs are pending');
+      assert(manualLoginBody.includes("skipReason: 'exit-log-flush-pending'"), 'manual login hold-clear skip reason not reported');
+    });
+    check(`${file} keeps failed leave attempts pending until confirmed`, () => {
+      assert(countMatches(text, /if \(detail\.attempted \|\| detail\.exitAuditId\)/g) >= 4, 'failed/non-attempted exit audit leaves are not remembered as pending exits');
+      const pendingBody = functionBody(text, 'handlePendingExit');
+      assert(pendingBody.includes('const lastError = String(pending.lastResult?.error || \'\')'), 'pending exit does not inspect last leave error');
+      assert(pendingBody.includes('weakConfirmation'), 'pending exit does not mark weak auth-page confirmations');
+      assert(pendingBody.includes('ignoredBecauseLastLeaveError'), 'pending exit may confirm auth/login page after leave error');
+      const issueBody = functionBody(text, 'issueLeaveCommand');
+      assert(issueBody.includes('request.durationMs'), 'leave request duration is not recorded');
+      assert(issueBody.includes('detail.leaveRequests.push(request)'), 'leave request history is not stored on leave detail');
+    });
     check(`${file} logs combat target mode and safety fields`, () => {
       const body = functionBody(text, 'buildCombatAction');
       assert(body.includes("mode: target.current_join_mode || target.mode || ''"), 'combat target mode not logged');
