@@ -41,11 +41,16 @@ const NUMERIC_INVARIANTS = [
   { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
   { key: 'opportunityVisibleDistance', value: 50000 },
   { key: 'opportunityNearbyPriorityDistance', value: 50000 },
+  { key: 'opportunityOscillationSwitchLimit', value: 5 },
   { key: 'attackApproachRange', value: 50000 },
   { key: 'globalAttackMaxDistance', value: 50000 },
   { key: 'globalCoinMaxDistance', value: 50000 },
   { key: 'postAttackRecoveryDropMaxDistance', value: 50000 },
   { key: 'postAttackRecoveryDropMinScore', value: 60000 },
+  { key: 'postAttackDropWaitMs', value: 2500 },
+  { key: 'postAttackDropWaitMinDrop', value: 8 },
+  { key: 'postAttackDropWaitMaxDistance', value: 50000 },
+  { key: 'postAttackDropWaitStopDistance', value: 900 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatLowHpCloseRiskMargin', value: 5 },
@@ -238,6 +243,23 @@ function main() {
       assert(body.includes('if (score < minScore) continue'), 'post-attack drop picker does not filter by recovery ROI score');
       assert(text.includes('maxDistance: recovery ? cfg.postAttackRecoveryDropMaxDistance : cfg.postAttackDropCoinMaxDistance'), 'recovery post-attack drop max distance not wired');
       assert(text.includes('minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0'), 'recovery post-attack drop min score not wired');
+    });
+    check(`${file} locks oscillating opportunity target pairs`, () => {
+      const body = functionBody(text, 'applyOpportunityOscillationLock');
+      assert(body.includes('cfg.opportunityOscillationSwitchLimit'), 'oscillation lock limit config not used');
+      assert(body.includes('switchCount > limit'), 'oscillation lock does not wait until the switch limit is exceeded');
+      assert(body.includes('lockedKey: fromKey'), 'oscillation lock does not pin the current target');
+      assert(text.includes('resetOpportunitySwitchLock()'), 'opportunity switch lock reset helper not found');
+      assert(text.includes('oscillationLocked: Boolean'), 'opportunity choice does not expose oscillation lock state');
+    });
+    check(`${file} waits at killed high-drop target position before drop refresh`, () => {
+      const body = functionBody(text, 'pickPostAttackDropWaitTarget');
+      assert(body.includes('cfg.postAttackDropWaitMs'), 'post-attack wait window not used');
+      assert(body.includes('cfg.postAttackDropWaitMinDrop'), 'post-attack wait minimum drop not used');
+      assert(body.includes('postAttackVisibleCoinExists'), 'post-attack wait does not skip already-visible drops');
+      assert(body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"), 'post-attack wait can trigger without a recent shot/attack');
+      assert(body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target disappearance');
+      assert(text.includes("reason: 'post-attack-drop-wait-position'"), 'post-attack wait action reason not found');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
       assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
@@ -603,6 +625,10 @@ function main() {
     assert(sourceBot.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
     assert(sourceBot.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
     assert(sourceBot.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
+    assert(sourceBot.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
+    assert(sourceBot.includes("name: 'high drop kill waits at last target position before coin refresh'"), 'post-kill drop wait self-test not found');
+    assert(sourceBot.includes("name: 'alive high drop target does not trigger post kill wait'"), 'alive-target no-wait self-test not found');
+    assert(sourceBot.includes("name: 'unshot high drop target disappearance does not trigger post kill wait'"), 'unshot-target no-wait self-test not found');
     assert(sourceBot.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
   });
 
