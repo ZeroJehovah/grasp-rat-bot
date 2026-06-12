@@ -320,6 +320,12 @@ function main() {
       assert(text.includes('bot.pendingInjuryLeave && isCombatStateForInjuryLeave(action)'), 'main loop does not use combat-state injury suppression');
       assert(text.includes("suppressedReason: 'combat-state'"), 'combat-state injury suppression is not logged');
     });
+    check(`${file} keeps engaged combat above recovery avoidance`, () => {
+      const body = functionBody(text, 'chooseAction');
+      assert(body.includes('const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'recovery combat action is not built in chooseAction');
+      assert(body.includes("if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave')"), 'engaged recovery combat can still fall through to non-combat logic');
+      assert(!body.includes('const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'old recovery-leave-only combat branch is still present');
+    });
     check(`${file} blocks new leave triggers while pending exit is active`, () => {
       const skipBody = functionBody(text, 'pendingExitSkipNewLeave');
       assert(skipBody.includes('if (!pending) return null'), 'pending-exit skip helper can run without pending exit');

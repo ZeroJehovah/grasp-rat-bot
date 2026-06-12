@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.114"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.115"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -8765,11 +8765,11 @@
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     if (recovery && recoveryCombatTarget) {
-      const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets);
-      if (recoveryLeave?.kind === 'leave') {
+      const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets);
+      if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave') {
         bot.fleeLock = null;
         bot.returnBlockScan = null;
-        return recoveryLeave;
+        return recoveryCombatAction;
       }
       clearCombatEngagement('recovery-hold');
     }
