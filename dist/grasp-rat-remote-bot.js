@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.121"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.122"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -4966,11 +4966,26 @@
   function listFromNativeCoinValue(value) {
     if (Array.isArray(value)) return value;
     if (value instanceof Map || value instanceof Set) return Array.from(value.values());
+    if (value && typeof value === 'object') {
+      if (Number.isFinite(firstFiniteNumber(value.x, value.pos_x, value.posX, value.world_x, value.worldX, value.coord_x, value.coordX, value.center_x, value.centerX, value.position?.x, value.pos?.x))) {
+        return [value];
+      }
+      const values = Object.values(value);
+      if (values.length && values.every(item => item && typeof item === 'object')) return values;
+    }
     return null;
   }
 
-  function addNativeCoinSource(sources, label, value) {
-    const list = listFromNativeCoinValue(value);
+  function addNativeCoinSource(sources, label, value, thisArg = null) {
+    let sourceValue = value;
+    if (typeof sourceValue === 'function') {
+      try {
+        sourceValue = sourceValue.call(thisArg);
+      } catch (_) {
+        return false;
+      }
+    }
+    const list = listFromNativeCoinValue(sourceValue);
     if (!list) return false;
     sources.push({ label, list });
     return true;
@@ -4978,19 +4993,28 @@
 
   function getNativeCoinSources() {
     const sources = [];
+    const win = typeof window === 'object' && window ? window : null;
     try {
-      if (typeof getRenderCoinDrops === 'function') addNativeCoinSource(sources, 'render', getRenderCoinDrops());
+      addNativeCoinSource(
+        sources,
+        'render',
+        typeof getRenderCoinDrops === 'function' ? getRenderCoinDrops : win?.getRenderCoinDrops,
+        win
+      );
     } catch (_) {}
     const nativeState = getNativeState();
     if (!nativeState) return sources;
     for (const key of ['coinDrops', 'coin_drops', 'renderCoinDrops', 'render_coin_drops', 'visibleCoinDrops', 'visible_coin_drops', 'coins', 'drops']) {
-      addNativeCoinSource(sources, 'state.' + key, nativeState[key]);
+      addNativeCoinSource(sources, 'state.' + key, nativeState[key], nativeState);
+    }
+    for (const key of ['getRenderCoinDrops', 'getCoinDrops', 'getVisibleCoinDrops', 'getCoins']) {
+      addNativeCoinSource(sources, 'state.' + key + '()', nativeState[key], nativeState);
     }
     for (const parentKey of ['latestSnapshot', 'latest_snapshot', 'lastSnapshot', 'last_snapshot', 'snapshot', 'currentSnapshot', 'current_snapshot']) {
       const parent = nativeState[parentKey];
       if (!parent || typeof parent !== 'object') continue;
       for (const key of ['coinDrops', 'coin_drops', 'coins', 'drops']) {
-        addNativeCoinSource(sources, 'state.' + parentKey + '.' + key, parent[key]);
+        addNativeCoinSource(sources, 'state.' + parentKey + '.' + key, parent[key], parent);
       }
     }
     return sources;
@@ -6675,7 +6699,24 @@
 	  }
 
 	  function coinBlockedByThreat(self, coin, threat) {
-	    if (dist(coin, threat) <= coinThreatDangerRadius(threat)) return true;
+	    const threatRadius = coinThreatDangerRadius(threat);
+	    if (dist(coin, threat) <= threatRadius) {
+	      if (!self) return true;
+	      const coinDistance = dist(self, coin);
+	      const threatDistance = Number.isFinite(Number(threat?.distance)) ? Number(threat.distance) : dist(self, threat);
+	      if (!Number.isFinite(coinDistance) || !Number.isFinite(threatDistance)) return true;
+	      if (coinDistance <= Math.max(0, Number(cfg.activeReturnBlockCoinPassDistance || 0))) return false;
+	      if (isInvulnerableActive(threat)) return true;
+	      const coinDx = Number(coin.x) - Number(self.x);
+	      const coinDy = Number(coin.y) - Number(self.y);
+	      const threatDx = Number(threat.x) - Number(self.x);
+	      const threatDy = Number(threat.y) - Number(self.y);
+	      const towardThreat = (coinDx * threatDx + coinDy * threatDy) > 0;
+	      if (!towardThreat) return false;
+	      const stopGap = threatDistance - coinDistance;
+	      const stopBuffer = Math.max(0, Number(threat?.threatRadius || cfg.dangerRadius || 0));
+	      if (stopGap <= stopBuffer) return true;
+	    }
 	    return coinHeadingBlockedByInvulnerableThreat(self, coin, threat);
 	  }
 
