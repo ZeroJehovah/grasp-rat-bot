@@ -4001,6 +4001,7 @@ function browserBotSource(config) {
 	      : null,
 	    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
 	  };
+	  const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
 	  const cfg = {
 	    dryRun: Boolean(config.dryRun),
 	    once: Boolean(config.once),
@@ -4266,8 +4267,9 @@ function browserBotSource(config) {
 	    cloudflareErrorReloadMs: 5000,
 	    page403ErrorReloadMs: 600000,
 	    globalRefreshTimeoutMs: 1500,
-	    combatLoggingEnabled: Boolean(config.combatLoggingEnabled),
-	    combatLogEndpoint: String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log'),
+	    combatLoggingEnabled: Boolean(config.combatLoggingEnabled && combatLogEndpointConfigured),
+	    combatLogEndpoint: combatLogEndpointConfigured ? String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log') : '',
+	    combatLogEndpointConfigured,
 	    combatLogPreBufferMs: 10000,
 	    combatLogPostBufferMs: 10000,
 	    combatLogFlushMs: 1000,
@@ -4451,8 +4453,9 @@ function browserBotSource(config) {
     lastCombatLogMetric: preserved.lastCombatLogMetric,
     lastCombatShot: preserved.lastCombatShot,
     combatLogging: {
-      enabled: Boolean(cfg.combatLoggingEnabled),
-      endpoint: String(cfg.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log'),
+      enabled: Boolean(cfg.combatLoggingEnabled && cfg.combatLogEndpointConfigured),
+      endpoint: cfg.combatLogEndpointConfigured ? String(cfg.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log') : '',
+      endpointConfigured: Boolean(cfg.combatLogEndpointConfigured),
       combatId: String(preserved.combatLogging?.combatId || ''),
       active: Boolean(preserved.combatLogging?.active),
       startedAt: Number(preserved.combatLogging?.startedAt || 0),
@@ -5600,14 +5603,17 @@ function browserBotSource(config) {
 
       function configureCombatLogging(options = {}) {
         const next = options && typeof options === 'object' ? options : {};
-        if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
-          cfg.combatLoggingEnabled = Boolean(next.enabled);
-          bot.combatLogging.enabled = Boolean(next.enabled);
-        }
         if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
           const endpoint = String(next.endpoint || 'http://127.0.0.1:18765/combat-log');
           cfg.combatLogEndpoint = endpoint;
+          cfg.combatLogEndpointConfigured = true;
           bot.combatLogging.endpoint = endpoint;
+          bot.combatLogging.endpointConfigured = true;
+        }
+        if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+          const enabled = Boolean(next.enabled) && Boolean(cfg.combatLogEndpointConfigured);
+          cfg.combatLoggingEnabled = enabled;
+          bot.combatLogging.enabled = enabled;
         }
         if (!bot.combatLogging.enabled) {
           bot.combatLogging.active = false;
@@ -5623,6 +5629,7 @@ function browserBotSource(config) {
         return {
           enabled: Boolean(state.enabled),
           endpoint: String(state.endpoint || ''),
+          endpointConfigured: Boolean(state.endpointConfigured || cfg.combatLogEndpointConfigured),
           active: Boolean(state.active),
           combatId: state.combatId || '',
           startedAt: Number(state.startedAt || 0),
@@ -5677,6 +5684,7 @@ function browserBotSource(config) {
 
       function pendingExitAuditLogIds() {
         const state = bot.combatLogging || {};
+        if (!state.endpoint) return [];
         const ids = new Set();
         for (const entry of Array.isArray(state.pending) ? state.pending : []) {
           if (entry?.exitAuditLogId) ids.add(entry.exitAuditLogId);

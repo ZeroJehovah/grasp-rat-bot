@@ -69,7 +69,7 @@ Static full-stamina `Active` entities are treated as ordinary targets instead of
 
 ## Combat Logs
 
-Tampermonkey can send detailed combat-window logs to the local collector in `combat-log-service/`. This is intentionally Tampermonkey-only; the extension bootstrap is not changed for this logging switch.
+The bootstrap can send detailed combat-window logs to the local collector in `combat-log-service/`. The panel logging control stays hidden until a log endpoint has been configured from the game page console.
 
 Start the local service:
 
@@ -78,7 +78,7 @@ cd combat-log-service
 npm start
 ```
 
-Enable logging from the game page console:
+Configure the endpoint and enable logging from the game page console:
 
 ```js
 window.__graspRatBotBootstrap.configureCombatLogging({
@@ -93,7 +93,7 @@ Disable it:
 window.__graspRatBotBootstrap.configureCombatLogging({ enabled: false })
 ```
 
-The setting is persisted through Tampermonkey storage. Logs are written as JSONL under `combat-log-service/logs/YYYY-MM-DD/<combatId>.jsonl`. The bot records roughly 10 seconds before combat, every combat tick, and roughly 10 seconds after combat. Entries include the final decision, exit reason, self/target HP, nearby entities, incoming bullets, pursuit/injury context, control state, and snapshot ages. Entity and bullet lists are capped so normal fights should be MB-scale rather than unbounded full-page dumps.
+The setting is persisted by the active bootstrap. Once an endpoint has been configured, the compact panel shows the logging dot so logging can be toggled without returning to the console. Logs are written as JSONL under `combat-log-service/logs/YYYY-MM-DD/<combatId>.jsonl`. The bot records roughly 10 seconds before combat, every combat tick, and roughly 10 seconds after combat. Entries include the final decision, exit reason, self/target HP, nearby entities, incoming bullets, pursuit/injury context, control state, and snapshot ages. Entity and bullet lists are capped so normal fights should be MB-scale rather than unbounded full-page dumps.
 
 ## Build Script B
 
