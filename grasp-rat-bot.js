@@ -191,6 +191,8 @@ function runSelfTest() {
     combatShootEveryMs: 160,
     combatShootReserveMs: 5600,
     combatShootDodgeReserveMs: 3800,
+    combatShootHighHpDodgeReserveMs: 3000,
+    combatShootHighHpMinHp: 90,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
     combatShootRecoveryEveryMs: 700,
@@ -1386,7 +1388,8 @@ function runSelfTest() {
     const shooting = combatShootingPlan(self, {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
-      realBulletPressure: incoming
+      realBulletPressure: incoming,
+      targetHp: combatHpValue(target)
     });
     return {
       reason: movementSuppressed
@@ -1474,7 +1477,18 @@ function runSelfTest() {
     const recoveryEveryMs = Math.max(conserveEveryMs, Number(cfg.combatShootRecoveryEveryMs || conserveEveryMs));
     const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
+    const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
+    const selfHp = hpValue(self);
+    const targetHp = Number(options.targetHp);
+    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
+    const highHpFireWindow = highHpMin > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= highHpMin
+      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
+    const effectiveDodgeReserveMs = highHpFireWindow
+      ? Math.min(dodgeReserveMs, highHpDodgeReserveMs)
+      : dodgeReserveMs;
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure);
     const base = {
       shoot: true,
@@ -1483,16 +1497,19 @@ function runSelfTest() {
       reason: 'normal',
       stamina5s,
       reserveMs,
-      dodgeReserveMs,
+      dodgeReserveMs: effectiveDodgeReserveMs,
+      standardDodgeReserveMs: dodgeReserveMs,
+      highHpDodgeReserveMs,
       hardReserveMs,
       needsMovement,
+      highHpFireWindow,
       suppressed: false,
       throttled: false
     };
     if (stamina5s !== null && stamina5s < hardReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
     }
-    if (stamina5s !== null && needsMovement && stamina5s < dodgeReserveMs) {
+    if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
     }
     if (stamina5s !== null && stamina5s < reserveMs) {
@@ -1541,7 +1558,8 @@ function runSelfTest() {
     const shooting = combatShootingPlan(self, {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
-      realBulletPressure: incoming
+      realBulletPressure: incoming,
+      targetHp
     });
     const baseReason = incoming
       ? 'combat-tangent-dodge'
@@ -2718,6 +2736,28 @@ function runSelfTest() {
       want: 'combat-burst-fire:true:false:360:burst-fire'
     },
     {
+      name: 'combat high HP reserve band keeps burst pressure',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 3200 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Passive', hp: 100, firing: true, drop: 20 }
+        );
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.highHpFireWindow);
+      })(),
+      want: 'combat-burst-fire:1:1:true:burst-fire:true'
+    },
+    {
+      name: 'combat mid HP reserve band still preserves dodge stamina',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 3200 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Passive', hp: 70, firing: true, drop: 20 }
+        );
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.highHpFireWindow);
+      })(),
+      want: 'combat-stamina-conserve:1:1:false:reserve-for-dodge:false'
+    },
+    {
       name: 'coin route uses horizontal axis when x gap dominates',
       got: (() => {
         const dir = coinDirectionTo({ x: 0, y: 0 }, { x: 15000, y: 500 });
@@ -3574,6 +3614,8 @@ function browserBotSource(config) {
     combatShootEveryMs: 160,
     combatShootReserveMs: 5600,
     combatShootDodgeReserveMs: 3800,
+    combatShootHighHpDodgeReserveMs: 3000,
+    combatShootHighHpMinHp: 90,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
     combatShootRecoveryEveryMs: 700,
@@ -11007,7 +11049,18 @@ function browserBotSource(config) {
     const recoveryEveryMs = Math.max(conserveEveryMs, Number(cfg.combatShootRecoveryEveryMs || conserveEveryMs));
     const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
+    const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
+    const selfHp = hpValue(self);
+    const targetHp = Number(options.targetHp);
+    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
+    const highHpFireWindow = highHpMin > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= highHpMin
+      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
+    const effectiveDodgeReserveMs = highHpFireWindow
+      ? Math.min(dodgeReserveMs, highHpDodgeReserveMs)
+      : dodgeReserveMs;
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
     const base = {
       shoot: true,
@@ -11016,16 +11069,19 @@ function browserBotSource(config) {
       reason: 'normal',
       stamina5s,
       reserveMs,
-      dodgeReserveMs,
+      dodgeReserveMs: effectiveDodgeReserveMs,
+      standardDodgeReserveMs: dodgeReserveMs,
+      highHpDodgeReserveMs,
       hardReserveMs,
       needsMovement,
+      highHpFireWindow,
       suppressed: false,
       throttled: false
     };
     if (stamina5s !== null && stamina5s < hardReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
     }
-    if (stamina5s !== null && needsMovement && stamina5s < dodgeReserveMs) {
+    if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
     }
     if (stamina5s !== null && stamina5s < reserveMs) {
@@ -11188,7 +11244,8 @@ function browserBotSource(config) {
     const shooting = combatShootingPlan(self, {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
-      realBulletPressure
+      realBulletPressure,
+      targetHp: combatHpValue(target)
     });
     return {
       reason: movementSuppressed
@@ -11352,7 +11409,8 @@ function browserBotSource(config) {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
       realBulletPressure,
-      pressureClose: pressureClose.active
+      pressureClose: pressureClose.active,
+      targetHp
     });
     const baseReason = realBulletPressure
       ? 'combat-tangent-dodge'
