@@ -26,7 +26,7 @@ const BOOTSTRAP_FILES = [
 ];
 
 const NUMERIC_INVARIANTS = [
-  { key: 'postLoginZoomOutClicks', value: 6 },
+  { key: 'postLoginZoomOutClicks', value: 4 },
   { key: 'postLoginZoomStartDelayMs', value: 350 },
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
@@ -182,6 +182,10 @@ function main() {
       assert(text.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
+      assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
+      assert(text.includes('armed: preserved.postLoginZoom ? Boolean(preserved.postLoginZoom.armed) : true'), 'post-login zoom armed state does not reuse preserved state');
+      assert(text.includes("appliedKey: String(preserved.postLoginZoom?.appliedKey || '')"), 'post-login zoom applied key is not preserved');
+      assert(text.includes("scheduledKey: String(preserved.postLoginZoom?.scheduledKey || '')"), 'post-login zoom scheduled key is not preserved');
       const keyBody = functionBody(text, 'postLoginZoomSessionKey');
       assert(keyBody.includes("return String(userId) + ':token:' + String(token).slice(0, 24)"), 'token-based zoom session key not found');
       assert(keyBody.includes("return String(userId) + ':generation:' + Number(bot.postLoginZoom?.generation || 0)"), 'generation-based zoom session key not found');
@@ -413,6 +417,7 @@ function main() {
       assert(/\.workspace\{[^'"\r\n]*inset:auto!important[^'"\r\n]*transform:none!important[^'"\r\n]*flex:1 1 0!important/.test(text), 'workspace inset/transform/flex reset not found');
       assert(/\.workspace>\.map-shell\{[^'"\r\n]*width:100%!important[^'"\r\n]*height:100%!important/.test(text), 'map-shell fill rule not found');
       assert(/\.workspace #world\{[^'"\r\n]*width:100%!important[^'"\r\n]*height:100%!important[^'"\r\n]*display:block!important/.test(text), 'world fill rule not found');
+      assert(/@media \(min-aspect-ratio:1\/1\)\{body\.grasp-rat-bot-sidebar-embedded \.workspace #world\{[^'"\r\n]*width:calc\(100% \+ 368px\)!important[^'"\r\n]*max-width:none!important[^'"\r\n]*margin-left:-368px!important/.test(text), 'landscape world crop offset rule not found');
       assert(functionBody(text, 'dispatchNativeViewportResize').includes("window.dispatchEvent(new Event('resize'))"), 'native resize dispatch helper not found');
       const syncBody = functionBody(text, 'syncNativeSidebarStructure');
       assert(syncBody.includes("scheduleNativeViewportResize('sidebar-structure')"), 'sidebar layout changes do not schedule native resize');

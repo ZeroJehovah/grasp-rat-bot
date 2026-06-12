@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.115"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.116"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -36,6 +36,7 @@
 	    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
 	    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
 	    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
+	    postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
 	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
 	      ? {
 	        ...previousBot.combatLogging,
@@ -303,7 +304,7 @@
 	    combatLogMaxPendingEntries: 1000,
 	    combatLogMaxBulletEntries: 24,
 		    combatLogMaxEntityEntries: 12,
-    postLoginZoomOutClicks: 6,
+    postLoginZoomOutClicks: 4,
     postLoginZoomStartDelayMs: 350,
     postLoginZoomOutIntervalMs: 80,
     postLoginZoomArmMissingMs: 1000,
@@ -494,14 +495,16 @@
       clearedReason: String(preserved.leave403SnapshotRecovery?.clearedReason || '')
     },
     postLoginZoom: {
-      armed: true,
-      missingSince: 0,
-      generation: 0,
-      appliedKey: '',
-      scheduledKey: '',
-      scheduledAt: 0,
-      lastSeenSelfAt: 0,
-      lastResult: null
+      armed: preserved.postLoginZoom ? Boolean(preserved.postLoginZoom.armed) : true,
+      missingSince: Number(preserved.postLoginZoom?.missingSince || 0) || 0,
+      generation: Number(preserved.postLoginZoom?.generation || 0) || 0,
+      appliedKey: String(preserved.postLoginZoom?.appliedKey || ''),
+      scheduledKey: String(preserved.postLoginZoom?.scheduledKey || ''),
+      scheduledAt: Number(preserved.postLoginZoom?.scheduledAt || 0) || 0,
+      lastSeenSelfAt: Number(preserved.postLoginZoom?.lastSeenSelfAt || 0) || 0,
+      lastResult: preserved.postLoginZoom?.lastResult && typeof preserved.postLoginZoom.lastResult === 'object'
+        ? { ...preserved.postLoginZoom.lastResult }
+        : null
     },
 	    reloadRequestedAt: 0,
     lastTarget: null,

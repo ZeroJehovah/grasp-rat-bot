@@ -177,7 +177,7 @@ function buildStatus(options) {
     {
       key: 'post-login-zoom-out',
       ok: staticCheck.ok,
-      evidence: 'static verifier checks six scheduled native zoom-out clicks after self detection'
+      evidence: 'static verifier checks four scheduled native zoom-out clicks after self detection and state preservation across bot updates'
     },
     {
       key: 'tall-viewport-layout',
