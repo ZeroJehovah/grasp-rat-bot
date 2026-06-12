@@ -31,6 +31,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
   { key: 'unsafeExitReloginMinDelayMs', value: 60000 },
   { key: 'staminaBudgetReloginDelayMs', value: 300000 },
+  { key: 'leaveRetryMinMs', value: 10000 },
+  { key: 'leaveCommandTimeoutMs', value: 10000 },
+  { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'combatAttackRange', value: 14500 }
 ];
 
@@ -278,8 +281,40 @@ function main() {
       assert(pendingBody.includes('weakConfirmation'), 'pending exit does not mark weak auth-page confirmations');
       assert(pendingBody.includes('ignoredBecauseLastLeaveError'), 'pending exit may confirm auth/login page after leave error');
       const issueBody = functionBody(text, 'issueLeaveCommand');
-      assert(issueBody.includes('request.durationMs'), 'leave request duration is not recorded');
-      assert(issueBody.includes('detail.leaveRequests.push(request)'), 'leave request history is not stored on leave detail');
+      assert(issueBody.includes('detail.leaveRequestPending = true'), 'async leave requests are not marked pending');
+      assert(issueBody.includes('setTimeout(() =>'), 'async leave requests do not have a timeout gate');
+      assert(issueBody.includes('detail.leaveRequestTimeoutMs'), 'leave timeout metadata is not recorded');
+      const completeBody = functionBody(text, 'completeLeaveRequest');
+      assert(completeBody.includes('request.durationMs'), 'leave request duration is not recorded');
+      assert(completeBody.includes('detail.leaveRequests.push(request)'), 'leave request history is not stored on leave detail');
+    });
+    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
+      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
+      assert(localBody.includes('tokenCleared && chatLeftUser && ownEntity.disappeared'), 'token/chat/self-missing exit confirmation is not enforced');
+      assert(text.includes("'token-chat-left-user-self-missing'"), 'local exit confirmation source not logged');
+      const chatBody = functionBody(text, 'chatLeftUserMessageSeen');
+      assert(/left\\{2,4}s\+user/.test(chatBody), 'left user chat message matcher not found');
+      const ownBody = functionBody(text, 'ownEntityDisappearedState');
+      assert(ownBody.includes('getOwnEntity') && ownBody.includes('native-entities') && ownBody.includes('snapshot'), 'own entity disappearance does not check native and snapshot sources');
+      const pendingBody = functionBody(text, 'handlePendingExit');
+      assert(pendingBody.includes('if (state.known && state.alive)'), 'alive pending exit does not have a non-blocking path');
+      assert(pendingBody.includes('schedulePendingExitRetry(pending, self, state)'), 'alive pending exit does not schedule retry in background');
+      assert(pendingBody.includes('return null'), 'alive pending exit does not return to normal action selection');
+      const retryBody = functionBody(text, 'pendingExitRetryMs');
+      assert(retryBody.includes('cfg.leaveRetryMinMs ?? cfg.leaveCommandTimeoutMs ?? 10000'), 'pending exit retry floor does not use 10s leave timeout');
+      assert(text.includes('const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self))'), 'pending alive exit guard not found before offline branch');
+      assert(text.includes('controlOffline && !pendingExitAlive'), 'offline branch can still block live pending exits');
+      assert(text.includes("pendingExitIntent:") && text.includes("reason: 'injury-leave'"), 'injury leave no longer preserves normal control action');
+    });
+    check(`${file} treats leave HTTP 403 as confirmed exit with one hour hold`, () => {
+      const requestBody = functionBody(text, 'leaveRequestHasHttp403');
+      assert(requestBody.includes('status === 403'), 'leave 403 status detector not found');
+      const confirmBody = functionBody(text, 'confirmPendingExit');
+      assert(confirmBody.includes('leave403ReloginDelayMs()'), '403 confirmation does not use one hour delay helper');
+      assert(confirmBody.includes("minimumReason: 'leave HTTP 403 risk control'"), '403 risk-control minimum reason not recorded');
+      assert(confirmBody.includes('detail.http403RiskControl = true'), '403 risk-control marker not recorded');
+      const pendingBody = functionBody(text, 'handlePendingExit');
+      assert(pendingBody.includes("source: 'leave-http-403'"), 'pending exit does not confirm on leave HTTP 403');
     });
     check(`${file} logs combat target mode and safety fields`, () => {
       const body = functionBody(text, 'buildCombatAction');
@@ -292,7 +327,7 @@ function main() {
     check(`${file} allows immediate relogin after safe offline exit`, () => {
       const body = functionBody(text, 'setOfflineLeaveSuppress');
       assert(
-        body.includes('!staminaHold && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'),
+        body.includes('!(Number(options.minimumUntil || 0) > Date.now()) && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'),
         'safe offline exit does not bypass offline relogin suppress'
       );
       assert(body.includes('detail.safeReloginAllowed = true'), 'safe offline relogin marker not recorded');
