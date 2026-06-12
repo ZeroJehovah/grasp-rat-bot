@@ -315,6 +315,23 @@ function main() {
       assert(text.includes('bot.pendingInjuryLeave && isCombatStateForInjuryLeave(action)'), 'main loop does not use combat-state injury suppression');
       assert(text.includes("suppressedReason: 'combat-state'"), 'combat-state injury suppression is not logged');
     });
+    check(`${file} blocks new leave triggers while pending exit is active`, () => {
+      const skipBody = functionBody(text, 'pendingExitSkipNewLeave');
+      assert(skipBody.includes('if (!pending) return null'), 'pending-exit skip helper can run without pending exit');
+      assert(skipBody.includes('skippedNewLeave: true'), 'pending-exit skip helper does not mark skipped new leave');
+      assert(skipBody.includes('pendingExit: summarizePendingExit(pending)'), 'pending-exit skip helper does not preserve pending exit summary');
+      const issueBody = functionBody(text, 'issueLeaveCommand');
+      assert(issueBody.includes('bot.pendingExit && !detail?.pendingExitRetry'), 'leave command can send non-retry leave while pending exit is active');
+      assert(issueBody.includes('pendingExitSkipNewLeave'), 'leave command does not delegate pending-exit skip result');
+      assert(functionBody(text, 'retryPendingExit').includes('detail.pendingExitRetry = true'), 'pending exit retry is not explicitly allowed through leave command lock');
+      assert(functionBody(text, 'leaveOffline').includes("pendingExitSkipNewLeave('offline'"), 'offline leave does not skip during active pending exit');
+      assert(functionBody(text, 'leaveForInjury').includes("pendingExitSkipNewLeave('injury'"), 'injury leave does not skip during active pending exit');
+      assert(functionBody(text, 'leaveForPursuit').includes("pendingExitSkipNewLeave('pursuit'"), 'pursuit leave does not skip during active pending exit');
+      assert(functionBody(text, 'leaveForCombat').includes("pendingExitSkipNewLeave('combat'"), 'combat leave does not skip during active pending exit');
+      assert(text.includes('staminaState.mustLeave && !bot.pendingExit'), 'stamina exit can still start a new leave during active pending exit');
+      assert(text.includes("pendingExitIntentForSkippedLeave('injury'"), 'injury skip intent is not logged on normal action');
+      assert(text.includes("pendingExitIntentForSkippedLeave('pursuit'"), 'pursuit skip intent is not logged on normal action');
+    });
     check(`${file} treats leave HTTP 403 as confirmed exit with one hour hold`, () => {
       const requestBody = functionBody(text, 'leaveRequestHasHttp403');
       assert(requestBody.includes('status === 403'), 'leave 403 status detector not found');
