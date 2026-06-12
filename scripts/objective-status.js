@@ -124,6 +124,11 @@ function summarizeEvents(events, latest) {
   }));
 }
 
+function requiredExitHoldMs(event, minUnsafeDelayMs) {
+  const unsafeMin = event?.unsafe ? Math.max(0, Number(minUnsafeDelayMs || 0) || 0) : 0;
+  return Math.max(unsafeMin, Math.max(0, Number(event?.requiredDelayMs || 0) || 0));
+}
+
 function buildStatus(options) {
   const manifest = readJson(options.manifestPath);
   const staticCheck = runNodeScript('scripts/verify-objective-build.js');
@@ -142,9 +147,14 @@ function buildStatus(options) {
   const logIdentityOk = liveReport.parseErrors.length === 0
     && !hasEvidenceIssue(liveReport, LOG_IDENTITY_EVIDENCE_ISSUES);
   const currentEntriesOk = logIdentityOk && liveReport.entries > 0;
+  const unsafeOrRequiredDelayExitEvents = liveReport.exitEvents
+    .filter(event => requiredExitHoldMs(event, liveReport.minUnsafeDelayMs) > 0);
+  const unsafeOrRequiredDelayExitOk = unsafeOrRequiredDelayExitEvents
+    .some(event => Number(event.delayMs || 0) >= requiredExitHoldMs(event, liveReport.minUnsafeDelayMs));
   const exitReloginOk = staticCheck.ok
     && currentEntriesOk
     && liveReport.exitEvents.length > 0
+    && unsafeOrRequiredDelayExitOk
     && !hasIssue(liveReport, EXIT_RELOGIN_ISSUES)
     && !hasEvidenceIssue(liveReport, new Set(['no-matching-exit-events']));
   const activeCombatOk = staticCheck.ok
@@ -157,7 +167,7 @@ function buildStatus(options) {
     {
       key: 'exit-reasons-and-relogin-delay',
       ok: exitReloginOk,
-      evidence: 'current-version exit events plus no missing/generic exit reason, unsafe delay, required delay, or login-during-hold audit issues'
+      evidence: 'current-version unsafe or reason-required-delay exit evidence plus no missing/generic exit reason, delay, or login-during-hold audit issues'
     },
     {
       key: 'similar-roi-no-ambiguous-wait',
@@ -213,6 +223,7 @@ function buildStatus(options) {
       exitEvents: liveReport.exitEvents.length,
       activeCombatEvents: liveReport.activeCombatEvents.length,
       hpDisadvantageExitEvents: liveReport.hpDisadvantageExitEvents.length,
+      unsafeOrRequiredDelayExitEvents: unsafeOrRequiredDelayExitEvents.length,
       issues: issueCounts(liveReport),
       evidenceIssues: evidenceIssueCounts(liveReport),
       parseErrors: liveReport.parseErrors.length,
@@ -260,9 +271,11 @@ function runSelfTest() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-objective-status-'));
   try {
     const emptyDir = path.join(tempRoot, 'empty');
+    const safeOnlyDir = path.join(tempRoot, 'safe-only');
     const exitOnlyDir = path.join(tempRoot, 'exit-only');
     const completeDir = path.join(tempRoot, 'complete');
     fs.mkdirSync(emptyDir, { recursive: true });
+    fs.mkdirSync(safeOnlyDir, { recursive: true });
     fs.mkdirSync(exitOnlyDir, { recursive: true });
     fs.mkdirSync(completeDir, { recursive: true });
     const manifest = readJson(DEFAULT_MANIFEST);
@@ -280,6 +293,49 @@ function runSelfTest() {
     assertSelfTest(incomplete.liveEvidence.evidenceIssues['no-matching-entries'] === 1, 'expected no-matching-entries evidence gap');
     assertSelfTest(incomplete.requirements.some(item => item.key === 'exit-reasons-and-relogin-delay' && item.ok === false), 'expected exit requirement to be missing');
     assertSelfTest(incomplete.requirements.some(item => item.key === 'active-enemy-combat-and-hp-exit' && item.ok === false), 'expected active combat requirement to be missing');
+
+    writeJsonl(path.join(safeOnlyDir, 'objective-safe-only.jsonl'), [
+      {
+        type: 'combat-frame',
+        at: baseAt,
+        version: currentVersion,
+        sourceHash: currentHash,
+        self: {
+          id: 1,
+          x: 0,
+          y: 0,
+          hp: 100
+        },
+        decision: {
+          kind: 'wait',
+          reason: 'offline-leave',
+          leave: {
+            reason: 'websocket offline',
+            safeReloginAllowed: true,
+            offlineSafety: { unsafe: false }
+          }
+        },
+        exit: {
+          reason: 'websocket offline',
+          summary: 'safe offline exit',
+          safeReloginAllowed: true,
+          offlineSafety: { unsafe: false },
+          reloginDelayMs: 0
+        }
+      }
+    ]);
+
+    const safeOnly = buildStatus({
+      manifestPath: DEFAULT_MANIFEST,
+      logDir: safeOnlyDir,
+      latest: 3
+    });
+    assertSelfTest(safeOnly.staticCheck.ok, 'expected static check to pass for safe-only fixture');
+    assertSelfTest(!safeOnly.complete, 'expected safe-only fixture to be incomplete');
+    assertSelfTest(safeOnly.liveEvidence.entries === 1, `expected one safe-only matching entry, got ${safeOnly.liveEvidence.entries}`);
+    assertSelfTest(safeOnly.liveEvidence.exitEvents === 1, `expected one safe-only exit event, got ${safeOnly.liveEvidence.exitEvents}`);
+    assertSelfTest(safeOnly.liveEvidence.unsafeOrRequiredDelayExitEvents === 0, `expected no unsafe/required safe-only exits, got ${safeOnly.liveEvidence.unsafeOrRequiredDelayExitEvents}`);
+    assertSelfTest(safeOnly.requirements.some(item => item.key === 'exit-reasons-and-relogin-delay' && item.ok === false), 'expected safe-only fixture not to satisfy exit requirement');
 
     writeJsonl(path.join(exitOnlyDir, 'objective-exit-only.jsonl'), [
       {
@@ -324,6 +380,7 @@ function runSelfTest() {
     assertSelfTest(!exitOnly.complete, 'expected exit-only fixture to be incomplete');
     assertSelfTest(exitOnly.liveEvidence.entries === 1, `expected one exit-only matching entry, got ${exitOnly.liveEvidence.entries}`);
     assertSelfTest(exitOnly.liveEvidence.exitEvents === 1, `expected one exit-only event, got ${exitOnly.liveEvidence.exitEvents}`);
+    assertSelfTest(exitOnly.liveEvidence.unsafeOrRequiredDelayExitEvents === 1, `expected one unsafe/required exit-only event, got ${exitOnly.liveEvidence.unsafeOrRequiredDelayExitEvents}`);
     assertSelfTest(exitOnly.liveEvidence.activeCombatEvents === 0, `expected no exit-only active combat events, got ${exitOnly.liveEvidence.activeCombatEvents}`);
     assertSelfTest(exitOnly.requirements.some(item => item.key === 'exit-reasons-and-relogin-delay' && item.ok === true), 'expected exit-only fixture to satisfy exit requirement');
     assertSelfTest(exitOnly.requirements.some(item => item.key === 'active-enemy-combat-and-hp-exit' && item.ok === false), 'expected exit-only fixture to miss active combat requirement');
@@ -392,7 +449,7 @@ function runSelfTest() {
     assertSelfTest(Object.keys(complete.liveEvidence.evidenceIssues).length === 0, 'expected no evidence gaps for complete fixture');
     assertSelfTest(complete.requirements.every(item => item.ok), 'expected every requirement to be complete');
 
-    console.log(JSON.stringify({ ok: true, cases: 25 }, null, 2));
+    console.log(JSON.stringify({ ok: true, cases: 32 }, null, 2));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
