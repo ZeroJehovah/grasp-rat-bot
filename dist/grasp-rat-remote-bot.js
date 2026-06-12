@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.138"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.139"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -33,9 +33,10 @@
 	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
 	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
 	    lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === 'object' ? { ...previousBot.lastCombatLogMetric } : null,
-	    lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
-	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
-	    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
+		    lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
+		    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
+		    opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
+		    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
 	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
 		    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
 		    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
@@ -182,9 +183,10 @@
 	    opportunityStickBonus: 0,
 		    opportunitySwitchMargin: 3000,
 			    opportunitySwitchRelativeMargin: 0.1,
-			    opportunitySwitchHoldMs: 7000,
-			    opportunityMissingHoldMs: 7000,
-			    opportunitySameCoinRadius: 1200,
+    opportunitySwitchHoldMs: 7000,
+    opportunityMissingHoldMs: 7000,
+    opportunityOscillationSwitchLimit: 5,
+    opportunitySameCoinRadius: 1200,
 				    opportunityVisibleDistance: 50000,
 				    opportunityNearbyPriorityDistance: 50000,
 	    coinMaxDistance: 18000,
@@ -225,6 +227,10 @@
     postAttackDropCoinMaxDistance: 22000,
     postAttackRecoveryDropMaxDistance: 50000,
     postAttackRecoveryDropMinScore: 60000,
+    postAttackDropWaitMs: 2500,
+    postAttackDropWaitMinDrop: 8,
+    postAttackDropWaitMaxDistance: 50000,
+    postAttackDropWaitStopDistance: 900,
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
@@ -584,9 +590,10 @@
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    lastSelf: null,
 		    lastSafety: null,
-		    actionThreats: [],
-		    opportunityChoice: preserved.opportunityChoice,
-		    returnBlockLock: null,
+			    actionThreats: [],
+			    opportunityChoice: preserved.opportunityChoice,
+			    opportunitySwitchLock: preserved.opportunitySwitchLock,
+			    returnBlockLock: null,
     returnBlockScan: null,
     returnBlockCooldownUntil: 0,
     returnBlockRecentThreatId: '',
@@ -780,7 +787,8 @@
 		          lastBlockedReload: this.exitAudit?.lastBlockedReload || null,
 		          lastBlockedLogin: this.exitAudit?.lastBlockedLogin || null
 		        },
-		        opportunityChoice: this.opportunityChoice,
+			        opportunityChoice: this.opportunityChoice,
+			        opportunitySwitchLock: this.opportunitySwitchLock,
 	        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
 	        loginSnapshotGate: snapshotLoginGateStatus(),
 	        postLoginZoom: this.postLoginZoom,
@@ -7051,6 +7059,7 @@
       x: Math.round(Number(target.x) || 0),
       y: Math.round(Number(target.y) || 0),
       drop: Number(target.drop || 0),
+      afk: target.afk !== false,
       distance: Number(target.distance || 0),
       self: summarizeSelf(self)
     }, 80);
@@ -9834,6 +9843,60 @@
       .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || b.postAttackScore - a.postAttackScore || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
   }
 
+  function postAttackVisibleCoinExists(coins, attack) {
+    return (coins || [])
+      .map(c => ({ ...c, distanceToAttack: dist(c, attack), amount: Number(c.amount || 0) }))
+      .some(c => c.amount > 0 && c.distanceToAttack <= cfg.postAttackDropCoinRadius);
+  }
+
+  function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
+    const t = Date.now();
+    const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
+    if (!waitMs) return null;
+    const minDrop = Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0);
+    const maxDistance = Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0));
+    const stopDistance = Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0));
+    return bot.attackHistory
+      .slice()
+      .reverse()
+      .filter(item => t - Number(item.at || 0) <= waitMs)
+      .filter(item => Number(item.drop || 0) >= minDrop)
+      .filter(item => Number.isFinite(Number(item.x)) && Number.isFinite(Number(item.y)))
+      .filter(item => item.afk !== false)
+      .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
+      .filter(item => !recentAttackTargetStillAttackable(item, entities))
+      .filter(item => !postAttackVisibleCoinExists(coins, item))
+      .map(item => ({ ...item, distance: dist(self, item) }))
+      .filter(item => item.distance > stopDistance && item.distance <= maxDistance)
+      .filter(item => !activeThreats.some(threat => coinBlockedByThreat(self, item, threat)))
+      .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
+  }
+
+  function buildPostAttackDropWaitAction(self, target) {
+    const dir = coinDirectionTo(self, target, cfg.patrolPrecisionTolerance);
+    return {
+      kind: 'patrol',
+      reason: 'post-attack-drop-wait-position',
+      dx: dir.dx,
+      dy: dir.dy,
+      target: {
+        id: target.id,
+        name: target.name || '',
+        x: target.x,
+        y: target.y,
+        drop: target.drop,
+        distance: Math.round(dir.distance)
+      },
+      postAttackTarget: {
+        id: target.id,
+        name: target.name || '',
+        drop: target.drop,
+        ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now())))
+      },
+      ...coinMotionMeta(dir)
+    };
+  }
+
   function enemyOpportunityCandidates(self, targets, activeThreats) {
     const byId = new Map();
     for (const raw of targets) {
@@ -9933,6 +9996,74 @@
 		    const type = opportunityChoiceType(choice);
 		    const id = opportunityChoiceId(choice);
 		    return type && id ? type + ':' + id : '';
+		  }
+
+		  function opportunityPairKey(a, b) {
+		    return [String(a || ''), String(b || '')].sort().join('|');
+		  }
+
+		  function opportunityByKey(opportunities, key) {
+		    return (opportunities || []).find(item => opportunityKey(item) === key) || null;
+		  }
+
+		  function resetOpportunitySwitchLock() {
+		    bot.opportunitySwitchLock = null;
+		  }
+
+		  function lockedOpportunityChoice(sorted) {
+		    const lock = bot.opportunitySwitchLock;
+		    const lockedKey = String(lock?.lockedKey || '');
+		    if (!lockedKey) return null;
+		    const pairKeys = String(lock.pairKey || '').split('|').filter(Boolean);
+		    if (pairKeys.length === 2 && pairKeys.some(key => !opportunityByKey(sorted, key))) {
+		      resetOpportunitySwitchLock();
+		      return null;
+		    }
+		    const locked = opportunityByKey(sorted, lockedKey);
+		    if (!locked) {
+		      resetOpportunitySwitchLock();
+		      return null;
+		    }
+		    const best = sorted[0] || null;
+		    return {
+		      ...locked,
+		      held: true,
+		      oscillationLocked: true,
+		      oscillationSwitchCount: Number(lock.switchCount || 0),
+		      competingScore: best && opportunityKey(best) !== lockedKey ? best.score : locked.competingScore
+		    };
+		  }
+
+		  function applyOpportunityOscillationLock(sorted, current, chosen) {
+		    const locked = lockedOpportunityChoice(sorted);
+		    if (locked) return locked;
+		    if (!chosen) return chosen;
+		    if (!current) {
+		      resetOpportunitySwitchLock();
+		      return chosen;
+		    }
+		    if (opportunityMatchesChoice(chosen, current)) return chosen;
+		    const held = sorted.find(item => opportunityMatchesChoice(item, current)) || null;
+		    if (!held) {
+		      resetOpportunitySwitchLock();
+		      return chosen;
+		    }
+		    const fromKey = opportunityKey(held);
+		    const toKey = opportunityKey(chosen);
+		    if (!fromKey || !toKey || fromKey === toKey) return chosen;
+		    const limit = Math.max(0, Number(cfg.opportunityOscillationSwitchLimit || 0));
+		    if (!limit) return chosen;
+		    const t = now();
+		    const pairKey = opportunityPairKey(fromKey, toKey);
+		    const previous = bot.opportunitySwitchLock || {};
+		    const continuing = !previous.lockedKey && previous.pairKey === pairKey && previous.lastKey === fromKey;
+		    const switchCount = continuing ? Number(previous.switchCount || 0) + 1 : 1;
+		    if (switchCount > limit) {
+		      bot.opportunitySwitchLock = { pairKey, lastKey: fromKey, switchCount, lockedKey: fromKey, blockedKey: toKey, lockedAt: t, updatedAt: t };
+		      return { ...held, held: true, oscillationLocked: true, oscillationSwitchCount: switchCount, competingScore: chosen.score };
+		    }
+		    bot.opportunitySwitchLock = { pairKey, lastKey: toKey, switchCount, lockedKey: '', blockedKey: '', lockedAt: 0, updatedAt: t };
+		    return chosen;
 		  }
 
 		  function opportunitySameCoinRadius() {
@@ -10037,11 +10168,13 @@
 	      y: Number.isFinite(Number(item.y)) ? Number(item.y) : null,
 	      amount: Number.isFinite(Number(item.amount)) ? Number(item.amount) : null,
 	      distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
-	      actionKind: item.actionKind || action?.kind || '',
-	      priorityTier: Number(item.priorityTier || 0),
-	      maxDistance: Number.isFinite(Number(item.maxDistance)) ? Number(item.maxDistance) : null,
-	      missingSince: missingHold ? Number(previous?.missingSince || t) : 0
-	    };
+		      actionKind: item.actionKind || action?.kind || '',
+		      priorityTier: Number(item.priorityTier || 0),
+		      maxDistance: Number.isFinite(Number(item.maxDistance)) ? Number(item.maxDistance) : null,
+		      missingSince: missingHold ? Number(previous?.missingSince || t) : 0,
+		      oscillationLocked: Boolean(item.oscillationLocked),
+		      oscillationSwitchCount: Number(item.oscillationSwitchCount || 0)
+		    };
 	    return {
 	      ...action,
 	      opportunityChoice: {
@@ -10051,9 +10184,11 @@
 	        staminaCost: bot.opportunityChoice.staminaCost,
 	        held: Boolean(item.held),
 	        missingHold,
-	        competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
-	        holdRemainingMs: Math.max(0, Math.round(Number(bot.opportunityChoice.until || 0) - t))
-	      }
+		        competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
+		        holdRemainingMs: Math.max(0, Math.round(Number(bot.opportunityChoice.until || 0) - t)),
+		        oscillationLocked: Boolean(item.oscillationLocked),
+		        oscillationSwitchCount: Number(item.oscillationSwitchCount || 0)
+		      }
 	    };
 	  }
 
@@ -10064,20 +10199,22 @@
 	    const best = sorted[0] || null;
 	    if (!best) return null;
     const current = bot.opportunityChoice;
+	    let chosen = best;
 	    if (current?.key && now() < Number(current.until || 0)) {
 	      const held = sorted.find(item => opportunityMatchesChoice(item, current));
 	      if (held && !opportunityMatchesChoice(best, current)) {
-	        if (Number(best.priorityTier || 0) > Number(held.priorityTier || 0)) return best;
-	        const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
-        const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
-        const heldScore = Number(held.score || 0);
-        const requiredScore = Math.max(heldScore + margin, heldScore * (1 + relativeMargin));
-        if (Number(best.score || 0) <= requiredScore) {
-          return { ...held, held: true, competingScore: best.score };
+	        if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
+	          const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
+          const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
+          const heldScore = Number(held.score || 0);
+          const requiredScore = Math.max(heldScore + margin, heldScore * (1 + relativeMargin));
+          if (Number(best.score || 0) <= requiredScore) {
+            chosen = { ...held, held: true, competingScore: best.score };
+	          }
 	        }
 	      }
 	    }
-		    return best;
+		    return applyOpportunityOscillationLock(sorted, current, chosen);
 		  }
 
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups) {
@@ -10190,16 +10327,20 @@
 		    return { dx: 0, dy: 0, distance: 0, reason: 'wait-for-snapshot-coin' };
 		  }
 
-	  function clearOpportunityChoiceFor(type, id = null) {
-	    const choice = bot.opportunityChoice;
-	    if (!choice || opportunityChoiceType(choice) !== String(type || '')) return;
-	    if (id === null || id === undefined || id === '') {
-	      bot.opportunityChoice = null;
-	      return;
-	    }
-	    const choiceId = opportunityChoiceId(choice);
-	    if (String(choiceId) === String(id)) bot.opportunityChoice = null;
-	  }
+		  function clearOpportunityChoiceFor(type, id = null) {
+		    const choice = bot.opportunityChoice;
+		    if (!choice || opportunityChoiceType(choice) !== String(type || '')) return;
+		    if (id === null || id === undefined || id === '') {
+		      bot.opportunityChoice = null;
+		      resetOpportunitySwitchLock();
+		      return;
+		    }
+		    const choiceId = opportunityChoiceId(choice);
+		    if (String(choiceId) === String(id)) {
+		      bot.opportunityChoice = null;
+		      resetOpportunitySwitchLock();
+		    }
+		  }
 
 	  function coinFailureIgnore(id, reason, t) {
     const previous = bot.coinFailures.get(id) || {};
@@ -10702,10 +10843,17 @@
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
       }
+      clearOpportunityChoiceFor('enemy', postAttackCoin.postAttackTarget?.id);
       const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
-	      action.postAttackTarget = postAttackCoin.postAttackTarget;
-	      return action;
-	    }
+      action.postAttackTarget = postAttackCoin.postAttackTarget;
+      return action;
+    }
+    const postAttackWaitTarget = pickPostAttackDropWaitTarget(self, allCoins, coinThreats, entities);
+    if (postAttackWaitTarget) {
+      bot.fleeLock = null;
+      clearOpportunityChoiceFor('enemy', postAttackWaitTarget.id);
+      return buildPostAttackDropWaitAction(self, postAttackWaitTarget);
+    }
 	    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
 	      self,
 	      safeCoinCandidates(allCoins, coinThreats, cfg.snapshotCoinMaxDistance, self)
