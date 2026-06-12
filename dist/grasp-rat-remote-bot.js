@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.124"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.125"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -885,6 +885,7 @@
   const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
+  const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
   const normalizeTargetText = value => String(value ?? '').trim();
   const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
     .map(normalizeTargetText)
@@ -1012,7 +1013,7 @@
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
-    if (isAfkTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
+    if (isAfkProfitTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
     const ownDrop = dropValue(self);
     return targetDrop >= cfg.attackMinDrop
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
@@ -5877,6 +5878,7 @@
       drop: Number(target.drop || 0),
       distance: targetDistance,
       reason: action?.reason || '',
+      intent: action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '',
       lastDamageAt,
       lastInRangeAt,
       lastDamageAmount: damaged ? Math.max(0, previousHp - currentHp) : Number(previous?.lastDamageAmount || 0),
@@ -6858,7 +6860,7 @@
     const dangerThreat = activeThreats.find(entity => entity.distance <= entity.threatRadius) || null;
     const cautionThreat = activeThreats.find(entity => entity.distance <= entity.cautionRadius + cfg.activeCautionExitMargin) || null;
     const returnBlockThreat = activeThreats.find(entity => entity.distance <= returnBlockRadius(entity)) || null;
-    const combatThreat = combatTargets.find(entity => !isAfkTarget(entity) && entity.distance <= cfg.combatAttackRange) || null;
+    const combatThreat = combatTargets.find(entity => !isAfkProfitTarget(entity) && entity.distance <= cfg.combatAttackRange) || null;
     const passiveDangerRadius = Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0));
     const closeHuman = nearbyHumans.find(entity => entity.distance <= passiveDangerRadius) || null;
     const injury = bot.pendingInjuryLeave;
@@ -7030,7 +7032,7 @@
   }
 
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
-    if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
+    if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
     if (isFiringEntity(target)) return true;
     if (isCurrentlyActive(target)) return true;
@@ -7039,7 +7041,7 @@
   }
 
   function isProfitableCombatTarget(target) {
-    return Boolean(target && !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target) && Number(target.drop || 0) > 0);
+    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isCurrentlyActive(target) && Number(target.drop || 0) > 0);
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -7066,7 +7068,7 @@
       const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isWhitelistedTarget(target) && !isInvulnerable(target));
       if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
     }
-    const eligibleTargets = combatTargets.filter(target => !isWhitelistedTarget(target) && !isAfkTarget(target) && !isInvulnerable(target));
+    const eligibleTargets = combatTargets.filter(target => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target));
     if (!eligibleTargets.length) return null;
     const defensiveTargets = eligibleTargets
       .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
@@ -7118,6 +7120,10 @@
     }
     const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
     if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
+      if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(target)) {
+        clearCombatEngagement('afk-profit-target');
+        return null;
+      }
       return {
         ...target,
         combatIntent: 'engaged',
@@ -7139,6 +7145,10 @@
     const reengageTarget = combatEngagedCandidate(self, raw);
     const graceRange = combatEngageGraceRange();
     if (!reengageTarget || reengageTarget.distance > graceRange) return null;
+    if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(reengageTarget)) {
+      clearCombatEngagement('afk-profit-target');
+      return null;
+    }
     return {
       ...reengageTarget,
       combatIntent: 'reengage',
@@ -7176,7 +7186,7 @@
       .filter(e => !isWhitelistedTarget(e))
       .filter(e => e.distance <= cfg.attackRange)
       .filter(e => attackWorthTaking(self, e) && !isInvulnerable(e))
-      .filter(isAfkTarget)
+      .filter(isAfkProfitTarget)
       .map(e => ({
         ...e,
         score: scoreEnemyOpportunity(e) ?? -Infinity,
@@ -7621,7 +7631,7 @@
   }
 
   function opportunityEnemyStaminaCost(target) {
-    const afk = isAfkTarget(target);
+    const afk = isAfkProfitTarget(target);
     const stopDistance = afk ? cfg.attackRange : cfg.attackEngageRange;
     const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
     const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
@@ -8388,7 +8398,7 @@
 
   function scoreEnemyOpportunity(target) {
     if (isWhitelistedTarget(target)) return null;
-    const afk = isAfkTarget(target);
+    const afk = isAfkProfitTarget(target);
     const inRange = Number(target.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     const sticky = bot.lastTarget?.kind === 'enemy'
@@ -8536,7 +8546,7 @@
   function buildEnemyAction(self, target, reason = '') {
     if (isWhitelistedTarget(target)) return { kind: 'wait', reason: 'target-whitelisted', dx: 0, dy: 0 };
     const dir = directionTo(self, target);
-    const afk = isAfkTarget(target);
+    const afk = isAfkProfitTarget(target);
     const inRange = Number(dir.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
     const staminaCost = opportunityEnemyStaminaCost(target);
     return {
@@ -8787,11 +8797,11 @@
 	        distance: target.distance,
 	        staminaCost,
 	        score,
-		        actionKind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
+		        actionKind: target.distance <= (isAfkProfitTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
 		        reason: '',
 		        priorityTier: opportunityPriorityTier({
 		          type: 'enemy',
-		          kind: target.distance <= (isAfkTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
+		          kind: target.distance <= (isAfkProfitTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
           distance: target.distance
         }),
 	        action: () => buildEnemyAction(self, target)
@@ -9466,8 +9476,8 @@
 
     const opportunityEnemyGroups = fullHp
       ? [
-        inactiveTargets.filter(isAfkTarget),
-        globalTargets.filter(target => !target.minimapOnly && isAfkTarget(target))
+        inactiveTargets.filter(isAfkProfitTarget),
+        globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target))
       ]
       : [inactiveTargets, globalTargets, minimapDropTargets];
     const opportunity = pickBestOpportunity(
@@ -9556,7 +9566,7 @@
 	      }
 	    }
 	    const blockedTargets = [
-	      ...globalTargets.filter(target => !target.minimapOnly && isAfkTarget(target)),
+	      ...globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target)),
 	      ...minimapDropTargets,
 	      ...inactiveTargets
 	    ];

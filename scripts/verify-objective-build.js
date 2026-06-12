@@ -250,6 +250,10 @@ function main() {
         'AFK target filter does not exclude join-mode Active'
       );
       assert(
+        countMatches(text, /const isAfkProfitTarget = e => isAfkTarget\(e\) \|\| \(isJoinModeActive\(e\) && !is(?:Currently)?Active\(e\) && !isMovingThreat\(e\) && !isFiringEntity\(e\)\);/g) >= expectedMin,
+        'passive Active profit target helper not found'
+      );
+      assert(
         countMatches(text, /if \(isJoinModeActive\(target\)\) return true;/g) === 0,
         'join-mode-only Active can still force defensive combat'
       );
@@ -264,6 +268,14 @@ function main() {
       assert(
         countMatches(text, /\+ \(isJoinModeActive\(target\) \? [0-9]+ : 0\)/g) >= expectedMin,
         'combat target priority does not include join-mode Active'
+      );
+      assert(
+        countMatches(text, /!isAfkProfitTarget\(target\) && !isInvulnerable\(target\) && is(?:Currently)?Active\(target\) && Number\(target\.drop \|\| 0\) > 0/g) >= expectedMin,
+        'profitable combat can still select passive Active profit targets'
+      );
+      assert(
+        countMatches(text, /filter\(isAfkProfitTarget\)/g) >= expectedMin,
+        'ordinary profit opportunities do not include passive Active targets'
       );
     });
 	    check(`${file} ends combat logs on relogin wait/manual states`, () => {
@@ -480,10 +492,14 @@ function main() {
     });
   }
 
-  check('grasp-rat-bot.js covers stationary full-stamina Active zero-drop self-test', () => {
+  check('grasp-rat-bot.js covers stationary full-stamina Active non-combat profit self-tests', () => {
     assert(
       /name: 'stationary full-stamina active zero drop does not beat coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'coin'/.test(sourceBot),
       'stationary full-stamina Active zero-drop no-combat self-test not found'
+    );
+    assert(
+      /name: 'stationary full-stamina active with drop is non-combat profit attack'[\s\S]*current_join_mode: 'Active'[\s\S]*death_reward_preview: 20[\s\S]*want: 'attack:false:best-opportunity-afk-drop-target'/.test(sourceBot),
+      'stationary full-stamina Active profit attack non-combat self-test not found'
     );
   });
 
