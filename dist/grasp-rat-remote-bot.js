@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.139"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.140"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -9879,18 +9879,13 @@
       reason: 'post-attack-drop-wait-position',
       dx: dir.dx,
       dy: dir.dy,
-      target: {
+      postAttackTarget: {
         id: target.id,
         name: target.name || '',
         x: target.x,
         y: target.y,
         drop: target.drop,
-        distance: Math.round(dir.distance)
-      },
-      postAttackTarget: {
-        id: target.id,
-        name: target.name || '',
-        drop: target.drop,
+        distance: Math.round(dir.distance),
         ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now())))
       },
       ...coinMotionMeta(dir)

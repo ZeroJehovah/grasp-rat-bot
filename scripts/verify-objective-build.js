@@ -260,6 +260,9 @@ function main() {
       assert(body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"), 'post-attack wait can trigger without a recent shot/attack');
       assert(body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target disappearance');
       assert(text.includes("reason: 'post-attack-drop-wait-position'"), 'post-attack wait action reason not found');
+      const actionBody = functionBody(text, 'buildPostAttackDropWaitAction');
+      assert(!actionBody.includes('\n      target: {'), 'post-attack wait should move without selecting a decision target');
+      assert(actionBody.includes('postAttackTarget'), 'post-attack wait should keep metadata for the killed target position');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
       assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');

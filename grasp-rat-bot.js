@@ -1584,18 +1584,13 @@ function runSelfTest() {
       reason: 'post-attack-drop-wait-position',
       dx: dir.dx,
       dy: dir.dy,
-      target: {
+      postAttackTarget: {
         id: target.id,
         name: target.name || '',
         x: target.x,
         y: target.y,
         drop: target.drop,
-        distance: Math.round(dir.distance)
-      },
-      postAttackTarget: {
-        id: target.id,
-        name: target.name || '',
-        drop: target.drop,
+        distance: Math.round(dir.distance),
         ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now())))
       }
     };
@@ -3075,9 +3070,9 @@ function runSelfTest() {
           attacks: [{ id: 7, x: 5000, y: 0, at: Date.now(), drop: 20, afk: true, action: 'attack' }],
           coins: [{ drop_id: 3, x: -10000, y: 0, amount: 10, native: true }]
         });
-        return action.kind + ':' + action.reason + ':' + action.target.id;
+        return action.kind + ':' + action.reason + ':' + action.postAttackTarget.id + ':' + Boolean(action.target);
       })(),
-      want: 'patrol:post-attack-drop-wait-position:7'
+      want: 'patrol:post-attack-drop-wait-position:7:false'
     },
     {
       name: 'alive high drop target does not trigger post kill wait',
@@ -14051,18 +14046,13 @@ function browserBotSource(config) {
       reason: 'post-attack-drop-wait-position',
       dx: dir.dx,
       dy: dir.dy,
-      target: {
+      postAttackTarget: {
         id: target.id,
         name: target.name || '',
         x: target.x,
         y: target.y,
         drop: target.drop,
-        distance: Math.round(dir.distance)
-      },
-      postAttackTarget: {
-        id: target.id,
-        name: target.name || '',
-        drop: target.drop,
+        distance: Math.round(dir.distance),
         ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now())))
       },
       ...coinMotionMeta(dir)
