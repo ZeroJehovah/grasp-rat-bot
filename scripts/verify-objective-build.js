@@ -226,7 +226,7 @@ function main() {
       assert(clickBody.includes('control.click()'), 'zoom-out control click not found');
       assert(text.includes('postLoginZoom: this.postLoginZoom'), 'status does not expose postLoginZoom state');
     });
-    check(`${file} treats join-mode Active as non-AFK combat`, () => {
+    check(`${file} ignores join-mode-only Active for defensive combat`, () => {
       const expectedMin = file === 'grasp-rat-bot.js' ? 2 : 1;
       assert(
         countMatches(text, /const isJoinModeActive = e => e\?\.current_join_mode === 'Active' \|\| e\?\.mode === 'Active';/g) >= expectedMin,
@@ -237,8 +237,16 @@ function main() {
         'AFK target filter does not exclude join-mode Active'
       );
       assert(
-        countMatches(text, /if \(isJoinModeActive\(target\)\) return true;/g) >= expectedMin,
-        'defensive combat target does not accept join-mode Active'
+        countMatches(text, /if \(isJoinModeActive\(target\)\) return true;/g) === 0,
+        'join-mode-only Active can still force defensive combat'
+      );
+      assert(
+        countMatches(text, /if \(isFiringEntity\(target\)\) return true;/g) >= expectedMin,
+        'defensive combat target no longer accepts firing targets'
+      );
+      assert(
+        countMatches(text, /if \(is(?:Currently)?Active\(target\)\) return true;/g) >= expectedMin,
+        'defensive combat target no longer accepts real active targets'
       );
       assert(
         countMatches(text, /\+ \(isJoinModeActive\(target\) \? [0-9]+ : 0\)/g) >= expectedMin,
@@ -410,10 +418,10 @@ function main() {
     });
   }
 
-  check('grasp-rat-bot.js covers stationary full-stamina Active combat self-test', () => {
+  check('grasp-rat-bot.js covers stationary full-stamina Active zero-drop self-test', () => {
     assert(
-      /name: 'stationary full-stamina active in range beats coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'attack'/.test(sourceBot),
-      'stationary full-stamina Active coin override self-test not found'
+      /name: 'stationary full-stamina active zero drop does not beat coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'coin'/.test(sourceBot),
+      'stationary full-stamina Active zero-drop no-combat self-test not found'
     );
   });
 

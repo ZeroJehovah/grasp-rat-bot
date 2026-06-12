@@ -388,6 +388,57 @@ function loggedEntityInvulnerable(entity) {
   );
 }
 
+function loggedTruthyFlag(value) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function loggedEntityFiring(entity) {
+  return loggedTruthyFlag(entity?.firing)
+    || loggedTruthyFlag(entity?.shooting)
+    || loggedTruthyFlag(entity?.is_firing)
+    || loggedTruthyFlag(entity?.isFiring)
+    || loggedTruthyFlag(entity?.is_shooting)
+    || loggedTruthyFlag(entity?.isShooting)
+    || loggedTruthyFlag(entity?.attacking)
+    || loggedTruthyFlag(entity?.is_attacking);
+}
+
+function loggedEntityMoving(entity) {
+  if (loggedTruthyFlag(entity?.moving) || loggedTruthyFlag(entity?.recentlyMoved)) return true;
+  const directSpeed = Number(entity?.speed ?? entity?.speedCmPerTick ?? entity?.velocity ?? NaN);
+  if (Number.isFinite(directSpeed)) return Math.abs(directSpeed) >= 5;
+  const vx = Number(entity?.vx);
+  const vy = Number(entity?.vy);
+  if (Number.isFinite(vx) || Number.isFinite(vy)) {
+    return Math.hypot(Number.isFinite(vx) ? vx : 0, Number.isFinite(vy) ? vy : 0) >= 5;
+  }
+  return false;
+}
+
+function loggedEntityFullStamina(entity) {
+  const remaining = Number(
+    entity?.stamina_5s_remaining_milli
+    ?? entity?.stamina5sRemainingMilli
+    ?? entity?.stamina5sRemaining
+    ?? NaN
+  );
+  const limit = Number(
+    entity?.stamina_5s_limit_milli
+    ?? entity?.stamina5sLimitMilli
+    ?? entity?.stamina5sLimit
+    ?? 10000
+  );
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return null;
+  return remaining >= limit * 0.98;
+}
+
+function loggedActiveCombatSignal(entity) {
+  if (loggedTruthyFlag(entity?.active) || loggedEntityMoving(entity) || loggedEntityFiring(entity)) return true;
+  if (loggedJoinMode(entity) !== 'active') return false;
+  const fullStamina = loggedEntityFullStamina(entity);
+  return fullStamina === false;
+}
+
 function activePlayerCandidateSources(entry) {
   const sources = [];
   for (const entity of Array.isArray(entry?.nearbyEntities) ? entry.nearbyEntities : []) {
@@ -414,9 +465,8 @@ function isActivePlayerCandidate(entry, entity, range, strict) {
   if (String(entity.type || '').toLowerCase() === 'coin') return false;
   const joinMode = loggedJoinMode(entity);
   const joinModeActive = joinMode === 'active';
-  if (!joinModeActive && entity.active === false) return false;
-  if (!joinModeActive && joinMode === 'passive') return false;
-  if (strict && !joinModeActive && entity.active !== true && entity.moving !== true && entity.firing !== true) return false;
+  if (!joinModeActive && joinMode === 'passive' && !loggedActiveCombatSignal(entity)) return false;
+  if (!loggedActiveCombatSignal(entity)) return false;
   if (String(entity.life || '').toLowerCase() === 'dead') return false;
   if (loggedEntityInvulnerable(entity)) return false;
   const distance = loggedEntityDistance(entry, entity);
@@ -1701,7 +1751,21 @@ function runSelfTest() {
             id: 124,
             distance: 1000
           }
-        }
+        },
+        nearbyEntities: [
+          {
+            id: 43,
+            name: 'MovingActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            moving: true,
+            invulnerable: false,
+            distance: 11000,
+            stamina_5s_remaining_milli: 8500,
+            stamina_5s_limit_milli: 10000
+          }
+        ]
       },
       {
         type: 'combat-frame',
@@ -1719,10 +1783,11 @@ function runSelfTest() {
             name: 'ActiveEnemy',
             mode: 'Active',
             life: 'Alive',
-            active: false,
+            active: true,
+            moving: true,
             invulnerable: false,
             distance: 12000,
-            stamina_5s_remaining_milli: 10000,
+            stamina_5s_remaining_milli: 8500,
             stamina_5s_limit_milli: 10000
           }
         ]
@@ -1741,7 +1806,8 @@ function runSelfTest() {
             name: 'TargetOnlyActive',
             mode: 'Active',
             life: 'Alive',
-            active: false,
+            active: true,
+            firing: true,
             invulnerable: false,
             distance: 13000
           }

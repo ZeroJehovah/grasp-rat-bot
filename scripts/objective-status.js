@@ -409,7 +409,8 @@ function runSelfTest() {
             name: 'ActiveEnemy',
             mode: 'Active',
             life: 'Alive',
-            active: false,
+            active: true,
+            firing: true,
             invulnerable: false,
             distance: 12000,
             hp: 100

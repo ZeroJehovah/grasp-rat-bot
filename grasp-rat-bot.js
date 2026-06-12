@@ -1102,7 +1102,6 @@ function runSelfTest() {
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
-    if (isJoinModeActive(target)) return true;
     if (isFiringEntity(target)) return true;
     if (isActive(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
@@ -2814,13 +2813,13 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'stationary full-stamina active in range beats coin pickup',
+      name: 'stationary full-stamina active zero drop does not beat coin pickup',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000 }],
         coins: [{ drop_id: 2, x: 5000, y: 0, amount: 1 }]
       }).kind,
-      want: 'attack'
+      want: 'coin'
     },
     {
       name: 'full hp avoids invulnerable active in caution range',
@@ -10175,7 +10174,6 @@ function browserBotSource(config) {
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
-    if (isJoinModeActive(target)) return true;
     if (isFiringEntity(target)) return true;
     if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
