@@ -188,7 +188,12 @@ function runSelfTest() {
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
     combatLowHpNoDamageMinGap: 0,
-    combatShootEveryMs: 80,
+    combatShootEveryMs: 160,
+    combatShootReserveMs: 5600,
+    combatShootDodgeReserveMs: 3800,
+    combatShootHardReserveMs: 1800,
+    combatShootConserveEveryMs: 360,
+    combatShootRecoveryEveryMs: 700,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
     combatAimJitterMinRadians: 0.025,
@@ -225,7 +230,7 @@ function runSelfTest() {
     combatSpacingPreferredRange: 6500,
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
-    combatPressureCloseMinHp: 70,
+    combatPressureCloseMinHp: 60,
     combatLeaveRetryMs: 1000,
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
@@ -1379,13 +1384,24 @@ function runSelfTest() {
         requestedDy
       }
       : null;
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedDx || requestedDy),
+      dodging: incoming,
+      realBulletPressure: incoming
+    });
     return {
-      reason: movementSuppressed ? 'combat-stamina-hold' : (incoming ? 'combat-leave-dodge' : (spacing.active ? 'combat-leave-spacing' : 'combat-leave-cover')),
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (shooting.suppressed
+          ? 'combat-stamina-conserve'
+          : (incoming ? 'combat-leave-dodge' : (spacing.active ? 'combat-leave-spacing' : 'combat-leave-cover'))),
       dx: movementSuppressed ? 0 : requestedDx,
       dy: movementSuppressed ? 0 : requestedDy,
-      shoot: true,
-      forceShoot: true,
-      movementSuppressed
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
+      movementSuppressed,
+      shooting
     };
   }
 
@@ -1417,6 +1433,7 @@ function runSelfTest() {
       dy: cover.dy,
       shoot: cover.shoot,
       forceShoot: cover.forceShoot,
+      shootEveryMs: cover.shootEveryMs,
       target: actionTarget,
       combatCover: cover,
 	      combatState: {
@@ -1451,6 +1468,40 @@ function runSelfTest() {
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
   }
 
+  function combatShootingPlan(self, options = {}) {
+    const stamina5s = staminaRemaining(self, '5s');
+    const normalEveryMs = Math.max(1, Number(cfg.combatShootEveryMs || cfg.shootEveryMs || 120));
+    const conserveEveryMs = Math.max(normalEveryMs, Number(cfg.combatShootConserveEveryMs || normalEveryMs));
+    const recoveryEveryMs = Math.max(conserveEveryMs, Number(cfg.combatShootRecoveryEveryMs || conserveEveryMs));
+    const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
+    const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
+    const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
+    const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure);
+    const base = {
+      shoot: true,
+      forceShoot: false,
+      shootEveryMs: normalEveryMs,
+      reason: 'normal',
+      stamina5s,
+      reserveMs,
+      dodgeReserveMs,
+      hardReserveMs,
+      needsMovement,
+      suppressed: false,
+      throttled: false
+    };
+    if (stamina5s !== null && stamina5s < hardReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
+    }
+    if (stamina5s !== null && needsMovement && stamina5s < dodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
+    if (stamina5s !== null && stamina5s < reserveMs) {
+      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
+    }
+    return base;
+  }
+
   function chooseCombatAction(self, target, bullets = []) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
@@ -1468,10 +1519,7 @@ function runSelfTest() {
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap }, bullets);
 	    }
-    const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, combatTargetNoDamageMs(target));
-    if (lowNoDamage) {
-      return combatLeaveAction('combat-low-hp-no-damage-leave', self, target, lowNoDamage, bullets);
-    }
+    const noDamageMs = combatTargetNoDamageMs(target);
     const motionScale = combatAimMotionScale(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
@@ -1491,12 +1539,24 @@ function runSelfTest() {
       : null;
     const dx = movementSuppressed ? 0 : requestedDx;
     const dy = movementSuppressed ? 0 : requestedDy;
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedDx || requestedDy),
+      dodging: incoming,
+      realBulletPressure: incoming
+    });
+    const baseReason = incoming
+      ? 'combat-tangent-dodge'
+      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack'));
     return {
       kind: 'attack',
-      reason: movementSuppressed ? 'combat-stamina-hold' : (incoming ? 'combat-tangent-dodge' : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack'))),
+      reason: movementSuppressed
+        ? 'combat-stamina-hold'
+        : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason)),
       combat: true,
       ignoreReturnBlock: true,
-      shoot: true,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
       dx,
       dy,
       aimMode: moving ? 'jitter' : 'exact',
@@ -1533,7 +1593,9 @@ function runSelfTest() {
           closeRange: Math.round(pressureClose.closeRange),
           noDamageMs: Math.round(pressureClose.noDamageMs)
         } : null,
-        movementSuppressed
+        noDamageMs,
+        movementSuppressed,
+        shooting
       }
     };
   }
@@ -2247,7 +2309,7 @@ function runSelfTest() {
         });
         return action.kind + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.movementSuppressed?.reason;
       })(),
-      want: 'leave:0:0:true:stamina-5s-exhausted'
+      want: 'leave:0:0:false:stamina-5s-exhausted'
     },
     {
       name: 'combat low hp exit summary includes target and hp details',
@@ -2296,7 +2358,7 @@ function runSelfTest() {
       want: 'flee'
     },
     {
-      name: 'low hp no-damage combat leaves before bleeding out',
+      name: 'low hp no-damage combat keeps fighting without disadvantage',
       got: (() => {
         bot.combatTarget = { id: 4, at: Date.now() - 16000, lastDamageAt: Date.now() - 16000, hp: 65 };
         const action = chooseCombatAction(
@@ -2304,9 +2366,9 @@ function runSelfTest() {
           { user_id: 4, x: 9000, y: 0, distance: 9000, current_join_mode: 'Passive', hp: 65, firing: true, drop: 20 }
         );
         bot.combatTarget = null;
-        return action.reason + ':' + (Number(action.combatState?.noDamageMs || 0) >= cfg.combatLowHpNoDamageLeaveMs) + ':' + action.exitSummary.includes('低血久攻未中退出');
+        return action.kind + ':' + action.reason + ':' + Boolean(action.shoot) + ':' + Boolean(action.forceShoot) + ':' + (Number(action.combatState?.noDamageMs || 0) >= cfg.combatLowHpNoDamageLeaveMs);
       })(),
-      want: 'combat-low-hp-no-damage-leave:true:true'
+      want: 'attack:combat-tangent-dodge:true:false:true'
     },
     {
       name: 'low hp recent damage keeps fighting instead of no-damage leave',
@@ -2624,7 +2686,7 @@ function runSelfTest() {
       want: 'combat-pressure-close:1:0:long-no-damage'
     },
     {
-      name: 'combat short stamina exhaustion stops movement but keeps shooting',
+      name: 'combat short stamina exhaustion stops movement and fire',
       got: (() => {
         const action = chooseCombatAction(
           { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 500 },
@@ -2632,7 +2694,29 @@ function runSelfTest() {
         );
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.movementSuppressed?.reason;
       })(),
-      want: 'combat-stamina-hold:0:0:true:stamina-5s-exhausted'
+      want: 'combat-stamina-hold:0:0:false:stamina-5s-exhausted'
+    },
+    {
+      name: 'combat preserves dodge stamina by pausing fire',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 2500 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Passive', hp: 100, firing: true, drop: 20 }
+        );
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason;
+      })(),
+      want: 'combat-stamina-conserve:1:1:false:reserve-for-dodge'
+    },
+    {
+      name: 'combat reserve band uses burst fire without force shooting',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 4500 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Passive', hp: 100, drop: 20 }
+        );
+        return action.reason + ':' + Boolean(action.shoot) + ':' + Boolean(action.forceShoot) + ':' + action.shootEveryMs + ':' + action.combatState?.shooting?.reason;
+      })(),
+      want: 'combat-burst-fire:true:false:360:burst-fire'
     },
     {
       name: 'coin route uses horizontal axis when x gap dominates',
@@ -3488,7 +3572,12 @@ function browserBotSource(config) {
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
     combatLowHpNoDamageMinGap: 0,
-    combatShootEveryMs: 80,
+    combatShootEveryMs: 160,
+    combatShootReserveMs: 5600,
+    combatShootDodgeReserveMs: 3800,
+    combatShootHardReserveMs: 1800,
+    combatShootConserveEveryMs: 360,
+    combatShootRecoveryEveryMs: 700,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
     combatAimJitterMinRadians: 0.025,
@@ -3525,7 +3614,7 @@ function browserBotSource(config) {
     combatSpacingPreferredRange: 6500,
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
-    combatPressureCloseMinHp: 70,
+    combatPressureCloseMinHp: 60,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -4577,10 +4666,12 @@ function browserBotSource(config) {
 	      'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
 	      'conserve-stamina-before-chasing': '兼容旧状态：保存体力',
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
-	      'combat-attack': '战斗：持续开火',
-	      'combat-tangent-dodge': '战斗：切线规避并开火',
-	      'combat-stamina-hold': '战斗：短体力不足，停止移动并开火',
-	      'combat-pressure-close': '战斗：久攻未中，压近开火',
+	      'combat-attack': '战斗：节奏开火',
+	      'combat-tangent-dodge': '战斗：切线规避并节奏开火',
+	      'combat-stamina-hold': '战斗：短体力不足，停止移动并暂停开火',
+	      'combat-stamina-conserve': '战斗：保留体力躲避，暂停开火',
+	      'combat-burst-fire': '战斗：保留体力，降频开火',
+	      'combat-pressure-close': '战斗：久攻未中，压近并节奏开火',
 	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
@@ -10870,6 +10961,40 @@ function browserBotSource(config) {
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
   }
 
+  function combatShootingPlan(self, options = {}) {
+    const stamina5s = staminaRemaining(self, '5s');
+    const normalEveryMs = Math.max(1, Number(cfg.combatShootEveryMs || cfg.shootEveryMs || 120));
+    const conserveEveryMs = Math.max(normalEveryMs, Number(cfg.combatShootConserveEveryMs || normalEveryMs));
+    const recoveryEveryMs = Math.max(conserveEveryMs, Number(cfg.combatShootRecoveryEveryMs || conserveEveryMs));
+    const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
+    const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
+    const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
+    const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
+    const base = {
+      shoot: true,
+      forceShoot: false,
+      shootEveryMs: normalEveryMs,
+      reason: 'normal',
+      stamina5s,
+      reserveMs,
+      dodgeReserveMs,
+      hardReserveMs,
+      needsMovement,
+      suppressed: false,
+      throttled: false
+    };
+    if (stamina5s !== null && stamina5s < hardReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
+    }
+    if (stamina5s !== null && needsMovement && stamina5s < dodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
+    if (stamina5s !== null && stamina5s < reserveMs) {
+      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
+    }
+    return base;
+  }
+
   function combatAimNoDamageLevel(widenMs) {
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const elapsed = Math.max(0, Number(widenMs) || 0);
@@ -11009,6 +11134,7 @@ function browserBotSource(config) {
     let combatMove = dodging
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -11020,17 +11146,24 @@ function browserBotSource(config) {
       : null;
     if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
     const aim = combatAimTarget(self, target);
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure
+    });
     return {
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (realBulletPressure
-          ? 'combat-leave-dodge'
-          : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover')),
+        : (shooting.suppressed
+          ? 'combat-stamina-conserve'
+          : (realBulletPressure
+            ? 'combat-leave-dodge'
+            : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover'))),
       dx: combatMove.dx,
       dy: combatMove.dy,
-      shoot: true,
-      forceShoot: true,
-      shootEveryMs: cfg.combatShootEveryMs,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
       aimTarget: {
         x: aim.x,
         y: aim.y,
@@ -11054,6 +11187,7 @@ function browserBotSource(config) {
         reason: pressure.reason || ''
       } : null,
       movementSuppressed,
+      shooting,
       strafe: dodging ? {
         dx: combatMove.dx,
         dy: combatMove.dy,
@@ -11117,10 +11251,6 @@ function browserBotSource(config) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
     const damageState = combatAimDamageState(target);
-    const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState);
-    if (lowNoDamage) {
-      return combatLeaveAction('combat-low-hp-no-damage-leave', baseTarget, lowNoDamage, combatLeaveCoverAction(self, target, bullets, targetDistance));
-    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
       const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
@@ -11165,6 +11295,7 @@ function browserBotSource(config) {
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
     combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
+    const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -11178,20 +11309,27 @@ function browserBotSource(config) {
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure,
+      pressureClose: pressureClose.active
+    });
+    const baseReason = realBulletPressure
+      ? 'combat-tangent-dodge'
+      : (spacingActive
+        ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+        : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
     return {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (realBulletPressure
-          ? 'combat-tangent-dodge'
-          : (spacingActive
-            ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-            : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')))),
+        : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason)),
       combat: true,
       ignoreReturnBlock: true,
-      shoot: true,
-      forceShoot: true,
-      shootEveryMs: cfg.combatShootEveryMs,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
       dx: combatMove.dx,
       dy: combatMove.dy,
       target: baseTarget,
@@ -11261,7 +11399,8 @@ function browserBotSource(config) {
           preferClosing: Boolean(pressureClose.active),
           merged: Boolean(!realBulletPressure)
         } : null,
-        movementSuppressed
+        movementSuppressed,
+        shooting
       }
     };
   }

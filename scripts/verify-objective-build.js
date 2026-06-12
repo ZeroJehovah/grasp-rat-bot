@@ -37,7 +37,14 @@ const NUMERIC_INVARIANTS = [
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'page403ErrorReloadMs', value: 600000 },
-  { key: 'combatAttackRange', value: 14500 }
+  { key: 'combatAttackRange', value: 14500 },
+  { key: 'combatPressureCloseMinHp', value: 60 },
+  { key: 'combatShootEveryMs', value: 160 },
+  { key: 'combatShootReserveMs', value: 5600 },
+  { key: 'combatShootDodgeReserveMs', value: 3800 },
+  { key: 'combatShootHardReserveMs', value: 1800 },
+  { key: 'combatShootConserveEveryMs', value: 360 },
+  { key: 'combatShootRecoveryEveryMs', value: 700 }
 ];
 
 const results = [];
@@ -330,6 +337,22 @@ function main() {
       assert(body.includes("if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave')"), 'engaged recovery combat can still fall through to non-combat logic');
       assert(!body.includes('const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'old recovery-leave-only combat branch is still present');
     });
+    check(`${file} uses stamina-aware combat fire discipline`, () => {
+      const shootingBody = functionBody(text, 'combatShootingPlan');
+      assert(shootingBody.includes("staminaRemaining(self, '5s')"), 'combat shooting plan does not read 5s stamina');
+      assert(shootingBody.includes('reserve-for-dodge'), 'combat shooting plan does not reserve stamina for dodge');
+      assert(shootingBody.includes('stamina-rebuild'), 'combat shooting plan does not stop fire for stamina rebuild');
+      assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
+      const combatBody = functionBody(text, 'buildCombatAction');
+      assert(combatBody.includes('const shooting = combatShootingPlan(self'), 'combat action does not use shooting plan');
+      assert(combatBody.includes('shoot: shooting.shoot'), 'combat action does not expose planned shoot flag');
+      assert(combatBody.includes('forceShoot: shooting.forceShoot'), 'combat action does not expose planned force flag');
+      assert(combatBody.includes('shootEveryMs: shooting.shootEveryMs'), 'combat action does not expose planned cadence');
+      assert(combatBody.includes("shooting.suppressed ? 'combat-stamina-conserve'"), 'combat action does not report fire suppression reason');
+      assert(combatBody.includes("shooting.throttled ? 'combat-burst-fire'"), 'combat action does not report burst-fire reason');
+      assert(!combatBody.includes("combat-low-hp-no-damage-leave', baseTarget"), 'low no-damage can still trigger combat leave');
+      assert(!text.includes('forceShoot: true'), 'force shooting is still present');
+    });
     check(`${file} blocks new leave triggers while pending exit is active`, () => {
       const skipBody = functionBody(text, 'pendingExitSkipNewLeave');
       assert(skipBody.includes('if (!pending) return null'), 'pending-exit skip helper can run without pending exit');
@@ -392,6 +415,12 @@ function main() {
       /name: 'stationary full-stamina active in range beats coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'attack'/.test(sourceBot),
       'stationary full-stamina Active coin override self-test not found'
     );
+  });
+
+  check('grasp-rat-bot.js covers combat fire discipline self-tests', () => {
+    assert(sourceBot.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
+    assert(sourceBot.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
+    assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
   });
 
   const obsoleteReason = ['wait', 'for', 'clear', 'opportunity'].join('-');

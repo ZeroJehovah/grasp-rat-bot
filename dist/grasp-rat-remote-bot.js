@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.116"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.117"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -91,7 +91,12 @@
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
     combatLowHpNoDamageMinGap: 0,
-    combatShootEveryMs: 80,
+    combatShootEveryMs: 160,
+    combatShootReserveMs: 5600,
+    combatShootDodgeReserveMs: 3800,
+    combatShootHardReserveMs: 1800,
+    combatShootConserveEveryMs: 360,
+    combatShootRecoveryEveryMs: 700,
     combatStationarySpeed: 5,
     combatAimJitterRadians: 0.08,
     combatAimJitterMinRadians: 0.025,
@@ -128,7 +133,7 @@
     combatSpacingPreferredRange: 6500,
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
-    combatPressureCloseMinHp: 70,
+    combatPressureCloseMinHp: 60,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -1180,10 +1185,12 @@
 	      'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
 	      'conserve-stamina-before-chasing': '兼容旧状态：保存体力',
 	      'save-stamina-for-profitable-coin': '兼容旧状态：等待目标',
-	      'combat-attack': '战斗：持续开火',
-	      'combat-tangent-dodge': '战斗：切线规避并开火',
-	      'combat-stamina-hold': '战斗：短体力不足，停止移动并开火',
-	      'combat-pressure-close': '战斗：久攻未中，压近开火',
+	      'combat-attack': '战斗：节奏开火',
+	      'combat-tangent-dodge': '战斗：切线规避并节奏开火',
+	      'combat-stamina-hold': '战斗：短体力不足，停止移动并暂停开火',
+	      'combat-stamina-conserve': '战斗：保留体力躲避，暂停开火',
+	      'combat-burst-fire': '战斗：保留体力，降频开火',
+	      'combat-pressure-close': '战斗：久攻未中，压近并节奏开火',
 	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
@@ -7501,6 +7508,40 @@
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
   }
 
+  function combatShootingPlan(self, options = {}) {
+    const stamina5s = staminaRemaining(self, '5s');
+    const normalEveryMs = Math.max(1, Number(cfg.combatShootEveryMs || cfg.shootEveryMs || 120));
+    const conserveEveryMs = Math.max(normalEveryMs, Number(cfg.combatShootConserveEveryMs || normalEveryMs));
+    const recoveryEveryMs = Math.max(conserveEveryMs, Number(cfg.combatShootRecoveryEveryMs || conserveEveryMs));
+    const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
+    const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
+    const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
+    const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
+    const base = {
+      shoot: true,
+      forceShoot: false,
+      shootEveryMs: normalEveryMs,
+      reason: 'normal',
+      stamina5s,
+      reserveMs,
+      dodgeReserveMs,
+      hardReserveMs,
+      needsMovement,
+      suppressed: false,
+      throttled: false
+    };
+    if (stamina5s !== null && stamina5s < hardReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
+    }
+    if (stamina5s !== null && needsMovement && stamina5s < dodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
+    if (stamina5s !== null && stamina5s < reserveMs) {
+      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
+    }
+    return base;
+  }
+
   function combatAimNoDamageLevel(widenMs) {
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const elapsed = Math.max(0, Number(widenMs) || 0);
@@ -7640,6 +7681,7 @@
     let combatMove = dodging
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
+    const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -7651,17 +7693,24 @@
       : null;
     if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
     const aim = combatAimTarget(self, target);
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure
+    });
     return {
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (realBulletPressure
-          ? 'combat-leave-dodge'
-          : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover')),
+        : (shooting.suppressed
+          ? 'combat-stamina-conserve'
+          : (realBulletPressure
+            ? 'combat-leave-dodge'
+            : (spacing.active && (combatMove.dx || combatMove.dy) ? 'combat-leave-spacing' : 'combat-leave-cover'))),
       dx: combatMove.dx,
       dy: combatMove.dy,
-      shoot: true,
-      forceShoot: true,
-      shootEveryMs: cfg.combatShootEveryMs,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
       aimTarget: {
         x: aim.x,
         y: aim.y,
@@ -7685,6 +7734,7 @@
         reason: pressure.reason || ''
       } : null,
       movementSuppressed,
+      shooting,
       strafe: dodging ? {
         dx: combatMove.dx,
         dy: combatMove.dy,
@@ -7748,10 +7798,6 @@
 	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
     const damageState = combatAimDamageState(target);
-    const lowNoDamage = combatLowHpNoDamageLeaveState(selfHp, targetHp, damageState);
-    if (lowNoDamage) {
-      return combatLeaveAction('combat-low-hp-no-damage-leave', baseTarget, lowNoDamage, combatLeaveCoverAction(self, target, bullets, targetDistance));
-    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
       const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
@@ -7796,6 +7842,7 @@
       ? mergeCombatMove(strafe, spacing, !realBulletPressure)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
     combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
+    const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -7809,20 +7856,27 @@
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
+    const shooting = combatShootingPlan(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure,
+      pressureClose: pressureClose.active
+    });
+    const baseReason = realBulletPressure
+      ? 'combat-tangent-dodge'
+      : (spacingActive
+        ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
+        : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
     return {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (realBulletPressure
-          ? 'combat-tangent-dodge'
-          : (spacingActive
-            ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-            : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')))),
+        : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason)),
       combat: true,
       ignoreReturnBlock: true,
-      shoot: true,
-      forceShoot: true,
-      shootEveryMs: cfg.combatShootEveryMs,
+      shoot: shooting.shoot,
+      forceShoot: shooting.forceShoot,
+      shootEveryMs: shooting.shootEveryMs,
       dx: combatMove.dx,
       dy: combatMove.dy,
       target: baseTarget,
@@ -7892,7 +7946,8 @@
           preferClosing: Boolean(pressureClose.active),
           merged: Boolean(!realBulletPressure)
         } : null,
-        movementSuppressed
+        movementSuppressed,
+        shooting
       }
     };
   }
