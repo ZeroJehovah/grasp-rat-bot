@@ -725,9 +725,7 @@ function runSelfTest() {
     return Math.max(1, Math.ceil(hp / damage));
   }
   function opportunityEnemyStaminaCost(target) {
-    const afk = isAfkProfitTarget(target);
-    const stopDistance = afk ? cfg.attackRange : cfg.attackEngageRange;
-    const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
+    const moveCost = opportunityMoveStaminaCost(target?.distance, 0);
     const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
     return moveCost + shotCost;
   }
@@ -3552,6 +3550,30 @@ function runSelfTest() {
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
           local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 5 }],
           coins: [{ drop_id: 1, x: 10000, y: 0, amount: 5 }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:best-opportunity-coin'
+    },
+    {
+      name: '500m drop five afk loses to 100m one coin by pickup travel cost',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          global: [{ user_id: 7, x: 50000, y: 0, current_join_mode: 'Passive', death_reward_preview: 5 }],
+          coins: [{ drop_id: 1, x: -10000, y: 0, amount: 1, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:best-opportunity-coin'
+    },
+    {
+      name: 'same distance ten coin beats drop ten after kill pickup cost',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 10 }],
+          coins: [{ drop_id: 1, x: 10000, y: 0, amount: 10, native: true }]
         });
         return action.kind + ':' + action.reason;
       })(),
@@ -12891,9 +12913,7 @@ function browserBotSource(config) {
   }
 
   function opportunityEnemyStaminaCost(target) {
-    const afk = isAfkProfitTarget(target);
-    const stopDistance = afk ? cfg.attackRange : cfg.attackEngageRange;
-    const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
+    const moveCost = opportunityMoveStaminaCost(target?.distance, 0);
     const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
     return moveCost + shotCost;
   }

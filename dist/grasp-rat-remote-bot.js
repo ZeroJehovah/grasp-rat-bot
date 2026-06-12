@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.136"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.137"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -8953,9 +8953,7 @@
   }
 
   function opportunityEnemyStaminaCost(target) {
-    const afk = isAfkProfitTarget(target);
-    const stopDistance = afk ? cfg.attackRange : cfg.attackEngageRange;
-    const moveCost = opportunityMoveStaminaCost(target?.distance, stopDistance);
+    const moveCost = opportunityMoveStaminaCost(target?.distance, 0);
     const shotCost = estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500));
     return moveCost + shotCost;
   }
