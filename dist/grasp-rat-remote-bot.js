@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.135"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.136"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -96,9 +96,9 @@
     attackRange: 14500,
     attackPreferredRange: 14500,
     attackEngageRange: 11000,
-    attackApproachRange: 26000,
+    attackApproachRange: 50000,
     attackDangerRadius: 25000,
-    globalAttackMaxDistance: 26000,
+    globalAttackMaxDistance: 50000,
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
@@ -185,7 +185,8 @@
 			    opportunitySwitchHoldMs: 7000,
 			    opportunityMissingHoldMs: 7000,
 			    opportunitySameCoinRadius: 1200,
-			    opportunityNearbyPriorityDistance: 18000,
+				    opportunityVisibleDistance: 50000,
+				    opportunityNearbyPriorityDistance: 50000,
 	    coinMaxDistance: 18000,
 	    coinDangerRadius: 25000,
 	    invulnerableActiveCoinDangerRadius: 36000,
@@ -194,7 +195,7 @@
 	    invulnerableActiveCoinHeadingCosMin: 0.55,
 	    invulnerableActiveCoinHeadingMinDistance: 1500,
 	    stationaryActiveCoinDangerRadius: 12000,
-    globalCoinMaxDistance: 22000,
+    globalCoinMaxDistance: 50000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
     distantCoinMaxDistance: 35000,
@@ -9744,8 +9745,8 @@
 
   function opportunityPriorityTier(item) {
     const distance = Number(item?.distance ?? Infinity);
-    const nearDistance = Math.max(0, Number(cfg.opportunityNearbyPriorityDistance || 0));
-    if (Number.isFinite(distance) && distance <= nearDistance) return 1;
+    const visibleDistance = Math.max(0, Number(cfg.opportunityVisibleDistance || cfg.opportunityNearbyPriorityDistance || 0));
+    if (Number.isFinite(distance) && distance <= visibleDistance) return 1;
     if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
     return 0;
   }

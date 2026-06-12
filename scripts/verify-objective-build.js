@@ -39,6 +39,11 @@ const NUMERIC_INVARIANTS = [
   { key: 'loginSnapshotSuccessRequired', value: 3 },
   { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
   { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
+  { key: 'opportunityVisibleDistance', value: 50000 },
+  { key: 'opportunityNearbyPriorityDistance', value: 50000 },
+  { key: 'attackApproachRange', value: 50000 },
+  { key: 'globalAttackMaxDistance', value: 50000 },
+  { key: 'globalCoinMaxDistance', value: 50000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatLowHpCloseRiskMargin', value: 5 },
@@ -574,6 +579,12 @@ function main() {
       /name: 'stationary full-stamina active with drop is non-combat profit attack'[\s\S]*current_join_mode: 'Active'[\s\S]*death_reward_preview: 20[\s\S]*want: 'attack:false:best-opportunity-afk-drop-target'/.test(sourceBot),
       'stationary full-stamina Active profit attack non-combat self-test not found'
     );
+  });
+
+  check('grasp-rat-bot.js covers visible opportunity ROI self-tests', () => {
+    assert(sourceBot.includes("name: 'higher roi 200m coin beats 150m coin inside visible pool'"), 'visible coin ROI self-test not found');
+    assert(sourceBot.includes("name: 'visible high afk drop beats opposite one coin by stamina roi'"), 'visible AFK-vs-coin ROI self-test not found');
+    assert(sourceBot.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
   });
 
   check('grasp-rat-bot.js covers combat fire discipline self-tests', () => {
