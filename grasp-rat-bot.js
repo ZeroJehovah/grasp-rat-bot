@@ -3982,6 +3982,8 @@ function browserBotSource(config) {
 	    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
 	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
 	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
+	    lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === 'object' ? { ...previousBot.lastCombatLogMetric } : null,
+	    lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
 	    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
 	    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
 	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
@@ -4446,6 +4448,8 @@ function browserBotSource(config) {
     combatStrafe: null,
     combatTarget: preserved.combatTarget,
     combatAim: preserved.combatAim,
+    lastCombatLogMetric: preserved.lastCombatLogMetric,
+    lastCombatShot: preserved.lastCombatShot,
     combatLogging: {
       enabled: Boolean(cfg.combatLoggingEnabled),
       endpoint: String(cfg.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log'),
@@ -5994,6 +5998,255 @@ function browserBotSource(config) {
           .slice(0, limit);
       }
 
+      function combatMetricNumber(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+      }
+
+      function combatMetricRound(value) {
+        const num = combatMetricNumber(value);
+        return num === null ? null : Math.round(num);
+      }
+
+      function combatMetricDelta(current, previous) {
+        const curr = combatMetricNumber(current);
+        const prev = combatMetricNumber(previous);
+        if (curr === null || prev === null) return null;
+        return Math.round((curr - prev) * 100) / 100;
+      }
+
+      function combatMetricEntityId(entity) {
+        const id = entity?.id ?? entity?.user_id ?? entity?.targetId;
+        return id === undefined || id === null || id === '' ? null : id;
+      }
+
+      function combatMetricHp(entity, fallback = null) {
+        const values = [
+          entity?.hp,
+          entity?.knownHp,
+          entity?.displayHp,
+          entity?.selfHp,
+          entity?.targetHp,
+          fallback
+        ];
+        for (const value of values) {
+          const num = combatMetricNumber(value);
+          if (num !== null) return num;
+        }
+        return null;
+      }
+
+      function combatMetricPoint(entity, fallbackHp = null) {
+        if (!entity || typeof entity !== 'object') return null;
+        const x = combatMetricNumber(entity.x);
+        const y = combatMetricNumber(entity.y);
+        const hp = combatMetricHp(entity, fallbackHp);
+        const distance = combatMetricNumber(entity.distance);
+        const id = combatMetricEntityId(entity);
+        if (id === null && x === null && y === null && hp === null && distance === null) return null;
+        return {
+          id,
+          name: entity.name || entity.label || '',
+          x: x === null ? null : Math.round(x),
+          y: y === null ? null : Math.round(y),
+          hp,
+          distance: distance === null ? null : Math.round(distance)
+        };
+      }
+
+      function combatMetricDistance(a, b) {
+        if (!a || !b) return null;
+        const ax = combatMetricNumber(a.x);
+        const ay = combatMetricNumber(a.y);
+        const bx = combatMetricNumber(b.x);
+        const by = combatMetricNumber(b.y);
+        if (ax === null || ay === null || bx === null || by === null) return null;
+        return Math.round(Math.hypot(ax - bx, ay - by));
+      }
+
+      function combatMetricTarget(decision, nearbyEntities) {
+        const target = decision?.target || decision?.combatState?.target || null;
+        const targetId = combatMetricEntityId(target);
+        const targetName = target?.name || target?.label || '';
+        let live = null;
+        if (Array.isArray(nearbyEntities)) {
+          live = nearbyEntities.find(entity => {
+            const id = combatMetricEntityId(entity);
+            return targetId !== null && id !== null && String(id) === String(targetId);
+          }) || null;
+          if (!live && targetName) {
+            live = nearbyEntities.find(entity => String(entity?.name || entity?.label || '') === String(targetName)) || null;
+          }
+        }
+        const fallbackHp = combatMetricNumber(decision?.combatState?.targetHp ?? decision?.targetHp ?? null);
+        if (live && target) return { ...target, ...live, hp: live.hp ?? live.knownHp ?? target.hp ?? target.knownHp ?? fallbackHp };
+        if (live) return { ...live, hp: live.hp ?? live.knownHp ?? fallbackHp };
+        if (target) return { ...target, hp: target.hp ?? target.knownHp ?? fallbackHp };
+        return null;
+      }
+
+      function combatMetricBulletStats(bullets) {
+        const laneLimit = Math.max(
+          Number(cfg.combatBulletLaneRadius || 0) || 0,
+          (Number(cfg.combatBulletHitRadiusCm || 0) || 0) + 500
+        );
+        let nativeBulletCount = 0;
+        let snapshotBulletCount = 0;
+        let threatBulletCount = 0;
+        let nearestThreat = null;
+        for (const bullet of bullets || []) {
+          if (bullet?.native) nativeBulletCount += 1;
+          if (bullet?.snapshot) snapshotBulletCount += 1;
+          const projection = combatMetricNumber(bullet?.projection);
+          const laneDistance = combatMetricNumber(bullet?.laneDistance);
+          if (projection === null || projection <= 0 || laneDistance === null || laneDistance > laneLimit) continue;
+          threatBulletCount += 1;
+          const timeToImpactMs = combatMetricNumber(bullet?.timeToImpactMs);
+          if (timeToImpactMs === null) continue;
+          if (!nearestThreat || timeToImpactMs < nearestThreat.timeToImpactMs) {
+            nearestThreat = {
+              id: bullet.id ?? null,
+              ownerId: bullet.ownerId ?? null,
+              timeToImpactMs: Math.round(timeToImpactMs),
+              laneDistance: Math.round(laneDistance),
+              distance: combatMetricRound(bullet.distance)
+            };
+          }
+        }
+        return {
+          bulletCount: arrayCount(bullets),
+          nativeBulletCount,
+          snapshotBulletCount,
+          threatBulletCount,
+          nearestThreat
+        };
+      }
+
+      function combatMetricActionSummary(decision, rawSelf, incoming) {
+        const combatState = decision?.combatState || {};
+        const spacing = combatState.spacing || decision?.spacing || null;
+        const pressureClose = combatState.pressureClose || null;
+        const shooting = combatState.shooting || decision?.shooting || null;
+        const movementSuppressed = combatState.movementSuppressed || decision?.movementSuppressed || null;
+        return {
+          kind: decision?.kind || '',
+          reason: decision?.reason || '',
+          dx: combatMetricRound(decision?.dx),
+          dy: combatMetricRound(decision?.dy),
+          shoot: Boolean(decision?.shoot),
+          forceShoot: Boolean(decision?.forceShoot),
+          shootEveryMs: combatMetricRound(decision?.shootEveryMs),
+          spacingReason: spacing?.reason || '',
+          spacingMerged: Boolean(spacing?.merged || spacing?.spacingMerged || combatState?.strafe?.spacingMerged),
+          spacingOverrideBullet: Boolean(spacing?.overrideBullet),
+          pressureCloseReason: pressureClose?.reason || '',
+          shootingReason: shooting?.reason || '',
+          shootingSuppressed: Boolean(shooting?.suppressed),
+          shootingThrottled: Boolean(shooting?.throttled),
+          stamina5s: combatMetricRound(shooting?.stamina5s ?? movementSuppressed?.stamina5s ?? rawSelf?.stamina_5s_remaining_milli),
+          movementSuppressedReason: movementSuppressed?.reason || '',
+          incomingBulletReason: decision?.incomingBullet?.reason || incoming?.reason || ''
+        };
+      }
+
+      function combatLogFrameMetrics(rawSelf, selfSummary, decision, nearbyEntities, bullets, incoming, entryAt, perfNow) {
+        const selfPoint = combatMetricPoint(selfSummary || rawSelf);
+        const targetPoint = combatMetricPoint(combatMetricTarget(decision, nearbyEntities), decision?.combatState?.targetHp);
+        const previous = bot.lastCombatLogMetric && typeof bot.lastCombatLogMetric === 'object'
+          ? bot.lastCombatLogMetric
+          : null;
+        const frameDtMs = previous?.at ? Math.max(0, Math.round(entryAt - Number(previous.at || entryAt))) : null;
+        const sameTarget = Boolean(previous?.target?.id !== null
+          && previous?.target?.id !== undefined
+          && targetPoint?.id !== null
+          && targetPoint?.id !== undefined
+          && String(previous.target.id) === String(targetPoint.id));
+        const selfHpDelta = combatMetricDelta(selfPoint?.hp, previous?.self?.hp);
+        const targetHpDelta = sameTarget ? combatMetricDelta(targetPoint?.hp, previous?.target?.hp) : null;
+        const distanceDelta = sameTarget ? combatMetricDelta(targetPoint?.distance, previous?.target?.distance) : null;
+        const shot = bot.lastCombatShot && typeof bot.lastCombatShot === 'object' ? bot.lastCombatShot : null;
+        const shotAt = Number(shot?.at || 0);
+        const previousAt = Number(previous?.at || 0);
+        const shotSincePreviousFrame = Boolean(shotAt && shotAt <= entryAt && (!previousAt || shotAt > previousAt));
+        const combatTarget = bot.combatTarget || null;
+        const targetDamageAt = combatTarget
+          && targetPoint?.id !== null
+          && targetPoint?.id !== undefined
+          && String(combatTarget.id ?? '') === String(targetPoint.id)
+          ? Number(combatTarget.lastDamageAt || 0)
+          : 0;
+        const serverPositionStall = summarizeServerPositionStall();
+        const metrics = {
+          frameDtMs,
+          selfHpDelta,
+          selfDamageTaken: selfHpDelta !== null && selfHpDelta < 0 ? Math.round(Math.abs(selfHpDelta) * 100) / 100 : 0,
+          targetHpDelta,
+          targetDamageTaken: targetHpDelta !== null && targetHpDelta < 0 ? Math.round(Math.abs(targetHpDelta) * 100) / 100 : 0,
+          distanceDelta,
+          selfMoveCm: combatMetricDistance(selfPoint, previous?.self),
+          targetMoveCm: sameTarget ? combatMetricDistance(targetPoint, previous?.target) : null,
+          action: combatMetricActionSummary(decision || {}, rawSelf || selfSummary || null, incoming),
+          shots: shot ? {
+            lastShotAgeMs: shotAt ? Math.max(0, Math.round(entryAt - shotAt)) : null,
+            shotSincePreviousFrame,
+            sent: Boolean(shot.sent),
+            blockedByCadence: Boolean(shot.blockedByCadence),
+            cadenceRemainingMs: combatMetricRound(shot.cadenceRemainingMs),
+            shootEveryMs: combatMetricRound(shot.shootEveryMs),
+            force: Boolean(shot.force),
+            targetId: shot.target?.id ?? null,
+            targetName: shot.target?.name || ''
+          } : null,
+          damage: {
+            lastTargetDamageAgeMs: targetDamageAt ? Math.max(0, Math.round(entryAt - targetDamageAt)) : null,
+            lastTargetDamageAmount: combatTarget
+              && targetPoint?.id !== null
+              && targetPoint?.id !== undefined
+              && String(combatTarget.id ?? '') === String(targetPoint.id)
+              ? combatMetricRound(combatTarget.lastDamageAmount)
+              : null,
+            noTargetDamageMs: combatTarget
+              && targetPoint?.id !== null
+              && targetPoint?.id !== undefined
+              && String(combatTarget.id ?? '') === String(targetPoint.id)
+              ? combatMetricRound(combatTarget.noDamageMs)
+              : null
+          },
+          bullets: combatMetricBulletStats(bullets),
+          incomingBullet: incoming ? {
+            id: incoming.id ?? null,
+            ownerId: incoming.ownerId ?? null,
+            distance: combatMetricRound(incoming.distance),
+            laneDistance: combatMetricRound(incoming.laneDistance),
+            timeToImpactMs: combatMetricRound(incoming.timeToImpactMs),
+            reason: incoming.reason || ''
+          } : null,
+          serverPositionStall: serverPositionStall ? {
+            active: Boolean(serverPositionStall.active),
+            stalled: Boolean(serverPositionStall.stalled),
+            reason: serverPositionStall.reason || '',
+            holdRemainingMs: combatMetricRound(serverPositionStall.holdRemainingMs),
+            movingMs: combatMetricRound(serverPositionStall.movingMs),
+            clientMoved: combatMetricRound(serverPositionStall.clientMoved),
+            serverMoved: combatMetricRound(serverPositionStall.serverMoved),
+            gap: combatMetricRound(serverPositionStall.gap),
+            gapDelta: combatMetricRound(serverPositionStall.gapDelta),
+            snapshotAgeMs: combatMetricRound(serverPositionStall.snapshotAgeMs)
+          } : null
+        };
+        bot.lastCombatLogMetric = {
+          at: entryAt,
+          perfNow,
+          combatId: bot.combatLogging?.combatId || '',
+          source: decision?.source || '',
+          reason: decision?.reason || '',
+          self: selfPoint,
+          target: targetPoint
+        };
+        return metrics;
+      }
+
       function combatLogGlobalStateSummary() {
         return {
           refreshedAt: bot.globalState.refreshedAt || 0,
@@ -6104,6 +6357,8 @@ function browserBotSource(config) {
       }
 
       function buildCombatLogEntry(source, decision) {
+        const entryAt = Date.now();
+        const perfNow = Math.round(now());
         let currentSelf = null;
         try {
           currentSelf = getSelf();
@@ -6122,10 +6377,11 @@ function browserBotSource(config) {
         }
         const exit = combatLogExitSummary(decision || {});
         const login = combatLogLoginSummary(decision || {});
+        const combatMetrics = combatLogFrameMetrics(rawSelf, self, decision || {}, nearbyEntities, bullets, incoming, entryAt, perfNow);
         return {
           type: 'combat-frame',
-          at: Date.now(),
-          perfNow: Math.round(now()),
+          at: entryAt,
+          perfNow,
           tickCount: bot.tickCount,
           source,
           version: cfg.version,
@@ -6158,6 +6414,7 @@ function browserBotSource(config) {
           exit,
           login,
           enemyExit: combatLogEnemyExitSummary(),
+          combatMetrics,
           nearbyEntities,
           bullets
         };
@@ -6283,6 +6540,7 @@ function browserBotSource(config) {
           target: entry.target || null,
           decision: entry.decision,
           login: entry.login || null,
+          combatMetrics: entry.combatMetrics || null,
           nearbyEntities: entry.nearbyEntities,
           exit: entry.exit || null,
           enemyExit: entry.enemyExit || null
@@ -6310,6 +6568,7 @@ function browserBotSource(config) {
           self: entry?.self || null,
           decision: entry?.decision || null,
           login: entry?.login || null,
+          combatMetrics: entry?.combatMetrics || null,
           exit: entry?.exit || null,
           enemyExit: entry?.enemyExit || null,
           sent: state.sent,
@@ -10433,17 +10692,72 @@ function browserBotSource(config) {
 	    }
 	  }
 
+  function recordCombatShotAttempt(self, target, detail = {}) {
+    if (!target) return;
+    const at = Number(detail.at || Date.now());
+    const perfNow = Number(detail.perfNow ?? now());
+    const targetDistance = Number.isFinite(Number(target.distance))
+      ? Number(target.distance)
+      : (self ? dist(self, target) : NaN);
+    bot.lastCombatShot = {
+      at,
+      perfNow: Math.round(perfNow),
+      force: Boolean(detail.force),
+      shootEveryMs: combatMetricRound(detail.shootEveryMs),
+      sent: Boolean(detail.sent),
+      blockedByCadence: Boolean(detail.blockedByCadence),
+      cadenceRemainingMs: combatMetricRound(detail.cadenceRemainingMs),
+      self: self ? {
+        id: combatMetricEntityId(self),
+        x: combatMetricRound(self.x),
+        y: combatMetricRound(self.y),
+        hp: combatMetricHp(self)
+      } : null,
+      target: {
+        id: combatMetricEntityId(target),
+        name: target.name || target.label || '',
+        x: combatMetricRound(target.x),
+        y: combatMetricRound(target.y),
+        hp: combatMetricHp(target),
+        distance: Number.isFinite(targetDistance) ? Math.round(targetDistance) : null
+      }
+    };
+  }
+
   function shootAt(self, target, force = false, options = {}) {
     if (!target) return false;
     const t = now();
-    const shootEveryMs = Number(options.shootEveryMs ?? cfg.shootEveryMs);
-    if (!force && t - bot.lastShotAt < shootEveryMs) return false;
+    const at = Date.now();
+    const shootEveryMs = Math.max(0, Number(options.shootEveryMs ?? cfg.shootEveryMs) || 0);
+    const cadenceRemainingMs = Math.max(0, shootEveryMs - (t - Number(bot.lastShotAt || 0)));
+    if (!force && cadenceRemainingMs > 0) {
+      recordCombatShotAttempt(self, target, {
+        at,
+        perfNow: t,
+        force,
+        shootEveryMs,
+        sent: false,
+        blockedByCadence: true,
+        cadenceRemainingMs
+      });
+      return false;
+    }
     bot.lastShotAt = t;
     aimAt(target);
-    if (sendNativeShoot(self, target)) return true;
+    let sent = sendNativeShoot(self, target);
     const startX = Math.round(Number(self.x) || 0);
     const startY = Math.round(Number(self.y) || 0);
-    return wsSend('shoot ' + Math.round(target.x) + ' ' + Math.round(target.y) + ' ' + startX + ' ' + startY);
+    if (!sent) sent = wsSend('shoot ' + Math.round(target.x) + ' ' + Math.round(target.y) + ' ' + startX + ' ' + startY);
+    recordCombatShotAttempt(self, target, {
+      at,
+      perfNow: t,
+      force,
+      shootEveryMs,
+      sent,
+      blockedByCadence: false,
+      cadenceRemainingMs: 0
+    });
+    return sent;
   }
 
   function directionTo(self, target, tolerance = 250) {
