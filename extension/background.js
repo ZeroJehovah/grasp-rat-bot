@@ -178,7 +178,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (type === 'storageGet') {
       const defaults = payload.defaults && typeof payload.defaults === 'object' ? payload.defaults : {};
       const values = await storageGet(null);
-      return { ok: true, values: { ...defaults, ...values } };
+      return { ok: true, values: { ...defaults, ...values }, keys: Object.keys(values || {}) };
     }
     if (type === 'storageSet') {
       await storageSet(payload.items || {});

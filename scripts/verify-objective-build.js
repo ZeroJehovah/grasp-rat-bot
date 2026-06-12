@@ -332,6 +332,8 @@ function main() {
       assert(queueBody.includes('const critical = Boolean(options.critical || snapshot.exitAuditLogId)'), 'critical exit audit queue marker not found');
       assert(queueBody.includes('(!state.enabled && !critical)'), 'critical exit audit logs still depend on combat logging enabled');
       assert(queueBody.includes('persistExitAuditLogEntry(queued)'), 'critical exit audit logs are not persisted before flush');
+      const pendingIdsBody = functionBody(text, 'pendingExitAuditLogIds');
+      assert(pendingIdsBody.includes('if (!state.endpoint) return []'), 'unconfigured log endpoint can still block on persisted exit audit logs');
       const flushBody = functionBody(text, 'flushCombatLogs');
       assert(flushBody.includes('removePersistedExitAuditLogs(exitAuditIds)'), 'persisted exit audit logs are not cleared on successful flush');
       const reloadBody = functionBody(text, 'requestReload');
@@ -598,6 +600,9 @@ function main() {
       assert(text.includes("statusDot.setAttribute('aria-pressed', String(paused))"), 'BOT status dot aria-pressed not found');
       assert(text.includes('actions.appendChild(createDot(wsTitle, wsColor'), 'WS state dot not found');
       assert(text.includes("label: 'WS'"), 'WS state dot visible label not found');
+      assert(text.includes('combatLogEndpointConfigured'), 'combat log endpoint configured flag not found');
+      assert(text.includes('const remoteLogVisible = Boolean(cfg.combatLogEndpointConfigured)'), 'remote-log visibility gate not found');
+      assert(text.includes('if (remoteLogVisible) {'), 'remote-log dot is not hidden before endpoint configuration');
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
       assert(text.includes("label: '日志'"), 'remote-log dot visible label not found');
       assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');

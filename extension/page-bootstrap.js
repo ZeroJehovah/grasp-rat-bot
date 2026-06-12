@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.25';
+  const BOOTSTRAP_VERSION = '0.1.26';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -59,6 +59,7 @@
     page403ErrorReloadMs: 600000,
     combatLoggingEnabled: false,
     combatLogEndpoint: 'http://127.0.0.1:18765/combat-log',
+    combatLogEndpointConfigured: false,
     cacheBust: true,
     autoLogin: true
   };
@@ -359,6 +360,14 @@
     }
     if (!result) throw lastError || new Error('extension storage bridge unavailable');
     storedValues = result.values || defaults;
+    const storedKeys = new Set(Array.isArray(result.keys) ? result.keys : []);
+    const storedCombatLogEndpoint = storedKeys.has('combatLogEndpoint')
+      ? String(readStored('combatLogEndpoint', '') || '')
+      : '';
+    const storedCombatLogEndpointConfigured = Boolean(
+      storedBoolean(readStored('combatLogEndpointConfigured', DEFAULTS.combatLogEndpointConfigured))
+      || storedCombatLogEndpoint
+    );
     cfg = {
       manifestUrl: String(readStored('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
       loaderUpdateUrl: String(readStored('loaderUpdateUrl', DEFAULTS.loaderUpdateUrl) || DEFAULTS.loaderUpdateUrl),
@@ -381,8 +390,9 @@
       panelUpdateMs: Math.max(250, Number(readStored('panelUpdateMs', DEFAULTS.panelUpdateMs)) || DEFAULTS.panelUpdateMs),
       cloudflareErrorReloadMs: Math.max(1000, Number(readStored('cloudflareErrorReloadMs', DEFAULTS.cloudflareErrorReloadMs)) || DEFAULTS.cloudflareErrorReloadMs),
       page403ErrorReloadMs: Math.max(60000, Number(readStored('page403ErrorReloadMs', DEFAULTS.page403ErrorReloadMs)) || DEFAULTS.page403ErrorReloadMs),
-      combatLoggingEnabled: Boolean(storedBoolean(readStored('combatLoggingEnabled', DEFAULTS.combatLoggingEnabled))),
-      combatLogEndpoint: String(readStored('combatLogEndpoint', DEFAULTS.combatLogEndpoint) || DEFAULTS.combatLogEndpoint),
+      combatLoggingEnabled: Boolean(storedBoolean(readStored('combatLoggingEnabled', DEFAULTS.combatLoggingEnabled)) && storedCombatLogEndpointConfigured),
+      combatLogEndpoint: storedCombatLogEndpoint || DEFAULTS.combatLogEndpoint,
+      combatLogEndpointConfigured: storedCombatLogEndpointConfigured,
       cacheBust: Boolean(storedBoolean(readStored('cacheBust', DEFAULTS.cacheBust))),
       autoLogin: Boolean(storedBoolean(readStored('autoLogin', DEFAULTS.autoLogin)))
     };
@@ -1315,28 +1325,33 @@
   function configureCombatLogging(options = {}) {
     const next = options && typeof options === 'object' ? options : {};
     const stored = {};
-    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
-      cfg.combatLoggingEnabled = Boolean(next.enabled);
-      stored.combatLoggingEnabled = cfg.combatLoggingEnabled;
-    }
     if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
       cfg.combatLogEndpoint = String(next.endpoint || DEFAULTS.combatLogEndpoint);
+      cfg.combatLogEndpointConfigured = true;
       stored.combatLogEndpoint = cfg.combatLogEndpoint;
+      stored.combatLogEndpointConfigured = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+      cfg.combatLoggingEnabled = Boolean(next.enabled) && Boolean(cfg.combatLogEndpointConfigured);
+      stored.combatLoggingEnabled = cfg.combatLoggingEnabled;
     }
     if (Object.keys(stored).length) writeStored(stored);
     try {
       const bot = window.__graspRatBot;
       if (bot && typeof bot.configureCombatLogging === 'function') {
         bot.configureCombatLogging({
-          enabled: cfg.combatLoggingEnabled,
-          endpoint: cfg.combatLogEndpoint
+          enabled: Boolean(cfg.combatLoggingEnabled && cfg.combatLogEndpointConfigured),
+          endpoint: cfg.combatLogEndpointConfigured ? cfg.combatLogEndpoint : '',
+          endpointConfigured: Boolean(cfg.combatLogEndpointConfigured)
         });
       }
     } catch (_) {}
     updateBootstrapPanel(true);
     return {
       enabled: cfg.combatLoggingEnabled,
-      endpoint: cfg.combatLogEndpoint
+      endpoint: cfg.combatLogEndpoint,
+      endpointConfigured: Boolean(cfg.combatLogEndpointConfigured),
+      panelVisible: Boolean(cfg.combatLogEndpointConfigured)
     };
   }
 
@@ -1366,7 +1381,8 @@
       : '-';
     const session = status?.session || {};
     const combatLogStatus = status?.combatLogging || {};
-    const remoteLogEnabled = Boolean(cfg.combatLoggingEnabled || combatLogStatus.enabled);
+    const remoteLogVisible = Boolean(cfg.combatLogEndpointConfigured);
+    const remoteLogEnabled = remoteLogVisible && Boolean(cfg.combatLoggingEnabled || combatLogStatus.enabled);
     const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
     const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
     const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
@@ -1554,13 +1570,15 @@
     actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)'), {
       label: 'WS'
     }));
-    const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
-      label: '日志',
-      pending: remoteLogPending > 0 && remoteLogFailed <= 0,
-      onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })
-    });
-    logDot.setAttribute('aria-pressed', String(remoteLogEnabled));
-    actions.appendChild(logDot);
+    if (remoteLogVisible) {
+      const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
+        label: '日志',
+        pending: remoteLogPending > 0 && remoteLogFailed <= 0,
+        onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })
+      });
+      logDot.setAttribute('aria-pressed', String(remoteLogEnabled));
+      actions.appendChild(logDot);
+    }
     header.appendChild(actions);
     appendParent.appendChild(header);
     if (state.loaderUpdateAvailable) {
@@ -2153,8 +2171,9 @@
       sourceHash: String(manifest.sha256 || ''),
       sourceUrl: String(manifest.scriptUrl || ''),
       injectedBy: 'extension',
-      combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled),
-      combatLogEndpoint: cfg.combatLogEndpoint
+      combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled && cfg.combatLogEndpointConfigured),
+      combatLogEndpoint: cfg.combatLogEndpointConfigured ? cfg.combatLogEndpoint : '',
+      combatLogEndpointConfigured: Boolean(cfg.combatLogEndpointConfigured)
     };
     const injectResult = await runInPage(source, manifest.scriptUrl);
     state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
