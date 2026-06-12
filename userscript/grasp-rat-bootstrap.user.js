@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.45
+// @version      0.4.46
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.45';
+  const BOOTSTRAP_VERSION = '0.4.46';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -666,11 +666,58 @@
     return Number.isFinite(n) ? String(Math.round(n)) : '-';
   }
 
+  function entityIdText(entity) {
+    const id = entity?.id ?? entity?.userId ?? entity?.user_id ?? entity?.uid;
+    if (id === undefined || id === null || id === '') return targetNameText(entity);
+    return '#' + id;
+  }
+
+  function combatHpValueColor(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '#cbd5e1';
+    if (n > 80) return '#86efac';
+    if (n >= 50) return '#fde68a';
+    if (n >= 20) return '#fb923c';
+    return '#fca5a5';
+  }
+
+  function combatHpValuePart(value) {
+    return {
+      text: hpText(value),
+      style: [
+        'display:inline-block',
+        'width:3ch',
+        'text-align:right',
+        'color:' + combatHpValueColor(value),
+        'font-weight:800',
+        'font-variant-numeric:tabular-nums'
+      ].join(';')
+    };
+  }
+
   function combatHpSummary(decision, status, self) {
     const target = decision?.target || status?.combatTarget || null;
+    const selfEntity = self || decision?.self || status?.self || null;
     const selfHp = Number(decision?.combatState?.selfHp ?? self?.hp ?? status?.self?.hp ?? NaN);
     const targetHp = Number(decision?.combatState?.targetHp ?? target?.hp ?? NaN);
-    return { selfHp, targetHp };
+    return {
+      selfHp,
+      targetHp,
+      selfId: entityIdText(selfEntity),
+      targetId: entityIdText(target)
+    };
+  }
+
+  function combatHpComparisonParts(hp) {
+    return [
+      { text: hp.selfId, style: 'color:#86efac;font-weight:800' },
+      ' ',
+      combatHpValuePart(hp.selfHp),
+      { text: ' VS ', style: 'color:#94a3b8;font-weight:800' },
+      combatHpValuePart(hp.targetHp),
+      ' ',
+      { text: hp.targetId, style: 'color:#fca5a5;font-weight:800' }
+    ];
   }
 
   function isGamePage() {
@@ -1462,12 +1509,7 @@
     ], 'font-size:11px;color:#94a3b8');
     if (isCombatDecision(decision, status)) {
       const hp = combatHpSummary(decision, status, self);
-      appendRichLine([
-        '战斗血量：',
-        { text: hpText(hp.selfHp), style: 'color:#fca5a5;font-weight:800' },
-        ' vs ',
-        { text: hpText(hp.targetHp), style: 'color:#fde68a;font-weight:800' }
-      ], 'margin:2px 0 0;padding:7px 9px;border:1px solid rgba(251,113,133,.42);border-radius:8px;background:rgba(127,29,29,.28);color:#fee2e2;font-weight:700');
+      appendRichLine(combatHpComparisonParts(hp), 'margin:2px 0 0;padding:7px 9px;border:1px solid rgba(251,113,133,.42);border-radius:8px;background:rgba(127,29,29,.28);color:#fee2e2;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums');
       if (decision?.combat) {
         appendLine('战斗细节：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
       }
