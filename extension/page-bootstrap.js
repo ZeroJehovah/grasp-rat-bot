@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.23';
+  const BOOTSTRAP_VERSION = '0.1.24';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -666,30 +666,77 @@
     return target.name || ('#' + (target.id ?? '-'));
   }
 
-  function targetSummaryText(decision, status) {
+  function panelTextPart(text, color, weight = '') {
+    let style = color ? 'color:' + color : '';
+    if (weight) style += (style ? ';' : '') + 'font-weight:' + weight;
+    return { text, style };
+  }
+
+  function panelPartsText(parts) {
+    return parts.map(part => part && typeof part === 'object' ? String(part.text ?? '') : String(part ?? '')).join('');
+  }
+
+  function hpValueColor(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '#cbd5e1';
+    if (n >= 80) return '#86efac';
+    if (n >= 45) return '#fde68a';
+    return '#fca5a5';
+  }
+
+  function targetSummaryParts(decision, status) {
     const target = decision?.target || null;
     const kind = decision?.kind || '';
     if (target) {
       const parts = [];
       const isCoin = kind === 'coin' || kind === 'seek-coin' || (target.amount !== undefined && target.drop === undefined && target.hp === undefined);
-      parts.push(isCoin ? '金币 ' : '目标 ');
-      parts.push(targetNameText(target));
-      if (target.distance !== undefined) parts.push(' 距离 ' + formatDistance(target.distance));
-      if (target.amount !== undefined) parts.push(' 金币 ' + target.amount);
-      if (target.hp !== undefined) parts.push(' HP ' + target.hp);
-      if (target.drop !== undefined) parts.push(' Drop ' + target.drop);
-      return parts.join('');
+      parts.push(panelTextPart(isCoin ? '金币 ' : '目标 ', isCoin ? '#facc15' : '#93c5fd', '700'));
+      parts.push(panelTextPart(targetNameText(target), '#e5edf7', '700'));
+      if (target.distance !== undefined) {
+        parts.push(panelTextPart(' 距离 ', '#64748b'));
+        parts.push(panelTextPart(formatDistance(target.distance), '#67e8f9', '700'));
+      }
+      if (target.amount !== undefined) {
+        parts.push(panelTextPart(' 金币 ', '#64748b'));
+        parts.push(panelTextPart(target.amount, '#facc15', '700'));
+      }
+      if (target.hp !== undefined) {
+        parts.push(panelTextPart(' HP ', '#64748b'));
+        parts.push(panelTextPart(target.hp, hpValueColor(target.hp), '700'));
+      }
+      if (target.drop !== undefined) {
+        parts.push(panelTextPart(' Drop ', '#64748b'));
+        parts.push(panelTextPart(target.drop, '#fbbf24', '700'));
+      }
+      return parts;
     }
     const threats = Array.isArray(decision?.threats) ? decision.threats : [];
     if (kind === 'flee' && threats[0]) {
       const threat = threats[0];
-      return '威胁 ' + (threat.name || ('#' + threat.id)) + ' 距离 ' + formatDistance(threat.d ?? threat.distance);
+      return [
+        panelTextPart('威胁 ', '#fca5a5', '700'),
+        panelTextPart(threat.name || ('#' + threat.id), '#e5edf7', '700'),
+        panelTextPart(' 距离 ', '#64748b'),
+        panelTextPart(formatDistance(threat.d ?? threat.distance), '#67e8f9', '700')
+      ];
     }
     const combatTarget = status?.combatTarget;
     if (isCombatDecision(decision, status) && combatTarget) {
-      return '目标 ' + targetNameText(combatTarget) + (combatTarget.hp !== undefined ? ' HP ' + combatTarget.hp : '');
+      const parts = [
+        panelTextPart('目标 ', '#93c5fd', '700'),
+        panelTextPart(targetNameText(combatTarget), '#e5edf7', '700')
+      ];
+      if (combatTarget.hp !== undefined) {
+        parts.push(panelTextPart(' HP ', '#64748b'));
+        parts.push(panelTextPart(combatTarget.hp, hpValueColor(combatTarget.hp), '700'));
+      }
+      return parts;
     }
-    return '-';
+    return [panelTextPart('-', '#64748b')];
+  }
+
+  function targetSummaryText(decision, status) {
+    return panelPartsText(targetSummaryParts(decision, status));
   }
 
   function hpText(value) {
@@ -1325,15 +1372,14 @@
       const hpLabel = document.createElement('span');
       const hpValue = Number(self?.hp);
       hpLabel.textContent = 'HP ' + (self?.hp ?? '-');
-      if (Number.isFinite(hpValue) && hpValue < 100) hpLabel.style.cssText = 'color:#fca5a5;font-weight:700';
-      else if (hpValue === 100) hpLabel.style.cssText = 'color:#86efac;font-weight:700';
+      hpLabel.style.cssText = 'color:' + hpValueColor(hpValue) + ';font-weight:700';
       const dropLabel = document.createElement('span');
       dropLabel.textContent = 'Drop ' + (self?.drop ?? '-');
-      dropLabel.style.cssText = 'color:#e5edf7';
+      dropLabel.style.cssText = 'color:#fbbf24;font-weight:700';
       const activeLabel = document.createElement('span');
       activeLabel.textContent = 'Active ' + nearestActive;
       activeLabel.title = activeLabel.textContent;
-      activeLabel.style.cssText = 'color:#cbd5e1;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      activeLabel.style.cssText = 'color:' + (nearestActive === '-' ? '#64748b' : '#93c5fd') + ';font-weight:700;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       line.appendChild(hpLabel);
       line.appendChild(dropLabel);
       line.appendChild(activeLabel);
@@ -1477,16 +1523,24 @@
       );
     }
     appendRichLine([
-      '加载器 扩展 ',
+      { text: '加载器 ', style: 'color:#94a3b8' },
+      { text: '扩展 ', style: 'color:#bfdbfe;font-weight:700' },
       { text: displayVersion(aVersion), style: 'color:' + (state.loaderUpdateAvailable ? '#fca5a5' : '#86efac') + ';font-weight:700' },
-      ' / 远程脚本 ',
+      { text: ' / ', style: 'color:#475569' },
+      { text: '远程脚本 ', style: 'color:#94a3b8' },
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
-    ], 'font-size:10.5px;margin:-2px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
+    ], 'font-size:10.5px;margin:4px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
     appendSection();
     const hold = reloginHold;
     appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''));
-    appendLine('当前目标：' + targetSummaryText(decision, status));
-    appendLine('原因：' + reasonDetail);
+    appendRichLine([
+      { text: '当前目标：', style: 'color:#94a3b8' },
+      ...targetSummaryParts(decision, status)
+    ]);
+    appendRichLine([
+      { text: '原因：', style: 'color:#64748b' },
+      { text: reasonDetail, style: 'color:#94a3b8' }
+    ], 'font-size:11px;color:#94a3b8');
     if (isCombatDecision(decision, status)) {
       const hp = combatHpSummary(decision, status, self);
       appendRichLine([
