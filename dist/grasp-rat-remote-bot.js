@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.110"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.111"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -272,7 +272,9 @@
     offlineReconnectChurnMinEvents: 3,
     offlinePassiveDangerRadius: 2500,
     offlineLeaveRetryMs: 600,
-    leaveCommandTimeoutMs: 600,
+    leaveRetryMinMs: 10000,
+    leaveCommandTimeoutMs: 10000,
+    leave403ReloginDelayMs: 3600000,
     offlineLeaveCooldownMs: 60000,
     serverPositionStallEnabled: true,
     serverPositionStallOfflineEnabled: false,
@@ -2992,8 +2994,8 @@
     return until;
   }
 
-  function setEnemyLeaveSuppress(reason, detail, selfLike = null) {
-    return setExitReloginSuppress('enemy leave', reason, detail, selfLike);
+  function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {
+    return setExitReloginSuppress('enemy leave', reason, detail, selfLike, options);
   }
 
 	  function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
@@ -3024,13 +3026,13 @@
     return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina');
   }
 
-	  function setOfflineLeaveSuppress(reason, detail, selfLike = null) {
+	  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
 		    const staminaHold = staminaExitHoldUntilForDetail(detail);
 		    if (staminaHold && detail) {
 		      if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
 		      else detail.staminaReset = staminaHold;
 		    }
-		    if (!staminaHold && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)) {
+		    if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()) && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)) {
 		      bot.offlineReloginUntil = 0;
 		      bot.lastOfflineLeaveWaitMs = 0;
 		      if (detail) {
@@ -3047,8 +3049,8 @@
 		    }
 		    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
 		      existingUntil: bot.offlineReloginUntil,
-		      minimumUntil: staminaHold?.until || 0,
-	      minimumReason: staminaHold?.reason || (staminaHold ? 'stamina reset' : ''),
+		      minimumUntil: Math.max(Number(options.minimumUntil || 0) || 0, staminaHold?.until || 0),
+	      minimumReason: options.minimumReason || staminaHold?.reason || (staminaHold ? 'stamina reset' : ''),
 	      fixedDelayMs: staminaHold?.fixed ? staminaHold.fixedDelayMs : 0
 	    });
 	  }
@@ -3176,13 +3178,17 @@
 
   function pendingExitRetryMs(pending) {
     const source = String(pending?.source || '');
+    const retryFloorMs = Math.max(
+      1000,
+      Number(cfg.leaveRetryMinMs ?? cfg.leaveCommandTimeoutMs ?? 10000) || 10000
+    );
     if (pending?.scope === 'offline' || source === 'offline') {
-      return Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
+      return Math.max(retryFloorMs, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
     }
     if (source === 'pursuit') {
-      return Math.max(200, Number(cfg.pursuitLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
+      return Math.max(retryFloorMs, Number(cfg.pursuitLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
     }
-    return Math.max(200, Number(cfg.combatLeaveRetryMs || cfg.pursuitLeaveRetryMs || 1000));
+    return Math.max(retryFloorMs, Number(cfg.combatLeaveRetryMs || cfg.pursuitLeaveRetryMs || 1000));
   }
 
   function pendingExitDisplayReason(summary) {
@@ -3208,6 +3214,7 @@
       retryMs,
       retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
       retryCount: Number(pending.retryCount || 0),
+      leaveRequestPending: Boolean(pending.lastResult?.leaveRequestPending),
       userId: pending.userId || null,
       combatCover: pending.combatCover ? {
         reason: pending.combatCover.reason || '',
@@ -3312,6 +3319,133 @@
     return { known: false, alive: false, source: 'unknown', self: null };
   }
 
+  function escapeRegExpLiteral(value) {
+    return String(value || '').replace(/[.*+?^$()|[]\{}]/g, '\$&');
+  }
+
+  function chatLeftUserMessageSeen(userId = getCurrentUserId()) {
+    const id = String(userId || '').trim();
+    if (!id) return false;
+    const pattern = new RegExp('(?:^|\\b)left\\s+user\\s+' + escapeRegExpLiteral(id) + '(?:\\b|$)', 'i');
+    const selectors = [
+      '#chat',
+      '#chatLog',
+      '#chatMessages',
+      '.chat',
+      '.chat-log',
+      '.chat-messages',
+      '.messages',
+      '.side'
+    ];
+    const roots = [];
+    for (const selector of selectors) {
+      try {
+        document.querySelectorAll(selector).forEach(el => {
+          if (el && !roots.includes(el)) roots.push(el);
+        });
+      } catch (_) {}
+    }
+    if (!roots.length && document.body) roots.push(document.body);
+    for (const root of roots) {
+      const text = String(root?.innerText || root?.textContent || '');
+      if (pattern.test(text)) return true;
+    }
+    return false;
+  }
+
+  function ownEntityDisappearedState(self, userId = getCurrentUserId()) {
+    const id = Number(userId || 0);
+    if (!id) return { known: false, present: false, disappeared: false, sources: [] };
+    let known = false;
+    let present = false;
+    const sources = [];
+    try {
+      if (typeof getOwnEntity === 'function') {
+        known = true;
+        sources.push('native-own');
+        const nativeSelf = getOwnEntity();
+        if (nativeSelf && Number(nativeSelf.user_id) === id && isAlive(nativeSelf)) present = true;
+      }
+    } catch (_) {}
+    const nativeState = getNativeState();
+    const nativeEntities = Array.isArray(nativeState?.entities) ? nativeState.entities : null;
+    if (nativeEntities) {
+      known = true;
+      sources.push('native-entities');
+      const nativeSelf = nativeEntities.find(entity => Number(entity.user_id) === id) || null;
+      if (nativeSelf && isAlive(nativeSelf)) present = true;
+    }
+    if (self) {
+      known = true;
+      sources.push('tick-self');
+      if (Number(self.user_id) === id && isAlive(self)) present = true;
+    }
+    if (snapshotSelfFreshEnough()) {
+      known = true;
+      sources.push('snapshot');
+      const snapshotSelf = (bot.globalState.entities || []).find(entity => Number(entity.user_id) === id) || null;
+      if (snapshotSelf && isAlive(snapshotSelf)) present = true;
+    }
+    return {
+      known,
+      present,
+      disappeared: Boolean(known && !present),
+      sources
+    };
+  }
+
+  function pendingExitLocalConfirmationState(pending, self, state = null) {
+    const userId = Number(pending?.userId || getCurrentUserId() || 0);
+    const tokenCleared = !getSessionToken();
+    const chatLeftUser = chatLeftUserMessageSeen(userId);
+    const ownEntity = ownEntityDisappearedState(self, userId);
+    const confirmed = Boolean(tokenCleared && chatLeftUser && ownEntity.disappeared);
+    return {
+      known: confirmed,
+      alive: false,
+      source: confirmed ? 'token-chat-left-user-self-missing' : 'local-exit-evidence-incomplete',
+      self: null,
+      localExitConfirmation: true,
+      confirmed,
+      tokenCleared,
+      chatLeftUser,
+      ownEntity,
+      previousState: state || null
+    };
+  }
+
+  function leaveRequestHasHttp403(request) {
+    if (!request || typeof request !== 'object') return false;
+    const status = Number(request.status ?? request.statusCode ?? request.result?.status ?? request.result?.statusCode ?? NaN);
+    if (status === 403) return true;
+    const fields = [
+      request.error,
+      request.message,
+      request.statusText,
+      request.result?.error,
+      request.result?.message,
+      request.result?.statusText
+    ];
+    return fields.some(value => /(?:^|D)403(?:D|$)|forbidden/i.test(String(value || '')));
+  }
+
+  function leaveDetailHasHttp403(detail) {
+    if (!detail || typeof detail !== 'object') return false;
+    if (leaveRequestHasHttp403(detail) || leaveRequestHasHttp403(detail.lastLeaveRequest)) return true;
+    return Array.isArray(detail.leaveRequests) && detail.leaveRequests.some(leaveRequestHasHttp403);
+  }
+
+  function leaveDetailSucceeded(detail) {
+    if (!detail || typeof detail !== 'object') return false;
+    if (!detail.attempted || detail.leaveRequestPending || detail.error || leaveDetailHasHttp403(detail)) return false;
+    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
+    return !request || Boolean(request.completedAt || request.method || detail.method);
+  }
+
+  function leave403ReloginDelayMs() {
+    return Math.max(3600000, Number(cfg.leave403ReloginDelayMs || 0) || 0);
+  }
+
   function confirmPendingExit(pending, state) {
     const t = Date.now();
     const detail = cloneForPendingExit(pending.lastResult || {}) || {};
@@ -3327,10 +3461,21 @@
     detail.exitConfirmation = state || null;
     detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
     detail.pendingExitRetryCount = Number(pending.retryCount || 0);
+    const http403 = Boolean(state?.http403 || leaveDetailHasHttp403(detail));
+    const suppressOptions = http403
+      ? {
+        minimumUntil: t + leave403ReloginDelayMs(),
+        minimumReason: 'leave HTTP 403 risk control'
+      }
+      : {};
+    if (http403) {
+      detail.http403RiskControl = true;
+      detail.riskControlReloginDelayMs = leave403ReloginDelayMs();
+    }
     if (pending.scope === 'offline') {
-      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null);
+      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);
     } else {
-      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null);
+      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
       if (pending.source === 'combat') bot.lastCombatLeaveResult = detail;
       if (pending.source === 'pursuit') bot.lastPursuitLeaveResult = detail;
       if (pending.source === 'injury') bot.lastInjuryLeaveResult = detail;
@@ -3439,6 +3584,13 @@
     detail.exitConfirmed = false;
     detail.pendingExitRetry = true;
     detail.exitConfirmation = state || null;
+    bot.pendingExit = {
+      ...pending,
+      updatedAt: t,
+      lastAttemptAt: t,
+      lastResult: cloneForPendingExit(detail)
+    };
+    detail.pendingExit = summarizePendingExit(bot.pendingExit);
     recordPendingExitResult(pending.source, detail, t);
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -3459,6 +3611,18 @@
     return detail;
   }
 
+  function schedulePendingExitRetry(pending, self, state) {
+    if (!pending) return false;
+    const t = Date.now();
+    const retryMs = pendingExitRetryMs(pending);
+    const lastAttemptAt = Number(pending.lastAttemptAt || 0);
+    if (lastAttemptAt && t - lastAttemptAt < retryMs) return false;
+    Promise.resolve()
+      .then(() => retryPendingExit(pending, self, state))
+      .catch(err => recordUnhandledTickError('pending-exit-retry', err));
+    return true;
+  }
+
   async function handlePendingExit(self) {
     const pending = bot.pendingExit;
     if (!pending) return null;
@@ -3468,6 +3632,37 @@
       return null;
     }
     const state = pendingExitSelfState(self);
+    const lastDetail = pending.lastResult || {};
+    if (leaveDetailHasHttp403(lastDetail)) {
+      const detail = confirmPendingExit(pending, {
+        ...state,
+        known: true,
+        alive: false,
+        source: 'leave-http-403',
+        http403: true,
+        self: null
+      });
+      return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
+    }
+    if (leaveDetailSucceeded(lastDetail)) {
+      const detail = confirmPendingExit(pending, {
+        ...state,
+        known: true,
+        alive: false,
+        source: 'leave-success',
+        self: null
+      });
+      return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
+    }
+    const localState = pendingExitLocalConfirmationState(pending, self, state);
+    if (localState.confirmed) {
+      const detail = confirmPendingExit(pending, localState);
+      return pendingExitWaitDecision(pending, self, detail, localState, true);
+    }
+    if (state.known && state.alive) {
+      schedulePendingExitRetry(pending, self, state);
+      return null;
+    }
     if (state.known && !state.alive) {
       const lastError = String(pending.lastResult?.error || '');
       const weakConfirmation = /^(login-required|no-current-user-id)$/.test(String(state.source || ''));
@@ -3704,7 +3899,78 @@
     };
   }
 
-	  async function issueLeaveCommand(detail) {
+  function updatePendingExitLastResult(detail) {
+    const pending = bot.pendingExit;
+    if (!pending || !detail?.exitAuditId) return;
+    const pendingAuditId = pending.lastResult?.exitAuditId || '';
+    if (pendingAuditId && pendingAuditId !== detail.exitAuditId) return;
+    bot.pendingExit = {
+      ...pending,
+      updatedAt: Date.now(),
+      lastAttemptAt: Number(detail.at || detail.lastLeaveRequest?.sentAt || pending.lastAttemptAt || Date.now()),
+      lastResult: cloneForPendingExit(detail)
+    };
+  }
+
+  function maybeConfirmPendingExitFromLeaveDetail(detail) {
+    const pending = bot.pendingExit;
+    if (!pending || !detail?.exitAuditId) return null;
+    const pendingAuditId = pending.lastResult?.exitAuditId || '';
+    if (pendingAuditId && pendingAuditId !== detail.exitAuditId) return null;
+    const self = getSelf();
+    const baseState = pendingExitSelfState(self);
+    if (leaveDetailHasHttp403(detail)) {
+      return confirmPendingExit(pending, {
+        ...baseState,
+        known: true,
+        alive: false,
+        source: 'leave-http-403',
+        http403: true,
+        self: null
+      });
+    }
+    if (leaveDetailSucceeded(detail)) {
+      return confirmPendingExit(pending, {
+        ...baseState,
+        known: true,
+        alive: false,
+        source: 'leave-success',
+        self: null
+      });
+    }
+    const localState = pendingExitLocalConfirmationState(pending, self, baseState);
+    if (localState.confirmed) return confirmPendingExit(pending, localState);
+    return null;
+  }
+
+  function completeLeaveRequest(detail, request, rawResult, errorMessage = '') {
+    if (!detail || !request || request.completedAt) return detail;
+    const failure = errorMessage || leaveCommandFailureMessage(rawResult);
+    if (failure) detail.error = failure;
+    detail.leaveRequestPending = false;
+    request.completedAt = Date.now();
+    request.durationMs = Math.max(0, Math.round(request.completedAt - request.sentAt));
+    request.attempted = Boolean(detail.attempted);
+    request.method = detail.method || '';
+    request.error = detail.error || '';
+    request.result = summarizeLeaveCommandResult(rawResult);
+    request.pending = false;
+    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
+    detail.leaveRequests.push(request);
+    detail.leaveRequests = detail.leaveRequests.slice(-20);
+    detail.lastLeaveRequest = request;
+    updatePendingExitLastResult(detail);
+    recordExitAuditEvent('leave-request', detail, {
+      at: request.completedAt,
+      request,
+      source: detail.exitAuditSource || detail.reason || 'leave-command',
+      scope: detail.exitAuditScope || ''
+    });
+    maybeConfirmPendingExitFromLeaveDetail(detail);
+    return detail;
+  }
+
+	  function issueLeaveCommand(detail) {
     ensureExitAuditDetail(detail, {
       source: detail?.exitAuditSource || detail?.reason || 'leave-command',
       scope: detail?.exitAuditScope || ''
@@ -3718,50 +3984,56 @@
       attempted: false,
       method: '',
       error: '',
-      result: null
+      result: null,
+      pending: false
     };
-    let rawResult;
 	    try {
 	      if (typeof leave === 'function') {
 	        detail.attempted = true;
 	        detail.method = detail.userId ? 'leave(userId)' : 'leave';
-	        let result = detail.userId ? leave(detail.userId) : leave();
+	        const result = detail.userId ? leave(detail.userId) : leave();
 	        if (result && typeof result.then === 'function') {
-	          result = await waitWithTimeout(result, cfg.leaveCommandTimeoutMs, 'leave request');
+          detail.leaveRequestPending = true;
+          detail.leaveRequestSentAt = request.sentAt;
+          detail.leaveRequestTimeoutMs = Math.max(1000, Number(cfg.leaveCommandTimeoutMs || 0) || 10000);
+          request.attempted = true;
+          request.method = detail.method;
+          request.pending = true;
+          detail.lastLeaveRequest = request;
+          let settled = false;
+          const timeoutMs = detail.leaveRequestTimeoutMs;
+          const finish = (rawResult, errorMessage = '') => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            completeLeaveRequest(detail, request, rawResult, errorMessage);
+          };
+          const timer = setTimeout(() => {
+            finish({ error: 'leave request timed out after ' + timeoutMs + 'ms' }, 'leave request timed out after ' + timeoutMs + 'ms');
+          }, timeoutMs);
+          Promise.resolve(result).then(
+            value => finish(value, ''),
+            err => finish({ error: err?.message || String(err) }, err?.message || String(err))
+          );
+          return detail;
 	        }
-        rawResult = result;
-	        const failure = leaveCommandFailureMessage(result);
-	        if (failure) detail.error = failure;
+        return completeLeaveRequest(detail, request, result, '');
 	      } else {
 	        const leaveBtn = document.querySelector('#leaveBtn');
 	        if (leaveBtn && isVisible(leaveBtn)) {
 	          detail.attempted = true;
 	          detail.method = '#leaveBtn';
 	          leaveBtn.click();
+          return completeLeaveRequest(detail, request, undefined, '');
 	        } else {
 	          detail.error = 'leave control not found';
+          return completeLeaveRequest(detail, request, { error: detail.error }, detail.error);
 	        }
 	      }
 	    } catch (err) {
 	      detail.error = err?.message || String(err);
-      rawResult = { error: detail.error };
+      return completeLeaveRequest(detail, request, { error: detail.error }, detail.error);
 	    }
-    request.completedAt = Date.now();
-    request.durationMs = Math.max(0, Math.round(request.completedAt - request.sentAt));
-    request.attempted = Boolean(detail.attempted);
-    request.method = detail.method || '';
-    request.error = detail.error || '';
-    request.result = summarizeLeaveCommandResult(rawResult);
-    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
-    detail.leaveRequests.push(request);
-    detail.leaveRequests = detail.leaveRequests.slice(-20);
-    detail.lastLeaveRequest = request;
-    recordExitAuditEvent('leave-request', detail, {
-      at: request.completedAt,
-      request,
-      source: detail.exitAuditSource || detail.reason || 'leave-command',
-      scope: detail.exitAuditScope || ''
-    });
 	    return detail;
 	  }
 
@@ -8740,7 +9012,8 @@
         windowMs: Number(bot.control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
       } : null;
       const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn;
-		    if (!cfg.dryRun && controlOffline) {
+      const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
+		    if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
 		      bot.pursuit = null;
 		      stopMotionSafely(serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline'));
 		      if (!bot.offlineSince) bot.offlineSince = Date.now();
@@ -8901,8 +9174,6 @@
 	        return;
 	      }
 	      if (bot.pendingInjuryLeave) {
-        bot.pursuit = null;
-        stopMotionSafely('injury-leave');
         const injury = {
           ...bot.pendingInjuryLeave,
           self: currentSummary,
@@ -8910,22 +9181,16 @@
           nearestActive: bot.lastSafety?.nearestAvoidance || bot.lastSafety?.nearestActive || bot.pendingInjuryLeave.nearestActive || null,
           nearestHuman: bot.lastSafety?.nearestHuman || bot.pendingInjuryLeave.nearestHuman || null
         };
-        const leaveResult = await leaveForInjury(injury);
-        const enemyDetail = activeEnemyLeaveDetail();
-        bot.lastDecision = {
-          kind: 'wait',
-          reason: 'injury-leave',
-          dx: 0,
-          dy: 0,
-          self: currentSummary,
+        bot.pendingInjuryLeave = null;
+        Promise.resolve(leaveForInjury(injury)).catch(err => recordUnhandledTickError('injury-leave', err));
+        action = {
+          ...action,
           injury,
-          displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || '',
-          leave: leaveResult,
-          holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+          pendingExitIntent: {
+            reason: 'injury-leave',
+            summary: injuryLeaveSummary(injury)
+          }
         };
-        updateBotPanel(bot.lastDecision);
-        if (cfg.once) bot.stop('once');
-        return;
       }
 	      action = trackCoinProgress(action, self);
       const escape = bot.staleCoinEscape;
@@ -9019,6 +9284,7 @@
       bot.lastDecision = {
         ...action,
         source,
+        pendingExit: summarizePendingExit(),
         self: {
           ...summarizeSelf(self),
           canMove,
