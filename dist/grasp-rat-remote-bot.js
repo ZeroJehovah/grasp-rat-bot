@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.123"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.124"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -84,7 +84,7 @@
     attackDangerRadius: 25000,
     globalAttackMaxDistance: 26000,
     nativeEntityAuthoritativeRadius: 42000,
-    nativeCoinAuthoritativeRadius: 45000,
+    nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
@@ -6951,6 +6951,13 @@
 	      .sort(compareCoinOpportunity);
 	  }
 
+	  function pickRealtimeLocalCoin(self, coins, activeThreats) {
+	    const radius = snapshotCoinLocalSuppressRadius();
+	    if (!(radius > 0)) return null;
+	    return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, radius, self)
+	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+	  }
+
 	  function pickCoin(self, coins, activeThreats, maxDistance) {
 	    const candidates = safeCoinCandidates(coins, activeThreats, maxDistance, self);
     if (!candidates.length) return null;
@@ -9438,7 +9445,8 @@
       }, self, entities, { recovery });
     }
 
-    const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
+    const localRealtimeCoin = pickRealtimeLocalCoin(self, allCoins, coinThreats);
+    const snapshotCompetitionCoin = localRealtimeCoin ? null : pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
     const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
       ? pickCoinField(self, allCoins, coinThreats)
       : null;
@@ -9487,6 +9495,17 @@
       }, self, entities, { recovery });
     }
 
+    if (localRealtimeCoin) {
+      bot.fleeLock = null;
+      const action = buildCoinAction(
+        self,
+        localRealtimeCoin,
+        snapshotCoinNavigationReason(localRealtimeCoin),
+        localRealtimeCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
+      );
+      return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, action), self, entities, { recovery });
+    }
+
     if (hasReturnBlockThreat(avoidanceThreats)) {
       bot.fleeLock = null;
       return buildReturnBlockScanAction(self, avoidanceThreats, nearbyHumans);
@@ -9517,7 +9536,7 @@
 		    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
 	    const snapshotWaitMaxMs = Math.max(0, Number(cfg.snapshotCoinIdleMaxMs || 0));
 	    const snapshotWaitRemainingMs = Math.max(0, snapshotWaitMaxMs - snapshotWaitAgeMs);
-		    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
+		    if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
 		      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
 		      if (idleSnapshotCoin) {
 	        const action = buildCoinAction(

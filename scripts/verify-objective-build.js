@@ -38,6 +38,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'loginSnapshotSuccessRequired', value: 3 },
   { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
+  { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatPressureCloseMinHp', value: 60 },
@@ -191,6 +192,14 @@ function main() {
     }
     check(`${file} accepts injected sourceHash`, () => {
       assert(text.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
+    });
+    check(`${file} keeps 500m realtime coins ahead of snapshot travel`, () => {
+      assert(text.includes('function pickRealtimeLocalCoin'), 'realtime local coin picker not found');
+      assert(text.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'realtime local coin picker can include snapshot-only coins');
+      assert(text.includes('const localRealtimeCoin = pickRealtimeLocalCoin(self,'), 'local realtime coin is not computed before snapshot selection');
+      assert(text.includes('const snapshotCompetitionCoin = localRealtimeCoin ? null : pickSnapshotCoinDestination'), 'snapshot travel is not blocked by local realtime coins');
+      assert(text.includes('if (localRealtimeCoin) {'), 'local realtime coin fallback action not found');
+      assert(text.includes('if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs)'), 'snapshot idle fallback is not blocked by local realtime coins');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
       assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');

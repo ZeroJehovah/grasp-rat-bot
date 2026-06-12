@@ -181,7 +181,7 @@ function runSelfTest() {
     attackPreferredRange: 14500,
     globalAttackMaxDistance: 26000,
     nativeEntityAuthoritativeRadius: 42000,
-    nativeCoinAuthoritativeRadius: 45000,
+    nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
@@ -903,8 +903,16 @@ function runSelfTest() {
     return (coins || []).filter(coin => snapshotLocalCoinAllowed(self, coin));
   }
 
+  function pickRealtimeLocalCoin(self, coins, activeThreats) {
+    const radius = Math.max(0, Number(cfg.nativeCoinAuthoritativeRadius || 0));
+    if (!(radius > 0)) return null;
+    return safeCoins(self, (coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, radius)
+      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+  }
+
   function pickSnapshotCoinDestination(self, coins, activeThreats, options = {}) {
     const allowIdleFallback = Boolean(options.allowIdleFallback || options.idleFallback);
+    if (!allowIdleFallback && !options.ignoreRealtimeLocalCoin && pickRealtimeLocalCoin(self, coins, activeThreats)) return null;
     const candidates = safeCoins(self, filterLocalSnapshotCoins(self, coins).filter(isSnapshotOnlyCoin), activeThreats, cfg.snapshotCoinMaxDistance);
     if (!candidates.length) return null;
     let best = null;
@@ -1973,7 +1981,8 @@ function runSelfTest() {
     }
     const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
     if (footCoin) return attachOpportunisticShot({ kind: 'coin', reason: 'foot-coin-priority', id: footCoin.drop_id, amount: footCoin.amount }, self, entities, !recovery);
-    const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, usableCoins, coinThreats);
+    const localRealtimeCoin = pickRealtimeLocalCoin(self, usableCoins, coinThreats);
+    const snapshotCompetitionCoin = localRealtimeCoin ? null : pickSnapshotCoinDestination(self, usableCoins, coinThreats);
     const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
       ? pickField(self, usableCoins, coinThreats)
       : null;
@@ -1990,6 +1999,18 @@ function runSelfTest() {
         reason: 'safe-distant-coin',
         id: distantCoin.drop_id,
         amount: distantCoin.amount,
+        dx: dir.dx,
+        dy: dir.dy,
+        target: { distance: Math.round(dir.distance) }
+      }), self, entities, !recovery);
+    }
+    if (localRealtimeCoin) {
+      const dir = directionTo(self, localRealtimeCoin);
+      return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, {
+        kind: localRealtimeCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
+        reason: snapshotCoinNavigationReason(localRealtimeCoin),
+        id: localRealtimeCoin.drop_id,
+        amount: localRealtimeCoin.amount,
         dx: dir.dx,
         dy: dir.dy,
         target: { distance: Math.round(dir.distance) }
@@ -2012,7 +2033,7 @@ function runSelfTest() {
     }
     const shotWait = buildOpportunisticShotWait(self, entities, !recovery);
     if (shotWait) return shotWait;
-    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
+    if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
       const idleSnapshotCoin = pickSnapshotCoinDestination(self, usableCoins, coinThreats, { allowIdleFallback: true });
       if (idleSnapshotCoin) {
         const dir = directionTo(self, idleSnapshotCoin);
@@ -2262,12 +2283,36 @@ function runSelfTest() {
       want: 'wait-for-snapshot-coin'
     },
     {
+      name: '500m snapshot-only coin is suppressed by realtime authority',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        coins: [{ drop_id: 1034, x: 50000, y: 0, amount: 50, snapshot: true }]
+      }).reason,
+      want: 'wait-for-snapshot-coin'
+    },
+    {
       name: 'native nearby coin with snapshot metadata uses visible coin reason',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [{ drop_id: 639, x: 4800, y: 0, amount: 1, native: true, snapshot: true, snapshotMembers: 1 }]
       }).reason,
       want: 'best-opportunity-coin'
+    },
+    {
+      name: 'local realtime coin inside 500m blocks far snapshot field',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: 49000, y: 0, amount: 1, native: true },
+            { drop_id: 2, x: 126200, y: 0, amount: 1, snapshot: true },
+            { drop_id: 3, x: 128000, y: 1200, amount: 1, snapshot: true },
+            { drop_id: 4, x: 130000, y: -1200, amount: 1, snapshot: true }
+          ]
+        });
+        return action.id + ':' + action.reason;
+      })(),
+      want: '1:best-opportunity-visible-coin'
     },
     {
       name: 'same-value coin score distinguishes 150m from 227m',
@@ -2392,7 +2437,7 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         global: [{ user_id: 4, x: 20000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }],
-        coins: [{ drop_id: 2, x: 50000, y: 0, amount: 5, snapshot: true }]
+        coins: [{ drop_id: 2, x: 52000, y: 0, amount: 5, snapshot: true }]
       }).kind,
       want: 'seek-coin'
     },
@@ -2400,7 +2445,7 @@ function runSelfTest() {
 	      name: 'single far low-value snapshot coin waits before idle timeout',
 	      got: choose({
 	        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-	        coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true }],
+	        coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
 	        snapshotWaitAgeMs: 59999
 	      }).reason,
 	      want: 'wait-for-snapshot-coin'
@@ -2409,7 +2454,7 @@ function runSelfTest() {
 	      name: 'single far low-value snapshot coin is chased after idle timeout',
 	      got: choose({
 	        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-	        coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true }],
+	        coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
 	        snapshotWaitAgeMs: 60000
 	      }).reason,
 	      want: 'snapshot-coin-idle-timeout'
@@ -2419,9 +2464,9 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [
-          { drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true },
-          { drop_id: 3, x: 54000, y: 2000, amount: 1, snapshot: true },
-          { drop_id: 4, x: 57000, y: -1000, amount: 1, snapshot: true }
+          { drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true },
+          { drop_id: 3, x: 56000, y: 2000, amount: 1, snapshot: true },
+          { drop_id: 4, x: 59000, y: -1000, amount: 1, snapshot: true }
         ]
       }).kind,
       want: 'seek-coin'
@@ -2431,9 +2476,9 @@ function runSelfTest() {
 	      got: choose({
 	        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
 	        coins: [
-	          { drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true },
-	          { drop_id: 3, x: 54000, y: 2000, amount: 1, snapshot: true },
-	          { drop_id: 4, x: 57000, y: -1000, amount: 1, snapshot: true }
+	          { drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true },
+	          { drop_id: 3, x: 56000, y: 2000, amount: 1, snapshot: true },
+	          { drop_id: 4, x: 59000, y: -1000, amount: 1, snapshot: true }
 	        ]
 	      }).reason,
 	      want: 'snapshot-coin-field'
@@ -3450,7 +3495,7 @@ function runSelfTest() {
           stamina_1h_remaining_milli: 3500,
           stamina_1d_remaining_milli: 3500
         },
-        coins: [{ drop_id: 2, x: 50000, y: 0, amount: 1, snapshot: true }],
+        coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
         snapshotWaitAgeMs: 60000
       }).reason,
       want: 'stamina-budget-coin-leave'
@@ -3814,7 +3859,7 @@ function browserBotSource(config) {
     attackDangerRadius: 25000,
     globalAttackMaxDistance: 26000,
     nativeEntityAuthoritativeRadius: 42000,
-    nativeCoinAuthoritativeRadius: 45000,
+    nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
@@ -10653,6 +10698,13 @@ function browserBotSource(config) {
 	      .sort(compareCoinOpportunity);
 	  }
 
+	  function pickRealtimeLocalCoin(self, coins, activeThreats) {
+	    const radius = snapshotCoinLocalSuppressRadius();
+	    if (!(radius > 0)) return null;
+	    return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, radius, self)
+	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+	  }
+
 	  function pickCoin(self, coins, activeThreats, maxDistance) {
 	    const candidates = safeCoinCandidates(coins, activeThreats, maxDistance, self);
     if (!candidates.length) return null;
@@ -13140,7 +13192,8 @@ function browserBotSource(config) {
       }, self, entities, { recovery });
     }
 
-    const snapshotCompetitionCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
+    const localRealtimeCoin = pickRealtimeLocalCoin(self, allCoins, coinThreats);
+    const snapshotCompetitionCoin = localRealtimeCoin ? null : pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
     const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
       ? pickCoinField(self, allCoins, coinThreats)
       : null;
@@ -13189,6 +13242,17 @@ function browserBotSource(config) {
       }, self, entities, { recovery });
     }
 
+    if (localRealtimeCoin) {
+      bot.fleeLock = null;
+      const action = buildCoinAction(
+        self,
+        localRealtimeCoin,
+        snapshotCoinNavigationReason(localRealtimeCoin),
+        localRealtimeCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
+      );
+      return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, action), self, entities, { recovery });
+    }
+
     if (hasReturnBlockThreat(avoidanceThreats)) {
       bot.fleeLock = null;
       return buildReturnBlockScanAction(self, avoidanceThreats, nearbyHumans);
@@ -13219,7 +13283,7 @@ function browserBotSource(config) {
 		    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
 	    const snapshotWaitMaxMs = Math.max(0, Number(cfg.snapshotCoinIdleMaxMs || 0));
 	    const snapshotWaitRemainingMs = Math.max(0, snapshotWaitMaxMs - snapshotWaitAgeMs);
-		    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
+		    if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
 		      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
 		      if (idleSnapshotCoin) {
 	        const action = buildCoinAction(
