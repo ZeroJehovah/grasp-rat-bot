@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.140"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.141"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -231,6 +231,8 @@
     postAttackDropWaitMinDrop: 8,
     postAttackDropWaitMaxDistance: 50000,
     postAttackDropWaitStopDistance: 900,
+    killChatAttackMatchMs: 120000,
+    killAttributionMergeMs: 120000,
     conserveCoinMaxDistance: 6000,
     recoveryCoinMaxDistance: 600,
     coinPrecisionTolerance: 60,
@@ -6677,6 +6679,13 @@
     if (!item || typeof item !== 'object') return null;
     const rewardRaw = item.rewardCoins ?? item.drop;
     const rewardCoins = Number.isFinite(Number(rewardRaw)) ? Math.max(0, Math.round(Number(rewardRaw))) : null;
+    const coin = item.coin && typeof item.coin === 'object' ? {
+      id: item.coin.id ?? item.coin.drop_id ?? item.coin.coin_id ?? null,
+      amount: Number.isFinite(Number(item.coin.amount)) ? Math.max(0, Math.round(Number(item.coin.amount))) : null,
+      x: Number.isFinite(Number(item.coin.x)) ? Math.round(Number(item.coin.x)) : null,
+      y: Number.isFinite(Number(item.coin.y)) ? Math.round(Number(item.coin.y)) : null,
+      distance: Number.isFinite(Number(item.coin.distance)) ? Math.round(Number(item.coin.distance)) : null
+    } : null;
     return {
       at: Number(item.at || 0) || 0,
       time: item.time || '',
@@ -6684,7 +6693,12 @@
       id: item.id ?? item.userId ?? null,
       rewardCoins,
       matchedAttack: Boolean(item.matchedAttack),
-      attackDistance: Number.isFinite(Number(item.attackDistance)) ? Math.round(Number(item.attackDistance)) : null
+      attackDistance: Number.isFinite(Number(item.attackDistance)) ? Math.round(Number(item.attackDistance)) : null,
+      source: String(item.source || ''),
+      chatConfirmed: Boolean(item.chatConfirmed),
+      dropMatched: Boolean(item.dropMatched),
+      targetDrop: Number.isFinite(Number(item.targetDrop ?? item.drop)) ? Math.max(0, Math.round(Number(item.targetDrop ?? item.drop))) : null,
+      coin
     };
   }
 
@@ -6747,6 +6761,7 @@
     if (!session.startedAt) return null;
     if (!session.importantSessionId) session.importantSessionId = importantLogId('session', t, session.userId || selfSummary?.id || getCurrentUserId() || 'user');
     if (!session.importantStartEventId) session.importantStartEventId = session.importantSessionId + ':start';
+    closeOpenImportantSessionsBeforeStart(session, selfSummary, t);
     session.exitAt = 0;
     session.exitReason = '';
     session.exitSummary = '';
@@ -6760,6 +6775,53 @@
       session: record
     });
     return record;
+  }
+
+  function closeOpenImportantSessionsBeforeStart(session = bot.session || {}, selfSummary = null, t = Date.now()) {
+    const nextSessionId = String(session.importantSessionId || '');
+    const userId = session.userId ?? selfSummary?.id ?? getCurrentUserId() ?? null;
+    const closed = [];
+    updateImportantLogsStore(store => {
+      for (const record of store.sessions) {
+        if (!record || typeof record !== 'object') continue;
+        const sessionId = String(record.sessionId || '');
+        if (!sessionId || sessionId === nextSessionId) continue;
+        if (Number(record.exitAt || 0)) continue;
+        const loginAt = Number(record.loginAt || 0);
+        if (!loginAt || loginAt >= t) continue;
+        const recordUser = record.userId ?? null;
+        if (userId !== null && recordUser !== null && String(recordUser) !== String(userId)) continue;
+        const exitReason = 'session-interrupted-before-next-login';
+        const exitSummary = '上次登录未记录退出，下一次登录时自动收口';
+        Object.assign(record, {
+          exitAt: t,
+          exitIso: new Date(t).toISOString(),
+          exitReason,
+          exitSummary,
+          loginDurationMs: Math.max(0, Math.round(t - loginAt)),
+          inferredExit: true,
+          inferredExitReason: 'next-session-start',
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          updatedAt: t
+        });
+        closed.push(safeJsonClone(record) || { ...record });
+      }
+    });
+    for (const record of closed) {
+      recordImportantEvent('session-end', {
+        importantLogId: String(record.sessionId || importantLogId('session', t, userId || 'user')) + ':end',
+        at: record.exitAt || t,
+        sessionId: record.sessionId || '',
+        userId: record.userId ?? userId,
+        exitAt: record.exitAt || t,
+        exitReason: record.exitReason,
+        exitSummary: record.exitSummary,
+        inferredExit: true,
+        session: record
+      });
+    }
+    return closed.length;
   }
 
   function importantExitReasonRank(reason) {
@@ -7110,36 +7172,175 @@
     bot.combatAim = null;
   }
 
+  function killIdentityMatches(item, victim, id) {
+    if (!item) return false;
+    const victimName = String(victim || '').trim();
+    const itemName = String(item.victim || item.name || '').trim();
+    const idText = id === undefined || id === null ? '' : String(id);
+    const itemId = item.id === undefined || item.id === null ? '' : String(item.id);
+    if (idText && itemId && idText === itemId) return true;
+    return Boolean(victimName && itemName && victimName === itemName);
+  }
+
+  function recentKillHistoryIndex(victim, id, t = Date.now(), windowMs = cfg.killAttributionMergeMs) {
+    const maxAge = Math.max(1000, Number(windowMs || cfg.killAttributionMergeMs || 120000));
+    for (let i = bot.killHistory.length - 1; i >= 0; i -= 1) {
+      const item = bot.killHistory[i];
+      if (t - Number(item?.at || 0) > maxAge) continue;
+      if (killIdentityMatches(item, victim, id)) return i;
+    }
+    return -1;
+  }
+
+  function recordKillHistoryItem(kill, seenKey = '') {
+    if (!kill || typeof kill !== 'object') return null;
+    const t = Number(kill.at || Date.now()) || Date.now();
+    const index = recentKillHistoryIndex(kill.victim || kill.name || '', kill.id, t);
+    let stored = kill;
+    if (index >= 0) {
+      const previous = bot.killHistory[index] || {};
+      stored = {
+        ...previous,
+        ...kill,
+        at: Number(previous.at || kill.at || t) || t,
+        time: kill.time || previous.time || '',
+        rewardCoins: Math.max(0, Number(kill.rewardCoins ?? previous.rewardCoins ?? 0) || 0),
+        drop: Math.max(0, Number(kill.drop ?? previous.drop ?? kill.rewardCoins ?? previous.rewardCoins ?? 0) || 0),
+        matchedAttack: Boolean(previous.matchedAttack || kill.matchedAttack),
+        chatConfirmed: Boolean(previous.chatConfirmed || kill.chatConfirmed),
+        dropMatched: Boolean(previous.dropMatched || kill.dropMatched),
+        source: previous.source && kill.source && previous.source !== kill.source
+          ? previous.source + '+' + kill.source
+          : (kill.source || previous.source || '')
+      };
+      bot.killHistory[index] = stored;
+    } else {
+      pushBounded(bot.killHistory, stored, 40);
+    }
+    recordImportantKill(stored);
+    if (seenKey) {
+      bot.seenKillKeys.add(seenKey);
+      pushBounded(bot.seenKillKeysList, seenKey, 120);
+    }
+    return stored;
+  }
+
+  function killMessageText(raw) {
+    if (typeof raw === 'string') return raw;
+    if (!raw || typeof raw !== 'object') return '';
+    return String(raw.text ?? raw.message ?? raw.content ?? raw.body ?? raw.msg ?? raw.value ?? '');
+  }
+
+  function killMessageTime(raw) {
+    if (!raw || typeof raw !== 'object') return '';
+    const value = raw.time ?? raw.created_at ?? raw.createdAt ?? raw.at ?? raw.timestamp ?? '';
+    if (typeof value === 'string' && /^\d{1,2}:\d{2}:\d{2}$/.test(value)) return value;
+    return '';
+  }
+
+  function collectKillMessageRows() {
+    const rows = [];
+    if (typeof document !== 'undefined' && document?.body) {
+      const lines = (document.body.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i += 1) {
+        rows.push({
+          text: lines[i],
+          time: /^\d{1,2}:\d{2}:\d{2}$/.test(lines[i - 1] || '') ? lines[i - 1] : '',
+          source: 'chat'
+        });
+      }
+    }
+    for (const message of Array.isArray(bot.globalState.messages) ? bot.globalState.messages : []) {
+      const text = killMessageText(message).trim();
+      if (!text) continue;
+      rows.push({
+        text,
+        time: killMessageTime(message),
+        source: 'snapshot'
+      });
+    }
+    return rows;
+  }
+
+  function recentAttackForKill(victim, t = Date.now()) {
+    const maxAge = Math.max(1000, Number(cfg.killChatAttackMatchMs || 120000));
+    return bot.attackHistory
+      .slice()
+      .reverse()
+      .find(item => t - Number(item.at || 0) <= maxAge
+        && (item.name === victim || String(item.id) === victim)) || null;
+  }
+
+  function recordDropMatchedKill(target, amount, currentSummary, reason = '') {
+    const postAttackTarget = target?.postAttackTarget || null;
+    if (!postAttackTarget) return null;
+    const reward = Math.max(0, Math.round(Number(amount || 0)));
+    const targetDrop = Math.max(0, Math.round(Number(postAttackTarget.drop || 0)));
+    if (!reward || !targetDrop || reward !== targetDrop) return null;
+    const coinKey = coinTargetKey(target) || ('xy:' + Math.round(Number(target.x) || 0) + ':' + Math.round(Number(target.y) || 0) + ':' + reward);
+    const targetKey = postAttackTarget.id !== undefined && postAttackTarget.id !== null && postAttackTarget.id !== ''
+      ? 'id:' + String(postAttackTarget.id)
+      : 'name:' + String(postAttackTarget.name || '');
+    const seenKey = 'drop-coin-match|' + targetKey + '|' + coinKey + '|' + reward;
+    if (bot.seenKillKeys.has(seenKey)) return null;
+    const t = Date.now();
+    return recordKillHistoryItem({
+      at: t,
+      time: '',
+      victim: postAttackTarget.name || '',
+      id: postAttackTarget.id ?? null,
+      drop: targetDrop,
+      rewardCoins: reward,
+      matchedAttack: true,
+      dropMatched: true,
+      chatConfirmed: false,
+      source: 'drop-coin-match',
+      targetDrop,
+      attackDistance: Number.isFinite(Number(postAttackTarget.distance)) ? Math.round(Number(postAttackTarget.distance)) : null,
+      sessionId: bot.session?.importantSessionId || '',
+      coin: {
+        id: target.id ?? target.drop_id ?? target.coin_id ?? null,
+        amount: reward,
+        x: Number.isFinite(Number(target.x)) ? Math.round(Number(target.x)) : null,
+        y: Number.isFinite(Number(target.y)) ? Math.round(Number(target.y)) : null,
+        distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
+      },
+      attributionReason: reason || 'coin-pickup',
+      self: currentSummary || null
+    }, seenKey);
+  }
+
   function updateKillHistory(self) {
     const ownName = self?.name || '';
-    if (!ownName || !document?.body) return;
-    const lines = (document.body.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
-    for (let i = 0; i < lines.length; i += 1) {
-      const match = lines[i].match(/^(.+?) killed (.+)$/);
+    if (!ownName) return;
+    const rows = collectKillMessageRows();
+    for (const row of rows) {
+      const match = row.text.match(/^(.+?) killed (.+)$/);
       if (!match || match[1] !== ownName) continue;
-      const time = /^\d{1,2}:\d{2}:\d{2}$/.test(lines[i - 1] || '') ? lines[i - 1] : '';
+      const time = row.time || '';
       const victim = match[2];
-      const key = time + '|' + victim;
+      const key = 'chat-kill|' + (row.source || 'chat') + '|' + time + '|' + victim;
       if (bot.seenKillKeys.has(key)) continue;
-      const attack = bot.attackHistory
-        .slice()
-        .reverse()
-        .find(item => item.name === victim || String(item.id) === victim);
+      const attack = recentAttackForKill(victim);
+      const existingIndex = recentKillHistoryIndex(victim, attack?.id ?? null);
+      const existing = existingIndex >= 0 ? bot.killHistory[existingIndex] : null;
+      if (!attack && !existing) continue;
       const kill = {
         at: Date.now(),
         time,
         victim,
-        id: attack ? attack.id : null,
-        drop: attack ? attack.drop : null,
-        rewardCoins: attack ? attack.drop : null,
-        matchedAttack: Boolean(attack),
-        attackDistance: attack ? attack.distance : null,
-        sessionId: bot.session?.importantSessionId || ''
+        id: attack ? attack.id : (existing?.id ?? null),
+        drop: attack ? attack.drop : (existing?.drop ?? null),
+        rewardCoins: attack ? attack.drop : (existing?.rewardCoins ?? null),
+        matchedAttack: Boolean(attack || existing?.matchedAttack),
+        chatConfirmed: true,
+        source: 'chat',
+        attackDistance: attack ? attack.distance : (existing?.attackDistance ?? null),
+        sessionId: bot.session?.importantSessionId || '',
+        coin: existing?.coin || null,
+        dropMatched: Boolean(existing?.dropMatched)
       };
-      pushBounded(bot.killHistory, kill, 40);
-      recordImportantKill(kill);
-      bot.seenKillKeys.add(key);
-      pushBounded(bot.seenKillKeysList, key, 120);
+      recordKillHistoryItem(kill, key);
     }
   }
 
@@ -9818,7 +10019,7 @@
     const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
     const minScore = Math.max(0, Number(options.minScore ?? 0) || 0);
     const candidates = [];
-	    for (const coin of safeCoinCandidates(coins, activeThreats, maxDistance, self)
+    for (const coin of safeCoinCandidates(coins, activeThreats, maxDistance, self)
       .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)))
       .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))) {
@@ -9828,16 +10029,24 @@
       if (!attack) continue;
       const score = scoreCoinOpportunity(coin);
       if (score < minScore) continue;
-      candidates.push({
+      const candidate = {
         ...coin,
         postAttackScore: score,
         postAttackTarget: {
           id: attack.id,
           name: attack.name || '',
           drop: attack.drop,
+          x: attack.x,
+          y: attack.y,
+          action: attack.action || '',
+          distance: Number.isFinite(Number(attack.distance)) ? Math.round(Number(attack.distance)) : null,
+          coinDistance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
+          coinDistanceToTarget: Math.round(dist(coin, attack)),
           ageMs: Math.max(0, Math.round(t - Number(attack.at || t)))
         }
-      });
+      };
+      recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), 'post-attack-drop-visible');
+      candidates.push(candidate);
     }
     return candidates
       .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || b.postAttackScore - a.postAttackScore || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
@@ -10408,6 +10617,9 @@
       nearStartedAt: distance <= cfg.nearCoinStuckDistance ? t : 0
     };
     attempt.amount = amount || Number(attempt.amount || 0) || 0;
+    if (action.postAttackTarget || action.target?.postAttackTarget) {
+      attempt.postAttackTarget = action.postAttackTarget || action.target.postAttackTarget;
+    }
     if (Number.isFinite(targetX)) attempt.x = targetX;
     if (Number.isFinite(targetY)) attempt.y = targetY;
     attempt.lastSeenAt = t;
@@ -10482,7 +10694,8 @@
         lastDistance: distance,
         amount: attempt.amount,
         x: attempt.x,
-        y: attempt.y
+        y: attempt.y,
+        postAttackTarget: attempt.postAttackTarget || null
       };
       return action;
     }
@@ -10495,7 +10708,8 @@
         lastDistance: distance,
         amount: attempt.amount,
         x: attempt.x,
-        y: attempt.y
+        y: attempt.y,
+        postAttackTarget: attempt.postAttackTarget || previous.postAttackTarget || null
       };
       return action;
     }
@@ -10504,7 +10718,8 @@
       lastDistance: distance,
       amount: attempt.amount,
       x: attempt.x,
-      y: attempt.y
+      y: attempt.y,
+      postAttackTarget: attempt.postAttackTarget || previous.postAttackTarget || null
     };
     if (t - Number(previous.lastImprovedAt || previous.startedAt || t) < cfg.coinNoProgressMs) {
       return action;
@@ -10571,6 +10786,7 @@
         || (decision.kind === 'patrol' && String(decision.reason || '').includes('coin')));
     if (decisionLooksLikeCoin) {
       const target = { ...decisionTarget };
+      if (decision?.postAttackTarget && !target.postAttackTarget) target.postAttackTarget = decision.postAttackTarget;
       target.id = target.id ?? bot.lastTarget?.id ?? bot.coinProgress?.id;
       if (!Number.isFinite(Number(target.distance)) && Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.y)) && self) {
         target.distance = dist(self, target);
@@ -10583,7 +10799,8 @@
         distance: bot.coinProgress?.lastDistance,
         amount: bot.coinProgress?.amount,
         x: bot.coinProgress?.x,
-        y: bot.coinProgress?.y
+        y: bot.coinProgress?.y,
+        postAttackTarget: bot.coinProgress?.postAttackTarget || null
       };
     }
     if (bot.coinProgress?.id) {
@@ -10592,7 +10809,8 @@
         distance: bot.coinProgress.lastDistance,
         amount: bot.coinProgress.amount,
         x: bot.coinProgress.x,
-        y: bot.coinProgress.y
+        y: bot.coinProgress.y,
+        postAttackTarget: bot.coinProgress.postAttackTarget || null
       };
     }
     return null;
@@ -10645,6 +10863,7 @@
       return false;
     }
     if (key) pushBounded(session.coinPickupKeys, { key, at: t, amount: value, reason: reason || '' }, 80);
+    recordDropMatchedKill(target, value, currentSummary, reason);
     session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + value;
     const coinDiff = Math.max(0, Math.round(Number(currentSummary?.coins || 0) - Number(previousCoins || 0)));
     session.coinsGained = Math.max(

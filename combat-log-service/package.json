@@ -6,8 +6,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node analyze-logs.js --self-test",
+    "test": "node analyze-logs.js --self-test && node daily-summary.js --self-test",
     "analyze": "node analyze-logs.js",
+    "daily": "node daily-summary.js",
+    "daily:self-test": "node daily-summary.js --self-test",
     "analyze:current": "node analyze-logs.js --manifest ../dist/manifest.json",
     "validate:current": "node analyze-logs.js --manifest ../dist/manifest.json --require-entries --fail-on-issue",
     "validate:objective": "node analyze-logs.js --manifest ../dist/manifest.json --require-entries --require-exit-events --require-active-combat-events --require-hp-disadvantage-exit-events --fail-on-issue",
