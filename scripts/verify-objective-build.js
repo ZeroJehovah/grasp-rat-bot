@@ -31,7 +31,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
   { key: 'unsafeExitReloginMinDelayMs', value: 60000 },
-  { key: 'staminaBudgetReloginDelayMs', value: 300000 },
+  { key: 'staminaBudgetReloginDelayMs', value: 1800000 },
   { key: 'leaveRetryMinMs', value: 10000 },
   { key: 'leaveCommandTimeoutMs', value: 10000 },
   { key: 'leave403ReloginDelayMs', value: 3600000 },

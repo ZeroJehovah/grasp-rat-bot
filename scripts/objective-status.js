@@ -355,17 +355,17 @@ function runSelfTest() {
           displayReason: '1h体力预算不足，退出等待恢复',
           staminaBudgetExit: {
             window: '1h',
-            reloginDelayMs: 300000
+            reloginDelayMs: 1800000
           }
         },
         exit: {
           reason: 'stamina-budget-coin-leave',
           summary: '1h体力预算不足，退出等待恢复',
-          pendingLoginSuppressDelayMs: 300000,
-          reloginDelayMs: 300000
+          pendingLoginSuppressDelayMs: 1800000,
+          reloginDelayMs: 1800000
         },
         login: {
-          suppressRemainingMs: 300000,
+          suppressRemainingMs: 1800000,
           suppressReason: 'stamina-budget-coin-leave'
         }
       }
