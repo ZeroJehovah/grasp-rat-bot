@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.142"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.143"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -300,7 +300,7 @@
     staminaFullRatio: 0.98,
     staminaExhaustedThresholdMs: 1000,
 	    staminaResetGraceMs: 10000,
-	    staminaBudgetReloginDelayMs: 300000,
+	    staminaBudgetReloginDelayMs: 1800000,
 	    loginSnapshotSuccessRequired: 3,
 	    loginSnapshotProbeMinMs: 5000,
 	    autoLogin: true,
@@ -1044,7 +1044,7 @@
     return dailyStaminaWindowStartAt(t) + dayMs;
   }
   function staminaBudgetReloginDelayMs() {
-    return Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000));
+    return Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 1800000));
   }
   function staminaResetHoldUntil(staminaState, t = Date.now()) {
     const exhausted = Array.isArray(staminaState?.longExhausted)

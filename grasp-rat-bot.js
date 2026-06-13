@@ -366,7 +366,7 @@ function runSelfTest() {
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
     conserveStaminaThreshold: 6500,
-    staminaBudgetReloginDelayMs: 300000,
+    staminaBudgetReloginDelayMs: 1800000,
     pursuitLeaveMs: 300000,
     pursuitLeaveNonFullHpMs: 90000,
     pursuitLeaveInvulnerableMs: 60000,
@@ -838,7 +838,7 @@ function runSelfTest() {
       budgetMs: Math.max(0, Math.round(budget)),
       requiredMs: Math.max(0, Math.round(staminaCost)),
       shortageMs: Math.max(0, Math.round(staminaCost - budget)),
-      reloginDelayMs: Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000))
+      reloginDelayMs: Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 1800000))
     };
   }
   function staminaBudgetCoinLeaveAction(staminaBudgetExit) {
@@ -849,7 +849,7 @@ function runSelfTest() {
       dy: 0,
       offline: true,
       staminaBudgetExit,
-      reloginDelayMs: staminaBudgetExit?.reloginDelayMs || Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000))
+      reloginDelayMs: staminaBudgetExit?.reloginDelayMs || Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 1800000))
     };
   }
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
@@ -4599,7 +4599,7 @@ function browserBotSource(config) {
     staminaFullRatio: 0.98,
     staminaExhaustedThresholdMs: 1000,
 	    staminaResetGraceMs: 10000,
-	    staminaBudgetReloginDelayMs: 300000,
+	    staminaBudgetReloginDelayMs: 1800000,
 	    loginSnapshotSuccessRequired: 3,
 	    loginSnapshotProbeMinMs: 5000,
 	    autoLogin: true,
@@ -5343,7 +5343,7 @@ function browserBotSource(config) {
     return dailyStaminaWindowStartAt(t) + dayMs;
   }
   function staminaBudgetReloginDelayMs() {
-    return Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000));
+    return Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 1800000));
   }
   function staminaResetHoldUntil(staminaState, t = Date.now()) {
     const exhausted = Array.isArray(staminaState?.longExhausted)

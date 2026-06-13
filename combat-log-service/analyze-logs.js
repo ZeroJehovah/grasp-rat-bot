@@ -8,7 +8,7 @@ const path = require('path');
 const DEFAULTS = {
   dir: path.join(__dirname, 'logs'),
   minUnsafeDelayMs: 60000,
-  staminaBudgetDelayMs: 300000,
+  staminaBudgetDelayMs: 1800000,
   combatAttackRange: 14500,
   eventGapMs: 30000,
   eventLineGap: 100,
@@ -1884,7 +1884,7 @@ function runSelfTest() {
         exit: {
           reason: 'stamina-budget-coin-leave',
           summary: 'full stamina delay',
-          reloginDelayMs: 300000
+          reloginDelayMs: 1800000
         }
       }
     ];
