@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.48
+// @version      0.4.49
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.48';
+  const BOOTSTRAP_VERSION = '0.4.49';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -80,6 +80,7 @@
     combatLoggingEnabled: false,
     combatLogEndpoint: 'http://127.0.0.1:18765/combat-log',
     combatLogEndpointConfigured: false,
+    debugBootstrapLogging: false,
     cacheBust: true,
     autoLogin: true
   };
@@ -204,8 +205,14 @@
     return text;
   }
 
+  function shouldLogBootstrap(message) {
+    if (cfg.debugBootstrapLogging || unsafeWindow.__graspRatBootstrapVerbose) return true;
+    return !/^(watchdog ok|watchdog skipped: busy|poll skipped: busy|poll ok: bot current|manifest sync skipped: running bot and cache current|manifest fetch start|manifest fetch try|manifest fetch ok|manifest fetch complete|userscript version check complete)$/.test(String(message || ''));
+  }
+
   function logBootstrap(message, detail) {
     try {
+      if (!shouldLogBootstrap(message)) return;
       console.log('[grasp-rat-bootstrap]', `${BOOTSTRAP_VERSION} ${state.bootId} ${message}`, detail || '');
     } catch (_) {}
   }
@@ -1390,13 +1397,15 @@
     const remoteLogSent = Number(combatLogStatus.sessionSent ?? session.combatLogSent ?? combatLogStatus.sent ?? 0) || 0;
     const remoteLogPending = Number(combatLogStatus.pending ?? 0) || 0;
     const remoteLogFailed = Number(combatLogStatus.sessionFailed ?? session.combatLogFailed ?? combatLogStatus.failed ?? 0) || 0;
-    const remoteLogColor = remoteLogFailed > 0 ? '#fca5a5' : (remoteLogEnabled ? '#86efac' : '#fde68a');
-    const remoteLogHalo = remoteLogFailed > 0 ? 'rgba(251,113,133,.13)' : (remoteLogEnabled ? 'rgba(52,211,153,.13)' : 'rgba(251,191,36,.14)');
-    const remoteLogGlow = remoteLogFailed > 0 ? 'rgba(251,113,133,.45)' : (remoteLogEnabled ? 'rgba(52,211,153,.45)' : 'rgba(251,191,36,.45)');
+    const remoteLogHasFailure = remoteLogFailed > 0;
+    const remoteLogColor = remoteLogHasFailure ? '#fca5a5' : (remoteLogEnabled ? '#86efac' : '#fde68a');
+    const remoteLogHalo = remoteLogHasFailure ? 'rgba(251,113,133,.13)' : (remoteLogEnabled ? 'rgba(52,211,153,.13)' : 'rgba(251,191,36,.14)');
+    const remoteLogGlow = remoteLogHasFailure ? 'rgba(251,113,133,.45)' : (remoteLogEnabled ? 'rgba(52,211,153,.45)' : 'rgba(251,191,36,.45)');
     const remoteLogTitle = '远程日志 ' + (remoteLogEnabled ? '开启' : '关闭')
       + '，已发 ' + formatNumber(remoteLogSent, '0')
       + '，待发 ' + formatNumber(remoteLogPending, '0')
-      + '，失败 ' + formatNumber(remoteLogFailed, '0');
+      + '，失败 ' + formatNumber(remoteLogFailed, '0')
+      + (combatLogStatus.lastError ? '，最近错误 ' + String(combatLogStatus.lastError) : '');
     const persistent = activePersistentExitDetail(status);
     const reloginHold = status?.enemyLeave?.holdRemainingMs || status?.pursuitLeave?.holdRemainingMs || status?.offlineLeave?.holdRemainingMs || persistent?.holdRemainingMs || 0;
     const statusText = paused ? '暂停' : (status?.running ? '运行' : '未运行');
@@ -1577,7 +1586,7 @@
     if (remoteLogVisible) {
       const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
         label: '日志',
-        pending: remoteLogPending > 0 && remoteLogFailed <= 0,
+        pending: remoteLogPending > 0 && !remoteLogHasFailure,
         onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })
       });
       logDot.setAttribute('aria-pressed', String(remoteLogEnabled));

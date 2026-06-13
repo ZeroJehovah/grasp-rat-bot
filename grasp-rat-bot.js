@@ -4925,6 +4925,7 @@ function browserBotSource(config) {
       dropped: Number(preserved.combatLogging?.dropped || 0),
       sent: Number(preserved.combatLogging?.sent || 0),
       failed: Number(preserved.combatLogging?.failed || 0),
+      failedEntryKeys: Array.isArray(preserved.combatLogging?.failedEntryKeys) ? preserved.combatLogging.failedEntryKeys.slice(-1000) : [],
       sending: false,
       sendingExitAuditIds: [],
       pendingExitAuditIds: [],
@@ -6078,6 +6079,59 @@ function browserBotSource(config) {
         return text || fallback;
       }
 
+      function combatLogEntryFailureKey(entry) {
+        if (!entry || typeof entry !== 'object') return '';
+        return [
+          entry.exitAuditLogId || '',
+          entry.importantLogId || '',
+          entry.combatId || '',
+          entry.sequence ?? '',
+          entry.type || '',
+          entry.at || '',
+          entry.source || ''
+        ].map(value => String(value ?? '')).join('|');
+      }
+
+      function normalizeCombatLogFailedState(state = bot.combatLogging) {
+        if (!state || typeof state !== 'object') return 0;
+        if (!Array.isArray(state.failedEntryKeys)) state.failedEntryKeys = [];
+        if (Number(state.failed || 0) > 0 && !state.failedEntryKeys.length && Array.isArray(state.pending) && state.pending.length) {
+          const count = Math.min(state.pending.length, Math.max(0, Math.round(Number(state.failed || 0))));
+          state.failedEntryKeys = state.pending.slice(0, count).map(combatLogEntryFailureKey).filter(Boolean);
+        }
+        if ((!Array.isArray(state.pending) || !state.pending.length) && !state.sending) {
+          state.failedEntryKeys = [];
+          state.failed = 0;
+          return 0;
+        }
+        state.failedEntryKeys = Array.from(new Set(state.failedEntryKeys.filter(Boolean))).slice(-1000);
+        state.failed = state.failedEntryKeys.length;
+        return state.failed;
+      }
+
+      function markCombatLogEntriesFailed(entries) {
+        const state = bot.combatLogging;
+        if (!state || !Array.isArray(entries) || !entries.length) return 0;
+        const keys = new Set(Array.isArray(state.failedEntryKeys) ? state.failedEntryKeys.filter(Boolean) : []);
+        for (const entry of entries) {
+          const key = combatLogEntryFailureKey(entry);
+          if (key) keys.add(key);
+        }
+        state.failedEntryKeys = Array.from(keys).slice(-1000);
+        state.failed = state.failedEntryKeys.length;
+        return state.failed;
+      }
+
+      function markCombatLogEntriesSent(entries) {
+        const state = bot.combatLogging;
+        if (!state || !Array.isArray(entries) || !entries.length) return 0;
+        if (!Array.isArray(state.failedEntryKeys) || !state.failedEntryKeys.length) return normalizeCombatLogFailedState(state);
+        const sentKeys = new Set(entries.map(combatLogEntryFailureKey).filter(Boolean));
+        if (!sentKeys.size) return normalizeCombatLogFailedState(state);
+        state.failedEntryKeys = state.failedEntryKeys.filter(key => !sentKeys.has(key));
+        return normalizeCombatLogFailedState(state);
+      }
+
       function configureCombatLogging(options = {}) {
         const next = options && typeof options === 'object' ? options : {};
         if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
@@ -6097,6 +6151,9 @@ function browserBotSource(config) {
           bot.combatLogging.combatId = '';
         }
         restoreImportantLogsForRemote();
+        if (Array.isArray(bot.combatLogging?.pending) && bot.combatLogging.pending.length) {
+          flushCombatLogs(true);
+        }
         return summarizeCombatLoggingStatus();
       }
 
@@ -6104,6 +6161,7 @@ function browserBotSource(config) {
         const state = bot.combatLogging || {};
         const t = Date.now();
         const exitAuditPending = unresolvedExitAuditLogCount();
+        const failed = normalizeCombatLogFailedState(state);
         return {
           enabled: Boolean(state.enabled),
           endpoint: String(state.endpoint || ''),
@@ -6119,13 +6177,13 @@ function browserBotSource(config) {
           exitAuditBlocking: exitAuditPending > 0,
           dropped: Number(state.dropped || 0),
           sent: Number(state.sent || 0),
-	          failed: Number(state.failed || 0),
-	          sending: Boolean(state.sending),
-	          lastError: state.lastError || '',
-	          lastSkipReason: state.lastSkipReason || '',
-	          lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null
-	        };
-	      }
+          failed,
+          sending: Boolean(state.sending),
+          lastError: state.lastError || '',
+          lastSkipReason: state.lastSkipReason || '',
+          lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null
+        };
+      }
 
       function readPersistedExitAuditLogs() {
         try {
@@ -7078,6 +7136,7 @@ function browserBotSource(config) {
         if (!force && t - Number(state.lastFlushAt || 0) < Math.max(250, Number(cfg.combatLogFlushMs) || 1000)) return false;
         if (typeof fetch !== 'function') {
           state.lastError = 'fetch unavailable';
+          markCombatLogEntriesFailed(state.pending);
           return false;
         }
         state.lastFlushAt = t;
@@ -7121,11 +7180,12 @@ function browserBotSource(config) {
             state.sent += entries.length;
             state.lastOkAt = Date.now();
             state.lastError = '';
+            markCombatLogEntriesSent(entries);
             if (exitAuditIds.length) removePersistedExitAuditLogs(exitAuditIds);
             if (importantLogIds.length) markImportantLogsRemoteSent(importantLogIds, state.lastOkAt);
           })
           .catch(err => {
-            state.failed += entries.length;
+            markCombatLogEntriesFailed(entries);
             state.lastError = err?.message || String(err);
             if (importantLogIds.length) markImportantLogsRemoteError(importantLogIds, state.lastError, Date.now());
             state.pending = entries.concat(Array.isArray(state.pending) ? state.pending : []);
@@ -7155,22 +7215,23 @@ function browserBotSource(config) {
         return true;
       }
 
-	      function recordCombatLogTick(source, decision = bot.lastDecision) {
-	        const state = bot.combatLogging;
-	        if (!state?.enabled) return;
-	        state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
-	        if (!state.endpoint) return;
-	        const suspendedReason = combatLogSuspendReason(decision || {});
-	        if (suspendedReason) {
-	          if (state.active) {
-	            const entry = buildCombatLogEntry(source, decision || {});
-	            endCombatLogSession(entry, 'suspended:' + suspendedReason);
-	          }
-		          state.lastSkipReason = suspendedReason;
-		          return;
-		        }
-		        state.lastSkipReason = '';
-		        const entry = buildCombatLogEntry(source, decision || {});
+      function recordCombatLogTick(source, decision = bot.lastDecision) {
+        const state = bot.combatLogging;
+        if (!state?.enabled) return;
+        state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
+        if (!state.endpoint) return;
+        const suspendedReason = combatLogSuspendReason(decision || {});
+        if (suspendedReason) {
+          if (state.active) {
+            const entry = buildCombatLogEntry(source, decision || {});
+            endCombatLogSession(entry, 'suspended:' + suspendedReason);
+          }
+          state.lastSkipReason = suspendedReason;
+          flushCombatLogs(false);
+          return;
+        }
+        state.lastSkipReason = '';
+        const entry = buildCombatLogEntry(source, decision || {});
 	        const triggerReason = combatLogTriggerReason(entry, decision || {});
 	        const triggered = Boolean(triggerReason);
 	        const afkFrame = combatLogIsAfkAttack(entry, decision || {});
@@ -10966,6 +11027,7 @@ function browserBotSource(config) {
     if (Array.isArray(bot.importantLogging?.queuedRemoteIds)) {
       bot.importantLogging.queuedRemoteIds = bot.importantLogging.queuedRemoteIds.filter(id => !idSet.has(String(id)));
     }
+    if (bot.importantLogging) bot.importantLogging.lastRemoteError = '';
   }
 
   function markImportantLogsRemoteError(ids, error, t = Date.now()) {
@@ -11318,6 +11380,20 @@ function browserBotSource(config) {
     return Math.max(0, Math.round(Number(session?.stamina1dSpentMs || 0) || 0));
   }
 
+  function importantCombatDecisionIsExitOnly(decision, reason = decision?.reason || '') {
+    const text = String(reason || '').toLowerCase();
+    if (decision?.kind === 'leave' || decision?.leave) return true;
+    return /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/.test(text);
+  }
+
+  function importantCombatHasActualEngagement(record) {
+    if (!record) return false;
+    if (record.kill) return true;
+    if (record.engagementObserved === true) return true;
+    if (Number(record.enemyHpDelta || 0) < 0 || Number(record.selfHpDelta || 0) < 0) return true;
+    return !importantCombatDecisionIsExitOnly({ kind: record.startedWithExitOnly ? 'leave' : '', reason: record.startReason }, record.startReason);
+  }
+
   function updateImportantCombatStamina(record, session = bot.session || {}) {
     if (!record) return;
     const current = importantSessionStaminaSpentMs(session);
@@ -11341,6 +11417,7 @@ function browserBotSource(config) {
       at: Date.now(),
       reason,
       source: decision?.source || '',
+      exitOnly: importantCombatDecisionIsExitOnly(decision, reason),
       selfHp: importantHpValue(self?.hp),
       target: targetSummary,
       targetHp: targetSummary.hp ?? targetSummary.displayHp
@@ -11373,6 +11450,8 @@ function browserBotSource(config) {
       enemyHpMin: null,
       enemyHpMax: null,
       enemyHpDelta: null,
+      startedWithExitOnly: Boolean(sample.exitOnly),
+      engagementObserved: !sample.exitOnly,
       staminaSpentStartMs: importantSessionStaminaSpentMs(session),
       staminaSpentEndMs: importantSessionStaminaSpentMs(session),
       staminaSpentMs: 0,
@@ -11395,6 +11474,7 @@ function browserBotSource(config) {
     const previousEnemyHp = importantHpValue(record.enemyHpEnd);
     record.lastSampleAt = sample.at;
     record.lastReason = sample.reason || record.lastReason || '';
+    if (!sample.exitOnly) record.engagementObserved = true;
     record.sampleCount = Math.max(0, Number(record.sampleCount || 0) || 0) + 1;
     record.enemy = { ...(record.enemy || {}), ...(sample.target || {}) };
     record.enemyKey = record.enemyKey || sample.target?.key || '';
@@ -11449,6 +11529,13 @@ function browserBotSource(config) {
     record.resultReason = String(reason || 'ended');
     record.result = importantCombatResult(record, reason, extra);
     record.updatedAt = t;
+    if (!importantCombatHasActualEngagement(record)) {
+      updateImportantLogsStore(store => {
+        store.combats = store.combats.filter(item => String(item?.combatSummaryId || '') !== String(record.combatSummaryId || ''));
+      });
+      bot.importantLogging.activeCombat = null;
+      return null;
+    }
     updateImportantLogsStore(store => {
       upsertImportantListItem(store.combats, 'combatSummaryId', safeJsonClone(record) || record);
     });
@@ -11472,6 +11559,7 @@ function browserBotSource(config) {
         finishImportantCombat('target-switched', { at: sample.at });
       }
       if (!bot.importantLogging.activeCombat) {
+        if (sample.exitOnly) return;
         startImportantCombat(sample);
       } else {
         updateImportantCombatRecord(bot.importantLogging.activeCombat, sample);

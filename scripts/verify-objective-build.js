@@ -393,6 +393,14 @@ function main() {
       assert(pendingIdsBody.includes('if (!state.endpoint) return []'), 'unconfigured log endpoint can still block on persisted exit audit logs');
       const flushBody = functionBody(text, 'flushCombatLogs');
       assert(flushBody.includes('removePersistedExitAuditLogs(exitAuditIds)'), 'persisted exit audit logs are not cleared on successful flush');
+      assert(text.includes('failedEntryKeys'), 'remote log failed entries are not tracked by entry key');
+      assert(flushBody.includes('markCombatLogEntriesSent(entries)'), 'successful remote log retry does not clear failed entry count');
+      assert(flushBody.includes('markCombatLogEntriesFailed(entries)'), 'remote log send failure does not mark failed entry count');
+      const recordBody = functionBody(text, 'recordCombatLogTick');
+      assert(
+        /state\.lastSkipReason = suspendedReason;[\s\S]{0,120}flushCombatLogs\(false\);[\s\S]{0,120}return;/.test(recordBody),
+        'suspended combat-log ticks do not retry pending remote logs'
+      );
       const reloadBody = functionBody(text, 'requestReload');
       assert(reloadBody.includes('if (exitAuditFlushPending())'), 'requestReload does not block on pending exit audit logs');
       const loginBody = functionBody(text, 'maybeStartAutoLogin');
@@ -415,6 +423,7 @@ function main() {
       const flushBody = functionBody(text, 'flushCombatLogs');
       assert(flushBody.includes('const hasImportant ='), 'flush does not detect important logs');
       assert(flushBody.includes('markImportantLogsRemoteSent(importantLogIds'), 'important logs are not marked sent after remote flush');
+      assert(functionBody(text, 'markImportantLogsRemoteSent').includes("bot.importantLogging.lastRemoteError = ''"), 'successful important remote sends do not clear stale error state');
       assert(text.includes('restoreImportantLogsForRemote();'), 'unsent important logs are not restored for remote flush');
       assert(text.includes('pureRefreshCoins'), 'session logs do not include pure refreshed coin totals');
       assert(text.includes('staminaSpentMs'), 'session logs do not include stamina spent');
@@ -423,6 +432,9 @@ function main() {
       assert(text.includes('staminaSpentStartMs') && text.includes('staminaSpentEndMs'), 'combat summaries do not include combat stamina range');
       assert(text.includes('selfHpDelta') && text.includes('enemyHpDelta'), 'combat summaries do not include HP deltas');
       assert(text.includes('closeOpenImportantSessionsBeforeStart(session'), 'unclosed important sessions are not closed before the next login');
+      assert(text.includes('function importantCombatDecisionIsExitOnly'), 'important combat exit-only classifier not found');
+      assert(text.includes('if (sample.exitOnly) return;'), 'exit-only combat samples can still start combat summaries');
+      assert(text.includes('!importantCombatHasActualEngagement(record)'), 'empty combat summaries are not discarded');
       assert(text.includes("exitReason = 'session-interrupted-before-next-login'"), 'next-login interrupted sessions are not explicitly marked');
       assert(text.includes('recordDropMatchedKill(candidate') && text.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards');
       assert(text.includes('recordDropMatchedKill(target, value'), 'picked post-attack drop coins are not attributed as kill rewards');
@@ -654,6 +666,8 @@ function main() {
     assert(!dailySummary.includes('staminaSpentMs) / 1000)}s') && !dailySummary.includes('combatStaminaSpentMs / 1000)}s'), 'daily summary stamina output still includes seconds unit');
     assert(dailySummary.includes('activeKillCount === 1') && dailySummary.includes('afkKillCount === 1'), 'daily summary self-test does not cover AFK/active kill buckets');
     assert(dailySummary.includes('report.combats[0].staminaSpentMs === 2500'), 'daily summary self-test does not cover combat stamina');
+    assert(dailySummary.includes('combatHasActualEngagement(combat)'), 'daily summary does not filter non-engaged combat summaries');
+    assert(dailySummary.includes('immediate login exit was incorrectly counted as combat'), 'daily summary self-test does not cover immediate login exits');
   });
 
   check('combat-log daily summary exposes incomplete exits and no-self text', () => {
@@ -750,9 +764,17 @@ function main() {
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
       assert(text.includes("label: '日志'"), 'remote-log dot visible label not found');
       assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');
-      assert(text.includes('pending: remoteLogPending > 0 && remoteLogFailed <= 0'), 'remote-log pending blink state not found');
+      assert(text.includes('const remoteLogHasFailure = remoteLogFailed > 0'), 'remote-log failure state not found');
+      assert(text.includes('const remoteLogColor = remoteLogHasFailure'), 'remote-log color does not depend on outstanding failed count');
+      assert(text.includes('pending: remoteLogPending > 0 && !remoteLogHasFailure'), 'remote-log pending blink state not found');
       assert(text.includes('onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })'), 'remote-log dot toggle not found');
       assert(text.includes("logDot.setAttribute('aria-pressed', String(remoteLogEnabled))"), 'remote-log dot aria-pressed not found');
+    });
+    check(`${file} suppresses routine bootstrap console noise`, () => {
+      assert(text.includes('function shouldLogBootstrap'), 'bootstrap log filter not found');
+      assert(text.includes('debugBootstrapLogging'), 'bootstrap verbose logging switch not found');
+      assert(text.includes('watchdog ok|watchdog skipped: busy|poll skipped: busy|poll ok: bot current'), 'routine watchdog/poll logs are not filtered');
+      assert(text.includes('manifest fetch start|manifest fetch try|manifest fetch ok|manifest fetch complete'), 'routine manifest fetch logs are not filtered');
     });
     check(`${file} keeps panel section titles removed`, () => {
       const removedText = [
