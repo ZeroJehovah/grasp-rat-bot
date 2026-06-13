@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.49
+// @version      0.4.50
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.49';
+  const BOOTSTRAP_VERSION = '0.4.50';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -1169,6 +1169,23 @@
     return Boolean(hasNativeUser || hasToken || hasSelf || (statusUserId && controlWsLooksActive(control)));
   }
 
+  function reloginHoldRemainingFromStatus(status) {
+    const persistent = activePersistentExitDetail(status);
+    return Math.max(
+      0,
+      Number(status?.enemyLeave?.holdRemainingMs || 0) || 0,
+      Number(status?.pursuitLeave?.holdRemainingMs || 0) || 0,
+      Number(status?.offlineLeave?.holdRemainingMs || 0) || 0,
+      Number(status?.lastDecision?.holdRemainingMs || 0) || 0,
+      Number(persistent?.holdRemainingMs || 0) || 0
+    );
+  }
+
+  function shouldShowInlineLogin(status) {
+    const reloginHold = reloginHoldRemainingFromStatus(status);
+    return reloginHold > 0 || !pageLooksLoggedIn(status);
+  }
+
   function syncEntityControlLogin(status) {
     const side = getNativeSidebar();
     const nativeJoin = document.getElementById('joinBtn');
@@ -1183,9 +1200,9 @@
     }
     const grid = nativeJoin?.parentElement || side?.querySelector?.('.control-grid') || null;
     if (!grid) return;
-    const loggedIn = pageLooksLoggedIn(status);
     let loginButton = document.getElementById(INLINE_LOGIN_BUTTON_ID);
-    if (state.cloudflareError || loggedIn) {
+    const reloginHold = reloginHoldRemainingFromStatus(status);
+    if (state.cloudflareError || !shouldShowInlineLogin(status)) {
       if (loginButton) loginButton.remove();
       return;
     }
@@ -1200,7 +1217,7 @@
     }
     loginButton.className = nativeJoin?.className || 'join';
     loginButton.textContent = loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录';
-    loginButton.title = '通过脚本立即登录/加入游戏';
+    loginButton.title = reloginHold > 0 ? '跳过重连等待并立即登录/加入游戏' : '通过脚本立即登录/加入游戏';
     loginButton.disabled = loginButton.dataset.graspRatLoginPending === 'true';
     loginButton.onclick = event => {
       event.preventDefault();
