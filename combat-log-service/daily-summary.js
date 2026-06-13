@@ -225,6 +225,8 @@ function normalizeCombat(combat) {
     kill: combat.kill || null,
     startReason: combat.startReason || '',
     lastReason: combat.lastReason || '',
+    startedWithExitOnly: Boolean(combat.startedWithExitOnly),
+    engagementObserved: combat.engagementObserved === true,
     sampleCount: Math.max(0, Math.round(number(combat.sampleCount))),
     version: combat.version || '',
     sourceHash: combat.sourceHash || '',
@@ -239,6 +241,20 @@ function mergeCombat(previous, next) {
   return combatScore(normalized) >= combatScore(previous)
     ? { ...previous, ...normalized, enemy: { ...(previous.enemy || {}), ...(normalized.enemy || {}) } }
     : { ...normalized, ...previous, enemy: { ...(normalized.enemy || {}), ...(previous.enemy || {}) } };
+}
+
+function combatReasonIsExitOnly(reason) {
+  return /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/i.test(String(reason || ''));
+}
+
+function combatHasActualEngagement(combat) {
+  if (!combat) return false;
+  if (combat.kill) return true;
+  if (combat.engagementObserved === true) return true;
+  if (number(combat.enemyHpDelta) < 0 || number(combat.selfHpDelta) < 0) return true;
+  if (!combatReasonIsExitOnly(combat.startReason)) return true;
+  if (number(combat.sampleCount) > 1 && !combatReasonIsExitOnly(combat.lastReason)) return true;
+  return false;
 }
 
 function reasonText(reason, summary) {
@@ -303,7 +319,7 @@ function buildReport(entries, options = {}) {
     }
     if (event.importantType === 'combat-summary' && event.combat) {
       const combat = normalizeCombat(event.combat);
-      if (combat?.combatSummaryId) {
+      if (combat?.combatSummaryId && combatHasActualEngagement(combat)) {
         combats.set(combat.combatSummaryId, mergeCombat(combats.get(combat.combatSummaryId), combat));
       }
     }
@@ -587,6 +603,35 @@ function runSelfTest() {
         resultReason: 'kill',
         sampleCount: 12
       }
+    },
+    {
+      type: 'important-log',
+      importantType: 'combat-summary',
+      importantLogId: `${s2}:immediate-exit:summary`,
+      at: 10600,
+      sessionId: s2,
+      combat: {
+        combatSummaryId: `${s2}:immediate-exit`,
+        sessionId: s2,
+        startedAt: 10500,
+        endedAt: 10600,
+        durationMs: 100,
+        staminaSpentMs: 0,
+        enemy: { id: 9, name: 'login-threat', mode: 'Active' },
+        selfHpStart: 40,
+        selfHpEnd: 40,
+        selfHpDelta: 0,
+        enemyHpStart: 100,
+        enemyHpEnd: 100,
+        enemyHpDelta: 0,
+        result: 'left',
+        resultReason: 'combat-hp-disadvantage-leave',
+        startReason: 'combat-hp-disadvantage-leave',
+        lastReason: 'combat-hp-disadvantage-leave',
+        startedWithExitOnly: true,
+        engagementObserved: false,
+        sampleCount: 1
+      }
     }
   ]);
   const report = buildReport(readEntries(dayDir), { day });
@@ -597,6 +642,7 @@ function runSelfTest() {
   assertSelfTest(report.sessions[0].afkKillCount === 1 && report.sessions[0].afkKillRewardCoins === 9, 'AFK kill bucket was not computed');
   assertSelfTest(report.sessions[0].activeKillCount === 1 && report.sessions[0].activeKillRewardCoins === 4, 'active kill bucket was not computed');
   assertSelfTest(report.combats.length === 1, `expected 1 combat, got ${report.combats.length}`);
+  assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'immediate login exit was incorrectly counted as combat');
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
   assertSelfTest(report.sessions[1].incomplete === true, 'unclosed middle session was not marked incomplete');
