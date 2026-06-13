@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.47
+// @version      0.4.48
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.47';
+  const BOOTSTRAP_VERSION = '0.4.48';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -674,7 +674,9 @@
     return Number.isFinite(n) ? String(Math.round(n)) : '-';
   }
 
-  function entityIdText(entity) {
+  function entityNameText(entity) {
+    const name = String(entity?.name || entity?.label || '').trim();
+    if (name) return name;
     const id = entity?.id ?? entity?.userId ?? entity?.user_id ?? entity?.uid;
     if (id === undefined || id === null || id === '') return targetNameText(entity);
     return '#' + id;
@@ -689,18 +691,25 @@
     return '#fca5a5';
   }
 
-  function combatHpValuePart(value) {
-    return {
-      text: hpText(value),
-      style: [
-        'display:inline-block',
-        'width:3ch',
-        'text-align:right',
-        'color:' + combatHpValueColor(value),
-        'font-weight:800',
-        'font-variant-numeric:tabular-nums'
-      ].join(';')
-    };
+  function combatHpMaxValue(entity, fallback = 100) {
+    const n = Number(entity?.maxHp ?? entity?.max_hp ?? fallback);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  function combatHpPercent(value, maxValue) {
+    const hp = Number(value);
+    const max = Number(maxValue);
+    if (!Number.isFinite(hp) || !Number.isFinite(max) || max <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((hp / max) * 100)));
+  }
+
+  function combatHpFillGradient(value, align) {
+    const n = Number(value);
+    const dir = align === 'right' ? '270deg' : '90deg';
+    if (!Number.isFinite(n)) return 'linear-gradient(' + dir + ',#64748b,#cbd5e1)';
+    if (n >= 50) return 'linear-gradient(' + dir + ',#16a34a,#bef264)';
+    if (n >= 20) return 'linear-gradient(' + dir + ',#f59e0b,#fde047)';
+    return 'linear-gradient(' + dir + ',#dc2626,#fb7185)';
   }
 
   function combatHpSummary(decision, status, self) {
@@ -711,21 +720,99 @@
     return {
       selfHp,
       targetHp,
-      selfId: entityIdText(selfEntity),
-      targetId: entityIdText(target)
+      selfMaxHp: combatHpMaxValue(selfEntity),
+      targetMaxHp: combatHpMaxValue(target),
+      selfName: entityNameText(selfEntity),
+      targetName: entityNameText(target)
     };
   }
 
-  function combatHpComparisonParts(hp) {
-    return [
-      { text: hp.selfId, style: 'color:#86efac;font-weight:800' },
-      ' ',
-      combatHpValuePart(hp.selfHp),
-      { text: ' VS ', style: 'color:#94a3b8;font-weight:800' },
-      combatHpValuePart(hp.targetHp),
-      ' ',
-      { text: hp.targetId, style: 'color:#fca5a5;font-weight:800' }
-    ];
+  function appendCombatHpPanel(parent, hp) {
+    const box = document.createElement('div');
+    box.setAttribute('aria-label', '战斗血量 ' + hp.selfName + ' ' + hpText(hp.selfHp) + ' VS ' + hpText(hp.targetHp) + ' ' + hp.targetName);
+    box.style.cssText = [
+      'width:100%',
+      'box-sizing:border-box',
+      'padding:8px 16px 9px',
+      'border-top:1px solid rgba(248,113,113,.36)',
+      'border-bottom:1px solid rgba(248,113,113,.36)',
+      'background:rgba(24,24,27,.96)',
+      'display:grid',
+      'grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr)',
+      'align-items:center',
+      'gap:8px',
+      'font-variant-numeric:tabular-nums',
+      'box-shadow:inset 0 1px 0 rgba(255,255,255,.04),inset 0 -1px 0 rgba(0,0,0,.32)'
+    ].join(';');
+
+    const sideBlock = (name, value, maxValue, align, nameColor) => {
+      const right = align === 'right';
+      const wrap = document.createElement('div');
+      wrap.style.cssText = [
+        'min-width:0',
+        'display:grid',
+        'gap:4px',
+        'justify-items:' + (right ? 'end' : 'start'),
+        'text-align:' + align
+      ].join(';');
+      const nameNode = document.createElement('div');
+      nameNode.textContent = String(name || '-');
+      nameNode.title = nameNode.textContent;
+      nameNode.style.cssText = [
+        'max-width:100%',
+        'overflow:hidden',
+        'text-overflow:ellipsis',
+        'white-space:nowrap',
+        'color:' + nameColor,
+        'font-size:11px',
+        'line-height:1.05',
+        'font-weight:800'
+      ].join(';');
+      const hpNode = document.createElement('div');
+      hpNode.textContent = 'HP ' + hpText(value);
+      hpNode.style.cssText = [
+        'color:' + combatHpValueColor(value),
+        'font-size:13px',
+        'line-height:1',
+        'font-weight:900',
+        'letter-spacing:0'
+      ].join(';');
+      const track = document.createElement('div');
+      track.style.cssText = [
+        'position:relative',
+        'width:100%',
+        'height:10px',
+        'box-sizing:border-box',
+        'border:1px solid rgba(226,232,240,.26)',
+        'background:rgba(15,23,42,.82)',
+        'overflow:hidden',
+        'box-shadow:inset 0 1px 3px rgba(0,0,0,.55)'
+      ].join(';');
+      const fill = document.createElement('div');
+      fill.style.cssText = [
+        'position:absolute',
+        'top:0',
+        right ? 'right:0' : 'left:0',
+        'height:100%',
+        'width:' + combatHpPercent(value, maxValue) + '%',
+        'background:' + combatHpFillGradient(value, align),
+        'box-shadow:inset 0 1px 0 rgba(255,255,255,.35)'
+      ].join(';');
+      track.appendChild(fill);
+      wrap.appendChild(nameNode);
+      wrap.appendChild(hpNode);
+      wrap.appendChild(track);
+      return wrap;
+    };
+
+    const vs = document.createElement('div');
+    vs.textContent = 'VS';
+    vs.style.cssText = 'align-self:center;text-align:center;color:#e2e8f0;font-size:12px;line-height:1;font-weight:900;letter-spacing:0';
+    box.appendChild(sideBlock(hp.selfName, hp.selfHp, hp.selfMaxHp, 'right', '#86efac'));
+    box.appendChild(vs);
+    box.appendChild(sideBlock(hp.targetName, hp.targetHp, hp.targetMaxHp, 'left', '#fca5a5'));
+    parent.appendChild(box);
+    return box;
   }
 
   function isGamePage() {
@@ -1525,8 +1612,9 @@
     ], 'font-size:11px;color:#94a3b8');
     if (isCombatDecision(decision, status)) {
       const hp = combatHpSummary(decision, status, self);
-      appendRichLine(combatHpComparisonParts(hp), 'margin:2px 0 0;padding:7px 9px;border:1px solid rgba(251,113,133,.42);border-radius:8px;background:rgba(127,29,29,.28);color:#fee2e2;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums');
+      appendCombatHpPanel(panel, hp);
       if (decision?.combat) {
+        appendSection();
         appendLine('战斗细节：瞄准 ' + (decision?.aimTarget?.mode || '-') + ' / 来弹 ' + (decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : '-'));
       }
     }
