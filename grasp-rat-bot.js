@@ -231,7 +231,13 @@ function runSelfTest() {
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
+    combatAimSteadyNoDamageMs: 6000,
+    combatAimSteadySpeedMax: 5,
     combatAimLockMs: 450,
+    combatShootSteadyAimDodgeReserveMs: 3000,
+    combatShootSteadyAimNoDamageMs: 6000,
+    combatShootSteadyAimMinHp: 75,
+    combatShootSteadyAimMaxHpGap: 15,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -561,6 +567,21 @@ function runSelfTest() {
     const level = Math.max(0, Number(noDamageLevel) || 0);
     const maxNoDamageLimit = Math.max(base, Number(cfg.combatAimNoDamageMaxRadians) || base);
     return level ? Math.min(maxNoDamageLimit, base * (1 + level * 0.45)) : base;
+  }
+  function combatAimSteadyNoDamageState(target, noDamageMs, motionScale = 0) {
+    const thresholdMs = Math.max(0, Number(cfg.combatAimSteadyNoDamageMs || 0));
+    const elapsed = Math.max(0, Number(noDamageMs) || 0);
+    const speedMax = Math.max(0, Number(cfg.combatAimSteadySpeedMax ?? cfg.combatStationarySpeed ?? 0));
+    const currentSpeed = speed(target);
+    const active = Boolean(thresholdMs && elapsed >= thresholdMs && currentSpeed <= speedMax);
+    return {
+      active,
+      noDamageMs: elapsed,
+      thresholdMs,
+      currentSpeed,
+      speedMax,
+      motionScale: Number.isFinite(Number(motionScale)) ? Number(motionScale) : 0
+    };
   }
   function combatAimMotionScale(target) {
     const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
@@ -1891,10 +1912,12 @@ function runSelfTest() {
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
+    const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
     const selfHp = hpValue(self);
     const targetHp = Number(options.targetHp);
     const targetDistance = Number(options.targetDistance);
+    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
     const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
     const highHpFireWindow = highHpMin > 0
       && Number.isFinite(selfHp)
@@ -1913,10 +1936,21 @@ function runSelfTest() {
       && selfHp >= pressureMinHp
       && pressureHpGap <= pressureMaxHpGap
       && targetDistance <= pressureRange;
+    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
+    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
+    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
+    const steadyAimFireWindow = Boolean(options.steadyAim)
+      && steadyAimMinHp > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && selfHp >= steadyAimMinHp
+      && pressureHpGap <= steadyAimMaxHpGap
+      && noDamageMs >= steadyAimNoDamageMs;
     let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
-    const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure);
+    if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
+    const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
     const base = {
       shoot: true,
       forceShoot: false,
@@ -1928,10 +1962,13 @@ function runSelfTest() {
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
       pressureDodgeReserveMs,
+      steadyAimDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
       closePressureFireWindow,
+      steadyAimFireWindow,
+      noDamageMs,
       suppressed: false,
       throttled: false
     };
@@ -1968,6 +2005,7 @@ function runSelfTest() {
     const motionScale = combatAimMotionScale(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+    const steadyAim = combatAimSteadyNoDamageState(target, noDamageMs, motionScale);
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const spacing = combatSpacingVector(self, target, target.distance);
     const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, incoming);
@@ -2001,7 +2039,9 @@ function runSelfTest() {
       dodging: incoming,
       realBulletPressure: incoming,
       targetDistance: target.distance,
-      targetHp
+      targetHp,
+      steadyAim: steadyAim.active,
+      noDamageMs
     });
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
@@ -2018,8 +2058,8 @@ function runSelfTest() {
       shootEveryMs: shooting.shootEveryMs,
       dx,
       dy,
-      aimMode: moving ? 'jitter' : 'exact',
-      aimJitterLimit: moving ? Number(combatAimJitterLimit(target.distance, motionScale).toFixed(4)) : 0,
+      aimMode: steadyAim.active ? 'steady' : (moving ? 'jitter' : 'exact'),
+      aimJitterLimit: steadyAim.active ? 0 : (moving ? Number(combatAimJitterLimit(target.distance, motionScale).toFixed(4)) : 0),
       target: {
         id: target.user_id,
         name: target.name,
@@ -2054,6 +2094,7 @@ function runSelfTest() {
           noDamageMs: Math.round(pressureClose.noDamageMs)
         } : null,
         noDamageMs,
+        steadyAim,
         movementSuppressed,
         shooting
       }
@@ -3313,6 +3354,32 @@ function runSelfTest() {
       want: true
     },
     {
+      name: 'combat stationary long no-damage target steadies aim',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 12000, lastDamageAt: Date.now() - 12000, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 3200 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, firing: true, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.aimMode + ':' + action.aimJitterLimit + ':' + Boolean(action.combatState?.shooting?.steadyAimFireWindow) + ':' + action.reason + ':' + Boolean(action.shoot);
+      })(),
+      want: 'steady:0:true:combat-burst-fire:true'
+    },
+    {
+      name: 'combat moving long no-damage target keeps jitter aim',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 12000, lastDamageAt: Date.now() - 12000, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 88, max_hp: 100, stamina_5s_remaining_milli: 3200 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 30, firing: true, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.aimMode;
+      })(),
+      want: 'jitter'
+    },
+    {
       name: 'combat very close target backs away while shooting',
       got: (() => {
         const action = chooseCombatAction(
@@ -4448,7 +4515,13 @@ function browserBotSource(config) {
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
+    combatAimSteadyNoDamageMs: 6000,
+    combatAimSteadySpeedMax: 5,
     combatAimLockMs: 450,
+    combatShootSteadyAimDodgeReserveMs: 3000,
+    combatShootSteadyAimNoDamageMs: 6000,
+    combatShootSteadyAimMinHp: 75,
+    combatShootSteadyAimMaxHpGap: 15,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -13758,10 +13831,12 @@ function browserBotSource(config) {
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
+    const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
     const selfHp = hpValue(self);
     const targetHp = Number(options.targetHp);
     const targetDistance = Number(options.targetDistance);
+    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
     const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
     const highHpFireWindow = highHpMin > 0
       && Number.isFinite(selfHp)
@@ -13780,9 +13855,20 @@ function browserBotSource(config) {
       && selfHp >= pressureMinHp
       && pressureHpGap <= pressureMaxHpGap
       && targetDistance <= pressureRange;
+    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
+    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
+    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
+    const steadyAimFireWindow = Boolean(options.steadyAim)
+      && steadyAimMinHp > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && selfHp >= steadyAimMinHp
+      && pressureHpGap <= steadyAimMaxHpGap
+      && noDamageMs >= steadyAimNoDamageMs;
     let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
+    if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
     const base = {
       shoot: true,
@@ -13795,10 +13881,13 @@ function browserBotSource(config) {
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
       pressureDodgeReserveMs,
+      steadyAimDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
       closePressureFireWindow,
+      steadyAimFireWindow,
+      noDamageMs,
       suppressed: false,
       throttled: false
     };
@@ -13825,6 +13914,21 @@ function browserBotSource(config) {
     const level = Math.max(0, Number(noDamageLevel) || 0);
     const maxNoDamageLimit = Math.max(base, Number(cfg.combatAimNoDamageMaxRadians) || base);
     return level ? Math.min(maxNoDamageLimit, base * (1 + level * 0.45)) : base;
+  }
+  function combatAimSteadyNoDamageState(target, noDamageMs, motionScale = 0) {
+    const thresholdMs = Math.max(0, Number(cfg.combatAimSteadyNoDamageMs || 0));
+    const elapsed = Math.max(0, Number(noDamageMs) || 0);
+    const speedMax = Math.max(0, Number(cfg.combatAimSteadySpeedMax ?? cfg.combatStationarySpeed ?? 0));
+    const currentSpeed = speed(target);
+    const active = Boolean(thresholdMs && elapsed >= thresholdMs && currentSpeed <= speedMax);
+    return {
+      active,
+      noDamageMs: elapsed,
+      thresholdMs,
+      currentSpeed,
+      speedMax,
+      motionScale: Number.isFinite(Number(motionScale)) ? Number(motionScale) : 0
+    };
   }
 
   function combatMovementAimMode(self, target, distance) {
@@ -13869,19 +13973,26 @@ function browserBotSource(config) {
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const targetDistance = Number(target.distance);
     const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, target);
+    const damage = combatAimDamageState(target);
+    const steadyAim = combatAimSteadyNoDamageState(target, damage.noDamageMs, motionScale);
     const exact = {
       x: Number(target.x),
       y: Number(target.y),
-      mode: 'exact',
+      mode: steadyAim.active && moving ? 'steady' : 'exact',
       moving,
       distance,
-      motionScale
+      motionScale,
+      movementMode: steadyAim.active ? 'steady' : '',
+      jitterLimit: 0,
+      noDamageMs: damage.noDamageMs,
+      noDamageWidened: false,
+      steadyAim: Boolean(steadyAim.active),
+      lockedAim: false
     };
-    if (!moving) return exact;
+    if (!moving || steadyAim.active) return exact;
     const dx = Number(target.x) - Number(self.x);
     const dy = Number(target.y) - Number(self.y);
     const baseLimit = combatAimJitterLimit(distance, motionScale);
-    const damage = combatAimDamageState(target);
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const noDamageLevel = combatAimNoDamageLevel(damage.widenMs);
     const jitterLimit = combatAimNoDamageJitterLimit(baseLimit, noDamageLevel);
@@ -13939,6 +14050,7 @@ function browserBotSource(config) {
       lateralSpeed: movement.lateralSpeed,
       noDamageMs: damage.noDamageMs,
       noDamageWidened: Boolean(noDamageLevel),
+      steadyAim: false,
       lockedAim: Boolean(locked)
     };
   }
@@ -13973,7 +14085,9 @@ function browserBotSource(config) {
       dodging,
       realBulletPressure,
       targetDistance: distance,
-      targetHp
+      targetHp,
+      steadyAim: Boolean(aim.steadyAim),
+      noDamageMs: Number(aim.noDamageMs || 0)
     });
     return {
       reason: movementSuppressed
@@ -13998,6 +14112,7 @@ function browserBotSource(config) {
         movementMode: aim.movementMode || '',
         noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
         widened: Boolean(aim.noDamageWidened),
+        steady: Boolean(aim.steadyAim),
         locked: Boolean(aim.lockedAim)
       },
       incomingBullet: pressure ? {
@@ -14154,7 +14269,9 @@ function browserBotSource(config) {
       realBulletPressure,
       pressureClose: pressureClose.active,
       targetDistance: targetDistance,
-      targetHp
+      targetHp,
+      steadyAim: Boolean(aim.steadyAim),
+      noDamageMs: Number(aim.noDamageMs || 0)
     });
     const baseReason = realBulletPressure
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
@@ -14184,6 +14301,7 @@ function browserBotSource(config) {
         movementMode: aim.movementMode || '',
         noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
         widened: Boolean(aim.noDamageWidened),
+        steady: Boolean(aim.steadyAim),
         locked: Boolean(aim.lockedAim)
       },
       incomingBullet: pressure ? {
@@ -14205,6 +14323,7 @@ function browserBotSource(config) {
           motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
           noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
           widened: Boolean(aim.noDamageWidened),
+          steady: Boolean(aim.steadyAim),
           locked: Boolean(aim.lockedAim)
         },
         strafe: dodging ? {

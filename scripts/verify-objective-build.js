@@ -64,9 +64,15 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootDodgeReserveMs', value: 3800 },
   { key: 'combatShootHighHpDodgeReserveMs', value: 3000 },
   { key: 'combatShootHighHpMinHp', value: 90 },
+  { key: 'combatShootSteadyAimDodgeReserveMs', value: 3000 },
+  { key: 'combatShootSteadyAimNoDamageMs', value: 6000 },
+  { key: 'combatShootSteadyAimMinHp', value: 75 },
+  { key: 'combatShootSteadyAimMaxHpGap', value: 15 },
   { key: 'combatShootHardReserveMs', value: 1800 },
   { key: 'combatShootConserveEveryMs', value: 360 },
-  { key: 'combatShootRecoveryEveryMs', value: 700 }
+  { key: 'combatShootRecoveryEveryMs', value: 700 },
+  { key: 'combatAimSteadyNoDamageMs', value: 6000 },
+  { key: 'combatAimSteadySpeedMax', value: 5 }
 ];
 
 const results = [];
@@ -494,9 +500,15 @@ function main() {
       assert(shootingBody.includes('combatShootHighHpDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for high HP');
       assert(shootingBody.includes('closePressureFireWindow'), 'combat shooting plan does not expose close-pressure fire window');
       assert(shootingBody.includes('combatShootPressureDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve under close bullet pressure');
+      assert(shootingBody.includes('steadyAimFireWindow'), 'combat shooting plan does not expose steady-aim fire window');
+      assert(shootingBody.includes('combatShootSteadyAimDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for steady aim');
       assert(shootingBody.includes('stamina-rebuild'), 'combat shooting plan does not stop fire for stamina rebuild');
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
+      const aimBody = functionBody(text, 'combatAimTarget');
+      assert(text.includes('function combatAimSteadyNoDamageState'), 'steady no-damage aim helper not found');
+      assert(aimBody.includes("mode: steadyAim.active && moving ? 'steady' : 'exact'"), 'combat aim does not enter steady mode for stationary no-damage targets');
+      assert(aimBody.includes('if (!moving || steadyAim.active) return exact'), 'steady aim does not bypass jitter');
       assert(text.includes('function combatSpacingShouldOverrideBullet'), 'combat spacing cannot override real bullet dodge when too close');
       assert(text.includes('function combatLowHpCloseRiskState'), 'low-HP close-risk exit helper not found');
       assert(text.includes('function combatPressureDisadvantageState'), 'close-pressure HP disadvantage exit helper not found');
@@ -509,6 +521,8 @@ function main() {
       assert(combatBody.includes('shoot: shooting.shoot'), 'combat action does not expose planned shoot flag');
       assert(combatBody.includes('forceShoot: shooting.forceShoot'), 'combat action does not expose planned force flag');
       assert(combatBody.includes('shootEveryMs: shooting.shootEveryMs'), 'combat action does not expose planned cadence');
+      assert(combatBody.includes('steadyAim: Boolean(aim.steadyAim)'), 'combat action does not pass steady aim to shooting plan');
+      assert(combatBody.includes('steady: Boolean(aim.steadyAim)'), 'combat logs do not expose steady aim state');
       assert(combatBody.includes("shooting.suppressed ? 'combat-stamina-conserve'"), 'combat action does not report fire suppression reason');
       assert(combatBody.includes("shooting.throttled ? 'combat-burst-fire'"), 'combat action does not report burst-fire reason');
       assert(!combatBody.includes("combat-low-hp-no-damage-leave', baseTarget"), 'low no-damage can still trigger combat leave');
