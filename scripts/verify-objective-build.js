@@ -51,6 +51,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'postAttackDropWaitMinDrop', value: 8 },
   { key: 'postAttackDropWaitMaxDistance', value: 50000 },
   { key: 'postAttackDropWaitStopDistance', value: 900 },
+  { key: 'killChatAttackMatchMs', value: 120000 },
+  { key: 'killAttributionMergeMs', value: 120000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatLowHpCloseRiskMargin', value: 5 },
@@ -411,6 +413,12 @@ function main() {
       assert(text.includes('pureRefreshCoins'), 'session logs do not include pure refreshed coin totals');
       assert(text.includes('staminaSpentMs'), 'session logs do not include stamina spent');
       assert(text.includes('selfHpDelta') && text.includes('enemyHpDelta'), 'combat summaries do not include HP deltas');
+      assert(text.includes('closeOpenImportantSessionsBeforeStart(session'), 'unclosed important sessions are not closed before the next login');
+      assert(text.includes("exitReason = 'session-interrupted-before-next-login'"), 'next-login interrupted sessions are not explicitly marked');
+      assert(text.includes('recordDropMatchedKill(candidate') && text.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards');
+      assert(text.includes('recordDropMatchedKill(target, value'), 'picked post-attack drop coins are not attributed as kill rewards');
+      assert(text.includes('dropMatched') && text.includes('chatConfirmed'), 'kill summaries do not include attribution/confirmation flags');
+      assert(text.includes('bot.globalState.messages'), 'snapshot chat kill messages are not inspected');
     });
     check(`${file} keeps failed leave attempts pending until confirmed`, () => {
       assert(countMatches(text, /if \(detail\.attempted \|\| detail\.exitAuditId\)/g) >= 4, 'failed/non-attempted exit audit leaves are not remembered as pending exits');
@@ -609,6 +617,31 @@ function main() {
       assert(body.includes('return 0'), 'safe offline path does not return without suppress');
     });
   }
+
+  check('combat-log daily summary merges all daily JSONL important logs', () => {
+    const dailySummary = readText('combat-log-service/daily-summary.js');
+    assert(dailySummary.includes('listJsonlFiles(dayDir)'), 'daily summary does not scan the day directory');
+    assert(dailySummary.includes("item.name.endsWith('.jsonl')"), 'daily summary does not read all JSONL files');
+    assert(dailySummary.includes("item.type === 'important-log'") || dailySummary.includes("entry.type === 'important-log'"), 'daily summary does not filter important logs');
+    assert(dailySummary.includes('importantEventsById'), 'daily summary does not dedupe important logs by id');
+    assert(dailySummary.includes('mergeSession(sessions.get(event.session.sessionId), event.session)'), 'daily summary does not merge session-start/end records');
+    assert(dailySummary.includes('staminaSpentMs === 123000'), 'daily summary self-test does not cover cross-file stamina merge');
+  });
+
+  check('combat-log daily summary exposes incomplete exits and no-self text', () => {
+    const dailySummary = readText('combat-log-service/daily-summary.js');
+    assert(dailySummary.includes('未记录退出；下一次登录'), 'daily summary does not show next-login context for missing exits');
+    assert(dailySummary.includes('inferredExit') && dailySummary.includes('未记录退出；${reasonText'), 'daily summary does not keep inferred exits visible');
+    assert(dailySummary.includes('已登录但自身实体不可见，退出等待重连'), 'daily summary does not explain no-self exits');
+    assert(dailySummary.includes('!item.inferredExit'), 'inferred exits still count as completed sessions');
+  });
+
+  check('combat-log package exposes daily summary commands', () => {
+    const pkg = readJson('combat-log-service/package.json');
+    assert(pkg.scripts && pkg.scripts.daily === 'node daily-summary.js', 'daily summary npm script missing');
+    assert(pkg.scripts && pkg.scripts['daily:self-test'] === 'node daily-summary.js --self-test', 'daily summary self-test npm script missing');
+    assert(String(pkg.scripts.test || '').includes('daily-summary.js --self-test'), 'npm test does not run daily summary self-test');
+  });
 
   check('grasp-rat-bot.js covers stationary full-stamina Active non-combat profit self-tests', () => {
     assert(
