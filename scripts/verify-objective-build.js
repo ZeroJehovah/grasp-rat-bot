@@ -764,6 +764,11 @@ function main() {
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
       assert(text.includes("label: '日志'"), 'remote-log dot visible label not found');
       assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');
+      const loginBody = functionBody(text, 'syncEntityControlLogin');
+      assert(text.includes('function reloginHoldRemainingFromStatus'), 'relogin hold inline-login helper not found');
+      assert(text.includes('function shouldShowInlineLogin'), 'inline login visibility helper not found');
+      assert(loginBody.includes('!shouldShowInlineLogin(status)'), 'inline login is still hidden solely by logged-in state');
+      assert(loginBody.includes('跳过重连等待并立即登录/加入游戏'), 'inline login title does not reflect relogin hold bypass');
       assert(text.includes('const remoteLogHasFailure = remoteLogFailed > 0'), 'remote-log failure state not found');
       assert(text.includes('const remoteLogColor = remoteLogHasFailure'), 'remote-log color does not depend on outstanding failed count');
       assert(text.includes('pending: remoteLogPending > 0 && !remoteLogHasFailure'), 'remote-log pending blink state not found');
