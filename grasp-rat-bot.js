@@ -206,6 +206,10 @@ function runSelfTest() {
     combatShootDodgeReserveMs: 3800,
     combatShootHighHpDodgeReserveMs: 3000,
     combatShootHighHpMinHp: 90,
+    combatShootPressureDodgeReserveMs: 2600,
+    combatShootPressureMinHp: 60,
+    combatShootPressureRange: 8000,
+    combatShootPressureMaxHpGap: 5,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
     combatShootRecoveryEveryMs: 700,
@@ -248,6 +252,8 @@ function runSelfTest() {
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
     combatPressureCloseMinHp: 60,
+    combatPressureExitHpThreshold: 60,
+    combatPressureExitHpGap: 5,
     combatLeaveRetryMs: 1000,
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
@@ -1666,6 +1672,29 @@ function runSelfTest() {
     };
   }
 
+  function combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure = false) {
+    const threshold = Math.max(0, Number(cfg.combatPressureExitHpThreshold || 0));
+    const minGap = Math.max(0, Number(cfg.combatPressureExitHpGap || 0));
+    const range = Math.max(0, Number(cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const distance = Number(targetDistance);
+    const hpGap = enemyHp - hp;
+    if (!threshold || !minGap || !range || !realBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
+    if (!(hp < threshold) || !(hpGap >= minGap) || !(distance <= range)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      threshold,
+      minGap,
+      distance: Math.round(distance),
+      realBulletPressure: true
+    };
+  }
+
   function combatPressureCloseVector(self, target, targetDistance, selfHp) {
     const previous = bot.combatTarget || null;
     const targetId = target?.user_id ?? target?.id;
@@ -1712,6 +1741,12 @@ function runSelfTest() {
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '低于' + cfg.combatCriticalHpLeaveThreshold + '，紧急退出';
     }
     if (reason === 'combat-hp-disadvantage-leave') {
+      if (combatState?.pressureDisadvantage) {
+        const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance))
+          ? '，距离' + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + '米'
+          : '';
+        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
+      }
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
     }
     if (reason === 'combat-low-hp-no-damage-leave') {
@@ -1749,6 +1784,7 @@ function runSelfTest() {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
       realBulletPressure: incoming,
+      targetDistance: target.distance,
       targetHp
     });
     return {
@@ -1845,17 +1881,32 @@ function runSelfTest() {
     const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
+    const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
     const selfHp = hpValue(self);
     const targetHp = Number(options.targetHp);
+    const targetDistance = Number(options.targetDistance);
     const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
     const highHpFireWindow = highHpMin > 0
       && Number.isFinite(selfHp)
       && selfHp >= highHpMin
       && (!Number.isFinite(targetHp) || selfHp >= targetHp);
-    const effectiveDodgeReserveMs = highHpFireWindow
-      ? Math.min(dodgeReserveMs, highHpDodgeReserveMs)
-      : dodgeReserveMs;
+    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
+    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
+    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
+    const pressureHpGap = Number(targetHp) - Number(selfHp);
+    const closePressureFireWindow = Boolean(options.realBulletPressure)
+      && pressureMinHp > 0
+      && pressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= pressureMinHp
+      && pressureHpGap <= pressureMaxHpGap
+      && targetDistance <= pressureRange;
+    let effectiveDodgeReserveMs = dodgeReserveMs;
+    if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+    if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure);
     const base = {
       shoot: true,
@@ -1867,9 +1918,11 @@ function runSelfTest() {
       dodgeReserveMs: effectiveDodgeReserveMs,
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
+      pressureDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
+      closePressureFireWindow,
       suppressed: false,
       throttled: false
     };
@@ -1912,6 +1965,13 @@ function runSelfTest() {
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', self, target, { closeRisk }, bullets);
     }
+    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, target.distance, incoming);
+    if (pressureDisadvantage) {
+      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
+        hpGap: pressureDisadvantage.hpGap,
+        pressureDisadvantage
+      }, bullets);
+    }
     const pressureClose = combatPressureCloseVector(self, target, target.distance, selfHp);
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     const requestedDx = pressureClose.active ? pressureClose.dx : (spacingOverride ? spacing.dx : (incoming ? 1 : spacing.dx));
@@ -1931,6 +1991,7 @@ function runSelfTest() {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
       realBulletPressure: incoming,
+      targetDistance: target.distance,
       targetHp
     });
     const baseReason = incoming
@@ -3355,6 +3416,30 @@ function runSelfTest() {
       want: 'combat-stamina-conserve:1:1:false:reserve-for-dodge:false'
     },
     {
+      name: 'combat close pressure fire window keeps mid hp shooting',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 67, max_hp: 100, stamina_5s_remaining_milli: 3198 },
+          { user_id: 7, x: 6300, y: 0, distance: 6300, current_join_mode: 'Active', hp: 61, vx: 50, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.dodgeReserveMs + ':' + Boolean(action.combatState?.shooting?.closePressureFireWindow);
+      })(),
+      want: 'combat-burst-fire:true:2600:true'
+    },
+    {
+      name: 'combat close pressure hp disadvantage exits before low hp threshold',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 55, max_hp: 100, stamina_5s_remaining_milli: 3198 },
+          { user_id: 7, x: 6300, y: 0, distance: 6300, current_join_mode: 'Active', hp: 61, vx: 50, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        return action.reason + ':' + action.combatState?.hpGap + ':' + action.combatState?.pressureDisadvantage?.distance;
+      })(),
+      want: 'combat-hp-disadvantage-leave:6:6300'
+    },
+    {
       name: 'coin route uses horizontal axis when x gap dominates',
       got: (() => {
         const dir = coinDirectionTo({ x: 0, y: 0 }, { x: 15000, y: 500 });
@@ -4329,6 +4414,10 @@ function browserBotSource(config) {
     combatShootDodgeReserveMs: 3800,
     combatShootHighHpDodgeReserveMs: 3000,
     combatShootHighHpMinHp: 90,
+    combatShootPressureDodgeReserveMs: 2600,
+    combatShootPressureMinHp: 60,
+    combatShootPressureRange: 8000,
+    combatShootPressureMaxHpGap: 5,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
     combatShootRecoveryEveryMs: 700,
@@ -4371,6 +4460,8 @@ function browserBotSource(config) {
     combatPressureCloseNoDamageMs: 8000,
     combatPressureCloseRange: 6500,
     combatPressureCloseMinHp: 60,
+    combatPressureExitHpThreshold: 60,
+    combatPressureExitHpGap: 5,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
     enemyReloginMaxDelayMs: 600000,
@@ -7784,6 +7875,12 @@ function browserBotSource(config) {
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '低于' + cfg.combatCriticalHpLeaveThreshold + '，紧急退出';
     }
     if (reason === 'combat-hp-disadvantage-leave') {
+      if (combatState?.pressureDisadvantage) {
+        const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance))
+          ? '，距离' + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + '米'
+          : '';
+        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
+      }
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
     }
     if (reason === 'combat-low-hp-no-damage-leave') {
@@ -13209,6 +13306,29 @@ function browserBotSource(config) {
     };
   }
 
+  function combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure = false) {
+    const threshold = Math.max(0, Number(cfg.combatPressureExitHpThreshold || 0));
+    const minGap = Math.max(0, Number(cfg.combatPressureExitHpGap || 0));
+    const range = Math.max(0, Number(cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const distance = Number(targetDistance);
+    const hpGap = enemyHp - hp;
+    if (!threshold || !minGap || !range || !realBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
+    if (!(hp < threshold) || !(hpGap >= minGap) || !(distance <= range)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      threshold,
+      minGap,
+      distance: Math.round(distance),
+      realBulletPressure: true
+    };
+  }
+
   function combatPressureCloseVector(self, target, targetDistance, noDamageMs, selfHp) {
     const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
@@ -13542,17 +13662,32 @@ function browserBotSource(config) {
     const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
+    const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
     const selfHp = hpValue(self);
     const targetHp = Number(options.targetHp);
+    const targetDistance = Number(options.targetDistance);
     const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
     const highHpFireWindow = highHpMin > 0
       && Number.isFinite(selfHp)
       && selfHp >= highHpMin
       && (!Number.isFinite(targetHp) || selfHp >= targetHp);
-    const effectiveDodgeReserveMs = highHpFireWindow
-      ? Math.min(dodgeReserveMs, highHpDodgeReserveMs)
-      : dodgeReserveMs;
+    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
+    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
+    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
+    const pressureHpGap = Number(targetHp) - Number(selfHp);
+    const closePressureFireWindow = Boolean(options.realBulletPressure)
+      && pressureMinHp > 0
+      && pressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= pressureMinHp
+      && pressureHpGap <= pressureMaxHpGap
+      && targetDistance <= pressureRange;
+    let effectiveDodgeReserveMs = dodgeReserveMs;
+    if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+    if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
     const base = {
       shoot: true,
@@ -13564,9 +13699,11 @@ function browserBotSource(config) {
       dodgeReserveMs: effectiveDodgeReserveMs,
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
+      pressureDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
+      closePressureFireWindow,
       suppressed: false,
       throttled: false
     };
@@ -13740,6 +13877,7 @@ function browserBotSource(config) {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
       realBulletPressure,
+      targetDistance: distance,
       targetHp
     });
     return {
@@ -13849,6 +13987,15 @@ function browserBotSource(config) {
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
+    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
+    if (pressureDisadvantage) {
+      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+        selfHp,
+        targetHp,
+        hpGap: pressureDisadvantage.hpGap,
+        pressureDisadvantage
+      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+    }
     const damageState = combatAimDamageState(target);
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
@@ -13911,6 +14058,7 @@ function browserBotSource(config) {
       dodging,
       realBulletPressure,
       pressureClose: pressureClose.active,
+      targetDistance: targetDistance,
       targetHp
     });
     const baseReason = realBulletPressure
