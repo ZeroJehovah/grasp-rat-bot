@@ -417,6 +417,10 @@ function formatKillCell(count, rewardCoins) {
   return `${number(count)}次/${number(rewardCoins)}币`;
 }
 
+function formatStaminaSpent(value) {
+  return String(Math.round(number(value) / 1000));
+}
+
 function formatHp(value) {
   return Number.isFinite(Number(value)) ? String(Math.round(Number(value) * 10) / 10) : '-';
 }
@@ -460,10 +464,10 @@ function printReport(report) {
       : session.incomplete && !number(session.exitAt)
       ? (session.nextLoginAt ? `未记录退出；下一次登录 ${formatDuration(session.nextLoginAt - number(session.loginAt))} 后出现` : '未记录退出')
       : reasonText(session.exitReason, session.exitSummary);
-    console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${Math.round(number(session.staminaSpentMs) / 1000)}s | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins)} | ${formatCoins(session.coinsGained)} | ${status} |`);
+    console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins)} | ${formatCoins(session.coinsGained)} | ${status} |`);
   });
   console.log('');
-  console.log(`登录合计: completed=${report.totals.completed}/${report.totals.sessions}, duration=${formatDuration(report.totals.loginDurationMs)}, stamina=${Math.round(report.totals.staminaSpentMs / 1000)}s, refreshCoins=${report.totals.pureRefreshCoins}, afkKills=${report.totals.afkKillCount}/${report.totals.afkKillRewardCoins}, activeKills=${report.totals.activeKillCount}/${report.totals.activeKillRewardCoins}, totalCoins=${report.totals.coinsGained}`);
+  console.log(`登录合计: completed=${report.totals.completed}/${report.totals.sessions}, duration=${formatDuration(report.totals.loginDurationMs)}, stamina=${formatStaminaSpent(report.totals.staminaSpentMs)}, refreshCoins=${report.totals.pureRefreshCoins}, afkKills=${report.totals.afkKillCount}/${report.totals.afkKillRewardCoins}, activeKills=${report.totals.activeKillCount}/${report.totals.activeKillRewardCoins}, totalCoins=${report.totals.coinsGained}`);
   console.log('');
   console.log('## 活跃玩家战斗统计');
   if (!report.combats.length) {
@@ -473,10 +477,10 @@ function printReport(report) {
     console.log('|---:|---|---|---|---:|---:|---:|---:|---|');
     report.combats.forEach((combat, index) => {
       const endedAt = number(combat.endedAt) ? formatTime(combat.endedAt) : '未记录';
-      console.log(`| ${index + 1} | ${formatEnemy(combat.enemy)} | ${formatTime(combat.startedAt)} | ${endedAt} | ${formatDuration(combat.durationMs)} | ${Math.round(number(combat.staminaSpentMs) / 1000)}s | ${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)} | ${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)} | ${resultText(combat.result, combat.resultReason)} |`);
+      console.log(`| ${index + 1} | ${formatEnemy(combat.enemy)} | ${formatTime(combat.startedAt)} | ${endedAt} | ${formatDuration(combat.durationMs)} | ${formatStaminaSpent(combat.staminaSpentMs)} | ${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)} | ${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)} | ${resultText(combat.result, combat.resultReason)} |`);
     });
     console.log('');
-    console.log(`战斗合计: count=${report.totals.combats}, duration=${formatDuration(report.totals.combatDurationMs)}, stamina=${Math.round(report.totals.combatStaminaSpentMs / 1000)}s`);
+    console.log(`战斗合计: count=${report.totals.combats}, duration=${formatDuration(report.totals.combatDurationMs)}, stamina=${formatStaminaSpent(report.totals.combatStaminaSpentMs)}`);
   }
 }
 
