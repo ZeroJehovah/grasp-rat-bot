@@ -412,6 +412,9 @@ function main() {
       assert(text.includes('restoreImportantLogsForRemote();'), 'unsent important logs are not restored for remote flush');
       assert(text.includes('pureRefreshCoins'), 'session logs do not include pure refreshed coin totals');
       assert(text.includes('staminaSpentMs'), 'session logs do not include stamina spent');
+      assert(text.includes('playerCategory'), 'kill summaries do not include AFK/active player category');
+      assert(text.includes('afkKillRewardCoins') && text.includes('activeKillRewardCoins'), 'session logs do not include AFK/active kill reward buckets');
+      assert(text.includes('staminaSpentStartMs') && text.includes('staminaSpentEndMs'), 'combat summaries do not include combat stamina range');
       assert(text.includes('selfHpDelta') && text.includes('enemyHpDelta'), 'combat summaries do not include HP deltas');
       assert(text.includes('closeOpenImportantSessionsBeforeStart(session'), 'unclosed important sessions are not closed before the next login');
       assert(text.includes("exitReason = 'session-interrupted-before-next-login'"), 'next-login interrupted sessions are not explicitly marked');
@@ -631,6 +634,10 @@ function main() {
     assert(dailySummary.includes('importantEventsById'), 'daily summary does not dedupe important logs by id');
     assert(dailySummary.includes('mergeSession(sessions.get(event.session.sessionId), event.session)'), 'daily summary does not merge session-start/end records');
     assert(dailySummary.includes('staminaSpentMs === 123000'), 'daily summary self-test does not cover cross-file stamina merge');
+    assert(dailySummary.includes("event.importantType === 'combat-summary'"), 'daily summary does not consume combat-summary events');
+    assert(dailySummary.includes('## 登录统计') && dailySummary.includes('## 活跃玩家战斗统计'), 'daily summary does not print both required report dimensions');
+    assert(dailySummary.includes('activeKillCount === 1') && dailySummary.includes('afkKillCount === 1'), 'daily summary self-test does not cover AFK/active kill buckets');
+    assert(dailySummary.includes('report.combats[0].staminaSpentMs === 2500'), 'daily summary self-test does not cover combat stamina');
   });
 
   check('combat-log daily summary exposes incomplete exits and no-self text', () => {
@@ -761,6 +768,20 @@ function main() {
       assert(text.includes('padding:9px 16px'), 'panel sections do not use 16px horizontal padding');
       assert(text.includes("appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''))"), 'relogin countdown is not inline with current behavior');
       assert(!text.includes("appendLine('等待重连：' + formatDuration(hold))"), 'standalone relogin countdown line is still present');
+    });
+    check(`${file} renders combat HP as a full-width fight panel`, () => {
+      const body = functionBody(text, 'appendCombatHpPanel');
+      assert(body.includes("'width:100%'"), 'combat HP panel is not full width');
+      assert(body.includes("'background:rgba(24,24,27,.96)'"), 'combat HP panel does not use its own background');
+      assert(body.includes("'grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr)'"), 'combat HP panel does not use symmetric VS columns');
+      assert(body.includes("box.appendChild(sideBlock(hp.selfName, hp.selfHp, hp.selfMaxHp, 'right', '#86efac'))"), 'self side is not right-aligned left of VS');
+      assert(body.includes("box.appendChild(sideBlock(hp.targetName, hp.targetHp, hp.targetMaxHp, 'left', '#fca5a5'))"), 'target side is not left-aligned right of VS');
+      assert(body.includes("'width:' + combatHpPercent(value, maxValue) + '%'"), 'combat HP bar width is not driven by HP percent');
+      assert(body.includes("right ? 'right:0' : 'left:0'"), 'combat HP bar fill is not mirrored by side');
+      assert(text.includes('function entityNameText(entity)'), 'combat HP display does not prefer entity names');
+      assert(text.includes('selfName: entityNameText(selfEntity)') && text.includes('targetName: entityNameText(target)'), 'combat HP summary does not expose names');
+      assert(text.includes('appendCombatHpPanel(panel, hp)'), 'combat HP panel is not appended as its own panel block');
+      assert(!text.includes('combatHpComparisonParts'), 'old inline combat HP comparison renderer is still present');
     });
     check(`${file} shows script versions without v prefix`, () => {
       assert(!text.includes('远程脚本 v'), 'remote script visible version still has v prefix');

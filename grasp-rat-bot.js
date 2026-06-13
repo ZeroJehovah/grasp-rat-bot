@@ -1551,6 +1551,15 @@ function runSelfTest() {
           x: attack.x,
           y: attack.y,
           action: attack.action || '',
+          playerCategory: attack.playerCategory || (attack.afk === false ? 'active' : 'afk'),
+          afk: attack.afk !== false,
+          active: attack.active === true || attack.playerCategory === 'active',
+          combat: Boolean(attack.combat),
+          combatIntent: attack.combatIntent || '',
+          mode: attack.mode || '',
+          currentlyActive: Boolean(attack.currentlyActive),
+          moving: Boolean(attack.moving),
+          firing: Boolean(attack.firing),
           distance: Number.isFinite(Number(attack.distance)) ? Math.round(Number(attack.distance)) : null,
           coinDistance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
           coinDistanceToTarget: Math.round(dist(coin, attack)),
@@ -10951,6 +10960,7 @@ function browserBotSource(config) {
     if (!item || typeof item !== 'object') return null;
     const rewardRaw = item.rewardCoins ?? item.drop;
     const rewardCoins = Number.isFinite(Number(rewardRaw)) ? Math.max(0, Math.round(Number(rewardRaw))) : null;
+    const playerCategory = importantKillPlayerCategory(item);
     const coin = item.coin && typeof item.coin === 'object' ? {
       id: item.coin.id ?? item.coin.drop_id ?? item.coin.coin_id ?? null,
       amount: Number.isFinite(Number(item.coin.amount)) ? Math.max(0, Math.round(Number(item.coin.amount))) : null,
@@ -10964,6 +10974,12 @@ function browserBotSource(config) {
       name: item.victim || item.name || '',
       id: item.id ?? item.userId ?? null,
       rewardCoins,
+      playerCategory,
+      afk: playerCategory === 'afk',
+      active: playerCategory === 'active',
+      combat: Boolean(item.combat),
+      combatIntent: String(item.combatIntent || ''),
+      mode: String(item.mode || item.current_join_mode || ''),
       matchedAttack: Boolean(item.matchedAttack),
       attackDistance: Number.isFinite(Number(item.attackDistance)) ? Math.round(Number(item.attackDistance)) : null,
       source: String(item.source || ''),
@@ -10972,6 +10988,19 @@ function browserBotSource(config) {
       targetDrop: Number.isFinite(Number(item.targetDrop ?? item.drop)) ? Math.max(0, Math.round(Number(item.targetDrop ?? item.drop))) : null,
       coin
     };
+  }
+
+  function importantKillPlayerCategory(item) {
+    if (!item || typeof item !== 'object') return 'unknown';
+    const explicit = String(item.playerCategory || item.killCategory || '').toLowerCase();
+    if (explicit === 'active' || explicit === 'afk') return explicit;
+    const activeSignal = Boolean(item.combat || item.active || item.currentlyActive || item.firing || item.moving);
+    if (explicit && explicit !== 'unknown') return 'unknown';
+    if (activeSignal) return 'active';
+    if (explicit === 'unknown') return 'unknown';
+    if (item.afk === false) return 'active';
+    if (item.afk === true || item.matchedAttack || item.dropMatched || item.chatConfirmed) return 'afk';
+    return 'unknown';
   }
 
   function importantSessionKills(session) {
@@ -10990,6 +11019,8 @@ function browserBotSource(config) {
     const exitAt = Number(extra.exitAt || session.exitAt || 0) || 0;
     const kills = importantSessionKills({ ...session, exitAt });
     const killRewardCoins = kills.reduce((sum, item) => sum + Math.max(0, Number(item.rewardCoins || 0) || 0), 0);
+    const afkKills = kills.filter(item => importantKillPlayerCategory(item) === 'afk');
+    const activeKills = kills.filter(item => importantKillPlayerCategory(item) === 'active');
     const pickedCoins = Math.max(0, Math.round(Number(session.coinPickupTotal || 0) || 0));
     const coinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) || 0));
     const pureRefreshCoins = Math.max(0, Math.round((pickedCoins || coinsGained) - killRewardCoins));
@@ -11009,6 +11040,10 @@ function browserBotSource(config) {
       killRewardCoins,
       pureRefreshCoins,
       killCount: kills.length,
+      afkKillCount: afkKills.length,
+      afkKillRewardCoins: afkKills.reduce((sum, item) => sum + Math.max(0, Number(item.rewardCoins || 0) || 0), 0),
+      activeKillCount: activeKills.length,
+      activeKillRewardCoins: activeKills.reduce((sum, item) => sum + Math.max(0, Number(item.rewardCoins || 0) || 0), 0),
       kills,
       baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
       currentCoins: Number(selfSummary?.coins ?? bot.lastSelf?.coins ?? 0) || 0,
@@ -11206,6 +11241,18 @@ function browserBotSource(config) {
     record[deltaKey] = Number.isFinite(Number(record[startKey])) ? Math.round((value - Number(record[startKey])) * 100) / 100 : null;
   }
 
+  function importantSessionStaminaSpentMs(session = bot.session || {}) {
+    return Math.max(0, Math.round(Number(session?.stamina1dSpentMs || 0) || 0));
+  }
+
+  function updateImportantCombatStamina(record, session = bot.session || {}) {
+    if (!record) return;
+    const current = importantSessionStaminaSpentMs(session);
+    if (!Number.isFinite(Number(record.staminaSpentStartMs))) record.staminaSpentStartMs = current;
+    record.staminaSpentEndMs = current;
+    record.staminaSpentMs = Math.max(0, Math.round(current - Number(record.staminaSpentStartMs || 0)));
+  }
+
   function importantCombatSampleFromDecision(decision) {
     const reason = String(decision?.reason || '');
     const target = decision?.target || decision?.combatState?.target || decision?.pendingCombatLeave?.target || bot.combatTarget || null;
@@ -11253,6 +11300,9 @@ function browserBotSource(config) {
       enemyHpMin: null,
       enemyHpMax: null,
       enemyHpDelta: null,
+      staminaSpentStartMs: importantSessionStaminaSpentMs(session),
+      staminaSpentEndMs: importantSessionStaminaSpentMs(session),
+      staminaSpentMs: 0,
       result: 'ongoing',
       resultReason: '',
       kill: null,
@@ -11277,6 +11327,7 @@ function browserBotSource(config) {
     record.enemyKey = record.enemyKey || sample.target?.key || '';
     updateImportantCombatHp(record, 'self', sample.selfHp);
     updateImportantCombatHp(record, 'enemy', sample.targetHp);
+    updateImportantCombatStamina(record);
     record.durationMs = Math.max(0, Math.round((record.endedAt || sample.at) - Number(record.startedAt || sample.at)));
     record.updatedAt = sample.at;
     const selfHpChanged = importantHpValue(record.selfHpEnd) !== previousSelfHp;
@@ -11319,6 +11370,7 @@ function browserBotSource(config) {
     if (extra.kill) record.kill = safeJsonClone(extra.kill) || extra.kill;
     if (extra.selfHp !== undefined) updateImportantCombatHp(record, 'self', extra.selfHp);
     if (extra.targetHp !== undefined) updateImportantCombatHp(record, 'enemy', extra.targetHp);
+    updateImportantCombatStamina(record);
     record.endedAt = t;
     record.durationMs = Math.max(0, Math.round(t - Number(record.startedAt || t)));
     record.resultReason = String(reason || 'ended');
@@ -11383,8 +11435,21 @@ function browserBotSource(config) {
     };
   }
 
-  function rememberAttack(self, target, actionKind) {
+  function attackPlayerCategory(target, action = {}) {
+    if (!target) return 'unknown';
+    const afkProfit = isAfkProfitTarget(target);
+    const realActivity = isCurrentlyActive(target) || isMovingThreat(target) || isFiringEntity(target);
+    if (action?.combat || target.combat || (!afkProfit && realActivity)) return 'active';
+    if (afkProfit || target.afk === true || action?.combat === false) return 'afk';
+    return realActivity ? 'active' : 'unknown';
+  }
+
+  function rememberAttack(self, target, actionKind, action = {}) {
     if (!target) return;
+    const playerCategory = attackPlayerCategory(target, action);
+    const currentlyActive = isCurrentlyActive(target);
+    const moving = isMovingThreat(target);
+    const firing = isFiringEntity(target);
     pushBounded(bot.attackHistory, {
       at: Date.now(),
       action: actionKind,
@@ -11393,7 +11458,15 @@ function browserBotSource(config) {
       x: Math.round(Number(target.x) || 0),
       y: Math.round(Number(target.y) || 0),
       drop: Number(target.drop || 0),
-      afk: target.afk !== false,
+      afk: playerCategory === 'afk',
+      active: playerCategory === 'active',
+      playerCategory,
+      combat: Boolean(action?.combat || target.combat),
+      combatIntent: action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '',
+      mode: target.mode || target.current_join_mode || '',
+      currentlyActive,
+      moving,
+      firing,
       distance: Number(target.distance || 0),
       self: summarizeSelf(self)
     }, 80);
@@ -11489,6 +11562,10 @@ function browserBotSource(config) {
     } else {
       pushBounded(bot.killHistory, stored, 40);
     }
+    const playerCategory = importantKillPlayerCategory(stored);
+    stored.playerCategory = playerCategory;
+    stored.afk = playerCategory === 'afk';
+    stored.active = playerCategory === 'active';
     recordImportantKill(stored);
     if (seenKey) {
       bot.seenKillKeys.add(seenKey);
@@ -11563,6 +11640,15 @@ function browserBotSource(config) {
       id: postAttackTarget.id ?? null,
       drop: targetDrop,
       rewardCoins: reward,
+      playerCategory: postAttackTarget.playerCategory || (postAttackTarget.afk === false ? 'active' : 'afk'),
+      afk: postAttackTarget.afk !== false,
+      active: postAttackTarget.active === true || postAttackTarget.playerCategory === 'active',
+      combat: Boolean(postAttackTarget.combat),
+      combatIntent: postAttackTarget.combatIntent || '',
+      mode: postAttackTarget.mode || '',
+      currentlyActive: Boolean(postAttackTarget.currentlyActive),
+      moving: Boolean(postAttackTarget.moving),
+      firing: Boolean(postAttackTarget.firing),
       matchedAttack: true,
       dropMatched: true,
       chatConfirmed: false,
@@ -11604,6 +11690,15 @@ function browserBotSource(config) {
         id: attack ? attack.id : (existing?.id ?? null),
         drop: attack ? attack.drop : (existing?.drop ?? null),
         rewardCoins: attack ? attack.drop : (existing?.rewardCoins ?? null),
+        playerCategory: attack ? attack.playerCategory : (existing?.playerCategory ?? ''),
+        afk: attack ? attack.afk : (existing?.afk ?? null),
+        active: attack ? attack.active : (existing?.active ?? null),
+        combat: attack ? attack.combat : (existing?.combat ?? false),
+        combatIntent: attack ? attack.combatIntent : (existing?.combatIntent ?? ''),
+        mode: attack ? attack.mode : (existing?.mode ?? ''),
+        currentlyActive: attack ? attack.currentlyActive : (existing?.currentlyActive ?? false),
+        moving: attack ? attack.moving : (existing?.moving ?? false),
+        firing: attack ? attack.firing : (existing?.firing ?? false),
         matchedAttack: Boolean(attack || existing?.matchedAttack),
         chatConfirmed: true,
         source: 'chat',
@@ -14417,6 +14512,12 @@ function browserBotSource(config) {
         x: target.x,
         y: target.y,
         drop: target.drop,
+        playerCategory: target.playerCategory || (target.afk === false ? 'active' : 'afk'),
+        afk: target.afk !== false,
+        active: target.active === true || target.playerCategory === 'active',
+        combat: Boolean(target.combat),
+        combatIntent: target.combatIntent || '',
+        mode: target.mode || '',
         distance: Math.round(dir.distance),
         ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now())))
       },
@@ -16213,22 +16314,22 @@ function browserBotSource(config) {
 	        bot.snapshotCoinWaitSince = 0;
 	        bot.lastSnapshotCoinWaitAgeMs = 0;
 	      }
-	      sendActionVelocity(action);
+      sendActionVelocity(action);
       if (action.opportunisticShot) {
         const shotSent = shootAt(self, action.opportunisticShot, false, { shootEveryMs: cfg.opportunisticShootEveryMs });
-        if (shotSent) rememberAttack(self, action.opportunisticShot, 'opportunistic-shot');
+        if (shotSent) rememberAttack(self, action.opportunisticShot, 'opportunistic-shot', action);
       }
       if (action.kind === 'attack' && action.shoot && action.target) {
         shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
         setLastTarget('enemy', action.target.id);
         if (action.combat) rememberCombatEngagement(self, action.target, action);
-	        rememberAttack(self, action.target, action.kind);
+	        rememberAttack(self, action.target, action.kind, action);
       } else if ((action.kind === 'coin' || action.kind === 'seek-coin') && action.target) {
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {
         setLastTarget('enemy', action.target.id);
         if (action.combat) rememberCombatEngagement(self, action.target, action);
-        else rememberAttack(self, action.target, action.kind);
+        else rememberAttack(self, action.target, action.kind, action);
       } else if (action.kind === 'flee') {
         bot.lastTarget = null;
         bot.lastTargetAt = 0;

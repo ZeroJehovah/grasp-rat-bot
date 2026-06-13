@@ -163,6 +163,27 @@ npm run validate:objective
 npm test
 ```
 
+## 日报
+
+日报读取当天所有 JSONL 里的 `important-log`，默认使用最新日期目录：
+
+```bash
+cd combat-log-service
+npm run daily
+npm run daily -- --day 2026-06-13
+```
+
+输出包含两张表：
+
+- 登录统计：登录时间、退出时间、耗时、消耗体力、拾取刷新金币、挂机击杀次数/收益、活跃击杀次数/收益、总收益、退出原因；
+- 活跃玩家战斗统计：战斗对象、开始/结束时间、耗时、战斗期间消耗体力、我方/对方血量变化、战斗结果。
+
+机器可读输出：
+
+```bash
+npm run daily -- --json
+```
+
 审计会标记：
 
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
