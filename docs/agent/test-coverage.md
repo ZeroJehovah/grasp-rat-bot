@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `146`.
+- Latest bot self-test count: `184`.
 - Latest combat-log analyzer self-test count: `82`.
 - Recent important coverage:
   - local snapshot coin at `185m` cannot beat visible/native coin;
@@ -28,8 +28,10 @@
   - short 5s stamina exhaustion stops combat movement while keeping shooting enabled;
   - very close combat still backs away, but 50m mid-range no longer backs away by default;
   - long no-damage combat target triggers `combat-pressure-close`;
-  - recovering state no longer re-engages an already engaged stationary target in range;
-  - recovering state flees instead of re-engaging an active combat target unless combat leave thresholds fire;
+  - retreating out-of-range combat targets disengage instead of chasing;
+  - retreating edge-range combat targets suppress fire with `target-retreating-edge`;
+  - retreat-ignored targets are not reselected without incoming bullets, while real incoming bullets can still re-engage the shooter for defense;
+  - recovering state keeps already engaged stationary, active, and non-retreating grace-range combat targets under combat priority;
   - real incoming bullet shooter overrides an existing engaged target;
   - synthetic firing pressure does not override an existing engaged target;
   - emergency close combat spacing can override real-bullet dodge when too close, and combat leave cover uses spacing escape while exit is pending;
@@ -72,7 +74,7 @@
   - combat-log analyzer `npm test` covers reason-specific required-delay auditing for `stamina-budget-coin-leave`, including `exit-delay-below-required`;
   - combat-log analyzer `npm test` covers manifest source-hash match, missing-hash, and mismatch evidence issues;
   - local combat-log collector sourceHash propagation smoke test passed for payload-level sourceHash on session events;
-  - static objective build verifier passed 202 checks for current manifest/source hash alignment, key objective constants, runtime ambiguous-wait removal, bootstrap layout CSS, sourceHash wiring, bootstrap version consistency, compact panel dot controls, removed visible section/status titles, tooltip-only metric labels, raw remaining/limit stamina formatting, post-login zoom-out scheduling flow, join-mode Active non-AFK combat handling, logged combat target mode/safety fields, combat session-boundary sourceHash logging, login-suppressed/manual-login combat-log suspension, pending-exit top-level exit fallback, specific exit reason preservation during leave cooldown, longest exit suppress delay selection, important local/remote summary logs, safe offline immediate relogin behavior, non-invulnerable active combat priority over avoidance, and the stationary full-stamina Active coin-override self-test;
+  - static objective build verifier passed 210 checks for current manifest/source hash alignment, key objective constants, runtime ambiguous-wait removal, bootstrap layout CSS, sourceHash wiring, bootstrap version consistency, compact panel dot controls, removed visible section/status titles, tooltip-only metric labels, raw remaining/limit stamina formatting, post-login zoom-out scheduling flow, join-mode Active non-AFK combat handling, logged combat target mode/safety fields, combat session-boundary sourceHash logging, login-suppressed/manual-login combat-log suspension, pending-exit top-level exit fallback, specific exit reason preservation during leave cooldown, longest exit suppress delay selection, important local/remote summary logs, safe offline immediate relogin behavior, non-invulnerable active combat priority over avoidance, retreating-target disengage/fire suppression, and the stationary full-stamina Active coin-override self-test;
   - bot self-tests cover preserving the outer specific top-level combat-log `exit.reason` when leave detail reason is generic `cooldown`;
   - bot self-tests cover top-level combat-log `exit.safeReloginAllowed` / `exit.offlineSafety` for safe offline immediate relogin evidence;
   - bot self-tests cover top-level combat-log `exit` summaries for non-exit decisions, pending-exit decisions, canonical combat leave reason preservation, pending unsafe suppress fields, and confirmed longer relogin holds;
