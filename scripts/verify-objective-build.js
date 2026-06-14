@@ -55,6 +55,10 @@ const NUMERIC_INVARIANTS = [
   { key: 'killAttributionMergeMs', value: 120000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
+  { key: 'combatRetreatEdgeRange', value: 13800 },
+  { key: 'combatRetreatRadialSpeedMin', value: 5 },
+  { key: 'combatRetreatDistanceDeltaMin', value: 600 },
+  { key: 'combatRetreatIgnoreMs', value: 15000 },
   { key: 'combatLowHpCloseRiskMargin', value: 5 },
   { key: 'combatSpacingEmergencyRange', value: 3000 },
   { key: 'combatSpacingLowHpThreshold', value: 70 },
@@ -604,6 +608,9 @@ function main() {
       assert(text.includes('function combatLowHpCloseRiskState'), 'low-HP close-risk exit helper not found');
       assert(text.includes('function combatPressureDisadvantageState'), 'close-pressure HP disadvantage exit helper not found');
       assert(text.includes('function combatServerStallNoDamageLeaveState'), 'server-stall no-damage exit helper not found');
+      assert(text.includes('function combatRetreatingTargetState'), 'retreating combat target helper not found');
+      assert(text.includes('function combatRetreatIgnoreActive'), 'retreat-ignore helper not found');
+      assert(text.includes('function rememberCombatRetreatIgnore'), 'retreat-ignore writer not found');
       assert(text.includes('combatServerStallNoDamageLeaveMs: 25000'), 'server-stall no-damage exit wait is not configured');
       assert(text.includes('combatServerStallNoDamagePrecisionGraceMs: 10000'), 'server-stall no-damage exit does not allow precision aim grace');
       assert(text.includes('combatServerStallNoDamageHpGap: 5'), 'server-stall no-damage HP gap is not configured');
@@ -612,12 +619,20 @@ function main() {
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
       assert(combatBody.includes("combatLeaveAction('combat-hp-disadvantage-leave', baseTarget"), 'combat action does not leave on close-pressure HP disadvantage');
       assert(combatBody.includes('const serverStallNoDamage = combatServerStallNoDamageLeaveState'), 'combat action does not evaluate server-stall no-damage disadvantage');
+      assert(combatBody.includes('const retreatingTarget = combatRetreatingTargetState'), 'combat action does not evaluate retreating target state');
+      assert(combatBody.includes('serverStallNoDamage && !retreatingTarget.disengage'), 'retreating out-of-range target can still trigger server-stall no-damage exit');
+      assert(combatBody.includes('if (retreatingTarget.disengage)'), 'combat action does not disengage retreating out-of-range targets');
+      assert(combatBody.includes('rememberCombatRetreatIgnore(target)'), 'retreating target disengage does not remember short ignore');
+      assert(combatBody.includes("reason: 'combat-target-retreating'"), 'retreating target action reason not found');
       assert(combatBody.includes('summarizeServerPositionStall()'), 'server-stall no-damage exit does not read stall state');
       assert(combatBody.includes('serverStallNoDamage'), 'combat action does not log server-stall no-damage evidence');
       assert(combatBody.includes('!realBulletPressure || spacingOverride'), 'combat action does not merge spacing during emergency real-bullet pressure');
       assert(combatBody.includes('overrideBullet: Boolean(spacingOverride)'), 'combat logs do not expose bullet spacing override');
+      assert(combatBody.includes('retreatingTarget.active') && combatBody.includes('combatPressureCloseVector'), 'retreating edge targets can still trigger pressure-close chase');
       assert(combatBody.includes('const trend = combatTrendState(self'), 'combat action does not precompute combat trend state');
-      assert(combatBody.includes('const shooting = combatShootingPlan(self'), 'combat action does not use shooting plan');
+      assert(combatBody.includes('let shooting = combatShootingPlan(self'), 'combat action does not use mutable shooting plan');
+      assert(combatBody.includes('if (retreatingTarget.suppressFire)'), 'combat action does not suppress fire against retreating edge targets');
+      assert(combatBody.includes("reason: 'target-retreating-edge'"), 'retreating edge fire suppression reason not found');
       assert(combatBody.includes('trend,'), 'combat action does not pass trend state into shooting plan');
       assert(combatBody.includes('shoot: shooting.shoot'), 'combat action does not expose planned shoot flag');
       assert(combatBody.includes('forceShoot: shooting.forceShoot'), 'combat action does not expose planned force flag');
@@ -628,12 +643,20 @@ function main() {
       assert(combatBody.includes('targetMoving'), 'combat action does not pass moving target state to shooting plan');
       assert(combatBody.includes('steady: Boolean(aim.steadyAim)'), 'combat logs do not expose steady aim state');
       assert(combatBody.includes("shooting.suppressed ? 'combat-stamina-conserve'"), 'combat action does not report fire suppression reason');
+      assert(combatBody.includes("retreatingTarget.suppressFire ? 'combat-target-retreating'"), 'retreating edge action reason does not take precedence');
       assert(combatBody.includes("shooting.throttled ? 'combat-burst-fire'"), 'combat action does not report burst-fire reason');
       assert(!combatBody.includes("combat-low-hp-no-damage-leave', baseTarget"), 'low no-damage can still trigger combat leave');
       assert(!text.includes('forceShoot: true'), 'force shooting is still present');
       const switchBody = functionBody(text, 'defensiveTargetOverridesEngaged');
       assert(text.includes('function incomingBulletRequiresTargetSwitch'), 'target switch immediate-bullet helper not found');
       assert(switchBody.includes('incomingBulletRequiresTargetSwitch(defensiveTarget.incomingBullet)'), 'defensive target switch can still override engaged target for distant bullets');
+      const pickBody = functionBody(text, 'pickCombatTarget');
+      const incomingBranchIndex = pickBody.includes('if (incoming?.ownerId')
+        ? pickBody.indexOf('if (incoming?.ownerId')
+        : pickBody.indexOf('if (incoming)');
+      assert(incomingBranchIndex >= 0 && pickBody.indexOf('combatRetreatIgnoreActive(') > incomingBranchIndex, 'incoming bullet shooter no longer bypasses retreat-ignore filtering');
+      assert(pickBody.includes('!combatRetreatIgnoreActive(target)') || pickBody.includes('!combatRetreatIgnoreActive(e)'), 'ordinary combat target selection does not filter retreat-ignored targets');
+      assert(text.includes("clearCombatEngagement('target-retreating-ignore')"), 'engaged retreat-ignored target is not cleared');
       const pursuitBody = functionBody(text, 'updatePursuitTracking');
       assert(text.includes('function pursuitLeaveSuppressedByCombatAction'), 'same-target combat pursuit suppression helper not found');
       assert(pursuitBody.includes('pursuitLeaveSuppressedByCombatAction(picked, action)'), 'pursuit tracking does not check same-target combat suppression');
@@ -853,6 +876,10 @@ function main() {
     assert(sourceBot.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');
     assert(sourceBot.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(sourceBot.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
+    assert(sourceBot.includes("name: 'retreating out-of-range combat target disengages instead of chasing'"), 'retreating target disengage self-test not found');
+    assert(sourceBot.includes("name: 'retreating edge combat target suppresses fire'"), 'retreating edge fire suppression self-test not found');
+    assert(sourceBot.includes("name: 'retreat ignored target is not reselected without incoming bullet'"), 'retreat-ignore target selection self-test not found');
+    assert(sourceBot.includes("name: 'incoming bullet can reengage retreat ignored target'"), 'retreat-ignore incoming override self-test not found');
     assert(sourceBot.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');
   });
 
