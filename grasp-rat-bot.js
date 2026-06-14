@@ -238,6 +238,13 @@ function runSelfTest() {
     combatShootSteadyAimNoDamageMs: 6000,
     combatShootSteadyAimMinHp: 75,
     combatShootSteadyAimMaxHpGap: 15,
+    combatShootNoDamageDuelDodgeReserveMs: 3000,
+    combatShootNoDamageDuelNoDamageMs: 25000,
+    combatShootNoDamageDuelMinHp: 75,
+    combatShootNoDamageDuelMaxHpGap: 10,
+    combatShootNoDamageDuelRange: 14500,
+    combatTargetSwitchIncomingDistance: 6500,
+    combatTargetSwitchIncomingTimeMs: 900,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -364,6 +371,9 @@ function runSelfTest() {
     coinPickupFailureMinPulseMs: 35,
     coinPickupAttemptSlowEveryMs: 2500,
     coinPickupAttemptSlowMaxCount: 3,
+    tickMs: 120,
+    nativeTickMinMs: 120,
+    combatNativeTickMinMs: 80,
     attackMinStamina: 0,
     passiveAvoidRadius: 11000,
     passivePanicRadius: 120,
@@ -380,7 +390,7 @@ function runSelfTest() {
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0, combatTarget: null, opportunityChoice: null, opportunitySwitchLock: null };
+  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, opportunityChoice: null, opportunitySwitchLock: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -524,6 +534,16 @@ function runSelfTest() {
       candidates.push(Math.max(0, Number(cfg.pursuitLeaveNonFullHpInvulnerableMs || cfg.pursuitLeaveInvulnerableMs || cfg.pursuitLeaveNonFullHpMs || normalMs)));
     }
     return Math.max(0, Math.min(...candidates.filter(value => Number.isFinite(value))));
+  }
+  function actionCombatTargetId(action) {
+    const target = action?.target || null;
+    const id = target?.id ?? target?.user_id;
+    return id === null || id === undefined ? '' : String(id);
+  }
+  function pursuitLeaveSuppressedByCombatAction(pursuit, action) {
+    const pursuitId = pursuit?.id ?? pursuit?.user_id;
+    const actionId = actionCombatTargetId(action);
+    return Boolean(action?.combat && pursuitId !== null && pursuitId !== undefined && actionId && String(pursuitId) === actionId);
   }
   const isConservingStamina = self => {
     const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
@@ -1369,6 +1389,7 @@ function runSelfTest() {
   }
   function defensiveTargetOverridesEngaged(engagedTarget, defensiveTarget) {
     if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+    if (!incomingBulletRequiresTargetSwitch(defensiveTarget.incomingBullet)) return false;
     const ownerId = defensiveTarget.incomingBullet.ownerId
       ?? defensiveTarget.incomingBullet.owner_id
       ?? defensiveTarget.incomingBullet.source_user_id
@@ -1379,6 +1400,16 @@ function runSelfTest() {
     return defensiveId !== null && defensiveId !== undefined
       && engagedId !== null && engagedId !== undefined
       && String(defensiveId) !== String(engagedId);
+  }
+  function incomingBulletRequiresTargetSwitch(incomingBullet) {
+    if (!incomingBullet) return false;
+    const distance = Number(incomingBullet.distance);
+    const timeToImpactMs = Number(incomingBullet.timeToImpactMs);
+    const switchDistance = Math.max(0, Number(cfg.combatTargetSwitchIncomingDistance || 0));
+    const switchTime = Math.max(0, Number(cfg.combatTargetSwitchIncomingTimeMs || 0));
+    if (switchDistance > 0 && Number.isFinite(distance) && distance <= switchDistance) return true;
+    if (switchTime > 0 && Number.isFinite(timeToImpactMs) && timeToImpactMs <= switchTime) return true;
+    return false;
   }
 
   function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
@@ -1903,6 +1934,96 @@ function runSelfTest() {
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
   }
 
+  function combatTrendState(self, options = {}) {
+    const selfHp = hpValue(self);
+    const targetHp = Number(options.targetHp);
+    const targetDistance = Number(options.targetDistance);
+    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
+    const hpGap = Number(targetHp) - Number(selfHp);
+    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
+    const highHpFireWindow = highHpMin > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= highHpMin
+      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
+    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
+    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
+    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
+    const closePressureFireWindow = Boolean(options.realBulletPressure)
+      && pressureMinHp > 0
+      && pressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= pressureMinHp
+      && hpGap <= pressureMaxHpGap
+      && targetDistance <= pressureRange;
+    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
+    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
+    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
+    const steadyAimFireWindow = Boolean(options.steadyAim)
+      && steadyAimMinHp > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && selfHp >= steadyAimMinHp
+      && hpGap <= steadyAimMaxHpGap
+      && noDamageMs >= steadyAimNoDamageMs;
+    const noDamageDuelMinHp = Math.max(0, Number(cfg.combatShootNoDamageDuelMinHp || 0));
+    const noDamageDuelMaxHpGap = Math.max(0, Number(cfg.combatShootNoDamageDuelMaxHpGap || 0));
+    const noDamageDuelNoDamageMs = Math.max(0, Number(cfg.combatShootNoDamageDuelNoDamageMs || 0));
+    const noDamageDuelRange = Math.max(0, Number(cfg.combatShootNoDamageDuelRange || cfg.combatAttackRange || 0));
+    const noDamageDuelFireWindow = Boolean(options.engagedCombat || options.targetActive || options.targetMoving)
+      && noDamageDuelMinHp > 0
+      && noDamageDuelNoDamageMs > 0
+      && noDamageDuelRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= noDamageDuelMinHp
+      && hpGap <= noDamageDuelMaxHpGap
+      && noDamageMs >= noDamageDuelNoDamageMs
+      && targetDistance <= noDamageDuelRange;
+    let stance = 'normal';
+    if (closePressureFireWindow) stance = 'close-pressure';
+    else if (steadyAimFireWindow) stance = 'steady-aim';
+    else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
+    else if (highHpFireWindow) stance = 'high-hp-pressure';
+    else if (Number.isFinite(hpGap) && hpGap > 0) stance = 'guarded';
+    return {
+      stance,
+      selfHp,
+      targetHp,
+      hpGap,
+      targetDistance,
+      noDamageMs,
+      highHpFireWindow,
+      closePressureFireWindow,
+      steadyAimFireWindow,
+      noDamageDuelFireWindow,
+      engagedCombat: Boolean(options.engagedCombat),
+      targetActive: Boolean(options.targetActive),
+      targetMoving: Boolean(options.targetMoving),
+      realBulletPressure: Boolean(options.realBulletPressure),
+      steadyAim: Boolean(options.steadyAim)
+    };
+  }
+
+  function combatTickActiveFromState(state = {}) {
+    const t = Number.isFinite(Number(state.nowMs)) ? Number(state.nowMs) : Date.now();
+    const decision = state.decision || null;
+    const recentCombatMs = Math.max(1000, Number(cfg.combatEngageStickMs || 0), Number(cfg.combatEngageGraceMs || 0));
+    const combatAt = Number(state.combatTarget?.at || 0);
+    if (decision?.combat || decision?.combatCover || /^combat-/.test(String(decision?.reason || ''))) return true;
+    if (combatAt && t - combatAt <= recentCombatMs) return true;
+    if (state.pendingExit && /^combat-/.test(String(state.pendingExit.reason || state.pendingExit.rootReason || ''))) return true;
+    return false;
+  }
+
+  function nativeTickMinIntervalMs(state = {}) {
+    const normalMs = Math.max(1, Number(cfg.nativeTickMinMs || cfg.tickMs || 120));
+    const combatMs = Math.max(1, Number(cfg.combatNativeTickMinMs || normalMs));
+    return combatTickActiveFromState(state) ? Math.min(normalMs, combatMs) : normalMs;
+  }
+
   function combatShootingPlan(self, options = {}) {
     const stamina5s = staminaRemaining(self, '5s');
     const normalEveryMs = Math.max(1, Number(cfg.combatShootEveryMs || cfg.shootEveryMs || 120));
@@ -1913,43 +2034,21 @@ function runSelfTest() {
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
     const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
+    const noDamageDuelDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootNoDamageDuelDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
-    const selfHp = hpValue(self);
-    const targetHp = Number(options.targetHp);
-    const targetDistance = Number(options.targetDistance);
-    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
-    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
-    const highHpFireWindow = highHpMin > 0
-      && Number.isFinite(selfHp)
-      && selfHp >= highHpMin
-      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
-    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
-    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
-    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
-    const pressureHpGap = Number(targetHp) - Number(selfHp);
-    const closePressureFireWindow = Boolean(options.realBulletPressure)
-      && pressureMinHp > 0
-      && pressureRange > 0
-      && Number.isFinite(selfHp)
-      && Number.isFinite(targetHp)
-      && Number.isFinite(targetDistance)
-      && selfHp >= pressureMinHp
-      && pressureHpGap <= pressureMaxHpGap
-      && targetDistance <= pressureRange;
-    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
-    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
-    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
-    const steadyAimFireWindow = Boolean(options.steadyAim)
-      && steadyAimMinHp > 0
-      && Number.isFinite(selfHp)
-      && Number.isFinite(targetHp)
-      && selfHp >= steadyAimMinHp
-      && pressureHpGap <= steadyAimMaxHpGap
-      && noDamageMs >= steadyAimNoDamageMs;
+    const trend = options.trend && typeof options.trend === 'object'
+      ? options.trend
+      : combatTrendState(self, options);
+    const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
+    const highHpFireWindow = Boolean(trend.highHpFireWindow);
+    const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
+    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
+    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
     let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
+    if (noDamageDuelFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, noDamageDuelDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
     const base = {
       shoot: true,
@@ -1963,12 +2062,25 @@ function runSelfTest() {
       highHpDodgeReserveMs,
       pressureDodgeReserveMs,
       steadyAimDodgeReserveMs,
+      noDamageDuelDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
       closePressureFireWindow,
       steadyAimFireWindow,
+      noDamageDuelFireWindow,
       noDamageMs,
+      trend: {
+        stance: trend.stance || 'normal',
+        hpGap: Number.isFinite(Number(trend.hpGap)) ? Number(trend.hpGap) : null,
+        targetDistance: Number.isFinite(Number(trend.targetDistance)) ? Math.round(Number(trend.targetDistance)) : null,
+        noDamageMs: Math.round(noDamageMs),
+        engagedCombat: Boolean(trend.engagedCombat),
+        targetActive: Boolean(trend.targetActive),
+        targetMoving: Boolean(trend.targetMoving),
+        realBulletPressure: Boolean(trend.realBulletPressure),
+        steadyAim: Boolean(trend.steadyAim)
+      },
       suppressed: false,
       throttled: false
     };
@@ -2034,13 +2146,29 @@ function runSelfTest() {
       : null;
     const dx = movementSuppressed ? 0 : requestedDx;
     const dy = movementSuppressed ? 0 : requestedDy;
-    const shooting = combatShootingPlan(self, {
+    const trend = combatTrendState(self, {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
       realBulletPressure: incoming,
       targetDistance: target.distance,
       targetHp,
       steadyAim: steadyAim.active,
+      engagedCombat: target.combatIntent === 'engaged',
+      targetActive: isActive(target),
+      targetMoving: moving,
+      noDamageMs
+    });
+    const shooting = combatShootingPlan(self, {
+      trend,
+      needsMovement: Boolean(requestedDx || requestedDy),
+      dodging: incoming,
+      realBulletPressure: incoming,
+      targetDistance: target.distance,
+      targetHp,
+      steadyAim: steadyAim.active,
+      engagedCombat: target.combatIntent === 'engaged',
+      targetActive: isActive(target),
+      targetMoving: moving,
       noDamageMs
     });
     const baseReason = incoming
@@ -3101,7 +3229,7 @@ function runSelfTest() {
             { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100 },
             { user_id: 8, name: 'shooter', x: 9000, y: 0, current_join_mode: 'Active', hp: 100 }
           ],
-          bullets: [{ owner_id: 8, x: 8000, y: 0, vx: -100, vy: 0 }]
+          bullets: [{ owner_id: 8, x: 8000, y: 0, vx: -100, vy: 0, distance: 2500 }]
         });
         bot.combatTarget = null;
         return action.kind + ':' + action.target?.id;
@@ -3504,6 +3632,56 @@ function runSelfTest() {
       want: 'combat-burst-fire:true:2600:true'
     },
     {
+      name: 'combat long no-damage active duel resumes reserve-band fire',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 32000, lastDamageAt: Date.now() - 32000, hp: 82 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 85, max_hp: 100, stamina_5s_remaining_milli: 3139 },
+          { user_id: 7, x: 12275, y: 0, distance: 12275, current_join_mode: 'Active', hp: 82, vx: 35, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.dodgeReserveMs + ':' + Boolean(action.combatState?.shooting?.noDamageDuelFireWindow);
+      })(),
+      want: 'combat-burst-fire:true:3000:true'
+    },
+    {
+      name: 'combat trend classifies long no-damage duel stance',
+      got: (() => {
+        const trend = combatTrendState(
+          { user_id: 1, hp: 85 },
+          { targetHp: 82, targetDistance: 12275, targetActive: true, targetMoving: true, noDamageMs: 32000 }
+        );
+        return trend.stance + ':' + Boolean(trend.noDamageDuelFireWindow) + ':' + trend.hpGap;
+      })(),
+      want: 'no-damage-duel:true:-3'
+    },
+    {
+      name: 'combat long no-damage fire window keeps low hp conservative',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 32000, lastDamageAt: Date.now() - 32000, hp: 70 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 3139 },
+          { user_id: 7, x: 12275, y: 0, distance: 12275, current_join_mode: 'Active', hp: 70, vx: 35, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + Boolean(action.shoot) + ':' + Boolean(action.combatState?.shooting?.noDamageDuelFireWindow);
+      })(),
+      want: 'combat-stamina-conserve:false:false'
+    },
+    {
+      name: 'combat native tick interval tightens only during combat',
+      got: (() => {
+        const t = 100000;
+        return [
+          nativeTickMinIntervalMs({ decision: { combat: true }, nowMs: t }),
+          nativeTickMinIntervalMs({ decision: { kind: 'coin' }, nowMs: t }),
+          nativeTickMinIntervalMs({ combatTarget: { at: t - 500 }, nowMs: t }),
+          nativeTickMinIntervalMs({ combatTarget: { at: t - 60000 }, nowMs: t })
+        ].join(',');
+      })(),
+      want: '80,120,80,120'
+    },
+    {
       name: 'combat close pressure hp disadvantage exits before low hp threshold',
       got: (() => {
         const action = chooseCombatAction(
@@ -3665,6 +3843,24 @@ function runSelfTest() {
         pursuitLeaveThresholdForTest({ hp: 80, max_hp: 100 }, { current_join_mode: 'Active', invulnerable: true })
       ].join(','),
       want: '90000,60000,45000'
+    },
+    {
+      name: 'combat action suppresses same-target pursuit leave',
+      got: [
+        pursuitLeaveSuppressedByCombatAction({ id: 7 }, { combat: true, target: { id: 7 } }),
+        pursuitLeaveSuppressedByCombatAction({ id: 7 }, { combat: true, target: { id: 8 } }),
+        pursuitLeaveSuppressedByCombatAction({ id: 7 }, { combat: false, target: { id: 7 } })
+      ].join(','),
+      want: 'true,false,false'
+    },
+    {
+      name: 'defensive target switch requires immediate incoming bullet',
+      got: [
+        defensiveTargetOverridesEngaged({ user_id: 1 }, { user_id: 2, incomingBullet: { ownerId: 2, distance: 12000 } }),
+        defensiveTargetOverridesEngaged({ user_id: 1 }, { user_id: 2, incomingBullet: { ownerId: 2, distance: 2500 } }),
+        defensiveTargetOverridesEngaged({ user_id: 1 }, { user_id: 2, incomingBullet: { ownerId: 2, timeToImpactMs: 500 } })
+      ].join(','),
+      want: 'false,true,true'
     },
     {
       name: 'whitelisted afk drop target is not attacked',
@@ -4522,6 +4718,13 @@ function browserBotSource(config) {
     combatShootSteadyAimNoDamageMs: 6000,
     combatShootSteadyAimMinHp: 75,
     combatShootSteadyAimMaxHpGap: 15,
+    combatShootNoDamageDuelDodgeReserveMs: 3000,
+    combatShootNoDamageDuelNoDamageMs: 25000,
+    combatShootNoDamageDuelMinHp: 75,
+    combatShootNoDamageDuelMaxHpGap: 10,
+    combatShootNoDamageDuelRange: 14500,
+    combatTargetSwitchIncomingDistance: 6500,
+    combatTargetSwitchIncomingTimeMs: 900,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -4674,6 +4877,7 @@ function browserBotSource(config) {
     opportunisticShotMinScoreRatio: 1,
     globalRefreshMs: 5000,
     nativeTickMinMs: 120,
+    combatNativeTickMinMs: 80,
     attackMinStamina: 0,
     conserveStaminaThreshold: 6500,
     lowHpThreshold: 60,
@@ -8434,7 +8638,8 @@ function browserBotSource(config) {
 	      thresholdMs,
 	      invulnerable: Boolean(pursuit.invulnerable),
 	      nonFullHp: Boolean(pursuit.nonFullHp),
-	      lastSeenAgeMs: Math.max(0, Math.round(t - lastSeenAt)),
+	      combatSuppressed: Boolean(pursuit.combatSuppressed),
+      lastSeenAgeMs: Math.max(0, Math.round(t - lastSeenAt)),
       towardScore: Number.isFinite(Number(pursuit.towardScore)) ? Number(pursuit.towardScore).toFixed(2) : null,
       closingDistance: Number.isFinite(Number(pursuit.closingDistance)) ? Math.round(Number(pursuit.closingDistance)) : null
     };
@@ -9198,6 +9403,18 @@ function browserBotSource(config) {
     );
   }
 
+  function actionCombatTargetId(action) {
+    const target = action?.target || null;
+    const id = target?.id ?? target?.user_id;
+    return id === null || id === undefined ? '' : String(id);
+  }
+
+  function pursuitLeaveSuppressedByCombatAction(pursuit, action) {
+    const pursuitId = pursuit?.id ?? pursuit?.user_id;
+    const actionId = actionCombatTargetId(action);
+    return Boolean(action?.combat && pursuitId !== null && pursuitId !== undefined && actionId && String(pursuitId) === actionId);
+  }
+
   function actionThreatId(action) {
     const threat = Array.isArray(action?.threats) ? action.threats[0] : null;
     return threat ? String(threat.id ?? threat.user_id ?? '') : '';
@@ -9282,7 +9499,8 @@ function browserBotSource(config) {
     }
     const same = previous && String(previous.id) === String(picked.id)
       && t - Number(previous.lastSeenAt || t) <= cfg.pursuitLostGraceMs;
-	    const startedAt = same ? Number(previous.startedAt || t) : t;
+	    const combatSuppressed = pursuitLeaveSuppressedByCombatAction(picked, action);
+	    const startedAt = combatSuppressed ? t : (same ? Number(previous.startedAt || t) : t);
 	    const thresholdMs = pursuitLeaveThresholdFor(self, picked.threat);
 	    bot.pursuit = {
 	      id: picked.id,
@@ -9299,7 +9517,8 @@ function browserBotSource(config) {
 	      closingDistance: picked.closingDistance,
 	      thresholdMs,
 	      invulnerable: isInvulnerable(picked.threat),
-	      nonFullHp: !isFullHp(self)
+	      nonFullHp: !isFullHp(self),
+	      combatSuppressed
 	    };
     if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(bot.pursuit);
     return bot.pursuit;
@@ -10049,7 +10268,13 @@ function browserBotSource(config) {
 	  function triggerNativeTick(source, respectMinInterval = true) {
 	    if (!bot.running || bot.ticking) return;
 	    const t = now();
-	    if (respectMinInterval && t - bot.lastNativeTickAt < cfg.nativeTickMinMs) return;
+	    const minIntervalMs = nativeTickMinIntervalMs({
+	      decision: bot.lastDecision,
+	      combatTarget: bot.combatTarget,
+	      pendingExit: bot.pendingExit,
+	      nowMs: t
+	    });
+	    if (respectMinInterval && t - bot.lastNativeTickAt < minIntervalMs) return;
 	    bot.lastNativeTickAt = t;
 	    runTickSafely(source);
 	  }
@@ -13196,6 +13421,7 @@ function browserBotSource(config) {
 
   function defensiveTargetOverridesEngaged(engagedTarget, defensiveTarget) {
     if (!engagedTarget || !defensiveTarget?.incomingBullet) return false;
+    if (!incomingBulletRequiresTargetSwitch(defensiveTarget.incomingBullet)) return false;
     const ownerId = defensiveTarget.incomingBullet.ownerId
       ?? defensiveTarget.incomingBullet.owner_id
       ?? defensiveTarget.incomingBullet.source_user_id
@@ -13206,6 +13432,17 @@ function browserBotSource(config) {
     return defensiveId !== null && defensiveId !== undefined
       && engagedId !== null && engagedId !== undefined
       && String(defensiveId) !== String(engagedId);
+  }
+
+  function incomingBulletRequiresTargetSwitch(incomingBullet) {
+    if (!incomingBullet) return false;
+    const distance = Number(incomingBullet.distance);
+    const timeToImpactMs = Number(incomingBullet.timeToImpactMs);
+    const switchDistance = Math.max(0, Number(cfg.combatTargetSwitchIncomingDistance || 0));
+    const switchTime = Math.max(0, Number(cfg.combatTargetSwitchIncomingTimeMs || 0));
+    if (switchDistance > 0 && Number.isFinite(distance) && distance <= switchDistance) return true;
+    if (switchTime > 0 && Number.isFinite(timeToImpactMs) && timeToImpactMs <= switchTime) return true;
+    return false;
   }
 
   function pickOpportunisticShotTarget(self, entities) {
@@ -13910,6 +14147,96 @@ function browserBotSource(config) {
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
   }
 
+  function combatTrendState(self, options = {}) {
+    const selfHp = hpValue(self);
+    const targetHp = Number(options.targetHp);
+    const targetDistance = Number(options.targetDistance);
+    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
+    const hpGap = Number(targetHp) - Number(selfHp);
+    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
+    const highHpFireWindow = highHpMin > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= highHpMin
+      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
+    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
+    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
+    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
+    const closePressureFireWindow = Boolean(options.realBulletPressure)
+      && pressureMinHp > 0
+      && pressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= pressureMinHp
+      && hpGap <= pressureMaxHpGap
+      && targetDistance <= pressureRange;
+    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
+    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
+    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
+    const steadyAimFireWindow = Boolean(options.steadyAim)
+      && steadyAimMinHp > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && selfHp >= steadyAimMinHp
+      && hpGap <= steadyAimMaxHpGap
+      && noDamageMs >= steadyAimNoDamageMs;
+    const noDamageDuelMinHp = Math.max(0, Number(cfg.combatShootNoDamageDuelMinHp || 0));
+    const noDamageDuelMaxHpGap = Math.max(0, Number(cfg.combatShootNoDamageDuelMaxHpGap || 0));
+    const noDamageDuelNoDamageMs = Math.max(0, Number(cfg.combatShootNoDamageDuelNoDamageMs || 0));
+    const noDamageDuelRange = Math.max(0, Number(cfg.combatShootNoDamageDuelRange || cfg.combatAttackRange || 0));
+    const noDamageDuelFireWindow = Boolean(options.engagedCombat || options.targetActive || options.targetMoving)
+      && noDamageDuelMinHp > 0
+      && noDamageDuelNoDamageMs > 0
+      && noDamageDuelRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= noDamageDuelMinHp
+      && hpGap <= noDamageDuelMaxHpGap
+      && noDamageMs >= noDamageDuelNoDamageMs
+      && targetDistance <= noDamageDuelRange;
+    let stance = 'normal';
+    if (closePressureFireWindow) stance = 'close-pressure';
+    else if (steadyAimFireWindow) stance = 'steady-aim';
+    else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
+    else if (highHpFireWindow) stance = 'high-hp-pressure';
+    else if (Number.isFinite(hpGap) && hpGap > 0) stance = 'guarded';
+    return {
+      stance,
+      selfHp,
+      targetHp,
+      hpGap,
+      targetDistance,
+      noDamageMs,
+      highHpFireWindow,
+      closePressureFireWindow,
+      steadyAimFireWindow,
+      noDamageDuelFireWindow,
+      engagedCombat: Boolean(options.engagedCombat),
+      targetActive: Boolean(options.targetActive),
+      targetMoving: Boolean(options.targetMoving),
+      realBulletPressure: Boolean(options.realBulletPressure),
+      steadyAim: Boolean(options.steadyAim)
+    };
+  }
+
+  function combatTickActiveFromState(state = {}) {
+    const t = Number.isFinite(Number(state.nowMs)) ? Number(state.nowMs) : Date.now();
+    const decision = state.decision || null;
+    const recentCombatMs = Math.max(1000, Number(cfg.combatEngageStickMs || 0), Number(cfg.combatEngageGraceMs || 0));
+    const combatAt = Number(state.combatTarget?.at || 0);
+    if (decision?.combat || decision?.combatCover || /^combat-/.test(String(decision?.reason || ''))) return true;
+    if (combatAt && t - combatAt <= recentCombatMs) return true;
+    if (state.pendingExit && /^combat-/.test(String(state.pendingExit.reason || state.pendingExit.rootReason || ''))) return true;
+    return false;
+  }
+
+  function nativeTickMinIntervalMs(state = {}) {
+    const normalMs = Math.max(1, Number(cfg.nativeTickMinMs || cfg.tickMs || 120));
+    const combatMs = Math.max(1, Number(cfg.combatNativeTickMinMs || normalMs));
+    return combatTickActiveFromState(state) ? Math.min(normalMs, combatMs) : normalMs;
+  }
+
   function combatShootingPlan(self, options = {}) {
     const stamina5s = staminaRemaining(self, '5s');
     const normalEveryMs = Math.max(1, Number(cfg.combatShootEveryMs || cfg.shootEveryMs || 120));
@@ -13920,43 +14247,21 @@ function browserBotSource(config) {
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
     const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
+    const noDamageDuelDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootNoDamageDuelDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
-    const selfHp = hpValue(self);
-    const targetHp = Number(options.targetHp);
-    const targetDistance = Number(options.targetDistance);
-    const noDamageMs = Math.max(0, Number(options.noDamageMs || 0));
-    const highHpMin = Math.max(0, Number(cfg.combatShootHighHpMinHp || 0));
-    const highHpFireWindow = highHpMin > 0
-      && Number.isFinite(selfHp)
-      && selfHp >= highHpMin
-      && (!Number.isFinite(targetHp) || selfHp >= targetHp);
-    const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
-    const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
-    const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
-    const pressureHpGap = Number(targetHp) - Number(selfHp);
-    const closePressureFireWindow = Boolean(options.realBulletPressure)
-      && pressureMinHp > 0
-      && pressureRange > 0
-      && Number.isFinite(selfHp)
-      && Number.isFinite(targetHp)
-      && Number.isFinite(targetDistance)
-      && selfHp >= pressureMinHp
-      && pressureHpGap <= pressureMaxHpGap
-      && targetDistance <= pressureRange;
-    const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
-    const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
-    const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
-    const steadyAimFireWindow = Boolean(options.steadyAim)
-      && steadyAimMinHp > 0
-      && Number.isFinite(selfHp)
-      && Number.isFinite(targetHp)
-      && selfHp >= steadyAimMinHp
-      && pressureHpGap <= steadyAimMaxHpGap
-      && noDamageMs >= steadyAimNoDamageMs;
+    const trend = options.trend && typeof options.trend === 'object'
+      ? options.trend
+      : combatTrendState(self, options);
+    const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
+    const highHpFireWindow = Boolean(trend.highHpFireWindow);
+    const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
+    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
+    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
     let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
+    if (noDamageDuelFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, noDamageDuelDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
     const base = {
       shoot: true,
@@ -13970,12 +14275,25 @@ function browserBotSource(config) {
       highHpDodgeReserveMs,
       pressureDodgeReserveMs,
       steadyAimDodgeReserveMs,
+      noDamageDuelDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
       closePressureFireWindow,
       steadyAimFireWindow,
+      noDamageDuelFireWindow,
       noDamageMs,
+      trend: {
+        stance: trend.stance || 'normal',
+        hpGap: Number.isFinite(Number(trend.hpGap)) ? Number(trend.hpGap) : null,
+        targetDistance: Number.isFinite(Number(trend.targetDistance)) ? Math.round(Number(trend.targetDistance)) : null,
+        noDamageMs: Math.round(noDamageMs),
+        engagedCombat: Boolean(trend.engagedCombat),
+        targetActive: Boolean(trend.targetActive),
+        targetMoving: Boolean(trend.targetMoving),
+        realBulletPressure: Boolean(trend.realBulletPressure),
+        steadyAim: Boolean(trend.steadyAim)
+      },
       suppressed: false,
       throttled: false
     };
@@ -14175,6 +14493,9 @@ function browserBotSource(config) {
       targetDistance: distance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
+      engagedCombat: target.combatIntent === 'engaged',
+      targetActive: isCurrentlyActive(target),
+      targetMoving: speed(target) >= cfg.combatStationarySpeed,
       noDamageMs: Number(aim.noDamageMs || 0)
     });
     return {
@@ -14351,7 +14672,21 @@ function browserBotSource(config) {
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
     const aim = combatAimTarget(self, target);
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
+    const trend = combatTrendState(self, {
+      needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
+      dodging,
+      realBulletPressure,
+      pressureClose: pressureClose.active,
+      targetDistance,
+      targetHp,
+      steadyAim: Boolean(aim.steadyAim),
+      engagedCombat: target.combatIntent === 'engaged',
+      targetActive: isCurrentlyActive(target),
+      targetMoving,
+      noDamageMs: Number(aim.noDamageMs || 0)
+    });
     const shooting = combatShootingPlan(self, {
+      trend,
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
       realBulletPressure,
@@ -14359,6 +14694,9 @@ function browserBotSource(config) {
       targetDistance: targetDistance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
+      engagedCombat: target.combatIntent === 'engaged',
+      targetActive: isCurrentlyActive(target),
+      targetMoving,
       noDamageMs: Number(aim.noDamageMs || 0)
     });
     const baseReason = realBulletPressure
