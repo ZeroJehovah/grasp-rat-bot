@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.155"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.157"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -140,6 +140,10 @@
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
+    combatAimFallbackPrecisionNoDamageMs: 25000,
+    combatAimLiveDivergencePrecisionCm: 1200,
+    combatAimLiveDivergencePrecisionRatio: 0.08,
+    combatAimRadialPrecisionLateralRatio: 0.35,
     combatAimSteadyNoDamageMs: 6000,
     combatAimSteadySpeedMax: 5,
     combatAimLockMs: 450,
@@ -153,6 +157,7 @@
     combatShootNoDamageDuelMaxHpGap: 10,
     combatShootNoDamageDuelRange: 14500,
     combatServerStallNoDamageLeaveMs: 25000,
+    combatServerStallNoDamagePrecisionGraceMs: 10000,
     combatServerStallNoDamageHpGap: 5,
     combatTargetSwitchIncomingDistance: 6500,
     combatTargetSwitchIncomingTimeMs: 900,
@@ -9815,6 +9820,9 @@
 
   function combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, realBulletPressure = false, serverPositionStall = null) {
     const waitMs = Math.max(0, Number(cfg.combatServerStallNoDamageLeaveMs || 0));
+    const precisionWaitMs = Math.max(0, Number(cfg.combatAimFallbackPrecisionNoDamageMs || 0));
+    const precisionGraceMs = Math.max(0, Number(cfg.combatServerStallNoDamagePrecisionGraceMs || 0));
+    const effectiveWaitMs = Math.max(waitMs, precisionWaitMs ? precisionWaitMs + precisionGraceMs : waitMs);
     const minGap = Math.max(0, Number(cfg.combatServerStallNoDamageHpGap || 0));
     const hp = Number(selfHp);
     const enemyHp = Number(targetHp);
@@ -9823,7 +9831,7 @@
     const stall = serverPositionStall || {};
     if (!waitMs || !stall.stalled || !realBulletPressure) return null;
     if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(hpGap)) return null;
-    if (elapsed < waitMs || hpGap < minGap) return null;
+    if (elapsed < effectiveWaitMs || hpGap < minGap) return null;
     return {
       active: true,
       selfHp: hp,
@@ -9831,6 +9839,9 @@
       hpGap,
       noDamageMs: elapsed,
       waitMs,
+      effectiveWaitMs,
+      precisionWaitMs,
+      precisionGraceMs,
       minGap,
       realBulletPressure: true,
       serverPositionStall: {
@@ -10034,6 +10045,16 @@
     };
   }
 
+  function combatAimFallbackPrecisionState(noDamageMs) {
+    const thresholdMs = Math.max(0, Number(cfg.combatAimFallbackPrecisionNoDamageMs || 0));
+    const elapsed = Math.max(0, Number(noDamageMs) || 0);
+    return {
+      active: Boolean(thresholdMs && elapsed >= thresholdMs),
+      noDamageMs: elapsed,
+      thresholdMs
+    };
+  }
+
   function combatMovementAimMode(self, target, distance) {
     const vx = Number(target.vx) || 0;
     const vy = Number(target.vy) || 0;
@@ -10070,37 +10091,182 @@
     };
   }
 
+  function combatLiveAimTarget(self, target) {
+    const targetId = combatTargetId(target);
+    const targetName = String(target?.name || '').trim();
+    let live = null;
+    try {
+      const nativeEntities = Array.isArray(bot.testNativeEntities)
+        ? bot.testNativeEntities
+        : (typeof getNativeEntityList === 'function' ? getNativeEntityList() : []);
+      if (Array.isArray(nativeEntities) && nativeEntities.length) {
+        live = nativeEntities.find(entity => {
+          const id = combatTargetId(entity);
+          return targetId && id && String(id) === targetId;
+        }) || null;
+        if (!live && targetName) live = nativeEntities.find(entity => String(entity?.name || '').trim() === targetName) || null;
+      }
+    } catch (_) {
+      live = null;
+    }
+    if (!live || !isAlive(live) || isInvulnerable(live)) return target;
+    const x = Number(live.x);
+    const y = Number(live.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return target;
+    return {
+      ...target,
+      ...live,
+      user_id: live.user_id ?? live.id ?? target.user_id ?? target.id,
+      id: live.user_id ?? live.id ?? target.id ?? target.user_id,
+      hp: combatHpValue(live),
+      knownHp: knownHpValue(live),
+      drop: dropValue(live) || target.drop,
+      distance: dist(self, live),
+      speed: speed(live),
+      combatIntent: target.combatIntent || live.combatIntent || '',
+      nativeAimResolved: true,
+      originalAimTarget: target
+    };
+  }
+
+  function combatAimSourceDivergenceState(aimSource, distance) {
+    const original = aimSource?.originalAimTarget;
+    const live = Boolean(aimSource?.nativeAimResolved);
+    const ax = Number(aimSource?.x);
+    const ay = Number(aimSource?.y);
+    const ox = Number(original?.x);
+    const oy = Number(original?.y);
+    const divergence = live
+      && Number.isFinite(ax)
+      && Number.isFinite(ay)
+      && Number.isFinite(ox)
+      && Number.isFinite(oy)
+      ? Math.hypot(ax - ox, ay - oy)
+      : null;
+    const baseThreshold = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionCm || 0));
+    const ratio = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionRatio || 0));
+    const ratioThreshold = Number.isFinite(Number(distance)) ? Math.round(Math.max(0, Number(distance)) * ratio) : 0;
+    const threshold = Math.max(baseThreshold, ratioThreshold);
+    return {
+      active: Boolean(live && divergence !== null && threshold > 0 && divergence >= threshold),
+      divergenceCm: divergence !== null ? Math.round(divergence) : null,
+      thresholdCm: Math.round(threshold),
+      baseThresholdCm: Math.round(baseThreshold),
+      ratioThresholdCm: Math.round(ratioThreshold)
+    };
+  }
+
+  function combatAimServerStallState() {
+    const stall = typeof summarizeServerPositionStall === 'function'
+      ? summarizeServerPositionStall()
+      : bot.serverPositionStall;
+    return stall && typeof stall === 'object' ? stall : {};
+  }
+
+  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim) {
+    const fallbackPrecision = combatAimFallbackPrecisionState(damage?.noDamageMs);
+    const sourceDivergence = combatAimSourceDivergenceState(aimSource, distance);
+    const serverStall = combatAimServerStallState();
+    const live = Boolean(aimSource?.nativeAimResolved);
+    const radialMax = Math.max(0, Number(cfg.combatAimRadialPrecisionLateralRatio || 0));
+    const radialPrecision = Boolean(live
+      && moving
+      && radialMax > 0
+      && movement
+      && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
+      && Math.abs(Number(movement.lateralRatio || 0)) <= radialMax
+      && Number(distance) <= Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0)));
+    let mode = moving ? 'jitter' : 'exact';
+    let strategy = moving ? 'jitter' : 'exact';
+    let reason = moving ? (movement?.mode || 'moving') : 'stationary';
+    let precision = false;
+    let steady = false;
+    if (sourceDivergence.active) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'coordinate-divergence';
+      precision = true;
+    } else if (live && serverStall.stalled) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'server-stall-live';
+      precision = true;
+    } else if (radialPrecision) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'radial-motion';
+      precision = true;
+    } else if (fallbackPrecision.active) {
+      mode = 'precision';
+      strategy = 'fallback-precision';
+      reason = 'no-damage-fallback';
+      precision = true;
+    } else if (steadyAim?.active && moving) {
+      mode = 'steady';
+      strategy = 'steady';
+      reason = 'steady-no-damage';
+      steady = true;
+    }
+    return {
+      mode,
+      strategy,
+      reason,
+      precision,
+      steady,
+      bypassJitter: Boolean(!moving || precision || steady),
+      sourceDivergence,
+      serverStall: Boolean(serverStall.stalled),
+      radialPrecision,
+      fallbackPrecision: Boolean(fallbackPrecision.active),
+      movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
+    };
+  }
+
   function combatAimTarget(self, target) {
-    const motionScale = combatAimMotionScale(target);
-    const moving = speed(target) >= cfg.combatStationarySpeed
+    const aimSource = combatLiveAimTarget(self, target);
+    const motionScale = combatAimMotionScale(aimSource);
+    const moving = speed(aimSource) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
-    const targetDistance = Number(target.distance);
-    const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, target);
-    const damage = combatAimDamageState(target);
-    const steadyAim = combatAimSteadyNoDamageState(target, damage.noDamageMs, motionScale);
+    const targetDistance = Number(aimSource.distance);
+    const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
+    const damage = combatAimDamageState(aimSource);
+    const steadyAim = combatAimSteadyNoDamageState(aimSource, damage.noDamageMs, motionScale);
+    const movement = moving
+      ? combatMovementAimMode(self, aimSource, distance)
+      : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
+    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim);
     const exact = {
-      x: Number(target.x),
-      y: Number(target.y),
-      mode: steadyAim.active && moving ? 'steady' : 'exact',
+      x: Number(aimSource.x),
+      y: Number(aimSource.y),
+      mode: aimStrategy.mode,
       moving,
       distance,
       motionScale,
-      movementMode: steadyAim.active ? 'steady' : '',
+      movementMode: aimStrategy.movementMode,
       jitterLimit: 0,
       noDamageMs: damage.noDamageMs,
       noDamageWidened: false,
-      steadyAim: Boolean(steadyAim.active),
-      lockedAim: false
+      precisionAim: Boolean(aimStrategy.precision),
+      steadyAim: Boolean(aimStrategy.steady),
+      lockedAim: false,
+      liveAim: Boolean(aimSource.nativeAimResolved),
+      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+      aimStrategy: aimStrategy.strategy,
+      aimStrategyReason: aimStrategy.reason,
+      sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
+      sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
+      serverStallAim: Boolean(aimStrategy.serverStall),
+      radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision)
     };
-    if (!moving || steadyAim.active) return exact;
-    const dx = Number(target.x) - Number(self.x);
-    const dy = Number(target.y) - Number(self.y);
+    if (aimStrategy.bypassJitter) return exact;
+    const dx = Number(aimSource.x) - Number(self.x);
+    const dy = Number(aimSource.y) - Number(self.y);
     const baseLimit = combatAimJitterLimit(distance, motionScale);
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
     const noDamageLevel = combatAimNoDamageLevel(damage.widenMs);
     const jitterLimit = combatAimNoDamageJitterLimit(baseLimit, noDamageLevel);
-    const movement = combatMovementAimMode(self, target, distance);
-    const targetId = combatTargetId(target);
+    const targetId = combatTargetId(aimSource);
     const previousAim = bot.combatAim;
     let sign = Math.sign(movement.lateralSpeed || 0);
     if (!sign && previousAim && String(previousAim.targetId || '') === targetId) sign = Math.sign(Number(previousAim.sign || 0));
@@ -10153,8 +10319,18 @@
       lateralSpeed: movement.lateralSpeed,
       noDamageMs: damage.noDamageMs,
       noDamageWidened: Boolean(noDamageLevel),
+      precisionAim: false,
       steadyAim: false,
-      lockedAim: Boolean(locked)
+      lockedAim: Boolean(locked),
+      liveAim: Boolean(aimSource.nativeAimResolved),
+      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+      aimStrategy: aimStrategy.strategy,
+      aimStrategyReason: aimStrategy.reason,
+      sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
+      sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
+      serverStallAim: Boolean(aimStrategy.serverStall),
+      radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision)
     };
   }
 
@@ -10216,10 +10392,20 @@
         jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0,
         motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
         movementMode: aim.movementMode || '',
+        strategy: aim.aimStrategy || '',
+        strategyReason: aim.aimStrategyReason || '',
         noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
         widened: Boolean(aim.noDamageWidened),
+        precision: Boolean(aim.precisionAim),
         steady: Boolean(aim.steadyAim),
-        locked: Boolean(aim.lockedAim)
+        locked: Boolean(aim.lockedAim),
+        live: Boolean(aim.liveAim),
+        liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
+        sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
+        sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
+        serverStall: Boolean(aim.serverStallAim),
+        radialPrecision: Boolean(aim.radialPrecisionAim),
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -10438,10 +10624,20 @@
         jitterLimit: Number.isFinite(aim.jitterLimit) ? Number(aim.jitterLimit.toFixed(4)) : 0,
         motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
         movementMode: aim.movementMode || '',
+        strategy: aim.aimStrategy || '',
+        strategyReason: aim.aimStrategyReason || '',
         noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
         widened: Boolean(aim.noDamageWidened),
+        precision: Boolean(aim.precisionAim),
         steady: Boolean(aim.steadyAim),
-        locked: Boolean(aim.lockedAim)
+        locked: Boolean(aim.lockedAim),
+        live: Boolean(aim.liveAim),
+        liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
+        sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
+        sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
+        serverStall: Boolean(aim.serverStallAim),
+        radialPrecision: Boolean(aim.radialPrecisionAim),
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -10458,12 +10654,22 @@
         targetHp,
         aim: {
           movementMode: aim.movementMode || '',
+          strategy: aim.aimStrategy || '',
+          strategyReason: aim.aimStrategyReason || '',
           angle: Number.isFinite(aim.angle) ? Number(aim.angle.toFixed(4)) : 0,
           motionScale: Number.isFinite(Number(aim.motionScale)) ? Number(Number(aim.motionScale).toFixed(2)) : 0,
           noDamageMs: Number.isFinite(Number(aim.noDamageMs)) ? Math.round(Number(aim.noDamageMs)) : 0,
           widened: Boolean(aim.noDamageWidened),
+          precision: Boolean(aim.precisionAim),
           steady: Boolean(aim.steadyAim),
-          locked: Boolean(aim.lockedAim)
+          locked: Boolean(aim.lockedAim),
+          live: Boolean(aim.liveAim),
+          liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
+          sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
+          sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
+          serverStall: Boolean(aim.serverStallAim),
+          radialPrecision: Boolean(aim.radialPrecisionAim),
+          fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
         },
         strafe: dodging ? {
           dx: combatMove.dx,
