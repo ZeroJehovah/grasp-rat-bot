@@ -430,6 +430,7 @@ function main() {
       assert(text.includes('staminaSpentMs'), 'session logs do not include stamina spent');
       assert(text.includes('playerCategory'), 'kill summaries do not include AFK/active player category');
       assert(text.includes('afkKillRewardCoins') && text.includes('activeKillRewardCoins'), 'session logs do not include AFK/active kill reward buckets');
+      assert(text.includes('rewardConfirmed') && text.includes('unconfirmedDropCoins'), 'kill summaries do not separate confirmed rewards from unconfirmed drops');
       assert(text.includes('staminaSpentStartMs') && text.includes('staminaSpentEndMs'), 'combat summaries do not include combat stamina range');
       assert(text.includes('selfHpDelta') && text.includes('enemyHpDelta'), 'combat summaries do not include HP deltas');
       assert(text.includes('closeOpenImportantSessionsBeforeStart(session'), 'unclosed important sessions are not closed before the next login');
@@ -440,7 +441,25 @@ function main() {
       assert(text.includes('recordDropMatchedKill(candidate') && text.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards');
       assert(text.includes('recordDropMatchedKill(target, value'), 'picked post-attack drop coins are not attributed as kill rewards');
       assert(text.includes('dropMatched') && text.includes('chatConfirmed'), 'kill summaries do not include attribution/confirmation flags');
+      assert(functionBody(text, 'updateKillHistory').includes('rewardCoins: existingRewardConfirmed') && functionBody(text, 'updateKillHistory').includes('reportedRewardCoins: targetDrop'), 'chat-confirmed kills still treat target Drop as confirmed reward');
+      assert(text.includes('function findLiveKillVictim') && functionBody(text, 'updateKillHistory').includes('findLiveKillVictim') && text.includes('victim-still-alive'), 'chat-confirmed kills are not blocked while the victim is still alive');
       assert(text.includes('bot.globalState.messages'), 'snapshot chat kill messages are not inspected');
+    });
+    check(`${file} blocks relogin and reload until session-end important logs flush`, () => {
+      assert(text.includes('function importantSessionEndFlushPending'), 'session-end important flush pending helper not found');
+      assert(text.includes('function importantSessionEndFlushBlockDetail'), 'session-end important flush block detail helper not found');
+      assert(text.includes("event.importantType === 'session-end'") && text.includes('flushCombatLogs(true)'), 'session-end important logs are not force-flushed');
+      assert(functionBody(text, 'maybeStartAutoLogin').includes('closeCurrentImportantSessionBeforeLogin'), 'auto login does not close the current important session before relogin');
+      assert(functionBody(text, 'maybeStartAutoLogin').includes('importantSessionEndFlushPending()'), 'auto login does not block on unsent session-end important logs');
+      assert(functionBody(text, 'maybeStartAutoLogin').includes("reason: 'important-log-flush-pending'"), 'auto login does not report the session-end log flush block reason');
+      assert(functionBody(text, 'forceLoginNow').includes('closeCurrentImportantSessionBeforeLogin'), 'manual login does not close the current important session before relogin');
+      assert(functionBody(text, 'forceLoginNow').includes("skipReason: 'important-log-flush-pending'"), 'manual login can clear relogin holds while session-end logs are pending');
+      assert(functionBody(text, 'requestReload').includes('closeCurrentImportantSessionBeforeReload'), 'requestReload does not close the current important session before refresh');
+      assert(functionBody(text, 'requestReload').includes('importantSessionEndFlushPending()'), 'requestReload does not block on unsent session-end important logs');
+      assert(functionBody(text, 'maybeReloadCloudflareError').includes('importantSessionEndFlushPending()'), 'error-page reload does not block on unsent session-end important logs');
+      assert(functionBody(text, 'combatLogSuspendReason').includes('important-log-flush-pending'), 'combat log suspension does not understand session-end flush waits');
+      assert(text.includes('等待会话结束日志发送完成'), 'session-end flush wait is not exposed with a Chinese display reason');
+      assert(text.includes('下一次登录时发现上一局已结束，按下一次登录时间收口'), 'next-login inferred session closure still uses the old missing-exit wording');
     });
     check(`${file} keeps failed leave attempts pending until confirmed`, () => {
       assert(countMatches(text, /if \(detail\.attempted \|\| detail\.exitAuditId\)/g) >= 4, 'failed/non-attempted exit audit leaves are not remembered as pending exits');
@@ -531,9 +550,15 @@ function main() {
       assert(text.includes('function combatSpacingShouldOverrideBullet'), 'combat spacing cannot override real bullet dodge when too close');
       assert(text.includes('function combatLowHpCloseRiskState'), 'low-HP close-risk exit helper not found');
       assert(text.includes('function combatPressureDisadvantageState'), 'close-pressure HP disadvantage exit helper not found');
+      assert(text.includes('function combatServerStallNoDamageLeaveState'), 'server-stall no-damage exit helper not found');
+      assert(text.includes('combatServerStallNoDamageLeaveMs: 25000'), 'server-stall no-damage exit wait is not configured');
+      assert(text.includes('combatServerStallNoDamageHpGap: 5'), 'server-stall no-damage HP gap is not configured');
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
       assert(combatBody.includes("combatLeaveAction('combat-hp-disadvantage-leave', baseTarget"), 'combat action does not leave on close-pressure HP disadvantage');
+      assert(combatBody.includes('const serverStallNoDamage = combatServerStallNoDamageLeaveState'), 'combat action does not evaluate server-stall no-damage disadvantage');
+      assert(combatBody.includes('summarizeServerPositionStall()'), 'server-stall no-damage exit does not read stall state');
+      assert(combatBody.includes('serverStallNoDamage'), 'combat action does not log server-stall no-damage evidence');
       assert(combatBody.includes('!realBulletPressure || spacingOverride'), 'combat action does not merge spacing during emergency real-bullet pressure');
       assert(combatBody.includes('overrideBullet: Boolean(spacingOverride)'), 'combat logs do not expose bullet spacing override');
       assert(combatBody.includes('const trend = combatTrendState(self'), 'combat action does not precompute combat trend state');
@@ -690,7 +715,7 @@ function main() {
     assert(dailySummary.includes('## 登录统计') && dailySummary.includes('## 活跃玩家战斗统计'), 'daily summary does not print both required report dimensions');
     assert(dailySummary.includes('formatStaminaSpent(session.staminaSpentMs)') && dailySummary.includes('formatStaminaSpent(combat.staminaSpentMs)'), 'daily summary stamina columns are not formatted through unitless helper');
     assert(!dailySummary.includes('staminaSpentMs) / 1000)}s') && !dailySummary.includes('combatStaminaSpentMs / 1000)}s'), 'daily summary stamina output still includes seconds unit');
-    assert(dailySummary.includes('activeKillCount === 1') && dailySummary.includes('afkKillCount === 1'), 'daily summary self-test does not cover AFK/active kill buckets');
+    assert(dailySummary.includes('activeKillCount === 1') && dailySummary.includes('afkKillCount === 1') && dailySummary.includes('activeUnconfirmedKillCount === 1') && dailySummary.includes('activeUnconfirmedDropCoins === 30'), 'daily summary self-test does not cover AFK/active confirmed and unconfirmed kill buckets');
     assert(dailySummary.includes('report.combats[0].staminaSpentMs === 2500'), 'daily summary self-test does not cover combat stamina');
     assert(dailySummary.includes('combatHasActualEngagement(combat)'), 'daily summary does not filter non-engaged combat summaries');
     assert(dailySummary.includes('immediate login exit was incorrectly counted as combat'), 'daily summary self-test does not cover immediate login exits');
@@ -698,10 +723,15 @@ function main() {
 
   check('combat-log daily summary exposes incomplete exits and no-self text', () => {
     const dailySummary = readText('combat-log-service/daily-summary.js');
-    assert(dailySummary.includes('未记录退出；下一次登录'), 'daily summary does not show next-login context for missing exits');
-    assert(dailySummary.includes('inferredExit') && dailySummary.includes('未记录退出；${reasonText'), 'daily summary does not keep inferred exits visible');
+    assert(dailySummary.includes('日志尚未收口：下一次登录在'), 'daily summary does not show next-login context for open sessions');
+    assert(dailySummary.includes('inferredExit') && dailySummary.includes('推断收口：${reasonText'), 'daily summary does not keep inferred exits visible');
     assert(dailySummary.includes('已登录但自身实体不可见，退出等待重连'), 'daily summary does not explain no-self exits');
     assert(dailySummary.includes('!item.inferredExit'), 'inferred exits still count as completed sessions');
+    assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
+    assert(dailySummary.includes('combatReasonText') && dailySummary.includes("left: '主动退出'") && dailySummary.includes('${label}：${detail}'), 'daily summary does not explain combat result reasons in Chinese');
+    assert(dailySummary.includes('说明：主动退出表示已离开当前局并等待安全重登'), 'daily summary does not explain combat result state labels');
+    assert(dailySummary.includes('疑似表示只有聊天或掉落值线索') && dailySummary.includes('unconfirmedDropCoins'), 'daily summary does not separate confirmed kill rewards from unconfirmed drops');
+    assert(!dailySummary.includes('登录合计: completed='), 'daily summary still prints English aggregate field names');
   });
 
   check('combat-log package exposes daily summary commands', () => {
@@ -747,6 +777,7 @@ function main() {
     assert(sourceBot.includes("name: 'combat action suppresses same-target pursuit leave'"), 'same-target pursuit suppression self-test not found');
     assert(sourceBot.includes("name: 'defensive target switch requires immediate incoming bullet'"), 'defensive target switch self-test not found');
     assert(sourceBot.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
+    assert(sourceBot.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');
     assert(sourceBot.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(sourceBot.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
     assert(sourceBot.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');

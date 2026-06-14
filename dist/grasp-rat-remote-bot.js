@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.150"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.155"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -152,6 +152,8 @@
     combatShootNoDamageDuelMinHp: 75,
     combatShootNoDamageDuelMaxHpGap: 10,
     combatShootNoDamageDuelRange: 14500,
+    combatServerStallNoDamageLeaveMs: 25000,
+    combatServerStallNoDamageHpGap: 5,
     combatTargetSwitchIncomingDistance: 6500,
     combatTargetSwitchIncomingTimeMs: 900,
     combatBulletDetectRadius: 30000,
@@ -1518,7 +1520,7 @@
     const detail = decisionReasonDetail(decision);
 	    if (kind === 'coin') return '拾取金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
 	    if (kind === 'seek-coin') return '前往金币' + (target ? ' #' + (target.id ?? '-') + ' 距离 ' + formatDistance(target.distance) : '');
-    if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' HP ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
+    if (kind === 'attack') return (decision?.combat ? '战斗 ' : '攻击 ') + (target?.name || ('#' + (target?.id ?? '-'))) + ' 血量 ' + (target?.hp ?? '-') + ' Drop ' + (target?.drop ?? '-');
 	    if (kind === 'seek-enemy' || kind === 'seek-drop') return '前往目标 ' + (target?.name || ('#' + (target?.id ?? '-'))) + (target?.drop ? ' Drop ' + target.drop : '');
 	    if (kind === 'flee') {
 	      const threat = threats[0];
@@ -1566,11 +1568,12 @@
 		      'snapshot-coin-target': '快照金币导航',
 			      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
 			      'wait-for-stamina-budget': '长期体力预算不足',
-			      'stamina-budget-coin-leave': '1h体力预算不足，退出等待恢复',
-			      'stamina-budget-coin-leave-retry': '1h体力预算不足，重试退出',
+			      'stamina-budget-coin-leave': '一小时体力预算不足，退出等待恢复',
+			      'stamina-budget-coin-leave-retry': '一小时体力预算不足，重试退出',
 			      'wait-for-snapshot-coin': '等待快照金币',
 		      'login-suppressed': '等待重连',
 		      'exit-log-flush-pending': '等待退出日志发送完成',
+		      'important-log-flush-pending': '等待会话结束日志发送完成',
 		      'maintain-safe-spacing': '避开附近玩家',
 	      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
 	      'leave-stale-coin': '离开疑似卡住金币',
@@ -1591,16 +1594,16 @@
 	      'combat-hp-disadvantage-leave': '战斗血量差劣势，立即退出',
 	      'combat-leave': '战斗劣势退出后等待',
 	      'combat-leave-retry': '战斗退出失败，等待补发退出',
-	      'control-ws-offline': 'WebSocket 离线',
-	      'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
-			      'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
-			      'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
+	      'control-ws-offline': '网络连接离线',
+	      'control-ws-offline-unsafe': '网络连接离线且周围危险，立即退出',
+			      'control-ws-offline-safe-wait': '网络连接离线，安全区短暂等待重连',
+			      'control-ws-reconnect-churn': '网络连接反复重连，立即退出',
 			      'control-ws-no-self-game-session': '已登录但自身实体不可见，立即退出',
-			      'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
-		      'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
+			      'control-ws-server-position-stalled': '服务端位置停止，按网络连接离线处理',
+		      'control-stamina-exhausted': '长周期体力耗尽，按网络连接离线处理',
 		      'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
-	      'offline-leave': 'WebSocket 离线，正在退出',
-	      'offline-leave-wait': 'WebSocket 离线退出后等待重连',
+	      'offline-leave': '网络连接离线，正在退出',
+	      'offline-leave-wait': '网络连接离线退出后等待重连',
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
 	      'pursuit-leave-retry': '追击退出失败，等待补发退出',
 	      'pursuit-leave-wait': '追击退出后等待重新登录',
@@ -1638,7 +1641,7 @@
 	      '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + '</div>',
 	      '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">远端 ' + escapeHtml(version) + ' / ' + escapeHtml(sourceHash) + '</div>',
 	      '<div>原因：' + escapeHtml(decisionReasonDetail(decision) || reasonText(decision?.reason)) + '</div>',
-	      '<div>HP ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(staminaText) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
+	      '<div>血量 ' + escapeHtml(hp) + ' / 体力 ' + escapeHtml(staminaText) + ' / Drop ' + escapeHtml(selfDrop || '-') + '</div>',
 	      '<div>移动 ' + escapeHtml(decision?.dx ?? 0) + ',' + escapeHtml(decision?.dy ?? 0) + ' / 速度 ' + escapeHtml(velocity) + '</div>',
 	      '<div>WS ' + escapeHtml(wsLabel) + ' / 最近 Active ' + escapeHtml(nearestActive) + '</div>'
 	    ];
@@ -1890,6 +1893,53 @@
           lastError: state.lastError || '',
           lastOkAt: Number(state.lastOkAt || 0)
         };
+      }
+
+      function pendingImportantSessionEndLogEvents() {
+        const state = bot.combatLogging || {};
+        if (!state.endpoint) return [];
+        const store = readImportantLogsStore();
+        return store.events
+          .filter(event => event?.importantLogId && event.importantType === 'session-end' && !event.remoteSentAt);
+      }
+
+      function importantSessionEndFlushPending() {
+        return pendingImportantSessionEndLogEvents().length > 0;
+      }
+
+      function importantSessionEndFlushBlockDetail(reason) {
+        restoreImportantLogsForRemote();
+        flushCombatLogs(true);
+        const state = bot.combatLogging || {};
+        const pending = pendingImportantSessionEndLogEvents();
+        return {
+          blocked: true,
+          reason: String(reason || ''),
+          pending: pending.length,
+          pendingIds: pending.map(event => event.importantLogId).slice(0, 12),
+          sending: Boolean(state.sending),
+          endpoint: String(state.endpoint || cfg.combatLogEndpoint || ''),
+          lastError: state.lastError || bot.importantLogging?.lastRemoteError || '',
+          lastOkAt: Number(state.lastOkAt || 0)
+        };
+      }
+
+      function closeCurrentImportantSessionBeforeLogin(reason = 'login-before-session-end') {
+        const session = bot.session || {};
+        if (!session.startedAt || session.exitAt) return null;
+        const t = Number(session.missingSince || 0) || Date.now();
+        return noteImportantSessionExit(reason, bot.lastSelf, t, {
+          exitSummary: '重新登录前上一局已不可用，按登录前收口'
+        });
+      }
+
+      function closeCurrentImportantSessionBeforeReload(reason = 'reload') {
+        const session = bot.session || {};
+        if (!session.startedAt || session.exitAt) return null;
+        const t = Number(session.missingSince || 0) || Date.now();
+        return noteImportantSessionExit('reload-before-session-end:' + String(reason || 'reload'), bot.lastSelf, t, {
+          exitSummary: '刷新页面前上一局已不可用，按刷新前收口'
+        });
       }
 
       function restorePersistedExitAuditLogs() {
@@ -2662,7 +2712,7 @@
 	      function combatLogSuspendReason(decision) {
 	        const reason = String(decision?.reason || '');
 	        if (!reason) return '';
-		        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|game-session-connecting|exit-log-flush-pending)$/.test(reason)) return reason;
+		        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
 		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
@@ -2981,9 +3031,9 @@
 		  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
-	    if (exitAuditFlushPending()) {
-	      const blocked = exitAuditFlushBlockDetail('reload:' + (reason || ''));
-	      bot.exitAudit.lastBlockedReload = blocked;
+		    if (exitAuditFlushPending()) {
+		      const blocked = exitAuditFlushBlockDetail('reload:' + (reason || ''));
+		      bot.exitAudit.lastBlockedReload = blocked;
 	      flushCombatLogs(true);
 	      logStatus('reload blocked until exit audit logs flush: ' + (reason || ''), {
 	        kind: 'wait',
@@ -2992,10 +3042,25 @@
 	        dy: 0,
 	        self: bot.lastSelf,
 	        exitAuditFlush: blocked
-	      });
-	      return false;
-	    }
-	    bot.reloadRequestedAt = Date.now();
+		      });
+		      return false;
+		    }
+		    closeCurrentImportantSessionBeforeReload(reason || 'reload');
+		    if (importantSessionEndFlushPending()) {
+		      const blocked = importantSessionEndFlushBlockDetail('reload:' + (reason || ''));
+		      bot.importantLogging.lastBlockedReload = blocked;
+		      logStatus('reload blocked until important session-end log flush: ' + (reason || ''), {
+		        kind: 'wait',
+		        reason: 'important-log-flush-pending',
+		        dx: 0,
+		        dy: 0,
+		        self: bot.lastSelf,
+		        importantLogFlush: blocked,
+		        displayReason: '等待会话结束日志发送完成，暂不刷新'
+		      });
+		      return false;
+		    }
+		    bot.reloadRequestedAt = Date.now();
 	    logStatus('reload: ' + reason);
 	    location.reload();
 	    return true;
@@ -3040,9 +3105,9 @@
 	  function maybeReloadCloudflareError(info) {
 	    if (!info || cfg.dryRun || cfg.once) return false;
 	    if (Number(info.remainingMs || 0) > 0) return false;
-	    if (exitAuditFlushPending()) {
-	      const blocked = exitAuditFlushBlockDetail('reload:cloudflare error');
-	      bot.exitAudit.lastBlockedReload = blocked;
+		    if (exitAuditFlushPending()) {
+		      const blocked = exitAuditFlushBlockDetail('reload:cloudflare error');
+		      bot.exitAudit.lastBlockedReload = blocked;
 	      flushCombatLogs(true);
 	      logStatus('reload blocked until exit audit logs flush: cloudflare error', {
 	        kind: 'wait',
@@ -3053,10 +3118,26 @@
 	        cloudflare: info,
 	        exitAuditFlush: blocked,
 	        displayReason: '等待退出日志发送完成，暂不刷新错误页'
-	      });
-	      return false;
-	    }
-	    try {
+		      });
+		      return false;
+		    }
+		    closeCurrentImportantSessionBeforeReload('cloudflare error');
+		    if (importantSessionEndFlushPending()) {
+		      const blocked = importantSessionEndFlushBlockDetail('reload:cloudflare error');
+		      bot.importantLogging.lastBlockedReload = blocked;
+		      logStatus('reload blocked until important session-end log flush: cloudflare error', {
+		        kind: 'wait',
+		        reason: 'important-log-flush-pending',
+		        dx: 0,
+		        dy: 0,
+		        self: bot.lastSelf,
+		        cloudflare: info,
+		        importantLogFlush: blocked,
+		        displayReason: '等待会话结束日志发送完成，暂不刷新错误页'
+		      });
+		      return false;
+		    }
+		    try {
 	      localStorage.setItem(CLOUDFLARE_RELOAD_KEY, String(Date.now()));
 	    } catch (_) {}
 	    bot.cloudflareReloadAt = Date.now();
@@ -3129,7 +3210,7 @@
 	      shouldLeave,
 	      reason,
 	      displayReason: reconnectChurn
-	        ? '已登录但自身实体不可见，WebSocket反复重连，正在退出'
+	        ? '已登录但自身实体不可见，网络连接反复重连，正在退出'
 	        : '已登录但自身实体长期不可见，正在退出',
 	      userId: userId || null,
 	      ageMs,
@@ -3690,27 +3771,34 @@
       return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '低于' + cfg.combatCriticalHpLeaveThreshold + '，紧急退出';
     }
     if (reason === 'combat-hp-disadvantage-leave') {
+      if (combatState?.serverStallNoDamage) {
+        const noDamageText = Number.isFinite(Number(combatState.serverStallNoDamage.noDamageMs))
+          ? '，' + Math.round(Number(combatState.serverStallNoDamage.noDamageMs) / 1000) + '秒未造成伤害'
+          : '';
+        const gapText = Number.isFinite(hpGap) ? '，差距' + hpDisplay(hpGap) : '';
+        return '与' + actorLabel(target) + '战斗，服务端位置停滞下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + gapText + noDamageText + '，劣势退出';
+      }
       if (combatState?.pressureDisadvantage) {
         const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance))
           ? '，距离' + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + '米'
           : '';
-        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
-      }
-      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
+	        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
+	      }
+	      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
     }
     if (reason === 'combat-low-hp-no-damage-leave') {
       const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
         ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
         : '';
-      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方HP ' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
+	      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
     }
     if (reason === 'combat-low-hp-leave' && combatState?.closeRisk) {
       const distanceText = Number.isFinite(Number(combatState.closeRisk.distance))
         ? '，距离' + Math.round(Number(combatState.closeRisk.distance) / 100) + '米'
         : '';
-      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + distanceText + '，低血近身风险退出';
-    }
-    return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方HP ' + hpDisplay(targetHp) + '，劣势退出';
+	      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方血量' + hpDisplay(targetHp) + distanceText + '，低血近身风险退出';
+	    }
+	    return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方血量' + hpDisplay(targetHp) + '，劣势退出';
   }
 
   function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
@@ -3763,14 +3851,16 @@
 			      return staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit);
 			    }
 			    const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
-			    if (staminaLabel) return staminaLabel + '体力到达限制，退出等待重连';
-			    const text = String(reason || '').toLowerCase();
-			    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
-			    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
-			    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return 'WebSocket 反复重连，退出等待重连';
-		    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
-		    if (offlineSafety?.unsafe) return 'WebSocket 离线且周围危险，退出等待重连';
-		    return 'WebSocket 离线，退出等待重连';
+				    if (staminaLabel === '1h') return '一小时体力到达限制，退出等待重连';
+				    if (staminaLabel === '1d') return '一天体力到达限制，退出等待重连';
+				    if (staminaLabel === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
+				    const text = String(reason || '').toLowerCase();
+				    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+				    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
+				    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
+			    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
+			    if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
+			    return '网络连接离线，退出等待重连';
 		  }
 
 	  function reloginDelayForHp(selfLike, detail) {
@@ -5243,10 +5333,10 @@
     const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
     const hasPageSession = Boolean(hasToken || hasNativeSession);
     const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || (force && canStartLogin && !hasNativeSession));
-    if (!needsLogin) {
-      return force ? {
-        needed: false,
-        attempted: false,
+	    if (!needsLogin) {
+	      return force ? {
+	        needed: false,
+	        attempted: false,
         reason: hasAliveSelf ? 'already-alive' : (hasNativeSession ? 'game-session-active' : 'already-logged-in'),
         error: '',
         forced: true,
@@ -5258,7 +5348,25 @@
 	        self: hasAliveSelf ? summarizeSelf(self) : null
 	      } : null;
 	    }
-    const suppressRemainingMs = loginSuppressRemainingMs();
+	    closeCurrentImportantSessionBeforeLogin('login-before-session-end:' + String(reason || 'login'));
+	    if (importantSessionEndFlushPending()) {
+	      const blocked = importantSessionEndFlushBlockDetail('login:' + (reason || ''));
+	      bot.importantLogging.lastBlockedLogin = blocked;
+	      return {
+	        needed: true,
+	        attempted: false,
+	        reason: 'important-log-flush-pending',
+	        cooldownRemainingMs: 0,
+	        error: '',
+	        importantLogFlush: blocked,
+	        hasToken,
+	        hasNativeSession,
+	        nativeWsReadyState: native?.wsReadyState ?? null,
+	        currentUserId: userId,
+	        snapshotGate: snapshotLoginGateStatus()
+	      };
+	    }
+	    const suppressRemainingMs = loginSuppressRemainingMs();
     if (suppressRemainingMs > 0 && !ignoreSuppress) {
       return {
         needed: true,
@@ -5342,13 +5450,18 @@
     return detail;
   }
 
-	  async function forceLoginNow(reason = 'panel immediate login') {
-	    const manualReason = String(reason || 'panel immediate login');
-	    const snapshotGate = await ensureLoginSnapshotGate(manualReason);
-	    const snapshotBlocked = !snapshotGate.satisfied;
-	    const cleared = snapshotBlocked
-	      ? {
-	        at: Date.now(),
+		  async function forceLoginNow(reason = 'panel immediate login') {
+		    const manualReason = String(reason || 'panel immediate login');
+		    const snapshotGate = await ensureLoginSnapshotGate(manualReason);
+		    const snapshotBlocked = !snapshotGate.satisfied;
+		    const currentSelf = getSelf();
+		    if (!snapshotBlocked && !(currentSelf && isAlive(currentSelf))) {
+		      closeCurrentImportantSessionBeforeLogin('manual-login-before-session-end:' + manualReason);
+		    }
+		    const importantBlocked = !snapshotBlocked && importantSessionEndFlushPending();
+		    const cleared = snapshotBlocked
+		      ? {
+		        at: Date.now(),
 	        reason: manualReason,
 	        skipped: true,
 	        skipReason: 'snapshot-gate',
@@ -5359,10 +5472,18 @@
 	        at: Date.now(),
 	        reason: manualReason,
         skipped: true,
-        skipReason: 'exit-log-flush-pending',
-	        exitAuditFlush: exitAuditFlushBlockDetail('manual-login:' + manualReason)
-	      }
-	      : clearCurrentReloginHold(manualReason);
+	        skipReason: 'exit-log-flush-pending',
+		        exitAuditFlush: exitAuditFlushBlockDetail('manual-login:' + manualReason)
+		      }
+		      : importantBlocked
+		      ? {
+		        at: Date.now(),
+		        reason: manualReason,
+	        skipped: true,
+	        skipReason: 'important-log-flush-pending',
+		        importantLogFlush: importantSessionEndFlushBlockDetail('manual-login:' + manualReason)
+		      }
+		      : clearCurrentReloginHold(manualReason);
 	    bot.lastLoginAt = 0;
 	    const login = snapshotBlocked
 	      ? {
@@ -6765,6 +6886,7 @@
     const pendingIndex = pending.findIndex(entry => String(entry?.importantLogId || '') === event.importantLogId);
     if (pendingIndex >= 0) pending[pendingIndex] = { ...pending[pendingIndex], ...event };
     else queueImportantLogRemote(event);
+    if (event.importantType === 'session-end') flushCombatLogs(true);
     return event;
   }
 
@@ -6787,7 +6909,10 @@
   function importantKillSummary(item) {
     if (!item || typeof item !== 'object') return null;
     const rewardRaw = item.rewardCoins ?? item.drop;
-    const rewardCoins = Number.isFinite(Number(rewardRaw)) ? Math.max(0, Math.round(Number(rewardRaw))) : null;
+    const rawRewardCoins = Number.isFinite(Number(rewardRaw)) ? Math.max(0, Math.round(Number(rewardRaw))) : 0;
+    const targetDrop = Number.isFinite(Number(item.targetDrop ?? item.drop ?? item.rewardCoins)) ? Math.max(0, Math.round(Number(item.targetDrop ?? item.drop ?? item.rewardCoins))) : null;
+    const rewardConfirmed = Boolean(item.rewardConfirmed || item.dropMatched);
+    const rewardCoins = rewardConfirmed ? rawRewardCoins : 0;
     const playerCategory = importantKillPlayerCategory(item);
     const coin = item.coin && typeof item.coin === 'object' ? {
       id: item.coin.id ?? item.coin.drop_id ?? item.coin.coin_id ?? null,
@@ -6802,6 +6927,7 @@
       name: item.victim || item.name || '',
       id: item.id ?? item.userId ?? null,
       rewardCoins,
+      reportedRewardCoins: rawRewardCoins,
       playerCategory,
       afk: playerCategory === 'afk',
       active: playerCategory === 'active',
@@ -6813,7 +6939,9 @@
       source: String(item.source || ''),
       chatConfirmed: Boolean(item.chatConfirmed),
       dropMatched: Boolean(item.dropMatched),
-      targetDrop: Number.isFinite(Number(item.targetDrop ?? item.drop)) ? Math.max(0, Math.round(Number(item.targetDrop ?? item.drop))) : null,
+      rewardConfirmed,
+      targetDrop,
+      unconfirmedDropCoins: rewardConfirmed ? 0 : Math.max(0, Number(targetDrop || rawRewardCoins) || 0),
       coin
     };
   }
@@ -6927,7 +7055,7 @@
         const recordUser = record.userId ?? null;
         if (userId !== null && recordUser !== null && String(recordUser) !== String(userId)) continue;
         const exitReason = 'session-interrupted-before-next-login';
-        const exitSummary = '上次登录未记录退出，下一次登录时自动收口';
+        const exitSummary = '下一次登录时发现上一局已结束，按下一次登录时间收口';
         Object.assign(record, {
           exitAt: t,
           exitIso: new Date(t).toISOString(),
@@ -7398,16 +7526,33 @@
     let stored = kill;
     if (index >= 0) {
       const previous = bot.killHistory[index] || {};
+      const previousDropMatched = Boolean(previous.dropMatched);
+      const nextDropMatched = Boolean(kill.dropMatched);
+      const rewardConfirmed = Boolean(previous.rewardConfirmed || kill.rewardConfirmed || previousDropMatched || nextDropMatched);
+      const previousReward = Math.max(0, Number(previous.rewardCoins || 0) || 0);
+      const nextReward = Math.max(0, Number(kill.rewardCoins || 0) || 0);
+      const targetDrop = Math.max(
+        0,
+        Number(kill.targetDrop ?? kill.drop ?? kill.reportedRewardCoins ?? 0) || 0,
+        Number(previous.targetDrop ?? previous.drop ?? previous.reportedRewardCoins ?? 0) || 0
+      );
       stored = {
         ...previous,
         ...kill,
         at: Number(previous.at || kill.at || t) || t,
         time: kill.time || previous.time || '',
-        rewardCoins: Math.max(0, Number(kill.rewardCoins ?? previous.rewardCoins ?? 0) || 0),
-        drop: Math.max(0, Number(kill.drop ?? previous.drop ?? kill.rewardCoins ?? previous.rewardCoins ?? 0) || 0),
+        rewardCoins: rewardConfirmed ? Math.max(previousReward, nextReward) : 0,
+        reportedRewardCoins: Math.max(
+          0,
+          Number(kill.reportedRewardCoins ?? kill.rewardCoins ?? 0) || 0,
+          Number(previous.reportedRewardCoins ?? previous.rewardCoins ?? 0) || 0
+        ),
+        drop: targetDrop,
+        targetDrop,
+        rewardConfirmed,
         matchedAttack: Boolean(previous.matchedAttack || kill.matchedAttack),
         chatConfirmed: Boolean(previous.chatConfirmed || kill.chatConfirmed),
-        dropMatched: Boolean(previous.dropMatched || kill.dropMatched),
+        dropMatched: Boolean(previousDropMatched || nextDropMatched),
         source: previous.source && kill.source && previous.source !== kill.source
           ? previous.source + '+' + kill.source
           : (kill.source || previous.source || '')
@@ -7474,6 +7619,41 @@
         && (item.name === victim || String(item.id) === victim)) || null;
   }
 
+  function findLiveKillVictim(victim, id = null) {
+    const victimName = String(victim || '').trim();
+    const idText = id === undefined || id === null || id === '' ? '' : String(id);
+    if (!victimName && !idText) return null;
+    const lists = [];
+    const nativeEntities = getNativeEntityList();
+    if (Array.isArray(nativeEntities)) lists.push({ source: 'native', entities: nativeEntities });
+    const currentEntities = getEntities();
+    if (Array.isArray(currentEntities) && currentEntities !== nativeEntities) lists.push({ source: 'current', entities: currentEntities });
+    if (Array.isArray(bot.globalState?.entities) && bot.globalState.entities !== currentEntities && bot.globalState.entities !== nativeEntities) {
+      lists.push({ source: 'snapshot', entities: bot.globalState.entities });
+    }
+    for (const list of lists) {
+      for (const entity of list.entities || []) {
+        if (!entity || typeof entity !== 'object') continue;
+        const entityId = entity.user_id ?? entity.userId ?? entity.id;
+        const entityName = String(entity.name || '').trim();
+        const idMatches = Boolean(idText && entityId !== undefined && entityId !== null && String(entityId) === idText);
+        const nameMatches = Boolean(victimName && entityName && entityName === victimName);
+        if (!idMatches && !nameMatches) continue;
+        if (!isAlive(entity)) continue;
+        const hp = firstFiniteNumber(entity.hp, entity.knownHp, entity.displayHp, entity.health, entity.currentHp);
+        if (Number.isFinite(hp) && hp <= 0) continue;
+        return {
+          source: list.source,
+          id: entityId ?? null,
+          name: entityName,
+          hp: Number.isFinite(hp) ? hp : null,
+          life: entity.life || ''
+        };
+      }
+    }
+    return null;
+  }
+
   function recordDropMatchedKill(target, amount, currentSummary, reason = '') {
     const postAttackTarget = target?.postAttackTarget || null;
     if (!postAttackTarget) return null;
@@ -7494,6 +7674,7 @@
       id: postAttackTarget.id ?? null,
       drop: targetDrop,
       rewardCoins: reward,
+      reportedRewardCoins: reward,
       playerCategory: postAttackTarget.playerCategory || (postAttackTarget.afk === false ? 'active' : 'afk'),
       afk: postAttackTarget.afk !== false,
       active: postAttackTarget.active === true || postAttackTarget.playerCategory === 'active',
@@ -7505,6 +7686,7 @@
       firing: Boolean(postAttackTarget.firing),
       matchedAttack: true,
       dropMatched: true,
+      rewardConfirmed: true,
       chatConfirmed: false,
       source: 'drop-coin-match',
       targetDrop,
@@ -7537,13 +7719,28 @@
       const existingIndex = recentKillHistoryIndex(victim, attack?.id ?? null);
       const existing = existingIndex >= 0 ? bot.killHistory[existingIndex] : null;
       if (!attack && !existing) continue;
+      const targetDrop = Math.max(0, Math.round(Number(attack ? attack.drop : (existing?.targetDrop ?? existing?.drop ?? 0)) || 0));
+      const existingRewardConfirmed = Boolean(existing?.rewardConfirmed || existing?.dropMatched);
+      const liveVictim = existingRewardConfirmed ? null : findLiveKillVictim(victim, attack?.id ?? existing?.id ?? null);
+      if (liveVictim) {
+        bot.importantLogging.lastSkippedChatKill = {
+          at: Date.now(),
+          victim,
+          id: attack?.id ?? existing?.id ?? null,
+          reason: 'victim-still-alive',
+          liveVictim
+        };
+        continue;
+      }
       const kill = {
         at: Date.now(),
         time,
         victim,
         id: attack ? attack.id : (existing?.id ?? null),
-        drop: attack ? attack.drop : (existing?.drop ?? null),
-        rewardCoins: attack ? attack.drop : (existing?.rewardCoins ?? null),
+        drop: targetDrop || null,
+        targetDrop: targetDrop || null,
+        rewardCoins: existingRewardConfirmed ? Math.max(0, Number(existing?.rewardCoins || 0) || 0) : 0,
+        reportedRewardCoins: targetDrop || Math.max(0, Number(existing?.reportedRewardCoins ?? existing?.rewardCoins ?? 0) || 0),
         playerCategory: attack ? attack.playerCategory : (existing?.playerCategory ?? ''),
         afk: attack ? attack.afk : (existing?.afk ?? null),
         active: attack ? attack.active : (existing?.active ?? null),
@@ -7559,7 +7756,8 @@
         attackDistance: attack ? attack.distance : (existing?.attackDistance ?? null),
         sessionId: bot.session?.importantSessionId || '',
         coin: existing?.coin || null,
-        dropMatched: Boolean(existing?.dropMatched)
+        dropMatched: Boolean(existing?.dropMatched),
+        rewardConfirmed: existingRewardConfirmed
       };
       recordKillHistoryItem(kill, key);
     }
@@ -9535,7 +9733,7 @@
 
 	  function staminaBudgetCoinLeaveSummary(staminaBudgetExit) {
 	    const detail = staminaBudgetExit || {};
-	    return '1h体力预算不足，最近金币距离' + formatDistance(detail.distance)
+	    return '一小时体力预算不足，最近金币距离' + formatDistance(detail.distance)
 	      + '，预算' + formatDurationMs(detail.budgetMs)
 	      + '，需要' + formatDurationMs(detail.requiredMs)
 	      + '，差' + formatDurationMs(detail.shortageMs)
@@ -9613,6 +9811,37 @@
     const noDamageMs = Number(damageState?.noDamageMs || 0);
     if (!threshold || !waitMs || !(Number(selfHp) < threshold) || !(hpGap >= minGap) || !(noDamageMs >= waitMs)) return null;
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
+  }
+
+  function combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, realBulletPressure = false, serverPositionStall = null) {
+    const waitMs = Math.max(0, Number(cfg.combatServerStallNoDamageLeaveMs || 0));
+    const minGap = Math.max(0, Number(cfg.combatServerStallNoDamageHpGap || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - hp;
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const stall = serverPositionStall || {};
+    if (!waitMs || !stall.stalled || !realBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(hpGap)) return null;
+    if (elapsed < waitMs || hpGap < minGap) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      noDamageMs: elapsed,
+      waitMs,
+      minGap,
+      realBulletPressure: true,
+      serverPositionStall: {
+        stalled: true,
+        reason: stall.reason || 'server-position-stalled',
+        movingMs: Number.isFinite(Number(stall.movingMs)) ? Math.round(Number(stall.movingMs)) : null,
+        gap: Number.isFinite(Number(stall.gap)) ? Math.round(Number(stall.gap)) : null,
+        gapDelta: Number.isFinite(Number(stall.gapDelta)) ? Math.round(Number(stall.gapDelta)) : null,
+        holdRemainingMs: Number.isFinite(Number(stall.holdRemainingMs)) ? Math.round(Number(stall.holdRemainingMs)) : null
+      }
+    };
   }
 
   function combatTrendState(self, options = {}) {
@@ -10070,6 +10299,7 @@
     const pressure = combatPressureThreat(self, target, bullets);
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
     const spacing = combatSpacingVector(self, target, targetDistance);
+    const damageState = combatAimDamageState(target);
     const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
@@ -10083,7 +10313,22 @@
         pressureDisadvantage
       }, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
-    const damageState = combatAimDamageState(target);
+    const serverStallNoDamage = combatServerStallNoDamageLeaveState(
+      selfHp,
+      targetHp,
+      damageState.noDamageMs,
+      realBulletPressure,
+      summarizeServerPositionStall()
+    );
+    if (serverStallNoDamage) {
+      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+        selfHp,
+        targetHp,
+        hpGap: serverStallNoDamage.hpGap,
+        noDamageMs: damageState.noDamageMs,
+        serverStallNoDamage
+      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+    }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
       const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
@@ -11925,18 +12170,20 @@
 		          : (login?.needed
 		            ? (login?.reason === 'snapshot-gate'
 		              ? 'login-snapshot-gate'
-		              : (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : 'login-cooldown'))))
+		              : (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : (login?.reason === 'important-log-flush-pending' ? 'important-log-flush-pending' : 'login-cooldown')))))
 		            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
 		        const loginDisplayReason = waitReason === 'game-session-connecting'
 		          ? '已登录，等待游戏连接/自身实体'
 		          : (waitReason === 'exit-log-flush-pending'
 		            ? '等待退出日志发送完成，暂不刷新或重新登录'
+		          : (waitReason === 'important-log-flush-pending'
+		            ? '等待会话结束日志发送完成，暂不刷新或重新登录'
 		          : (waitReason === 'login-snapshot-gate'
 		            ? loginSnapshotGateDisplayReason(login?.snapshotGate)
 		          : (waitReason === 'login-suppressed'
 		            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
 		              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
-		            : '')));
+		            : ''))));
 		        refreshGlobalState(false).catch(err => {
 		          bot.globalState.error = err.message || String(err);
 		        });
@@ -12066,7 +12313,7 @@
           offlineSafety,
           reconnectChurn: reconnectChurnDetail,
           serverPositionStall,
-          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (reconnectChurn ? 'WebSocket 反复重连，正在退出' : ''),
+	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (reconnectChurn ? '网络连接反复重连，正在退出' : ''),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
