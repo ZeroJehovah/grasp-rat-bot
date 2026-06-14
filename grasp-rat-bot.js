@@ -437,7 +437,8 @@ function runSelfTest() {
     || truthyFlag(e?.attacking)
     || truthyFlag(e?.is_attacking);
   const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
-  const isRecoveryUnsafeHuman = e => isActive(e);
+  const isAvoidanceThreat = e => isInvulnerable(e);
+  const isRecoveryUnsafeHuman = e => isAvoidanceThreat(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
   const normalizeTargetText = value => String(value ?? '').trim();
@@ -1617,13 +1618,16 @@ function runSelfTest() {
       || combatHpGapDisadvantaged(self, target);
   }
   function pickCombatTarget(self, entities, bullets = [], options = {}) {
+    const candidateRange = options.mode === 'profit' || isFullHp(self)
+      ? Number(cfg.combatAttackRange || 0)
+      : Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatEngageGraceRange || 0));
     const candidates = entities
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isWhitelistedTarget(e))
       .filter(e => !isInvulnerable(e))
-      .filter(e => e.distance <= cfg.combatAttackRange);
+      .filter(e => e.distance <= candidateRange);
     const incoming = (bullets || []).find(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) !== Number(self.user_id));
     const incomingOwnerId = incoming ? (incoming.owner_id ?? incoming.ownerId ?? incoming.source_user_id ?? incoming.user_id) : null;
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
@@ -2649,7 +2653,7 @@ function runSelfTest() {
       .filter(isActive)
       .map(e => decorateThreat(self, e))
       .sort((a, b) => a.distance - b.distance);
-    const avoidanceThreats = fullHp ? activeThreats.filter(isInvulnerableActive) : activeThreats;
+    const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const recovery = !fullHp && isRecovering(self);
@@ -2662,7 +2666,7 @@ function runSelfTest() {
       : (engagedCombatTarget || defensiveCombatTarget);
     if (recovery && recoveryCombatTarget) {
       const recoveryCombatAction = chooseCombatAction(self, recoveryCombatTarget, bullets);
-      if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave') return recoveryCombatAction;
+      if (recoveryCombatAction) return recoveryCombatAction;
     }
     if (!recovery && defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)) {
       return chooseCombatAction(self, defensiveCombatTarget, bullets);
@@ -2703,7 +2707,7 @@ function runSelfTest() {
     const nearbyHumans = entities
       .map(e => ({ ...e, distance: dist(self, e) }))
       .filter(e => e.distance <= (recovery ? cfg.recoveryAvoidRadius : cfg.passivePanicRadius));
-    const avoidHumans = recovery ? nearbyHumans.filter(isRecoveryUnsafeHuman) : nearbyHumans;
+    const avoidHumans = nearbyHumans.filter(recovery ? isRecoveryUnsafeHuman : isAvoidanceThreat);
     if (!fullHp && avoidHumans.length) return { kind: 'flee' };
     if (recovery) return { kind: 'recover' };
     if (!fullHp && closeThreats.length) return { kind: 'flee' };
@@ -3380,12 +3384,12 @@ function runSelfTest() {
       want: 'combat-hp-disadvantage-leave'
     },
     {
-      name: 'recovering combat gap at threshold avoids instead of fighting',
+      name: 'recovering combat gap at threshold keeps fighting',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 90, firing: true }]
       }).kind,
-      want: 'flee'
+      want: 'attack'
     },
     {
       name: 'low hp no-damage combat keeps fighting without disadvantage',
@@ -3414,12 +3418,12 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'recovering avoids non-firing moving enemy already in range',
+      name: 'recovering fights non-invulnerable moving enemy already in range',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Passive', vx: 30, death_reward_preview: 7 }]
       }).kind,
-      want: 'flee'
+      want: 'attack'
     },
     {
       name: 'recovering keeps engaged stationary target in combat',
@@ -3523,10 +3527,21 @@ function runSelfTest() {
       want: 'wait'
     },
     {
-      name: 'non-combat damaged state still flees active danger',
+      name: 'non-full active edge target reengages instead of fleeing',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 16000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+        });
+        return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
+      })(),
+      want: 'attack:true:4'
+    },
+    {
+      name: 'non-full invulnerable active still flees',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 16000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
+        local: [{ user_id: 4, x: 16000, y: 0, current_join_mode: 'Active', vx: -50, invulnerable_remaining_ticks: 5 }]
       }).kind,
       want: 'flee'
     },
@@ -5248,6 +5263,7 @@ function browserBotSource(config) {
     leaveCommandTimeoutMs: 10000,
     leave403ReloginDelayMs: 3600000,
     leave403SnapshotSuccessRequired: 5,
+    exitMotionStopLockMs: 8000,
     offlineLeaveCooldownMs: 60000,
     serverPositionStallEnabled: true,
     serverPositionStallOfflineEnabled: false,
@@ -5530,6 +5546,8 @@ function browserBotSource(config) {
     patrolHeading: null,
     velocityStopTimer: 0,
     velocityPulseToken: 0,
+    lastExitMotionStopAt: 0,
+    lastExitMotionStopReason: '',
     coinApproachLock: null,
     staleCoinEscape: null,
     coinProgress: null,
@@ -5683,6 +5701,10 @@ function browserBotSource(config) {
 	      const session = summarizeSessionStats(displaySelf);
 	      const enemyLeaveDetail = activeEnemyLeaveDetail();
 	      const offlineLeaveDetail = activeOfflineLeaveDetail();
+	      const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
+	      const displayLastDecision = exitMotionLockRemainingMs > 0
+	        ? postExitDecisionWithoutTarget(this.lastDecision, this.lastExitMotionStopReason || 'exit-motion-stopped')
+	        : this.lastDecision;
 		      return {
 	        version: cfg.version,
 	        sourceHash: cfg.sourceHash,
@@ -5702,7 +5724,7 @@ function browserBotSource(config) {
         lastTickAgeMs: this.lastTickAt ? Date.now() - this.lastTickAt : null,
         lastNativeTickAgeMs: this.lastNativeTickAt ? now() - this.lastNativeTickAt : null,
         lastAction: this.lastAction,
-	        lastDecision: this.lastDecision,
+	        lastDecision: displayLastDecision,
 	        lastTarget: this.lastTarget,
 	        combatTarget: this.combatTarget,
 	        combatAim: this.combatAim,
@@ -5721,6 +5743,11 @@ function browserBotSource(config) {
 	        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
 	        loginSnapshotGate: snapshotLoginGateStatus(),
 	        postLoginZoom: this.postLoginZoom,
+		        exitMotionStop: {
+		          at: this.lastExitMotionStopAt || 0,
+		          reason: this.lastExitMotionStopReason || '',
+		          lockRemainingMs: exitMotionLockRemainingMs
+		        },
 		        self: displaySelf,
         session,
         safety: this.lastSafety,
@@ -5866,7 +5893,8 @@ function browserBotSource(config) {
     || truthyFlag(e?.is_attacking);
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
   const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
-  const isRecoveryUnsafeHuman = e => isCurrentlyActive(e);
+  const isAvoidanceThreat = e => isInvulnerable(e);
+  const isRecoveryUnsafeHuman = e => isAvoidanceThreat(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
   const normalizeTargetText = value => String(value ?? '').trim();
@@ -6005,6 +6033,67 @@ function browserBotSource(config) {
   function removeTargetOverlay() {
     const overlay = document.getElementById(TARGET_OVERLAY_ID);
     if (overlay) overlay.remove();
+  }
+
+  function exitMotionStopLockRemainingMs(t = Date.now()) {
+    const stoppedAt = Number(bot.lastExitMotionStopAt || 0);
+    if (!stoppedAt) return 0;
+    const lockMs = Math.max(0, Number(cfg.exitMotionStopLockMs || 0) || 0);
+    return Math.max(0, Math.round(stoppedAt + lockMs - t));
+  }
+
+  function exitMotionStopActive(t = Date.now()) {
+    return exitMotionStopLockRemainingMs(t) > 0;
+  }
+
+  function postExitDecisionWithoutTarget(decision, reason = '') {
+    const previous = decision && typeof decision === 'object' ? decision : {};
+    return {
+      ...previous,
+      kind: 'wait',
+      reason: reason || previous.reason || 'exit-motion-stopped',
+      dx: 0,
+      dy: 0,
+      target: null,
+      aimTarget: null,
+      opportunisticShot: null,
+      combat: false,
+      shoot: false,
+      forceShoot: false,
+      combatCover: null,
+      exitMotionStopped: true,
+      exitMotionStopReason: reason || bot.lastExitMotionStopReason || '',
+      exitMotionLockRemainingMs: exitMotionStopLockRemainingMs()
+    };
+  }
+
+  function clearPostExitTargetState(reason = 'exit-confirmed') {
+    bot.lastTarget = null;
+    bot.lastTargetAt = 0;
+    bot.opportunityChoice = null;
+    resetOpportunitySwitchLock();
+    bot.staleCoinEscape = null;
+    bot.coinApproachLock = null;
+    removeTargetOverlay();
+    if (bot.lastDecision && typeof bot.lastDecision === 'object') {
+      bot.lastDecision = postExitDecisionWithoutTarget(bot.lastDecision, reason);
+      try {
+        updateBotPanel(bot.lastDecision);
+      } catch (_) {}
+    }
+  }
+
+  function targetOverlaySuppressedAfterExit(decision) {
+    if (exitMotionStopActive()) return true;
+    if (decision?.exitMotionStopped) return true;
+    if (decision?.leave?.exitConfirmed) return true;
+    const reason = String(decision?.reason || '');
+    return reason === 'leave-success'
+      || reason === 'leave-http-403'
+      || reason === 'exit-confirmed'
+      || reason === 'enemy-leave-wait'
+      || reason === 'offline-leave-wait'
+      || reason === 'pursuit-leave-wait';
   }
 
   function targetOverlayStyle(decision) {
@@ -6247,6 +6336,10 @@ function browserBotSource(config) {
 
   function renderTargetOverlay(decision = bot.lastDecision) {
     try {
+      if (targetOverlaySuppressedAfterExit(decision)) {
+        removeTargetOverlay();
+        return;
+      }
       const style = targetOverlayStyle(decision);
       const target = targetOverlayResolvedTarget(decision);
       const self = targetOverlayVisualSelf() || decision?.self || bot.lastSelf;
@@ -9587,15 +9680,15 @@ function browserBotSource(config) {
       self: currentSummary,
       currentUserId: getCurrentUserId(),
       control: summarizeControl(),
-      combat: Boolean(cover),
+      combat: !confirmed && Boolean(cover),
       shoot: Boolean(cover?.shoot),
       forceShoot: Boolean(cover?.forceShoot),
       shootEveryMs: cover?.shootEveryMs,
-      target: cover?.target || pending.target || null,
-      aimTarget: cover?.aimTarget || null,
+      target: confirmed ? null : (cover?.target || pending.target || null),
+      aimTarget: confirmed ? null : (cover?.aimTarget || null),
       incomingBullet: cover?.incomingBullet || null,
       combatState: pending.combat || null,
-      combatCover: cover || null,
+      combatCover: confirmed ? null : (cover || null),
       displayReason: leaveResult?.displayReason || activeDetail?.displayReason || pending.displayReason || '',
       leave: leaveResult,
       pendingExit: summarizePendingExit(bot.pendingExit || pending),
@@ -12723,20 +12816,24 @@ function browserBotSource(config) {
 	  }
 
 	  function setNativeKeys(nativeState, dx, dy) {
-	    if (!nativeState?.keys || typeof nativeState.keys.add !== 'function') return false;
-	    for (const key of ['w', 'a', 's', 'd', 'arrowup', 'arrowleft', 'arrowdown', 'arrowright']) {
-	      nativeState.keys.delete(key);
+	    let updated = false;
+	    if (nativeState?.keys && typeof nativeState.keys.add === 'function') {
+	      for (const key of ['w', 'a', 's', 'd', 'arrowup', 'arrowleft', 'arrowdown', 'arrowright']) {
+	        nativeState.keys.delete(key);
+	      }
+	      if (dx < 0) nativeState.keys.add('a');
+	      if (dx > 0) nativeState.keys.add('d');
+	      if (dy < 0) nativeState.keys.add('w');
+	      if (dy > 0) nativeState.keys.add('s');
+	      updated = true;
 	    }
-	    if (dx < 0) nativeState.keys.add('a');
-	    if (dx > 0) nativeState.keys.add('d');
-	    if (dy < 0) nativeState.keys.add('w');
-	    if (dy > 0) nativeState.keys.add('s');
-	    if (nativeState.touchMove) {
+	    if (nativeState?.touchMove) {
 	      nativeState.touchMove.active = false;
 	      nativeState.touchMove.dx = 0;
 	      nativeState.touchMove.dy = 0;
+	      updated = true;
 	    }
-	    return true;
+	    return updated;
 	  }
 
 	  function cancelVelocityStopTimer() {
@@ -12750,7 +12847,7 @@ function browserBotSource(config) {
 	  function clearNativeMotionState(nativeState) {
 	    if (!nativeState) return false;
 	    setNativeKeys(nativeState, 0, 0);
-	    const vectorFields = ['currentVel', 'targetVel', 'velocity'];
+	    const vectorFields = ['currentVel', 'targetVel', 'velocity', 'lastNonZeroVel'];
 	    for (const field of vectorFields) {
 	      const value = nativeState[field];
 	      if (value && typeof value === 'object') {
@@ -12773,6 +12870,9 @@ function browserBotSource(config) {
 	      nativeState.touchMove.dx = 0;
 	      nativeState.touchMove.dy = 0;
 	    }
+	    const t = now();
+	    if (Object.prototype.hasOwnProperty.call(nativeState, 'lastInputAt')) nativeState.lastInputAt = 0;
+	    if (Object.prototype.hasOwnProperty.call(nativeState, 'lastStopAt')) nativeState.lastStopAt = t;
 	    return true;
 	  }
 
@@ -12805,6 +12905,7 @@ function browserBotSource(config) {
 	    stopMotionSafely(reason);
 	    bot.lastExitMotionStopAt = Date.now();
 	    bot.lastExitMotionStopReason = reason;
+	    clearPostExitTargetState(reason);
 	    return true;
 	  }
 
@@ -12850,8 +12951,19 @@ function browserBotSource(config) {
 	  }
 
 	  function sendActionVelocity(action) {
-	    const dx = clamp(Math.round(Number(action?.dx || 0)), -1, 1);
-	    const dy = clamp(Math.round(Number(action?.dy || 0)), -1, 1);
+	    const lockRemainingMs = exitMotionStopLockRemainingMs();
+	    let dx = clamp(Math.round(Number(action?.dx || 0)), -1, 1);
+	    let dy = clamp(Math.round(Number(action?.dy || 0)), -1, 1);
+	    if (lockRemainingMs > 0) {
+	      dx = 0;
+	      dy = 0;
+	      if (action && typeof action === 'object') {
+	        action.exitMotionBlocked = {
+	          reason: bot.lastExitMotionStopReason || 'exit-motion-stopped',
+	          remainingMs: lockRemainingMs
+	        };
+	      }
+	    }
 	    bot.velocityPulseToken += 1;
 	    const token = bot.velocityPulseToken;
 	    if (bot.velocityStopTimer) {
@@ -13583,11 +13695,12 @@ function browserBotSource(config) {
 	    const nearbyHumans = entities
 	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
 	      .sort((a, b) => a.distance - b.distance);
+    const combatCandidateRange = combatTargetCandidateRange(self);
     const combatTargets = attackableEntities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
       .filter(e => !nativeMeta.available || e.native)
-      .filter(e => e.distance <= cfg.combatAttackRange)
+      .filter(e => e.distance <= combatCandidateRange)
       .sort((a, b) => {
         const stickyA = bot.lastTarget?.kind === 'enemy' && String(bot.lastTarget.id) === String(a.user_id);
         const stickyB = bot.lastTarget?.kind === 'enemy' && String(bot.lastTarget.id) === String(b.user_id);
@@ -13884,6 +13997,12 @@ function browserBotSource(config) {
     return Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatEngageGraceRange || 0));
   }
 
+  function combatTargetCandidateRange(self) {
+    return isFullHp(self)
+      ? Number(cfg.combatAttackRange || 0)
+      : combatEngageGraceRange();
+  }
+
   function combatEngagedCandidate(self, raw) {
     if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
     return {
@@ -13921,16 +14040,20 @@ function browserBotSource(config) {
         }
       };
     }
-    const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
-    const outOfRangeMs = Math.max(0, t - lastInRangeAt);
-    const graceMs = Math.max(0, Number(cfg.combatEngageGraceMs || 0));
-    if (!graceMs || outOfRangeMs > graceMs) {
-      clearCombatEngagement('range-grace-expired');
-      return null;
-    }
     const raw = (entities || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
     const reengageTarget = combatEngagedCandidate(self, raw);
     const graceRange = combatEngageGraceRange();
+    const activeReengage = Boolean(reengageTarget && (isCurrentlyActive(reengageTarget) || isFiringEntity(reengageTarget) || isMovingThreat(reengageTarget)));
+    const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
+    const outOfRangeMs = Math.max(0, t - lastInRangeAt);
+    const graceMs = Math.max(0, Number(cfg.combatEngageGraceMs || 0));
+    const outOfRangeLimitMs = activeReengage
+      ? Math.max(graceMs, Number(cfg.combatEngageStickMs || 0))
+      : graceMs;
+    if (!outOfRangeLimitMs || outOfRangeMs > outOfRangeLimitMs) {
+      clearCombatEngagement('range-grace-expired');
+      return null;
+    }
     if (!reengageTarget || reengageTarget.distance > graceRange) return null;
     if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(reengageTarget)) {
       clearCombatEngagement('afk-profit-target');
@@ -13942,8 +14065,10 @@ function browserBotSource(config) {
       combatEngagement: {
         ageMs: Math.round(ageMs),
         outOfRangeMs: Math.round(outOfRangeMs),
-        graceRemainingMs: Math.max(0, Math.round(graceMs - outOfRangeMs)),
+        graceRemainingMs: Math.max(0, Math.round(outOfRangeLimitMs - outOfRangeMs)),
         graceRange: Math.round(graceRange),
+        activeReengage,
+        outOfRangeLimitMs: Math.round(outOfRangeLimitMs),
         lastReason: engaged.reason || '',
         reengage: true
       }
@@ -16680,7 +16805,7 @@ function browserBotSource(config) {
     const { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets } = classify(self);
     bot.lastActionEntities = entities;
     const fullHp = isFullHp(self);
-    const avoidanceThreats = fullHp ? activeThreats.filter(isInvulnerableActive) : activeThreats;
+    const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
     bot.actionThreats = avoidanceThreats;
     const recovery = !fullHp && isRecovering(self);
     const coinThreats = avoidanceThreats;
@@ -16733,7 +16858,7 @@ function browserBotSource(config) {
       : (engagedCombatTarget || defensiveCombatTarget);
     if (recovery && recoveryCombatTarget) {
       const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets);
-      if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave') {
+      if (recoveryCombatAction) {
         bot.fleeLock = null;
         bot.returnBlockScan = null;
         return recoveryCombatAction;
@@ -16839,7 +16964,7 @@ function browserBotSource(config) {
 
     const avoidHumans = nearbyHumans.filter(e => {
       if (e.distance > (recovery ? cfg.recoveryAvoidRadius : cfg.passivePanicRadius)) return false;
-      return recovery ? isRecoveryUnsafeHuman(e) : true;
+      return recovery ? isRecoveryUnsafeHuman(e) : isAvoidanceThreat(e);
     });
 	    if (!fullHp && avoidHumans.length) {
 	      const reason = recovery ? 'recovery-avoid-humans' : 'passive-panic-distance';
@@ -17094,6 +17219,27 @@ function browserBotSource(config) {
       const pendingExitDecision = await handlePendingExit(self);
       if (pendingExitDecision) {
         bot.lastDecision = pendingExitDecision;
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
+      const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
+      if (exitMotionLockRemainingMs > 0) {
+        bot.pursuit = null;
+        stopMotionSafely(bot.lastExitMotionStopReason || 'exit-motion-stopped');
+        refreshGlobalState(false).catch(err => {
+          bot.globalState.error = err.message || String(err);
+        });
+        bot.lastDecision = postExitDecisionWithoutTarget({
+          kind: 'wait',
+          reason: bot.lastExitMotionStopReason || 'exit-motion-stopped',
+          dx: 0,
+          dy: 0,
+          self: self ? summarizeSelf(self) : bot.lastSelf,
+          currentUserId: getCurrentUserId(),
+          control: summarizeControl(),
+          holdRemainingMs: exitMotionLockRemainingMs
+        }, bot.lastExitMotionStopReason || 'exit-motion-stopped');
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
         return;
@@ -17645,11 +17791,13 @@ function browserBotSource(config) {
         const shotSent = shootAt(self, action.opportunisticShot, false, { shootEveryMs: cfg.opportunisticShootEveryMs });
         if (shotSent) rememberAttack(self, action.opportunisticShot, 'opportunistic-shot', action);
       }
-      if (action.kind === 'attack' && action.shoot && action.target) {
-        shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+      if (action.kind === 'attack' && action.target) {
+        if (action.shoot) {
+          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+          rememberAttack(self, action.target, action.kind, action);
+        }
         setLastTarget('enemy', action.target.id);
         if (action.combat) rememberCombatEngagement(self, action.target, action);
-	        rememberAttack(self, action.target, action.kind, action);
       } else if ((action.kind === 'coin' || action.kind === 'seek-coin') && action.target) {
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {

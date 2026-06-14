@@ -491,10 +491,30 @@ function main() {
 	      assert(confirmBody.includes("clearCombatEngagement('exit-confirmed')"), 'pending exit confirmation does not clear combat engagement');
 	      const clearBody = functionBody(text, 'clearNativeMotionState');
 	      assert(clearBody.includes("nativeState.lastVel = '0 0'"), 'native lastVel is not cleared on stop');
-	      assert(clearBody.includes("const vectorFields = ['currentVel', 'targetVel', 'velocity']"), 'native velocity vector fields are not cleared on stop');
+	      assert(clearBody.includes("const vectorFields = ['currentVel', 'targetVel', 'velocity', 'lastNonZeroVel']"), 'native velocity vector fields are not fully cleared on stop');
+	      assert(clearBody.includes("nativeState.lastInputAt = 0"), 'native lastInputAt is not cleared on stop');
+	      assert(clearBody.includes("nativeState.lastStopAt = t"), 'native lastStopAt is not refreshed on stop');
 	      const stopBody = functionBody(text, 'stopMotionSafely');
 	      assert(stopBody.includes('const sent = sendNativeVelocity(0, 0, true);'), 'stopMotionSafely does not send forced zero velocity');
 	      assert(stopBody.includes('stopLocalMotionOnly(reason);'), 'stopMotionSafely does not clear local motion after native stop');
+	      const exitStopBody = functionBody(text, 'stopMotionAfterExit');
+	      assert(exitStopBody.includes('clearPostExitTargetState(reason)'), 'exit stop does not clear post-exit target state');
+	      const clearTargetBody = functionBody(text, 'clearPostExitTargetState');
+	      assert(clearTargetBody.includes('removeTargetOverlay()'), 'post-exit target cleanup does not remove target overlay');
+	      assert(clearTargetBody.includes('bot.opportunityChoice = null'), 'post-exit target cleanup does not clear held opportunity');
+	      assert(clearTargetBody.includes('postExitDecisionWithoutTarget'), 'post-exit target cleanup does not sanitize last decision');
+	      const waitBody = functionBody(text, 'pendingExitWaitDecision');
+	      assert(waitBody.includes("target: confirmed ? null : (cover?.target || pending.target || null)"), 'confirmed pending-exit wait can still expose a target');
+	      assert(waitBody.includes('combatCover: confirmed ? null : (cover || null)'), 'confirmed pending-exit wait can still expose combat cover');
+	      const overlayBody = functionBody(text, 'renderTargetOverlay');
+	      assert(overlayBody.includes('targetOverlaySuppressedAfterExit(decision)'), 'target overlay is not suppressed after exit');
+	      const actionVelocityBody = functionBody(text, 'sendActionVelocity');
+	      assert(actionVelocityBody.includes('const lockRemainingMs = exitMotionStopLockRemainingMs()'), 'action velocity does not check exit motion lock');
+	      assert(actionVelocityBody.includes('action.exitMotionBlocked'), 'exit motion lock is not exposed on blocked actions');
+	      const tickBody = functionBody(text, 'tick');
+	      assert(tickBody.includes('const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs()'), 'main tick does not check post-exit motion lock before choosing actions');
+	      assert(tickBody.includes('postExitDecisionWithoutTarget({'), 'main tick does not publish a targetless post-exit wait decision');
+	      assert(text.includes('exitMotionStopLockMs: 8000'), 'exit motion stop lock duration not configured');
 	    });
 	    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
 	      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
@@ -523,11 +543,27 @@ function main() {
       assert(text.includes('bot.pendingInjuryLeave && isCombatStateForInjuryLeave(action)'), 'main loop does not use combat-state injury suppression');
       assert(text.includes("suppressedReason: 'combat-state'"), 'combat-state injury suppression is not logged');
     });
-    check(`${file} keeps engaged combat above recovery avoidance`, () => {
+    check(`${file} keeps non-invulnerable active combat above avoidance`, () => {
       const body = functionBody(text, 'chooseAction');
       assert(body.includes('const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'recovery combat action is not built in chooseAction');
-      assert(body.includes("if (engagedCombatTarget || recoveryCombatAction?.kind === 'leave')"), 'engaged recovery combat can still fall through to non-combat logic');
+      assert(body.includes('const avoidanceThreats = activeThreats.filter(isAvoidanceThreat)'), 'ordinary active threats can still enter the avoidance set');
+      assert(text.includes('const isAvoidanceThreat = e => isInvulnerable(e)'), 'avoidance threat helper is not limited to invulnerable players');
+      assert(body.includes('if (recoveryCombatAction) {'), 'recovery combat can still fall through to non-combat avoidance');
+      assert(body.includes('return recovery ? isRecoveryUnsafeHuman(e) : isAvoidanceThreat(e)'), 'nearby human avoidance is not limited to invulnerable players');
       assert(!body.includes('const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'old recovery-leave-only combat branch is still present');
+      const classifyBody = functionBody(text, 'classify');
+      assert(classifyBody.includes('const combatCandidateRange = combatTargetCandidateRange(self)'), 'combat target classification does not use HP-aware candidate range');
+      assert(classifyBody.includes('e.distance <= combatCandidateRange'), 'combat targets are still limited to raw attack range only');
+      const candidateBody = functionBody(text, 'combatTargetCandidateRange');
+      assert(candidateBody.includes('isFullHp(self)'), 'combat target candidate range is not HP-aware');
+      assert(candidateBody.includes('combatEngageGraceRange()'), 'non-full defensive targets cannot use reengage range');
+      assert(text.includes('const activeReengage = Boolean(reengageTarget'), 'engaged active reengage state is not computed');
+      assert(text.includes('Math.max(graceMs, Number(cfg.combatEngageStickMs || 0))'), 'active reengage does not extend out-of-range grace to combat stick window');
+      assert(text.includes('outOfRangeLimitMs'), 'engaged reengage does not expose/use the active out-of-range limit');
+      const tickBody = functionBody(text, 'tick');
+      assert(tickBody.includes("if (action.kind === 'attack' && action.target)"), 'combat attack tracking still requires shoot=true');
+      assert(tickBody.includes('if (action.shoot) {'), 'attack shooting is not separated from combat engagement tracking');
+      assert(tickBody.includes('if (action.combat) rememberCombatEngagement(self, action.target, action)'), 'combat engagement is not remembered for non-shooting combat attack frames');
     });
     check(`${file} uses stamina-aware combat fire discipline`, () => {
       const shootingBody = functionBody(text, 'combatShootingPlan');
@@ -797,6 +833,10 @@ function main() {
   });
 
   check('grasp-rat-bot.js covers combat fire discipline self-tests', () => {
+    assert(sourceBot.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
+    assert(sourceBot.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');
+    assert(sourceBot.includes("name: 'non-full active edge target reengages instead of fleeing'"), 'non-full active edge reengage self-test not found');
+    assert(sourceBot.includes("name: 'non-full invulnerable active still flees'"), 'invulnerable active flee self-test not found');
     assert(sourceBot.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
     assert(sourceBot.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
     assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
