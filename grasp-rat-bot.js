@@ -254,6 +254,10 @@ function runSelfTest() {
     combatServerStallNoDamageHpGap: 5,
     combatTargetSwitchIncomingDistance: 6500,
     combatTargetSwitchIncomingTimeMs: 900,
+    combatRetreatEdgeRange: 13800,
+    combatRetreatRadialSpeedMin: 5,
+    combatRetreatDistanceDeltaMin: 600,
+    combatRetreatIgnoreMs: 15000,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -399,7 +403,7 @@ function runSelfTest() {
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, opportunityChoice: null, opportunitySwitchLock: null };
+  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), opportunityChoice: null, opportunitySwitchLock: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -1537,9 +1541,37 @@ function runSelfTest() {
     };
   }
 
+  function combatTargetId(target) {
+    const id = target?.user_id ?? target?.id;
+    return id === null || id === undefined ? '' : String(id);
+  }
+
+  function combatRetreatIgnoreActive(target, t = Date.now()) {
+    const id = combatTargetId(target);
+    if (!id || !bot.combatRetreatIgnore) return false;
+    const until = Number(bot.combatRetreatIgnore.get(id) || 0);
+    if (!until) return false;
+    if (until <= t) {
+      bot.combatRetreatIgnore.delete(id);
+      return false;
+    }
+    return true;
+  }
+
+  function rememberCombatRetreatIgnore(target, t = Date.now()) {
+    const id = combatTargetId(target);
+    if (!id) return;
+    if (!bot.combatRetreatIgnore) bot.combatRetreatIgnore = new Map();
+    bot.combatRetreatIgnore.set(id, t + Math.max(1000, Number(cfg.combatRetreatIgnoreMs || 0) || 15000));
+  }
+
   function pickEngagedCombatTarget(self, entities) {
     const engaged = bot.combatTarget;
     if (!engaged?.id) return null;
+    if (combatRetreatIgnoreActive({ id: engaged.id })) {
+      bot.combatTarget = null;
+      return null;
+    }
     const target = (entities || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
@@ -1635,7 +1667,9 @@ function runSelfTest() {
       const shooter = candidates.find(e => String(e.user_id) === String(incomingOwnerId));
       if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
     }
-    const eligibleTargets = candidates.filter(e => !isAfkProfitTarget(e));
+    const eligibleTargets = candidates
+      .filter(e => !isAfkProfitTarget(e))
+      .filter(e => !combatRetreatIgnoreActive(e));
     const defensiveTargets = eligibleTargets
       .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
       .sort((a, b) => combatTargetPriority(b, incomingOwnerId, unknownIncoming) - combatTargetPriority(a, incomingOwnerId, unknownIncoming));
@@ -2114,6 +2148,46 @@ function runSelfTest() {
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
   }
 
+  function combatRetreatingTargetState(self, target, targetDistance, damageState = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const edgeRange = Math.min(
+      attackRange || Infinity,
+      Math.max(0, Number(cfg.combatRetreatEdgeRange || 0) || attackRange * 0.95)
+    );
+    const minRadialSpeed = Math.max(0, Number(cfg.combatRetreatRadialSpeedMin || cfg.combatStationarySpeed || 0));
+    const minDistanceDelta = Math.max(0, Number(cfg.combatRetreatDistanceDeltaMin || 0));
+    const dx = Number(target?.x) - Number(self?.x);
+    const dy = Number(target?.y) - Number(self?.y);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : Math.hypot(dx, dy);
+    const d = Math.max(1, Number.isFinite(distance) ? distance : Math.hypot(dx, dy));
+    const vx = Number(target?.vx) || 0;
+    const vy = Number(target?.vy) || 0;
+    const radialSpeed = (dx / d) * vx + (dy / d) * vy;
+    const previous = bot.combatTarget;
+    const same = previous && combatTargetId(previous) && combatTargetId(previous) === combatTargetId(target);
+    const previousDistance = same && Number.isFinite(Number(previous.distance)) ? Number(previous.distance) : null;
+    const distanceDelta = previousDistance === null ? 0 : distance - previousDistance;
+    const receding = Boolean(
+      (minRadialSpeed > 0 && radialSpeed >= minRadialSpeed)
+      || (minDistanceDelta > 0 && distanceDelta >= minDistanceDelta)
+    );
+    const outOfRange = attackRange > 0 && distance > attackRange;
+    const edge = edgeRange > 0 && distance >= edgeRange;
+    const active = Boolean(receding && (outOfRange || edge));
+    return {
+      active,
+      disengage: Boolean(active && outOfRange),
+      suppressFire: Boolean(active && edge),
+      reason: outOfRange ? 'target-retreating-out-of-range' : 'target-retreating-edge',
+      distance: Number.isFinite(distance) ? Math.round(distance) : null,
+      attackRange: Math.round(attackRange),
+      edgeRange: Math.round(edgeRange),
+      radialSpeed: Number.isFinite(radialSpeed) ? Math.round(radialSpeed) : 0,
+      distanceDelta: Number.isFinite(distanceDelta) ? Math.round(distanceDelta) : 0,
+      noDamageMs: Math.max(0, Number(damageState?.noDamageMs || 0))
+    };
+  }
+
   function combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, realBulletPressure = false, serverPositionStall = null) {
     const waitMs = Math.max(0, Number(cfg.combatServerStallNoDamageLeaveMs || 0));
     const precisionWaitMs = Math.max(0, Number(cfg.combatAimFallbackPrecisionNoDamageMs || 0));
@@ -2331,6 +2405,7 @@ function runSelfTest() {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap }, bullets);
 	    }
     const noDamageMs = combatTargetNoDamageMs(target);
+    const retreatingTarget = combatRetreatingTargetState(self, target, target.distance, { noDamageMs });
     const motionScale = combatAimMotionScale(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
@@ -2346,12 +2421,26 @@ function runSelfTest() {
     const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, { noDamageMs }, aimMoving, aimDistance, aimMovement, steadyAim);
     const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const serverStallNoDamage = combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, incoming, bot.serverPositionStall);
-    if (serverStallNoDamage) {
+    if (serverStallNoDamage && !retreatingTarget.disengage) {
       return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
         hpGap: serverStallNoDamage.hpGap,
         noDamageMs,
         serverStallNoDamage
       }, bullets);
+    }
+    if (retreatingTarget.disengage) {
+      rememberCombatRetreatIgnore(target);
+      bot.combatTarget = null;
+      return {
+        kind: 'wait',
+        reason: 'combat-target-retreating',
+        combat: false,
+        shoot: false,
+        forceShoot: false,
+        dx: 0,
+        dy: 0,
+        combatDisengage: retreatingTarget
+      };
     }
     const spacing = combatSpacingVector(self, target, target.distance);
     const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, incoming);
@@ -2365,7 +2454,9 @@ function runSelfTest() {
         pressureDisadvantage
       }, bullets);
     }
-    const pressureClose = combatPressureCloseVector(self, target, target.distance, selfHp);
+    const pressureClose = retreatingTarget.active
+      ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
+      : combatPressureCloseVector(self, target, target.distance, selfHp);
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     const requestedDx = pressureClose.active ? pressureClose.dx : (spacingOverride ? spacing.dx : (incoming ? 1 : spacing.dx));
     const requestedDy = pressureClose.active ? pressureClose.dy : (spacingOverride ? spacing.dy : (incoming ? 1 : spacing.dy));
@@ -2392,7 +2483,7 @@ function runSelfTest() {
       targetMoving: moving,
       noDamageMs
     });
-    const shooting = combatShootingPlan(self, {
+    let shooting = combatShootingPlan(self, {
       trend,
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
@@ -2405,6 +2496,16 @@ function runSelfTest() {
       targetMoving: moving,
       noDamageMs
     });
+    if (retreatingTarget.suppressFire) {
+      shooting = {
+        ...shooting,
+        shoot: false,
+        forceShoot: false,
+        suppressed: true,
+        reason: 'target-retreating-edge',
+        retreatingTarget
+      };
+    }
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
       : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack'));
@@ -2412,7 +2513,7 @@ function runSelfTest() {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason)),
+        : (retreatingTarget.suppressFire ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,
@@ -2474,7 +2575,8 @@ function runSelfTest() {
         noDamageMs,
         steadyAim,
         movementSuppressed,
-        shooting
+        shooting,
+        retreatingTarget: retreatingTarget.active ? retreatingTarget : null
       }
     };
   }
@@ -3462,7 +3564,7 @@ function runSelfTest() {
         };
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 7, x: 18000, y: 0, current_join_mode: 'Active', hp: 94, vx: 50 }]
+          local: [{ user_id: 7, x: 18000, y: 0, current_join_mode: 'Active', hp: 94, vx: -50 }]
         });
         bot.combatTarget = null;
         return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
@@ -3536,6 +3638,63 @@ function runSelfTest() {
         return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
       })(),
       want: 'attack:true:4'
+    },
+    {
+      name: 'retreating out-of-range combat target disengages instead of chasing',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 14000, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 16000, y: 0, distance: 16000, current_join_mode: 'Active', hp: 95, vx: 50, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        const ignored = combatRetreatIgnoreActive({ id: 7 });
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + action.combatDisengage?.reason + ':' + ignored;
+      })(),
+      want: 'wait:combat-target-retreating:false:target-retreating-out-of-range:true'
+    },
+    {
+      name: 'retreating edge combat target suppresses fire',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 13000, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14000, y: 0, distance: 14000, current_join_mode: 'Active', hp: 100, vx: 50, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason;
+      })(),
+      want: 'attack:combat-target-retreating:false:target-retreating-edge'
+    },
+    {
+      name: 'retreat ignored target is not reselected without incoming bullet',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 };
+        rememberCombatRetreatIgnore({ user_id: 7 });
+        const target = pickCombatTarget(self, [
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 50, drop: 20 }
+        ], [], { mode: 'defensive' });
+        bot.combatRetreatIgnore.clear();
+        return target;
+      })(),
+      want: null
+    },
+    {
+      name: 'incoming bullet can reengage retreat ignored target',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+        rememberCombatRetreatIgnore({ user_id: 7 });
+        const action = choose({
+          self,
+          local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, drop: 20 }],
+          bullets: [{ owner_id: 7, x: 9000, y: 0, vx: -100, vy: 0, distance: 2500 }]
+        });
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.target?.id;
+      })(),
+      want: 'attack:7'
     },
     {
       name: 'non-full invulnerable active still flees',
@@ -4945,6 +5104,7 @@ function browserBotSource(config) {
 	    seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
 	    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
 	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
+	    combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
 	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
 	    lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === 'object' ? { ...previousBot.lastCombatLogMetric } : null,
 		    lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
@@ -5075,6 +5235,10 @@ function browserBotSource(config) {
     combatServerStallNoDamageHpGap: 5,
     combatTargetSwitchIncomingDistance: 6500,
     combatTargetSwitchIncomingTimeMs: 900,
+    combatRetreatEdgeRange: 13800,
+    combatRetreatRadialSpeedMin: 5,
+    combatRetreatDistanceDeltaMin: 600,
+    combatRetreatIgnoreMs: 15000,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -5463,6 +5627,7 @@ function browserBotSource(config) {
     pursuit: null,
     combatStrafe: null,
     combatTarget: preserved.combatTarget,
+    combatRetreatIgnore: preserved.combatRetreatIgnore,
     combatAim: preserved.combatAim,
     lastCombatLogMetric: preserved.lastCombatLogMetric,
     lastCombatShot: preserved.lastCombatShot,
@@ -13968,7 +14133,9 @@ function browserBotSource(config) {
       const shooter = combatTargets.find(target => String(target.user_id) === String(incoming.ownerId) && !isWhitelistedTarget(target) && !isInvulnerable(target));
       if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
     }
-    const eligibleTargets = combatTargets.filter(target => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target));
+    const eligibleTargets = combatTargets
+      .filter(target => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target))
+      .filter(target => !combatRetreatIgnoreActive(target));
     if (!eligibleTargets.length) return null;
     const defensiveTargets = eligibleTargets
       .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
@@ -14018,6 +14185,10 @@ function browserBotSource(config) {
   function pickEngagedCombatTarget(self, combatTargets, entities) {
     const engaged = bot.combatTarget;
     if (!engaged?.id) return null;
+    if (combatRetreatIgnoreActive({ id: engaged.id })) {
+      clearCombatEngagement('target-retreating-ignore');
+      return null;
+    }
     const t = Date.now();
     const ageMs = Math.max(0, t - Number(engaged.at || 0));
     if (ageMs > Math.max(cfg.targetStickMs, cfg.combatEngageStickMs)) {
@@ -14769,6 +14940,25 @@ function browserBotSource(config) {
     return id === null || id === undefined ? '' : String(id);
   }
 
+  function combatRetreatIgnoreActive(target, t = Date.now()) {
+    const id = combatTargetId(target);
+    if (!id || !bot.combatRetreatIgnore) return false;
+    const until = Number(bot.combatRetreatIgnore.get(id) || 0);
+    if (!until) return false;
+    if (until <= t) {
+      bot.combatRetreatIgnore.delete(id);
+      return false;
+    }
+    return true;
+  }
+
+  function rememberCombatRetreatIgnore(target, t = Date.now()) {
+    const id = combatTargetId(target);
+    if (!id) return;
+    if (!bot.combatRetreatIgnore) bot.combatRetreatIgnore = new Map();
+    bot.combatRetreatIgnore.set(id, t + Math.max(1000, Number(cfg.combatRetreatIgnoreMs || 0) || 15000));
+  }
+
   function combatAimDamageState(target) {
     const id = combatTargetId(target);
     const previous = bot.combatTarget;
@@ -14801,6 +14991,46 @@ function browserBotSource(config) {
     const noDamageMs = Number(damageState?.noDamageMs || 0);
     if (!threshold || !waitMs || !(Number(selfHp) < threshold) || !(hpGap >= minGap) || !(noDamageMs >= waitMs)) return null;
     return { selfHp, targetHp, hpGap, noDamageMs, threshold, waitMs, minGap };
+  }
+
+  function combatRetreatingTargetState(self, target, targetDistance, damageState = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const edgeRange = Math.min(
+      attackRange || Infinity,
+      Math.max(0, Number(cfg.combatRetreatEdgeRange || 0) || attackRange * 0.95)
+    );
+    const minRadialSpeed = Math.max(0, Number(cfg.combatRetreatRadialSpeedMin || cfg.combatStationarySpeed || 0));
+    const minDistanceDelta = Math.max(0, Number(cfg.combatRetreatDistanceDeltaMin || 0));
+    const dx = Number(target?.x) - Number(self?.x);
+    const dy = Number(target?.y) - Number(self?.y);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : Math.hypot(dx, dy);
+    const d = Math.max(1, Number.isFinite(distance) ? distance : Math.hypot(dx, dy));
+    const vx = Number(target?.vx) || 0;
+    const vy = Number(target?.vy) || 0;
+    const radialSpeed = (dx / d) * vx + (dy / d) * vy;
+    const previous = bot.combatTarget;
+    const same = previous && combatTargetId(previous) && combatTargetId(previous) === combatTargetId(target);
+    const previousDistance = same && Number.isFinite(Number(previous.distance)) ? Number(previous.distance) : null;
+    const distanceDelta = previousDistance === null ? 0 : distance - previousDistance;
+    const receding = Boolean(
+      (minRadialSpeed > 0 && radialSpeed >= minRadialSpeed)
+      || (minDistanceDelta > 0 && distanceDelta >= minDistanceDelta)
+    );
+    const outOfRange = attackRange > 0 && distance > attackRange;
+    const edge = edgeRange > 0 && distance >= edgeRange;
+    const active = Boolean(receding && (outOfRange || edge));
+    return {
+      active,
+      disengage: Boolean(active && outOfRange),
+      suppressFire: Boolean(active && edge),
+      reason: outOfRange ? 'target-retreating-out-of-range' : 'target-retreating-edge',
+      distance: Number.isFinite(distance) ? Math.round(distance) : null,
+      attackRange: Math.round(attackRange),
+      edgeRange: Math.round(edgeRange),
+      radialSpeed: Number.isFinite(radialSpeed) ? Math.round(radialSpeed) : 0,
+      distanceDelta: Number.isFinite(distanceDelta) ? Math.round(distanceDelta) : 0,
+      noDamageMs: Math.max(0, Number(damageState?.noDamageMs || 0))
+    };
   }
 
   function combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, realBulletPressure = false, serverPositionStall = null) {
@@ -15471,6 +15701,7 @@ function browserBotSource(config) {
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
     const spacing = combatSpacingVector(self, target, targetDistance);
     const damageState = combatAimDamageState(target);
+    const retreatingTarget = combatRetreatingTargetState(self, target, targetDistance, damageState);
     const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
@@ -15491,7 +15722,7 @@ function browserBotSource(config) {
       realBulletPressure,
       summarizeServerPositionStall()
     );
-    if (serverStallNoDamage) {
+    if (serverStallNoDamage && !retreatingTarget.disengage) {
       return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
         selfHp,
         targetHp,
@@ -15499,6 +15730,21 @@ function browserBotSource(config) {
         noDamageMs: damageState.noDamageMs,
         serverStallNoDamage
       }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+    }
+    if (retreatingTarget.disengage) {
+      rememberCombatRetreatIgnore(target);
+      clearCombatEngagement('target-retreating');
+      return {
+        kind: 'wait',
+        reason: 'combat-target-retreating',
+        combat: false,
+        ignoreReturnBlock: true,
+        shoot: false,
+        forceShoot: false,
+        dx: 0,
+        dy: 0,
+        combatDisengage: retreatingTarget
+      };
     }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       const dir = directionTo(self, target);
@@ -15534,7 +15780,9 @@ function browserBotSource(config) {
         }
       };
     }
-    const pressureClose = combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
+    const pressureClose = retreatingTarget.active
+      ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+      : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
     const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
@@ -15569,7 +15817,7 @@ function browserBotSource(config) {
       targetMoving,
       noDamageMs: Number(aim.noDamageMs || 0)
     });
-    const shooting = combatShootingPlan(self, {
+    let shooting = combatShootingPlan(self, {
       trend,
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
@@ -15583,6 +15831,16 @@ function browserBotSource(config) {
       targetMoving,
       noDamageMs: Number(aim.noDamageMs || 0)
     });
+    if (retreatingTarget.suppressFire) {
+      shooting = {
+        ...shooting,
+        shoot: false,
+        forceShoot: false,
+        suppressed: true,
+        reason: 'target-retreating-edge',
+        retreatingTarget
+      };
+    }
     const baseReason = realBulletPressure
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
       : (spacingActive
@@ -15592,7 +15850,7 @@ function browserBotSource(config) {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason)),
+        : (retreatingTarget.suppressFire ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,
@@ -15691,7 +15949,8 @@ function browserBotSource(config) {
           merged: Boolean(!realBulletPressure)
         } : null,
         movementSuppressed,
-        shooting
+        shooting,
+        retreatingTarget: retreatingTarget.active ? retreatingTarget : null
       }
     };
   }
