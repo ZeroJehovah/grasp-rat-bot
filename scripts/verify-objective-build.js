@@ -71,6 +71,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootHardReserveMs', value: 1800 },
   { key: 'combatShootConserveEveryMs', value: 360 },
   { key: 'combatShootRecoveryEveryMs', value: 700 },
+  { key: 'combatNativeTickMinMs', value: 80 },
   { key: 'combatAimSteadyNoDamageMs', value: 6000 },
   { key: 'combatAimSteadySpeedMax', value: 5 }
 ];
@@ -508,12 +509,18 @@ function main() {
       const shootingBody = functionBody(text, 'combatShootingPlan');
       assert(shootingBody.includes("staminaRemaining(self, '5s')"), 'combat shooting plan does not read 5s stamina');
       assert(shootingBody.includes('reserve-for-dodge'), 'combat shooting plan does not reserve stamina for dodge');
+      assert(text.includes('function combatTrendState'), 'combat trend state helper not found');
+      assert(shootingBody.includes('const trend = options.trend'), 'combat shooting plan does not accept precomputed trend state');
+      assert(shootingBody.includes('combatTrendState(self, options)'), 'combat shooting plan cannot compute trend state fallback');
+      assert(shootingBody.includes("stance: trend.stance || 'normal'"), 'combat shooting plan does not expose trend stance');
       assert(shootingBody.includes('highHpFireWindow'), 'combat shooting plan does not expose high-HP fire window');
       assert(shootingBody.includes('combatShootHighHpDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for high HP');
       assert(shootingBody.includes('closePressureFireWindow'), 'combat shooting plan does not expose close-pressure fire window');
       assert(shootingBody.includes('combatShootPressureDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve under close bullet pressure');
       assert(shootingBody.includes('steadyAimFireWindow'), 'combat shooting plan does not expose steady-aim fire window');
       assert(shootingBody.includes('combatShootSteadyAimDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for steady aim');
+      assert(shootingBody.includes('noDamageDuelFireWindow'), 'combat shooting plan does not expose long no-damage duel fire window');
+      assert(shootingBody.includes('combatShootNoDamageDuelDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for long no-damage duels');
       assert(shootingBody.includes('stamina-rebuild'), 'combat shooting plan does not stop fire for stamina rebuild');
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
@@ -529,16 +536,35 @@ function main() {
       assert(combatBody.includes("combatLeaveAction('combat-hp-disadvantage-leave', baseTarget"), 'combat action does not leave on close-pressure HP disadvantage');
       assert(combatBody.includes('!realBulletPressure || spacingOverride'), 'combat action does not merge spacing during emergency real-bullet pressure');
       assert(combatBody.includes('overrideBullet: Boolean(spacingOverride)'), 'combat logs do not expose bullet spacing override');
+      assert(combatBody.includes('const trend = combatTrendState(self'), 'combat action does not precompute combat trend state');
       assert(combatBody.includes('const shooting = combatShootingPlan(self'), 'combat action does not use shooting plan');
+      assert(combatBody.includes('trend,'), 'combat action does not pass trend state into shooting plan');
       assert(combatBody.includes('shoot: shooting.shoot'), 'combat action does not expose planned shoot flag');
       assert(combatBody.includes('forceShoot: shooting.forceShoot'), 'combat action does not expose planned force flag');
       assert(combatBody.includes('shootEveryMs: shooting.shootEveryMs'), 'combat action does not expose planned cadence');
       assert(combatBody.includes('steadyAim: Boolean(aim.steadyAim)'), 'combat action does not pass steady aim to shooting plan');
+      assert(combatBody.includes("engagedCombat: target.combatIntent === 'engaged'"), 'combat action does not pass engaged state to shooting plan');
+      assert(combatBody.includes('targetActive: isCurrentlyActive(target)'), 'combat action does not pass active target state to shooting plan');
+      assert(combatBody.includes('targetMoving'), 'combat action does not pass moving target state to shooting plan');
       assert(combatBody.includes('steady: Boolean(aim.steadyAim)'), 'combat logs do not expose steady aim state');
       assert(combatBody.includes("shooting.suppressed ? 'combat-stamina-conserve'"), 'combat action does not report fire suppression reason');
       assert(combatBody.includes("shooting.throttled ? 'combat-burst-fire'"), 'combat action does not report burst-fire reason');
       assert(!combatBody.includes("combat-low-hp-no-damage-leave', baseTarget"), 'low no-damage can still trigger combat leave');
       assert(!text.includes('forceShoot: true'), 'force shooting is still present');
+      const switchBody = functionBody(text, 'defensiveTargetOverridesEngaged');
+      assert(text.includes('function incomingBulletRequiresTargetSwitch'), 'target switch immediate-bullet helper not found');
+      assert(switchBody.includes('incomingBulletRequiresTargetSwitch(defensiveTarget.incomingBullet)'), 'defensive target switch can still override engaged target for distant bullets');
+      const pursuitBody = functionBody(text, 'updatePursuitTracking');
+      assert(text.includes('function pursuitLeaveSuppressedByCombatAction'), 'same-target combat pursuit suppression helper not found');
+      assert(pursuitBody.includes('pursuitLeaveSuppressedByCombatAction(picked, action)'), 'pursuit tracking does not check same-target combat suppression');
+      assert(pursuitBody.includes('const startedAt = combatSuppressed ? t'), 'pursuit timer is not reset while fighting the same target');
+      assert(functionBody(text, 'summarizePursuit').includes('combatSuppressed'), 'pursuit summary does not expose combat suppression');
+      const nativeTickBody = functionBody(text, 'triggerNativeTick');
+      assert(text.includes('function combatTickActiveFromState'), 'combat tick active helper not found');
+      assert(text.includes('function nativeTickMinIntervalMs'), 'native tick interval helper not found');
+      assert(nativeTickBody.includes('nativeTickMinIntervalMs({'), 'native tick trigger does not use dynamic interval helper');
+      assert(nativeTickBody.includes('combatTarget: bot.combatTarget'), 'native tick interval does not consider active combat target');
+      assert(nativeTickBody.includes('pendingExit: bot.pendingExit'), 'native tick interval does not consider pending combat exit');
     });
     check(`${file} blocks new leave triggers while pending exit is active`, () => {
       const skipBody = functionBody(text, 'pendingExitSkipNewLeave');
@@ -715,6 +741,11 @@ function main() {
     assert(sourceBot.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
     assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
     assert(sourceBot.includes("name: 'combat close pressure fire window keeps mid hp shooting'"), 'close-pressure fire window self-test not found');
+    assert(sourceBot.includes("name: 'combat long no-damage active duel resumes reserve-band fire'"), 'long no-damage duel fire self-test not found');
+    assert(sourceBot.includes("name: 'combat trend classifies long no-damage duel stance'"), 'combat trend stance self-test not found');
+    assert(sourceBot.includes("name: 'combat native tick interval tightens only during combat'"), 'combat-only native tick self-test not found');
+    assert(sourceBot.includes("name: 'combat action suppresses same-target pursuit leave'"), 'same-target pursuit suppression self-test not found');
+    assert(sourceBot.includes("name: 'defensive target switch requires immediate incoming bullet'"), 'defensive target switch self-test not found');
     assert(sourceBot.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
     assert(sourceBot.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(sourceBot.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
