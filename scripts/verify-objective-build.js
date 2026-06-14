@@ -72,6 +72,11 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootConserveEveryMs', value: 360 },
   { key: 'combatShootRecoveryEveryMs', value: 700 },
   { key: 'combatNativeTickMinMs', value: 80 },
+  { key: 'combatAimFallbackPrecisionNoDamageMs', value: 25000 },
+  { key: 'combatAimLiveDivergencePrecisionCm', value: 1200 },
+  { key: 'combatAimLiveDivergencePrecisionRatio', value: 0.08 },
+  { key: 'combatAimRadialPrecisionLateralRatio', value: 0.35 },
+  { key: 'combatServerStallNoDamagePrecisionGraceMs', value: 10000 },
   { key: 'combatAimSteadyNoDamageMs', value: 6000 },
   { key: 'combatAimSteadySpeedMax', value: 5 }
 ];
@@ -544,15 +549,29 @@ function main() {
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
       const aimBody = functionBody(text, 'combatAimTarget');
+      assert(text.includes('function combatAimFallbackPrecisionState'), 'fallback precision aim helper not found');
+      assert(text.includes('function combatAimDynamicStrategyState'), 'dynamic combat aim strategy helper not found');
+      assert(text.includes('function combatAimSourceDivergenceState'), 'combat aim source divergence helper not found');
+      assert(text.includes('function combatLiveAimTarget'), 'live/native combat aim helper not found');
       assert(text.includes('function combatAimSteadyNoDamageState'), 'steady no-damage aim helper not found');
-      assert(aimBody.includes("mode: steadyAim.active && moving ? 'steady' : 'exact'"), 'combat aim does not enter steady mode for stationary no-damage targets');
-      assert(aimBody.includes('if (!moving || steadyAim.active) return exact'), 'steady aim does not bypass jitter');
+      assert(aimBody.includes('combatAimDynamicStrategyState(self, target, aimSource'), 'combat aim does not use dynamic strategy state');
+      assert(text.includes("reason = 'coordinate-divergence'"), 'combat aim does not switch on live/source coordinate divergence');
+      assert(text.includes("reason = 'radial-motion'"), 'combat aim does not switch on target radial movement');
+      assert(text.includes("reason = 'no-damage-fallback'"), 'combat aim fallback precision reason not found');
+      assert(aimBody.includes('mode: aimStrategy.mode'), 'combat aim does not use dynamic strategy mode');
+      assert(aimBody.includes('precisionAim: Boolean(aimStrategy.precision)'), 'combat logs do not expose dynamic precision aim state');
+      assert(aimBody.includes('liveAim: Boolean(aimSource.nativeAimResolved)'), 'combat logs do not expose live aim state');
+      assert(aimBody.includes('aimStrategyReason: aimStrategy.reason'), 'combat logs do not expose aim strategy reason');
+      assert(aimBody.includes('sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm'), 'combat logs do not expose aim source divergence');
+      assert(aimBody.includes('if (aimStrategy.bypassJitter) return exact'), 'dynamic precision/steady aim does not bypass jitter');
       assert(text.includes('function combatSpacingShouldOverrideBullet'), 'combat spacing cannot override real bullet dodge when too close');
       assert(text.includes('function combatLowHpCloseRiskState'), 'low-HP close-risk exit helper not found');
       assert(text.includes('function combatPressureDisadvantageState'), 'close-pressure HP disadvantage exit helper not found');
       assert(text.includes('function combatServerStallNoDamageLeaveState'), 'server-stall no-damage exit helper not found');
       assert(text.includes('combatServerStallNoDamageLeaveMs: 25000'), 'server-stall no-damage exit wait is not configured');
+      assert(text.includes('combatServerStallNoDamagePrecisionGraceMs: 10000'), 'server-stall no-damage exit does not allow precision aim grace');
       assert(text.includes('combatServerStallNoDamageHpGap: 5'), 'server-stall no-damage HP gap is not configured');
+      assert(functionBody(text, 'combatServerStallNoDamageLeaveState').includes('effectiveWaitMs'), 'server-stall no-damage exit does not use an effective precision-grace wait');
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
       assert(combatBody.includes("combatLeaveAction('combat-hp-disadvantage-leave', baseTarget"), 'combat action does not leave on close-pressure HP disadvantage');
@@ -738,7 +757,18 @@ function main() {
     const pkg = readJson('combat-log-service/package.json');
     assert(pkg.scripts && pkg.scripts.daily === 'node daily-summary.js', 'daily summary npm script missing');
     assert(pkg.scripts && pkg.scripts['daily:self-test'] === 'node daily-summary.js --self-test', 'daily summary self-test npm script missing');
+    assert(pkg.scripts && pkg.scripts.replay === 'node replay-combat.js', 'combat replay npm script missing');
+    assert(pkg.scripts && pkg.scripts['replay:self-test'] === 'node replay-combat.js --self-test', 'combat replay self-test npm script missing');
     assert(String(pkg.scripts.test || '').includes('daily-summary.js --self-test'), 'npm test does not run daily summary self-test');
+    assert(String(pkg.scripts.test || '').includes('replay-combat.js --self-test'), 'npm test does not run combat replay self-test');
+  });
+
+  check('combat replay tool verifies reference combat improvement', () => {
+    const replay = readText('combat-log-service/replay-combat.js');
+    assert(replay.includes('function dynamicAimForShot'), 'combat replay tool does not emulate dynamic aim strategy');
+    assert(replay.includes('liveDivergencePrecisionCm: 1200'), 'combat replay tool does not use live-divergence threshold');
+    assert(replay.includes('dynamic replay did not improve hits'), 'combat replay self-test does not require hit improvement');
+    assert(replay.includes('startLine: 12167') && replay.includes('endLine: 12351'), 'combat replay self-test does not cover the xmsthc reference fight');
   });
 
   check('grasp-rat-bot.js covers stationary full-stamina Active non-combat profit self-tests', () => {
@@ -772,11 +802,14 @@ function main() {
     assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
     assert(sourceBot.includes("name: 'combat close pressure fire window keeps mid hp shooting'"), 'close-pressure fire window self-test not found');
     assert(sourceBot.includes("name: 'combat long no-damage active duel resumes reserve-band fire'"), 'long no-damage duel fire self-test not found');
+    assert(sourceBot.includes("name: 'combat coordinate divergence immediately uses live precision aim'"), 'coordinate-divergence live precision self-test not found');
+    assert(sourceBot.includes("name: 'combat radial live target uses precision aim without waiting'"), 'radial-motion live precision self-test not found');
     assert(sourceBot.includes("name: 'combat trend classifies long no-damage duel stance'"), 'combat trend stance self-test not found');
     assert(sourceBot.includes("name: 'combat native tick interval tightens only during combat'"), 'combat-only native tick self-test not found');
     assert(sourceBot.includes("name: 'combat action suppresses same-target pursuit leave'"), 'same-target pursuit suppression self-test not found');
     assert(sourceBot.includes("name: 'defensive target switch requires immediate incoming bullet'"), 'defensive target switch self-test not found');
     assert(sourceBot.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
+    assert(sourceBot.includes("name: 'combat server stall no-damage waits for precision aim grace'"), 'server-stall precision grace self-test not found');
     assert(sourceBot.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');
     assert(sourceBot.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(sourceBot.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
