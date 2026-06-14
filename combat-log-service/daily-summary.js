@@ -120,6 +120,7 @@ function killKey(kill) {
     kill.id ?? '',
     kill.name || kill.victim || '',
     number(kill.rewardCoins),
+    number(kill.targetDropCoins),
     kill.source || '',
     kill.dropMatched ? 'drop' : ''
   ].join('|');
@@ -128,12 +129,20 @@ function killKey(kill) {
 function normalizeKill(kill) {
   if (!kill || typeof kill !== 'object') return null;
   const playerCategory = normalizePlayerCategory(kill);
+  const rawRewardCoins = Number.isFinite(Number(kill.rewardCoins ?? kill.drop)) ? Math.max(0, Math.round(Number(kill.rewardCoins ?? kill.drop))) : 0;
+  const targetDropCoins = Number.isFinite(Number(kill.targetDrop ?? kill.drop ?? kill.rewardCoins)) ? Math.max(0, Math.round(Number(kill.targetDrop ?? kill.drop ?? kill.rewardCoins))) : 0;
+  const rewardConfirmed = Boolean(kill.rewardConfirmed || kill.dropMatched);
+  const rewardCoins = rewardConfirmed ? rawRewardCoins : 0;
   return {
     at: number(kill.at),
     time: kill.time || '',
     name: kill.name || kill.victim || '',
     id: kill.id ?? kill.userId ?? null,
-    rewardCoins: Number.isFinite(Number(kill.rewardCoins ?? kill.drop)) ? Math.max(0, Math.round(Number(kill.rewardCoins ?? kill.drop))) : 0,
+    rewardCoins,
+    reportedRewardCoins: rawRewardCoins,
+    targetDropCoins,
+    unconfirmedDropCoins: rewardConfirmed ? 0 : Math.max(targetDropCoins, rawRewardCoins),
+    rewardConfirmed,
     playerCategory,
     afk: playerCategory === 'afk',
     active: playerCategory === 'active',
@@ -163,15 +172,17 @@ function normalizePlayerCategory(item) {
 
 function killBucketSummary(kills) {
   const summary = {
-    afk: { count: 0, rewardCoins: 0 },
-    active: { count: 0, rewardCoins: 0 },
-    unknown: { count: 0, rewardCoins: 0 }
+    afk: { count: 0, rewardCoins: 0, unconfirmedCount: 0, unconfirmedDropCoins: 0 },
+    active: { count: 0, rewardCoins: 0, unconfirmedCount: 0, unconfirmedDropCoins: 0 },
+    unknown: { count: 0, rewardCoins: 0, unconfirmedCount: 0, unconfirmedDropCoins: 0 }
   };
   for (const kill of kills || []) {
     const bucket = normalizePlayerCategory(kill);
     const key = bucket === 'active' || bucket === 'afk' ? bucket : 'unknown';
-    summary[key].count += 1;
+    if (kill.rewardConfirmed) summary[key].count += 1;
+    else summary[key].unconfirmedCount += 1;
     summary[key].rewardCoins += number(kill.rewardCoins);
+    summary[key].unconfirmedDropCoins += number(kill.unconfirmedDropCoins);
   }
   return summary;
 }
@@ -257,18 +268,113 @@ function combatHasActualEngagement(combat) {
   return false;
 }
 
+function stripReconnectSuffix(text) {
+  const value = String(text || '').trim();
+  const suffix = '，退出等待重连';
+  return value.endsWith(suffix) ? value.slice(0, value.length - suffix.length) : value;
+}
+
+function legacyDurationText(text) {
+  const value = String(text || '').trim();
+  const milliseconds = value.match(/^(\d+(?:\.\d+)?)ms$/i);
+  if (milliseconds) return `${milliseconds[1]}毫秒`;
+  return value;
+}
+
+function knownReasonText(reason) {
+  const value = String(reason || '').toLowerCase();
+  if (!value) return '';
+  if (/session-interrupted-before-next-login/.test(value)) return '下一次登录时发现上一局已结束，按下一次登录时间收口';
+  if (/no-self|game session missing self/.test(value)) return '已登录但自身实体不可见，退出等待重连';
+  if (/stamina-budget/.test(value)) return '一小时体力预算不足，退出等待恢复';
+  if (/stamina exhausted|stamina-exhausted/.test(value)) return '一天体力耗尽';
+  if (/combat hp disadvantage|combat-hp-disadvantage/.test(value)) return '战斗血量劣势，主动退出';
+  if (/combat low hp|combat-low-hp/.test(value)) return '战斗低血风险，主动退出';
+  if (/injury/.test(value)) return '受伤后主动退出';
+  if (/pursuit|sustained pursuit/.test(value)) return '被持续追击，主动退出';
+  if (/reconnect churn/.test(value)) return '网络连接反复重连，主动退出';
+  if (/offline|websocket|control-ws/.test(value)) return '网络连接离线，主动退出';
+  if (/leave-success|exit-confirmed/.test(value)) return '主动退出';
+  return '';
+}
+
+function parsedCombatExitSummary(text) {
+  const value = stripReconnectSuffix(text);
+  let match = value.match(/^与(.+?)战斗，近身弹压下血量([^，]+)，对方(?:HP|血量)\s*([^，]+)，差距([^，]+)(?:，距离([^，]+))?，提前劣势退出$/);
+  if (match) {
+    const [, name, selfHp, targetHp, gap, distance] = match;
+    return `与${name}战斗，近身弹压下血量${selfHp}，对方血量${targetHp}，差距${gap}${distance ? `，距离${distance}` : ''}，提前劣势退出`;
+  }
+  match = value.match(/^与(.+?)战斗，血量([^，]+)，对方(?:HP|血量)\s*([^，]+)，差距([^，]+)，劣势退出$/);
+  if (match) {
+    const [, name, selfHp, targetHp, gap] = match;
+    return `与${name}战斗，血量${selfHp}，对方血量${targetHp}，差距${gap}，劣势退出`;
+  }
+  match = value.match(/^与(.+?)战斗，血量([^，]+)，对方(?:HP|血量)\s*([^，]+)(，\d+秒未造成伤害)?，低血久攻未中退出$/);
+  if (match) {
+    const [, name, selfHp, targetHp, noDamageText = ''] = match;
+    return `与${name}战斗，血量${selfHp}，对方血量${targetHp}${noDamageText}，低血久攻未中退出`;
+  }
+  match = value.match(/^与(.+?)战斗，血量([^，]+)不足([^，]+)，对方(?:HP|血量)\s*([^，]+)(?:，距离([^，]+))?，低血近身风险退出$/);
+  if (match) {
+    const [, name, selfHp, threshold, targetHp, distance] = match;
+    return `与${name}战斗，血量${selfHp}不足${threshold}，对方血量${targetHp}${distance ? `，距离${distance}` : ''}，低血近身风险退出`;
+  }
+  match = value.match(/^与(.+?)战斗，血量([^，]+)不足([^，]+)，对方(?:HP|血量)\s*([^，]+)，劣势退出$/);
+  if (match) {
+    const [, name, selfHp, threshold, targetHp] = match;
+    return `与${name}战斗，血量${selfHp}不足${threshold}，对方血量${targetHp}，劣势退出`;
+  }
+  match = value.match(/^与(.+?)战斗，血量([^，]+)低于([^，]+)，紧急退出$/);
+  if (match) {
+    const [, name, selfHp, threshold] = match;
+    return `与${name}战斗，血量${selfHp}低于${threshold}，紧急退出`;
+  }
+  return '';
+}
+
+function parsedStaminaExitSummary(text) {
+  const value = stripReconnectSuffix(text);
+  let match = value.match(/^(?:1h体力预算不足|1h预算不足|一小时体力预算不足|一小时预算不足)[，：:]最近金币距离([^，]+)，预算([^，]+)，需要([^，]+)，差([^，]+)$/);
+  if (match) {
+    const [, distance, budget, required, shortage] = match;
+    return `一小时体力预算不足：最近金币距离${distance}，预算${legacyDurationText(budget)}，需要${legacyDurationText(required)}，差${legacyDurationText(shortage)}`;
+  }
+  if (/^(?:1h体力不足以拾取最近金币|一小时体力不足以拾取最近金币)/.test(value)) {
+    return '一小时体力不足以拾取最近金币';
+  }
+  if (/^(?:1d体力到达限制|1d体力耗尽|一天体力到达限制|一天体力耗尽)/.test(value)) {
+    return '一天体力耗尽';
+  }
+  if (/^(?:1h\/1d体力到达限制|一小时和一天体力到达限制)/.test(value)) {
+    return '一小时和一天体力均已到达限制';
+  }
+  return '';
+}
+
+function parsedNetworkExitSummary(text) {
+  const value = stripReconnectSuffix(text);
+  if (/WebSocket\s*反复重连|网络连接反复重连/.test(value)) return '网络连接反复重连，主动退出';
+  if (/WebSocket\s*离线且周围危险|网络连接离线且周围危险/.test(value)) return '网络连接离线且周围危险，主动退出';
+  if (/WebSocket\s*离线|网络连接离线/.test(value)) return '网络连接离线，主动退出';
+  return '';
+}
+
 function reasonText(reason, summary) {
   const text = String(summary || reason || '');
-  if (!text) return '未记录退出';
+  const reasonValue = String(reason || '').toLowerCase();
+  if (!text) return '原因未记录';
+  if (/session-interrupted-before-next-login/.test(reasonValue) || /上次登录未记录退出|下一次登录时发现上一局已结束/.test(text)) {
+    return '下一次登录时发现上一局已结束，按下一次登录时间收口';
+  }
   if (/game session missing self|no-self/i.test(text) || /game session missing self|no-self/i.test(reason || '')) {
     return '已登录但自身实体不可见，退出等待重连';
   }
-  return text
-    .replace(/，退出等待重连/g, '')
-    .replace(/1h体力预算不足，/g, '1h预算不足：')
-    .replace(/1d体力到达限制/g, '1d体力耗尽')
-    .replace(/WebSocket 反复重连/g, 'WS反复重连')
-    .replace(/WebSocket 离线/g, 'WS离线');
+  const parsed = parsedCombatExitSummary(text) || parsedStaminaExitSummary(text) || parsedNetworkExitSummary(text);
+  if (parsed) return parsed;
+  const fallback = stripReconnectSuffix(text);
+  if (/[\u4e00-\u9fff]/.test(fallback) && !/[A-Za-z][A-Za-z -]*:/.test(fallback)) return fallback;
+  return knownReasonText(reason) || knownReasonText(summary) || '原因未归类';
 }
 
 function buildExitEvents(entries) {
@@ -333,16 +439,41 @@ function buildReport(entries, options = {}) {
     session.kills = kills;
     session.rewardKillCount = kills.filter(kill => number(kill.rewardCoins) > 0).length;
     session.attributedKillRewardCoins = kills.reduce((sum, kill) => sum + number(kill.rewardCoins), 0);
+    session.unconfirmedKillDropCoins = kills.reduce((sum, kill) => sum + number(kill.unconfirmedDropCoins), 0);
     const buckets = killBucketSummary(kills);
-    session.afkKillCount = kills.length ? buckets.afk.count : number(session.afkKillCount);
-    session.afkKillRewardCoins = kills.length ? buckets.afk.rewardCoins : number(session.afkKillRewardCoins);
-    session.activeKillCount = kills.length ? buckets.active.count : number(session.activeKillCount);
-    session.activeKillRewardCoins = kills.length ? buckets.active.rewardCoins : number(session.activeKillRewardCoins);
-    session.unknownKillCount = kills.length ? buckets.unknown.count : number(session.unknownKillCount);
-    session.unknownKillRewardCoins = kills.length ? buckets.unknown.rewardCoins : number(session.unknownKillRewardCoins);
-    if (!Number.isFinite(Number(session.pureRefreshCoins))) {
+    if (kills.length) {
+      session.killRewardCoins = session.attributedKillRewardCoins;
+      session.afkKillCount = buckets.afk.count;
+      session.afkKillRewardCoins = buckets.afk.rewardCoins;
+      session.afkUnconfirmedKillCount = buckets.afk.unconfirmedCount;
+      session.afkUnconfirmedDropCoins = buckets.afk.unconfirmedDropCoins;
+      session.activeKillCount = buckets.active.count;
+      session.activeKillRewardCoins = buckets.active.rewardCoins;
+      session.activeUnconfirmedKillCount = buckets.active.unconfirmedCount;
+      session.activeUnconfirmedDropCoins = buckets.active.unconfirmedDropCoins;
+      session.unknownKillCount = buckets.unknown.count;
+      session.unknownKillRewardCoins = buckets.unknown.rewardCoins;
+      session.unknownUnconfirmedKillCount = buckets.unknown.unconfirmedCount;
+      session.unknownUnconfirmedDropCoins = buckets.unknown.unconfirmedDropCoins;
       const pickedCoins = number(session.pickedCoins) || number(session.coinsGained);
-      session.pureRefreshCoins = Math.max(0, pickedCoins - number(session.attributedKillRewardCoins || session.killRewardCoins));
+      session.pureRefreshCoins = Math.max(0, pickedCoins - number(session.attributedKillRewardCoins));
+    } else {
+      session.afkKillCount = number(session.afkKillCount);
+      session.afkKillRewardCoins = number(session.afkKillRewardCoins);
+      session.afkUnconfirmedKillCount = number(session.afkUnconfirmedKillCount);
+      session.afkUnconfirmedDropCoins = number(session.afkUnconfirmedDropCoins);
+      session.activeKillCount = number(session.activeKillCount);
+      session.activeKillRewardCoins = number(session.activeKillRewardCoins);
+      session.activeUnconfirmedKillCount = number(session.activeUnconfirmedKillCount);
+      session.activeUnconfirmedDropCoins = number(session.activeUnconfirmedDropCoins);
+      session.unknownKillCount = number(session.unknownKillCount);
+      session.unknownKillRewardCoins = number(session.unknownKillRewardCoins);
+      session.unknownUnconfirmedKillCount = number(session.unknownUnconfirmedKillCount);
+      session.unknownUnconfirmedDropCoins = number(session.unknownUnconfirmedDropCoins);
+      if (!Number.isFinite(Number(session.pureRefreshCoins))) {
+        const pickedCoins = number(session.pickedCoins) || number(session.coinsGained);
+        session.pureRefreshCoins = Math.max(0, pickedCoins - number(session.attributedKillRewardCoins || session.killRewardCoins));
+      }
     }
     session.dropMatchedKillCount = kills.filter(kill => kill.dropMatched).length;
     session.chatConfirmedKillCount = kills.filter(kill => kill.chatConfirmed).length;
@@ -373,6 +504,8 @@ function buildReport(entries, options = {}) {
     if (matched) combat.sessionId = matched.sessionId || '';
   }
   const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
+  const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
+  const open = sessionList.filter(item => !number(item.exitAt));
   return {
     day: options.day || '',
     entries: entries.length,
@@ -382,18 +515,24 @@ function buildReport(entries, options = {}) {
     totals: {
       sessions: sessionList.length,
       completed: completed.length,
-      incomplete: sessionList.length - completed.length,
+      inferred: inferred.length,
+      incomplete: open.length,
       loginDurationMs: completed.reduce((sum, item) => sum + number(item.loginDurationMs), 0),
       staminaSpentMs: completed.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
       coinsGained: completed.reduce((sum, item) => sum + number(item.coinsGained), 0),
       pureRefreshCoins: completed.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
       killRewardCoins: completed.reduce((sum, item) => sum + number(item.killRewardCoins), 0),
       attributedKillRewardCoins: completed.reduce((sum, item) => sum + number(item.attributedKillRewardCoins), 0),
+      unconfirmedKillDropCoins: completed.reduce((sum, item) => sum + number(item.unconfirmedKillDropCoins), 0),
       rewardKillCount: completed.reduce((sum, item) => sum + number(item.rewardKillCount), 0),
       afkKillCount: completed.reduce((sum, item) => sum + number(item.afkKillCount), 0),
       afkKillRewardCoins: completed.reduce((sum, item) => sum + number(item.afkKillRewardCoins), 0),
+      afkUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedKillCount), 0),
+      afkUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedDropCoins), 0),
       activeKillCount: completed.reduce((sum, item) => sum + number(item.activeKillCount), 0),
       activeKillRewardCoins: completed.reduce((sum, item) => sum + number(item.activeKillRewardCoins), 0),
+      activeUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedKillCount), 0),
+      activeUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedDropCoins), 0),
       combats: combatList.length,
       combatDurationMs: combatList.reduce((sum, item) => sum + number(item.durationMs), 0),
       combatStaminaSpentMs: combatList.reduce((sum, item) => sum + number(item.staminaSpentMs), 0)
@@ -418,19 +557,22 @@ function formatDuration(ms) {
   seconds -= hours * 3600;
   const minutes = Math.floor(seconds / 60);
   seconds -= minutes * 60;
-  return hours ? `${hours}h${String(minutes).padStart(2, '0')}m` : `${minutes}m${String(seconds).padStart(2, '0')}s`;
-}
-
-function formatVersion(version) {
-  return String(version || '-').replace(/^bootstrap-0\./, '.');
+  if (hours) return `${hours}小时${minutes}分钟`;
+  if (minutes) return `${minutes}分${seconds}秒`;
+  return `${seconds}秒`;
 }
 
 function formatCoins(value) {
   return `${number(value)}币`;
 }
 
-function formatKillCell(count, rewardCoins) {
-  return `${number(count)}次/${number(rewardCoins)}币`;
+function formatKillCell(count, rewardCoins, unconfirmedDropCoins = 0, unconfirmedCount = 0) {
+  const suspected = number(unconfirmedCount);
+  const suspectedCoins = number(unconfirmedDropCoins);
+  const suspectedText = suspected
+    ? `（疑似${suspected}次${suspectedCoins ? `/${suspectedCoins}币` : ''}）`
+    : '';
+  return `${number(count)}次/${number(rewardCoins)}币${suspectedText}`;
 }
 
 function formatStaminaSpent(value) {
@@ -443,49 +585,84 @@ function formatHp(value) {
 
 function formatHpChange(start, end, delta) {
   const deltaValue = Number.isFinite(Number(delta)) ? Number(delta) : (Number.isFinite(Number(start)) && Number.isFinite(Number(end)) ? Number(end) - Number(start) : null);
-  const deltaText = deltaValue === null ? '' : ` (${deltaValue > 0 ? '+' : ''}${Math.round(deltaValue * 10) / 10})`;
-  return `${formatHp(start)}->${formatHp(end)}${deltaText}`;
+  const deltaText = deltaValue === null ? '' : `（${deltaValue > 0 ? '+' : ''}${Math.round(deltaValue * 10) / 10}）`;
+  return `${formatHp(start)}到${formatHp(end)}${deltaText}`;
 }
 
 function formatEnemy(enemy) {
   const name = String(enemy?.name || '').trim();
   const id = enemy?.id === null || enemy?.id === undefined || enemy?.id === '' ? '' : String(enemy.id);
-  if (name && id) return `${name}/${id}`;
+  if (name && id) return `${name}（${id}）`;
   return name || id || '-';
+}
+
+function combatReasonText(reason) {
+  const value = String(reason || '').toLowerCase();
+  if (!value) return '';
+  if (value === 'kill') return '击杀确认';
+  if (value === 'target-switched') return '目标切换，原战斗记录结束';
+  if (value === 'post-combat-timeout') return '后置观察超时，未继续交火';
+  if (value === 'wait-for-full-stamina-and-hp') return '战后进入回血回体等待';
+  if (value === 'recovery-avoid-humans') return '恢复期避开附近玩家';
+  if (value === 'enemy-leave-wait') return '已主动离开，等待安全重登';
+  if (value === 'pursuit-leave') return '被持续追击，主动离开';
+  if (value === 'combat-hp-disadvantage-leave') return '血量劣势，主动离开';
+  if (value === 'combat-low-hp-leave') return '低血或近身风险，主动离开';
+  if (value === 'combat-critical-hp-leave') return '血量过低，紧急离开';
+  if (value === 'combat-low-hp-no-damage-leave') return '低血且久攻未中，主动离开';
+  if (value === 'injury-leave') return '受伤后离开';
+  if (value === 'offline-leave') return '连接离线后离开';
+  if (value === 'stamina-budget-coin-leave') return '一小时体力预算不足，离开等待恢复';
+  if (value === 'stamina-exhausted-leave' || value === 'stamina exhausted') return '一天体力耗尽，离开等待恢复';
+  if (value.startsWith('suspended:')) {
+    if (value.includes('enemy-leave-wait')) return '离开后的重登等待中，战斗记录挂起';
+    if (value.includes('login-suppressed')) return '重登等待中，战斗记录挂起';
+    if (value.includes('manual-login')) return '手动登录中断战斗记录';
+    return '等待状态中断战斗记录';
+  }
+  if (value.includes('leave')) return '主动离开';
+  if (value.includes('recover') || value.includes('retreat') || value.includes('flee')) return '局内撤离或恢复';
+  if (value.includes('timeout')) return '观察超时';
+  return '原因未归类';
 }
 
 function resultText(result, reason) {
   const value = String(result || '');
   const label = {
-    won: '胜',
-    lost: '败',
-    left: '退出',
-    retreated: '脱离',
-    disengaged: '脱战',
+    won: '胜利',
+    lost: '失败',
+    left: '主动退出',
+    retreated: '局内脱离',
+    disengaged: '脱战结束',
     ongoing: '进行中'
-  }[value] || value || '-';
-  return reason ? `${label}（${reason}）` : label;
+  }[value] || '状态未归类';
+  const detail = combatReasonText(reason);
+  return detail ? `${label}：${detail}` : label;
 }
 
 function printReport(report) {
-  console.log(`Day: ${report.day || '-'}; files=${report.files.length}; entries=${report.entries}`);
+  console.log(`日期：${report.day || '-'}；日志文件：${report.files.length}；记录数：${report.entries}`);
   console.log('');
   console.log('## 登录统计');
+  console.log('说明：击杀列格式为确认次数/确认收益；疑似表示只有聊天或掉落值线索，未确认目标死亡或拾取，不计入总收益。');
+  console.log('');
   console.log('| # | 登录时间 | 退出时间 | 耗时 | 消耗体力 | 拾取刷新金币 | 击杀挂机玩家 | 击杀活跃玩家 | 总收益 | 退出原因 |');
   console.log('|---:|---|---|---:|---:|---:|---:|---:|---:|---|');
   report.sessions.forEach((session, index) => {
-    const exit = number(session.exitAt) ? formatTime(session.exitAt) : '未记录';
+    const exit = number(session.exitAt) ? formatTime(session.exitAt) : '未收口';
     const status = session.inferredExit
-      ? `未记录退出；${reasonText(session.exitReason, session.exitSummary)}（推断）`
+      ? `推断收口：${reasonText(session.exitReason, session.exitSummary)}`
       : session.incomplete && !number(session.exitAt)
-      ? (session.nextLoginAt ? `未记录退出；下一次登录 ${formatDuration(session.nextLoginAt - number(session.loginAt))} 后出现` : '未记录退出')
+      ? (session.nextLoginAt ? `日志尚未收口：下一次登录在${formatDuration(session.nextLoginAt - number(session.loginAt))}后出现` : '日志尚未收口')
       : reasonText(session.exitReason, session.exitSummary);
-    console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins)} | ${formatCoins(session.coinsGained)} | ${status} |`);
+    console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins, session.afkUnconfirmedDropCoins, session.afkUnconfirmedKillCount)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins, session.activeUnconfirmedDropCoins, session.activeUnconfirmedKillCount)} | ${formatCoins(session.coinsGained)} | ${status} |`);
   });
   console.log('');
-  console.log(`登录合计: completed=${report.totals.completed}/${report.totals.sessions}, duration=${formatDuration(report.totals.loginDurationMs)}, stamina=${formatStaminaSpent(report.totals.staminaSpentMs)}, refreshCoins=${report.totals.pureRefreshCoins}, afkKills=${report.totals.afkKillCount}/${report.totals.afkKillRewardCoins}, activeKills=${report.totals.activeKillCount}/${report.totals.activeKillRewardCoins}, totalCoins=${report.totals.coinsGained}`);
+  console.log(`登录合计：明确退出${report.totals.completed}/${report.totals.sessions}，推断收口${report.totals.inferred}，尚未收口${report.totals.incomplete}，总耗时${formatDuration(report.totals.loginDurationMs)}，消耗体力${formatStaminaSpent(report.totals.staminaSpentMs)}，拾取刷新金币${report.totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(report.totals.afkKillCount, report.totals.afkKillRewardCoins, report.totals.afkUnconfirmedDropCoins, report.totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(report.totals.activeKillCount, report.totals.activeKillRewardCoins, report.totals.activeUnconfirmedDropCoins, report.totals.activeUnconfirmedKillCount)}，总收益${report.totals.coinsGained}币`);
   console.log('');
   console.log('## 活跃玩家战斗统计');
+  console.log('说明：主动退出表示已离开当前局并等待安全重登；局内脱离表示仍在局内撤退或恢复；脱战结束表示战斗记录因目标切换、观察超时等原因收口，不代表主动退出。');
+  console.log('');
   if (!report.combats.length) {
     console.log('无记录');
   } else {
@@ -496,7 +673,7 @@ function printReport(report) {
       console.log(`| ${index + 1} | ${formatEnemy(combat.enemy)} | ${formatTime(combat.startedAt)} | ${endedAt} | ${formatDuration(combat.durationMs)} | ${formatStaminaSpent(combat.staminaSpentMs)} | ${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)} | ${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)} | ${resultText(combat.result, combat.resultReason)} |`);
     });
     console.log('');
-    console.log(`战斗合计: count=${report.totals.combats}, duration=${formatDuration(report.totals.combatDurationMs)}, stamina=${formatStaminaSpent(report.totals.combatStaminaSpentMs)}`);
+    console.log(`战斗合计：次数${report.totals.combats}，总耗时${formatDuration(report.totals.combatDurationMs)}，消耗体力${formatStaminaSpent(report.totals.combatStaminaSpentMs)}`);
   }
 }
 
@@ -569,7 +746,7 @@ function runSelfTest() {
       importantLogId: `${s1}:kill-afk`,
       at: 3000,
       sessionId: s1,
-      kill: { at: 3000, name: 'afk-target', id: 7, rewardCoins: 9, playerCategory: 'afk', matchedAttack: true }
+      kill: { at: 3000, name: 'afk-target', id: 7, rewardCoins: 9, targetDrop: 9, playerCategory: 'afk', matchedAttack: true, dropMatched: true }
     },
     {
       type: 'important-log',
@@ -577,7 +754,15 @@ function runSelfTest() {
       importantLogId: `${s1}:kill-active`,
       at: 3500,
       sessionId: s1,
-      kill: { at: 3500, name: 'active-target', id: 8, rewardCoins: 4, playerCategory: 'active', combat: true }
+      kill: { at: 3500, name: 'active-target', id: 8, rewardCoins: 4, targetDrop: 4, playerCategory: 'active', combat: true, dropMatched: true }
+    },
+    {
+      type: 'important-log',
+      importantType: 'kill',
+      importantLogId: `${s1}:kill-active-unconfirmed`,
+      at: 3700,
+      sessionId: s1,
+      kill: { at: 3700, name: 'unpicked-active-target', id: 10, rewardCoins: 30, targetDrop: 30, playerCategory: 'active', combat: true, chatConfirmed: true, dropMatched: false }
     },
     {
       type: 'important-log',
@@ -640,7 +825,10 @@ function runSelfTest() {
   assertSelfTest(report.sessions[0].staminaSpentMs === 123000, 'cross-file stamina was not preserved');
   assertSelfTest(report.sessions[0].pureRefreshCoins === 7, 'pure refreshed coin total was not preserved');
   assertSelfTest(report.sessions[0].afkKillCount === 1 && report.sessions[0].afkKillRewardCoins === 9, 'AFK kill bucket was not computed');
-  assertSelfTest(report.sessions[0].activeKillCount === 1 && report.sessions[0].activeKillRewardCoins === 4, 'active kill bucket was not computed');
+  assertSelfTest(report.sessions[0].activeKillCount === 1 && report.sessions[0].activeKillRewardCoins === 4, 'active kill confirmed reward bucket was not computed');
+  assertSelfTest(report.sessions[0].activeUnconfirmedKillCount === 1, 'active unconfirmed kill count was not computed');
+  assertSelfTest(report.sessions[0].activeUnconfirmedDropCoins === 30, 'active unconfirmed drop bucket was not computed');
+  assertSelfTest(report.sessions[0].afkKillRewardCoins + report.sessions[0].activeKillRewardCoins <= report.sessions[0].coinsGained, 'confirmed kill rewards exceed total gained coins');
   assertSelfTest(report.combats.length === 1, `expected 1 combat, got ${report.combats.length}`);
   assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'immediate login exit was incorrectly counted as combat');
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
@@ -648,7 +836,7 @@ function runSelfTest() {
   assertSelfTest(report.sessions[1].incomplete === true, 'unclosed middle session was not marked incomplete');
   assertSelfTest(report.sessions[1].nextLoginAt === 20000, 'next-login context missing for incomplete session');
   fs.rmSync(root, { recursive: true, force: true });
-  console.log('daily-summary self-test passed');
+  console.log('日报自检通过');
 }
 
 function main() {
