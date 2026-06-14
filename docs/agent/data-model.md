@@ -1,0 +1,30 @@
+# Current Data Model
+
+
+- The page owns the game WebSocket lifecycle. The bot must not create or reconnect a second socket.
+- Control should use the page/native WebSocket and native page state when available.
+- A current user id plus page/native WebSocket in `CONNECTING` or `OPEN` state counts as an active page game session for login/status purposes, even if `tmpGameSessionToken` is unavailable.
+- Confirmed exits and successful/HTTP 403 leave completions must stop game-operation motion immediately. The stop path clears native movement keys, velocity vectors, `lastVel`, touch movement, and any pending precision pulse timer before the bot continues relogin/hold bookkeeping.
+- Tampermonkey and extension bootstraps can pass persisted runtime config to the remote bot, including combat logging enabled/address.
+- Bootstrap panel follows the native left-side panel visual language: 336px right rail, 16px radius, translucent dark rail background, native monospace font, status dot, compact dot pause/resume control, and compact metric cards for session uptime/stamina spent/coins/kills.
+- Bootstrap panel header uses compact dots: `BOT` dot toggles pause/resume, `WS` dot shows online/connecting/offline state, and the remote-log dot toggles combat logging.
+- Remote-log dot is green when logging is enabled, green blinking when entries are pending, yellow when disabled, and red after recent flush failures.
+- Metric cards show values only; labels are exposed through `title` and `aria-label`.
+- The HP line shows the three stamina windows as native remaining/limit pairs without 5s/1h/1d labels.
+- Session stamina spent is derived from 1d stamina and tracked across UTC+8 daily resets.
+- Important summary logs persist locally under `localStorage.graspRatImportantLogs` with `sessions`, `combats`, and replayable `events`. They record login/exit summaries, stamina/coin/kill totals, per-kill reward details, pure refreshed coin estimates, and combat HP deltas/results. When a combat-log endpoint is configured, these `important-log` events are posted to the same `/combat-log` service as non-critical logs even if normal combat logging is disabled.
+- Remote bot post-login zoom state is exposed in `status().postLoginZoom`; after self is missing for at least 1s, the next alive self detection schedules 4 native `zoomOutBtn` clicks after a 350ms resize-stabilization delay, then clicks at 80ms intervals. The `postLoginZoom` state is preserved across remote bot hot updates, so script replacement while already in-session does not re-trigger zoom.
+- When the page is already logged in/reconnecting but self entity is not visible yet, the remote status reports `game-session-connecting` with display reason `已登录，等待游戏连接/自身实体` instead of `login-cooldown`.
+- A logged-in/session-present no-self state is unsafe when native WebSocket reconnect churn is detected or the own entity stays missing for `gameSessionNoSelfLeaveMs = 30000`; it exits through the offline leave path instead of waiting indefinitely.
+- Native WebSocket reconnect churn is tracked from page WebSocket object/state transitions. Three offline-ish reconnect events within 10s count as `control-ws-reconnect-churn`.
+- `loginSnapshotGate` is exposed in status/log context. It resets on exit trigger and exit confirmation, then requires `loginSnapshotSuccessRequired = 3` consecutive successful `/snapshot` fetches before any auto or manual relogin attempt can proceed.
+- A stale ordinary offline relogin hold is cleared when the page has recovered to an alive self entity and an online native WebSocket, so the panel no longer shows an old offline-wait reason after recovery.
+- Bootstrap manifest polling defaults to 10s. Tampermonkey request transports and raw/jsDelivr fallback URLs are tried sequentially, so a successful poll should issue only one manifest network request instead of parallel duplicate raw GitHub requests.
+- Ordinary global refresh still fetches `/snapshot` and `/minimap` every `globalRefreshMs = 5000`.
+- The old movement-time server-position forced refresh probe has been removed. Movement no longer triggers extra `/snapshot` or `/minimap` requests.
+- Local/native page data is authoritative near the bot. Snapshot data is for outside-local awareness only.
+- For coins specifically: inside the local/view authority radius, do not use `/snapshot` coin drops. Real visible/local coins must come from native page coin state.
+- Native coin discovery includes the page render helper `getRenderCoinDrops()` plus native state coin/list fields; it accepts arrays, Map/Set values, object maps, single coin objects, and render/state getter functions. This is the authoritative source for visible viewport coins.
+- Snapshot coins are accepted only outside `max(nativeCoinAuthoritativeRadius, nativeState.viewRadiusCm/view_radius_cm/viewRadius/view_radius)`; `nativeCoinAuthoritativeRadius` is 50000cm.
+- Snapshot coin navigation candidates are snapshot-only (`snapshot && !native`). Native/visible coins must not receive `snapshot-coin-*` reasons even if merged metadata carries snapshot fields.
+- Removed local snapshot fallback: no `snapshotCoinLocalFallbackMaxDistance`, no local snapshot/native matching fallback.

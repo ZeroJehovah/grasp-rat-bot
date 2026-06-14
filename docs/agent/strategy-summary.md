@@ -1,0 +1,80 @@
+# Current Strategy Summary
+
+
+- Survival has priority over ROI:
+  - low HP recovery/flee paths remain first-class;
+  - combat critical HP and HP disadvantage can trigger leave;
+  - 1d long-window stamina exhaustion triggers leave/relogin hold until reset; 1h exhaustion uses a fixed 5 minute relogin delay because 1h stamina appears to recover continuously rather than at hourly reset.
+  - hostile leave/relogin messages now include the enemy summary and the actual wait time when available.
+  - repeated successful exits from the same identified enemy back off to at least 30 minutes on the second consecutive leave and 1 hour on the third or later.
+  - enemy/offline leave reason, target/player context, and remaining relogin wait are persisted in localStorage across page reloads.
+  - enemy/offline relogin hold waits are display-only; they stop movement and show the persisted reason/countdown, but do not keep sending leave requests.
+  - attempted combat/injury/pursuit/offline leave requests establish pending exit even when the transport reports a timeout/HTML error, so HP-based relogin hold can start after conservative exit confirmation.
+  - stamina-budget leave requests prime a non-offline login suppress immediately after an attempted leave command, so a page/context refresh before exit confirmation does not cause immediate auto-login.
+  - attempted unsafe exits from injury, combat disadvantage, pursuit, reconnect churn, server-position stall, or unsafe offline conditions prime a pending local login suppress for at least `unsafeExitReloginMinDelayMs` without setting confirmed enemy/offline hold state, so page reloads cannot instantly relogin but pending cover/retry behavior continues while still alive.
+  - confirmed ordinary safe offline exits are marked `safeReloginAllowed` and do not create an offline relogin suppress/hold; unsafe offline exits and stamina exits still create the required hold.
+  - exit suppress delay selection now takes the maximum of computed HP/fixed condition delay and any required minimum delay, so longer condition-specific cooldowns win for confirmed and pending unsafe exits.
+  - repeated native WebSocket reconnect churn triggers offline leave immediately instead of resetting the continuous offline timer on every brief reconnect.
+  - leave retries have a 10s floor and async completion handling; an unconfirmed exit remains pending, but if self is still alive/in-scene the bot continues ordinary combat/flee control instead of stopping in place.
+  - confirmed exit cooldown is entered after completed leave success, leave HTTP 403, or conservative local evidence from all three signals: token cleared, left chat showing `left user <currentUserId>`, and own entity absent from native/local/fresh snapshot state. Login-required/auth pages alone are weak evidence after leave errors.
+  - completed leave success/HTTP 403 and pending-exit confirmation stop native motion immediately before exit audit/log bookkeeping, so stale `keys`/`currentVel`/`lastVel` cannot keep the map moving after self disappears.
+  - leave HTTP 403 is treated as exit confirmation plus a risk-control relogin hold of at least 1 hour.
+  - WebSocket reconnect churn is treated as an offline exit condition as soon as the rolling reconnect window reaches the threshold, even if the page has just re-opened the socket.
+  - logged-in/no-self reconnect traps are treated as offline exits: reconnect churn exits immediately, and a 30s no-self timeout exits even without churn.
+  - every relogin attempt must pass `loginSnapshotGate` after the exit reset; existing cooldown/suppress waits and the 3 consecutive successful `/snapshot` gate must both be satisfied before login clicks.
+- Cloudflare error pages are detected by the remote bot and bootstrap layers and refresh every 5 seconds while the error page remains; full-page BunkerWeb 403 pages refresh every 10 minutes.
+  - Bootstrap panels render with DOM/textContent instead of innerHTML so Trusted Types/CSP protected error pages do not break the panel.
+- Tampermonkey and extension panels are embedded into the native left sidebar between Entity Control and Chat. The native title, Runtime Metrics, View Control, minimap dock, and native login button are hidden with `display:none`, and the script immediate-login button appears in the native login button position in Entity Control only while the page is not logged in. The injected layout forces `.app` to horizontal flex, `.side` to `min(336px,100vw)`, and `.workspace` back to a relative flex/grid item with `inset:auto`; `.map-shell`/`#world` fill the remaining viewport so tall/narrow native media rules cannot shift the game center or stretch the side panel across the page. Tampermonkey panel version is `0.4.47`; extension panel version is `0.1.26`.
+- Stamina-aware ROI is used for opportunities:
+  - movement cost is modeled at about `1ms` stamina per `1cm`;
+  - accepted shot cost is modeled at `500ms`;
+  - estimated damage is about `3HP` per accepted shot;
+  - non-survival actions are skipped when estimated cost cannot fit the 1h/1d stamina budget.
+  - if the 1h budget cannot afford the nearest safe coin candidate, the bot exits immediately with `stamina-budget-coin-leave` instead of waiting in game; this exit waits a fixed 30 minutes before relogin.
+  - AFK Drop targets enter opportunity scoring from Drop `3`; active/profit combat still uses the higher attack gates.
+  - opportunity stick bonus is disabled and switch hysteresis is small, so a clearly better nearby ROI target can replace an older far target promptly.
+  - similar same-tier opportunities are chosen immediately; once a target is selected, switch hold/margins keep the bot from jumping to another similar-ROI target unless it is clearly better.
+  - held coin opportunities are matched by id or nearby coordinates and can survive short candidate-source gaps for the remaining hold window, so a temporarily missing current coin does not cause a same-tier 1-coin target flip.
+- Coin routing:
+  - nearby and foot coins are prioritized before broader opportunities;
+  - post-attack dropped coins are prioritized when appropriate;
+  - far snapshot clusters can still be pursued, but only outside the local/view authority radius;
+  - safe affordable realtime/native coins inside the 500m local authority radius block far snapshot competition and snapshot idle fallback, and are used as visible-coin fallback targets when no higher-priority action wins;
+  - known coin-field migration is scored in the same opportunity pool as snapshot coin routing, so it shares ROI comparison and switch hysteresis instead of competing as a separate fallback branch.
+  - far low-value single snapshot coins are gated by distance/value during normal selection, but after 60s of continuous snapshot-coin waiting the bot chases a safe, fresh far snapshot coin instead of idling, even when ordinary long-window stamina ROI budget would otherwise keep it waiting.
+  - visible/native coin opportunities use visible coin reasons, not snapshot navigation reasons.
+  - when no action is chosen because only non-coin targets exceed the 1h/1d stamina budget, the wait reason remains `wait-for-stamina-budget`; coin-budget waits are no longer allowed to reach the 60s snapshot fallback when the nearest safe coin is unaffordable by 1h stamina.
+  - invulnerable active players use a wider coin danger radius and a heading/lane block, so the bot avoids walking toward them for coins even when the coin point itself is outside the old danger bubble.
+- Coin movement:
+  - far aligned coin movement uses dominant-axis approach to reduce snaking;
+  - near target handoff/brake prevents overshooting;
+  - close pickup uses shorter brake pulses and clears stale axis locks at exact tolerance.
+  - pickup pulses now shorten by distance bands as the bot nears the coin coordinate, and repeated close pickup misses further reduce pulse length before giving up on the coin.
+- Combat:
+  - defensive combat beats normal coin logic when a real threat exists;
+  - any non-whitelisted, non-invulnerable Active enemy inside `combatAttackRange` is a defensive combat target even if it is stationary, full-stamina, zero-drop, and not firing, so combat immediately beats coin pickup;
+  - combat HP disadvantage checks run as soon as the Active target enters combat selection, before waiting for a bullet/injury trigger;
+  - close combat backs away while shooting inside the shorter 45m spacing threshold;
+  - combat logging analysis showed 105-145m fights had very poor hit yield versus 30-75m, so default combat spacing now favors 45-65m instead of 75-105m;
+  - if the same combat target has no HP damage for at least 8s and self HP is at least 60, the bot pressures closer toward 65m while preserving real-bullet dodge priority;
+  - low HP plus long no-damage is not a standalone exit trigger; combat continues unless critical HP, low-HP disadvantage, or high-HP gap disadvantage thresholds fire;
+  - when pressure-close is active, diagonal tangent dodge keeps at least one target-closing axis so long no-damage fights do not keep drifting away at 100m+;
+  - incoming bullet pressure takes precedence over spacing;
+  - tangent dodge uses signed bullet lane when available;
+  - precise incoming signed-lane direction can override a stale opposite strafe lock; old logs showed conflicting locked strafe signs had worse self-damage/target-damage balance than aligned signs.
+  - if an already engaged target exists but another in-range player is the owner of a real incoming bullet threat, the bot temporarily prioritizes that shooter; synthetic `firing` pressure alone does not steal target focus.
+  - combat leave decisions now keep a combat cover action while the page has not yet confirmed exit: the bot continues dodge/spacing movement and planned shooting when self is still visible/alive instead of stopping in place under incoming fire.
+  - moving-target aim spread includes measured evasion physics;
+  - combat aim jitter and long no-damage aim widening are capped at `0.14rad`, because old delayed-hit attribution still showed `0.08-0.14rad` as the best stable aim bucket and higher buckets weakening sharply;
+  - combat shooting is stamina-aware: ordinary combat no longer force-bypasses `shootEveryMs`, normal combat cadence is 160ms, reserve-band fire is 360ms, and fire pauses below hard reserve or when 5s stamina should be saved for dodge.
+  - short-term target motion now scales aim jitter/lead down when a target is not meaningfully evading;
+  - an already engaged target stays under combat action priority even while recovering/non-full HP, including grace-range reengage before full disengage; non-engaged recovery threats can still use the safety/flee/recover path unless combat leave thresholds fire.
+  - pursuit leave thresholds remain 5 minutes normally, but shorten to 90 seconds when not full HP, 60 seconds for invulnerable chasers, and 45 seconds when both apply.
+  - optional Tampermonkey combat logging records only self-involved, non-AFK combat to local JSONL via `combat-log-service`; offline/relogin/no-self states pause logging and do not flush every tick.
+  - combat logging no longer starts from nearby third-party activity or AFK Drop attacks; AFK attack frames are also excluded from pre/post buffers.
+  - matching combat log sessions still include about 10s pre-combat, every combat tick, and about 10s post-combat.
+- combat log frames and session start/end events include final decision/exit reason, a top-level `exit` summary with relogin hold, pending suppress, minimum suppress, and HP-delay fields, login/suppress/hold context, self/target HP, current combat target mode/life/active/firing/invulnerable evidence, injury/pursuit context, capped nearby entities, capped bullets, control state, snapshot ages, and `combatMetrics` frame deltas for HP, distance, movement, shot cadence/result, target damage timing, bullet threat counts, nearest incoming bullet timing, and server-position stall state.
+- Targeting:
+  - whitelisted target names/ids must not be attacked;
+  - invulnerable targets are not valid opportunity/combat targets;
+  - AFK Drop targets compete by stamina ROI, not raw drop alone.

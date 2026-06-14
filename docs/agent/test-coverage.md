@@ -1,0 +1,85 @@
+# Current Test Coverage Notes
+
+
+- Latest bot self-test count: `146`.
+- Latest combat-log analyzer self-test count: `82`.
+- Recent important coverage:
+  - local snapshot coin at `185m` cannot beat visible/native coin;
+  - local snapshot-only coin is not chased;
+  - nearby native coin with stale snapshot metadata still reports visible coin reason;
+  - far snapshot clusters beyond local authority remain valid;
+  - nearby known coin fields beat farther snapshot fields by ROI;
+  - low-value far snapshot coin waits before 60s snapshot idle timeout and is chased after timeout when 1h budget can afford it;
+  - low 1h stamina exits instead of waiting when the nearest safe visible coin is unaffordable;
+  - low 1h stamina exits before the 60s snapshot idle fallback;
+  - 1h budget below a foot coin exits instead of bypassing long-window budget;
+  - low long-window stamina still reports `wait-for-stamina-budget` for target-only budget blocks;
+  - 150m coin beats richer 200m coin by nearby opportunity priority;
+  - same-value 150m coin beats a sticky older 213m coin target;
+  - similar same-tier ROI targets choose immediately instead of waiting;
+  - held similar ROI targets keep the current target to avoid jitter;
+  - missing held 54m coin target prevents a same-value 151m visible coin from taking over during source flicker;
+  - nearby Drop=3 AFK target beats far single coin by stamina ROI;
+  - Drop=3 AFK target in attack range beats 400m visible coin;
+  - low target motion shrinks combat aim jitter;
+  - precise incoming signed-lane direction overrides a stale opposite strafe lock;
+  - pressure-close diagonal strafe keeps a target-closing axis while preserving dodge movement;
+  - close target jitter and long no-damage aim widening stay capped at `0.14rad`;
+  - short 5s stamina exhaustion stops combat movement while keeping shooting enabled;
+  - very close combat still backs away, but 50m mid-range no longer backs away by default;
+  - long no-damage combat target triggers `combat-pressure-close`;
+  - recovering state no longer re-engages an already engaged stationary target in range;
+  - recovering state flees instead of re-engaging an active combat target unless combat leave thresholds fire;
+  - real incoming bullet shooter overrides an existing engaged target;
+  - synthetic firing pressure does not override an existing engaged target;
+  - emergency close combat spacing can override real-bullet dodge when too close, and combat leave cover uses spacing escape while exit is pending;
+  - low-HP close-risk combat exits before waiting for nominal HP disadvantage when under 50 HP and only within 5 HP of the target at close range;
+  - short 5s stamina exhaustion suppresses combat leave movement cover while preserving shoot intent;
+  - hostile combat/critical HP exit summaries include actionable context;
+  - invulnerable active players block same-direction coin routes while allowing coins in the opposite direction;
+  - pursuit leave thresholds shorten for non-full HP and invulnerable chasers;
+  - repeated same-enemy leave/relogin backoff uses 30 minute and 1 hour thresholds;
+  - offline reconnect churn summary reports an explicit `WebSocket 反复重连` reason;
+  - local combat-log collector write smoke test passed for JSONL append;
+  - combat-log analyzer reports missing top-level `exit` and unsafe relogin-delay issues from collected JSONL;
+  - combat-log monitor mode smoke test passed with `npm run monitor -- --watch-count 1 --latest 2`;
+  - fresh objective monitor script smoke test passed by confirming `npm run monitor:objective:fresh -- --watch-count 1 --watch-interval-ms 250` exits non-zero with expected no-current-log evidence issues when no fresh `.105` logs are present;
+  - objective observer script smoke test passed by confirming `npm run monitor:objective:observe -- --watch-count 1 --watch-interval-ms 250` exits zero while still printing expected missing `.109` evidence issues;
+  - objective status script smoke tests passed: `node scripts/objective-status.js --self-test` covers missing-evidence, safe-only, exit-only, and synthetic complete fixtures (`32` cases), `node scripts/objective-status.js` exits zero and reports granular requirement status, and `node scripts/objective-status.js --fail-on-incomplete` exits non-zero while fresh `.109` evidence is missing;
+  - combat-log version filter smoke test passed with zero matching entries/issues for `--min-version bootstrap-0.4.104` on current historical logs;
+  - manifest-based `analyze:current` / `monitor:current -- --watch-count 1` smoke tests passed and currently match zero `bootstrap-0.4.104` local log entries; current manifest target is now `bootstrap-0.4.109`;
+  - `validate:current` and `monitor:current:strict -- --watch-count 1` currently fail as expected with `no-matching-entries` because no `bootstrap-0.4.109` live logs are present yet;
+  - `validate:objective` and `monitor:objective -- --watch-count 1` currently fail as expected with `no-matching-entries`, `no-matching-exit-events`, `no-active-in-range-combat-events`, and `no-hp-disadvantage-exit-events` because no `bootstrap-0.4.109` live logs or required objective evidence samples are present yet;
+  - `monitor:objective:observe -- --watch-count 1 --watch-interval-ms 250` currently exits zero with the same missing-evidence report because it is intended for observation, not proof-of-completion gating;
+  - combat-log analyzer `npm test` covers temporary JSONL fixtures for missing top-level `exit`, unsafe-delay detection, and manifest exact-version filtering;
+  - combat-log analyzer `npm test` covers `missing-exit-reason` for top-level `exit` objects that omit explicit `exit.reason`;
+  - combat-log analyzer `npm test` covers `generic-exit-reason` for top-level `exit.reason` values like `cooldown` that do not explain the real exit root cause;
+  - combat-log analyzer `npm test` covers `safeReloginAllowed` safe offline zero-delay exits as safe relogin evidence rather than unsafe-delay issues;
+  - combat-log analyzer `npm test` covers `--require-entries` success when current entries exist and `no-matching-entries` failure when they do not;
+  - combat-log analyzer `npm test` covers `--fail-on-audit-issue` semantics: evidence-only gaps do not count as audit failures, while missing/generic exit reasons and behavior regressions do;
+  - combat-log analyzer `npm test` covers `--require-exit-events` success when current exit events exist and `no-matching-exit-events` failure when current logs contain no exit sample;
+  - combat-log analyzer `npm test` covers Active-in-range combat-response evidence counts, `--require-active-combat-events`, and `no-active-in-range-combat-events`;
+  - combat-log analyzer `npm test` covers `mode=Active` / `active:false` stationary/full-stamina entities as Active-in-range evidence for coin-action regression and combat-response evidence;
+  - combat-log analyzer `npm test` covers Active-in-range combat-response evidence from current `decision.target` fields even when `nearbyEntities` is absent, while coin targets do not false-positive as Active players;
+  - combat-log analyzer `npm test` covers HP-disadvantage combat-exit evidence counts, `--require-hp-disadvantage-exit-events`, and `no-hp-disadvantage-exit-events`;
+  - combat-log analyzer `npm test` covers login suppress/enemy-hold context extraction on exit events;
+  - combat-log analyzer `npm test` covers combat-end events preserving top-level `exit` and relogin delay instead of becoming missing-exit false positives;
+  - combat-log analyzer `npm test` covers `login-attempt-during-exit-hold` from both current decision login and prior `lastLogin.ignoredSuppressMs`, plus `manual-login-cleared-exit-hold`, without treating those relogin events as missing-exit false positives;
+  - combat-log analyzer `npm test` covers top-level `suspended:login-suppressed` and `suspended:manual-login` combat-end reasons as relogin/session-end exit events and reason-count evidence without missing-exit false positives;
+  - combat-log analyzer `npm test` covers `ambiguous-opportunity-wait` and `coin-action-with-active-player-in-range` behavior-regression detection;
+  - combat-log analyzer `npm test` covers exit/behavior reason-count summaries;
+  - combat-log analyzer `npm test` covers exit safety delay summaries for safe exits, unsafe exits meeting the minimum, and unsafe exits below the minimum;
+  - combat-log analyzer `npm test` covers reason-specific required-delay auditing for `stamina-budget-coin-leave`, including `exit-delay-below-required`;
+  - combat-log analyzer `npm test` covers manifest source-hash match, missing-hash, and mismatch evidence issues;
+  - local combat-log collector sourceHash propagation smoke test passed for payload-level sourceHash on session events;
+  - static objective build verifier passed 202 checks for current manifest/source hash alignment, key objective constants, runtime ambiguous-wait removal, bootstrap layout CSS, sourceHash wiring, bootstrap version consistency, compact panel dot controls, removed visible section/status titles, tooltip-only metric labels, raw remaining/limit stamina formatting, post-login zoom-out scheduling flow, join-mode Active non-AFK combat handling, logged combat target mode/safety fields, combat session-boundary sourceHash logging, login-suppressed/manual-login combat-log suspension, pending-exit top-level exit fallback, specific exit reason preservation during leave cooldown, longest exit suppress delay selection, important local/remote summary logs, safe offline immediate relogin behavior, non-invulnerable active combat priority over avoidance, and the stationary full-stamina Active coin-override self-test;
+  - bot self-tests cover preserving the outer specific top-level combat-log `exit.reason` when leave detail reason is generic `cooldown`;
+  - bot self-tests cover top-level combat-log `exit.safeReloginAllowed` / `exit.offlineSafety` for safe offline immediate relogin evidence;
+  - bot self-tests cover top-level combat-log `exit` summaries for non-exit decisions, pending-exit decisions, canonical combat leave reason preservation, pending unsafe suppress fields, and confirmed longer relogin holds;
+  - bot self-tests cover top-level combat-log `exit` fallback to decision-level hold/relogin fields for confirmed wait frames with `leave: null`;
+  - movement axis handoff/brake cases remain covered;
+  - coin pickup pulse length now decreases by near-distance band and repeated pickup failures;
+  - in-range Active targets beat foot coins without firing;
+  - stationary full-stamina join-mode Active targets are not treated as AFK and beat coin pickup;
+  - Active combat HP gap/low HP disadvantage exits fire before taking a bullet;
+  - combat spacing and measured-dodge aim spread remain covered.
