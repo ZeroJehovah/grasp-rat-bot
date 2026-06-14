@@ -1,5 +1,6 @@
 # Current State
 
+Update this file for every remote bot release or handoff-relevant version change. At minimum, keep the latest remote bot, manifest SHA-256, latest pushed commit, release note, and live-validation target current.
 
 - Latest remote bot: `bootstrap-0.4.159`.
 - Latest manifest SHA-256: `379deb8515086b4b8be4d81b8083d6326ea0d74aa2c2099e3636a51785788d05`.
