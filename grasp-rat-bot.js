@@ -236,6 +236,10 @@ function runSelfTest() {
     combatAimFallbackPrecisionNoDamageMs: 25000,
     combatAimLiveDivergencePrecisionCm: 1200,
     combatAimLiveDivergencePrecisionRatio: 0.08,
+    combatAimSnapshotOutlierCloseNativeRange: 8000,
+    combatAimSnapshotOutlierCloseSnapshotRatio: 2,
+    combatAimSnapshotOutlierDisadvantageRange: 11000,
+    combatAimSnapshotOutlierNoDamageMs: 1000,
     combatAimRadialPrecisionLateralRatio: 0.35,
     combatAimSteadyNoDamageMs: 6000,
     combatAimSteadySpeedMax: 5,
@@ -734,7 +738,7 @@ function runSelfTest() {
   }
   function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0, options = {}) {
     const pressureBullet = Boolean(options.realBulletPressure || options.incomingRealBullet || options.pressure);
-    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet };
+    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet, rejectedSnapshotOutlier: false, snapshotOutlierReason: '' };
     if (!snapshotSource) return empty;
     const reference = nativeSource || target || {};
     const sx = Number(snapshotSource.x);
@@ -753,7 +757,31 @@ function runSelfTest() {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
     const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
+    const closeNativeRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierCloseNativeRange || 0));
+    const closeSnapshotRatio = Math.max(1, Number(cfg.combatAimSnapshotOutlierCloseSnapshotRatio || 1));
+    const disadvantageRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierDisadvantageRange || 0));
+    const outlierNoDamageMs = Math.max(0, Number(cfg.combatAimSnapshotOutlierNoDamageMs || 0));
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const snapshotHp = combatHpValue(snapshotSource);
+    const targetMaxHp = Number(target?.max_hp ?? target?.maxHp ?? 100);
+    const closeNativeSnapshotOutlier = Boolean(authoritativeOutOfRange
+      && pressureBullet
+      && closeNativeRange
+      && nativeDistance <= closeNativeRange
+      && snapshotDistance >= attackRange * closeSnapshotRatio);
+    const staleSnapshotHpOutlier = Boolean(pressureBullet
+      && disadvantageRange
+      && nativeDistance <= disadvantageRange
+      && Number(noDamageMs || 0) >= outlierNoDamageMs
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(snapshotHp)
+      && targetHp > selfHp
+      && targetHp < snapshotHp
+      && (!Number.isFinite(targetMaxHp) || targetHp < targetMaxHp));
+    const rejectedSnapshotOutlier = closeNativeSnapshotOutlier || staleSnapshotHpOutlier;
+    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange) && !rejectedSnapshotOutlier);
     return {
       active,
       useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
@@ -763,7 +791,11 @@ function runSelfTest() {
       snapshotDistance: Math.round(snapshotDistance),
       nativeDistance: Math.round(nativeDistance),
       serverStall: Boolean(serverStall.stalled),
-      realBulletPressure: pressureBullet
+      realBulletPressure: pressureBullet,
+      rejectedSnapshotOutlier,
+      snapshotOutlierReason: closeNativeSnapshotOutlier
+        ? 'close-native-real-bullet'
+        : (staleSnapshotHpOutlier ? 'stale-snapshot-hp' : '')
     };
   }
   function combatAimSourceDivergenceState(aimSource, distance) {
@@ -4151,6 +4183,44 @@ function runSelfTest() {
       want: 'combat-stamina-conserve:false:authority-target-out-of-range:true:true'
     },
     {
+      name: 'combat close real-bullet target rejects far snapshot outlier',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 5000, y: 0, hp: 100, current_join_mode: 'Active', vx: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        bot.testSnapshotEntities = [{ user_id: 7, name: 'target', x: 45000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 0 }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, name: 'target', x: 5000, y: 0, distance: 5000, current_join_mode: 'Active', hp: 100, vx: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        bot.testSnapshotEntities = null;
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + Boolean(action.shoot) + ':' + Boolean(action.aimTarget?.authorityTargetOutOfRange) + ':' + action.aimTarget?.authority?.snapshotOutlierReason;
+      })(),
+      want: 'live-precision:live-precision:true:false:close-native-real-bullet'
+    },
+    {
+      name: 'combat losing damaged target rejects marginal out-of-range snapshot',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t - 12000, lastDamageAt: t - 12000, hp: 97 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 97, max_hp: 100, current_join_mode: 'Active', vx: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        bot.testSnapshotEntities = [{ user_id: 7, name: 'target', x: 16000, y: 0, hp: 100, max_hp: 100, current_join_mode: 'Active', vx: 0, vy: 0 }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 97, max_hp: 100, vx: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        bot.testSnapshotEntities = null;
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + Boolean(action.shoot) + ':' + Boolean(action.aimTarget?.authorityTargetOutOfRange) + ':' + action.aimTarget?.authority?.snapshotOutlierReason;
+      })(),
+      want: 'live-precision:live-precision:true:false:stale-snapshot-hp'
+    },
+    {
       name: 'combat very close target backs away while shooting',
       got: (() => {
         const action = chooseCombatAction(
@@ -5411,6 +5481,10 @@ function browserBotSource(config) {
     combatAimFallbackPrecisionNoDamageMs: 25000,
     combatAimLiveDivergencePrecisionCm: 1200,
     combatAimLiveDivergencePrecisionRatio: 0.08,
+    combatAimSnapshotOutlierCloseNativeRange: 8000,
+    combatAimSnapshotOutlierCloseSnapshotRatio: 2,
+    combatAimSnapshotOutlierDisadvantageRange: 11000,
+    combatAimSnapshotOutlierNoDamageMs: 1000,
     combatAimRadialPrecisionLateralRatio: 0.35,
     combatAimSteadyNoDamageMs: 6000,
     combatAimSteadySpeedMax: 5,
@@ -15632,7 +15706,7 @@ function browserBotSource(config) {
 
   function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0, options = {}) {
     const pressureBullet = Boolean(options.realBulletPressure || options.incomingRealBullet || options.pressure);
-    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet };
+    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet, rejectedSnapshotOutlier: false, snapshotOutlierReason: '' };
     if (!snapshotSource) return empty;
     const reference = nativeSource || target || {};
     const sx = Number(snapshotSource.x);
@@ -15651,7 +15725,31 @@ function browserBotSource(config) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
     const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
+    const closeNativeRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierCloseNativeRange || 0));
+    const closeSnapshotRatio = Math.max(1, Number(cfg.combatAimSnapshotOutlierCloseSnapshotRatio || 1));
+    const disadvantageRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierDisadvantageRange || 0));
+    const outlierNoDamageMs = Math.max(0, Number(cfg.combatAimSnapshotOutlierNoDamageMs || 0));
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const snapshotHp = combatHpValue(snapshotSource);
+    const targetMaxHp = Number(target?.max_hp ?? target?.maxHp ?? 100);
+    const closeNativeSnapshotOutlier = Boolean(authoritativeOutOfRange
+      && pressureBullet
+      && closeNativeRange
+      && nativeDistance <= closeNativeRange
+      && snapshotDistance >= attackRange * closeSnapshotRatio);
+    const staleSnapshotHpOutlier = Boolean(pressureBullet
+      && disadvantageRange
+      && nativeDistance <= disadvantageRange
+      && Number(noDamageMs || 0) >= outlierNoDamageMs
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(snapshotHp)
+      && targetHp > selfHp
+      && targetHp < snapshotHp
+      && (!Number.isFinite(targetMaxHp) || targetHp < targetMaxHp));
+    const rejectedSnapshotOutlier = closeNativeSnapshotOutlier || staleSnapshotHpOutlier;
+    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange) && !rejectedSnapshotOutlier);
     return {
       active,
       useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
@@ -15661,7 +15759,11 @@ function browserBotSource(config) {
       snapshotDistance: Math.round(snapshotDistance),
       nativeDistance: Math.round(nativeDistance),
       serverStall: Boolean(serverStall.stalled),
-      realBulletPressure: pressureBullet
+      realBulletPressure: pressureBullet,
+      rejectedSnapshotOutlier,
+      snapshotOutlierReason: closeNativeSnapshotOutlier
+        ? 'close-native-real-bullet'
+        : (staleSnapshotHpOutlier ? 'stale-snapshot-hp' : '')
     };
   }
 

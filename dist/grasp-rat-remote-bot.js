@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.167"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.168"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -144,6 +144,10 @@
     combatAimFallbackPrecisionNoDamageMs: 25000,
     combatAimLiveDivergencePrecisionCm: 1200,
     combatAimLiveDivergencePrecisionRatio: 0.08,
+    combatAimSnapshotOutlierCloseNativeRange: 8000,
+    combatAimSnapshotOutlierCloseSnapshotRatio: 2,
+    combatAimSnapshotOutlierDisadvantageRange: 11000,
+    combatAimSnapshotOutlierNoDamageMs: 1000,
     combatAimRadialPrecisionLateralRatio: 0.35,
     combatAimSteadyNoDamageMs: 6000,
     combatAimSteadySpeedMax: 5,
@@ -10404,7 +10408,7 @@
 
   function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0, options = {}) {
     const pressureBullet = Boolean(options.realBulletPressure || options.incomingRealBullet || options.pressure);
-    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet };
+    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet, rejectedSnapshotOutlier: false, snapshotOutlierReason: '' };
     if (!snapshotSource) return empty;
     const reference = nativeSource || target || {};
     const sx = Number(snapshotSource.x);
@@ -10423,7 +10427,31 @@
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
     const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
+    const closeNativeRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierCloseNativeRange || 0));
+    const closeSnapshotRatio = Math.max(1, Number(cfg.combatAimSnapshotOutlierCloseSnapshotRatio || 1));
+    const disadvantageRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierDisadvantageRange || 0));
+    const outlierNoDamageMs = Math.max(0, Number(cfg.combatAimSnapshotOutlierNoDamageMs || 0));
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const snapshotHp = combatHpValue(snapshotSource);
+    const targetMaxHp = Number(target?.max_hp ?? target?.maxHp ?? 100);
+    const closeNativeSnapshotOutlier = Boolean(authoritativeOutOfRange
+      && pressureBullet
+      && closeNativeRange
+      && nativeDistance <= closeNativeRange
+      && snapshotDistance >= attackRange * closeSnapshotRatio);
+    const staleSnapshotHpOutlier = Boolean(pressureBullet
+      && disadvantageRange
+      && nativeDistance <= disadvantageRange
+      && Number(noDamageMs || 0) >= outlierNoDamageMs
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(snapshotHp)
+      && targetHp > selfHp
+      && targetHp < snapshotHp
+      && (!Number.isFinite(targetMaxHp) || targetHp < targetMaxHp));
+    const rejectedSnapshotOutlier = closeNativeSnapshotOutlier || staleSnapshotHpOutlier;
+    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange) && !rejectedSnapshotOutlier);
     return {
       active,
       useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
@@ -10433,7 +10461,11 @@
       snapshotDistance: Math.round(snapshotDistance),
       nativeDistance: Math.round(nativeDistance),
       serverStall: Boolean(serverStall.stalled),
-      realBulletPressure: pressureBullet
+      realBulletPressure: pressureBullet,
+      rejectedSnapshotOutlier,
+      snapshotOutlierReason: closeNativeSnapshotOutlier
+        ? 'close-native-real-bullet'
+        : (staleSnapshotHpOutlier ? 'stale-snapshot-hp' : '')
     };
   }
 

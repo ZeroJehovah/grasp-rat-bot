@@ -612,6 +612,11 @@ function main() {
       assert(authorityBody.includes('serverStall.stalled || pressureBullet'), 'real bullet pressure cannot activate snapshot authority');
       assert(authorityBody.includes('authoritativeOutOfRange'), 'combat aim authority does not immediately guard out-of-range authoritative snapshots');
       assert(authorityBody.includes('pressure || authoritativeOutOfRange'), 'out-of-range authoritative snapshots still wait for pressure before suppressing fire');
+      assert(authorityBody.includes('staleSnapshotHpOutlier'), 'combat aim authority does not reject stale snapshot HP outliers');
+      assert(authorityBody.includes('targetHp < snapshotHp'), 'stale snapshot HP outlier does not compare target/snapshot HP');
+      assert(authorityBody.includes("snapshotOutlierReason: closeNativeSnapshotOutlier"), 'combat aim authority does not expose snapshot outlier reason');
+      assert(text.includes('combatAimSnapshotOutlierNoDamageMs: 1000'), 'snapshot outlier no-damage threshold is not configured');
+      assert(text.includes('combatAimSnapshotOutlierDisadvantageRange: 11000'), 'snapshot outlier disadvantage range is not configured');
       assert(text.includes('function combatAimTarget(self, target, options = {})'), 'combat aim target cannot receive pressure options');
       assert(combatBody.includes('combatAimTarget(self, target, { realBulletPressure })'), 'combat action does not pass real bullet pressure into aim authority');
       assert(text.includes('combatAimTarget(self, target, { realBulletPressure })'), 'leave cover does not pass real bullet pressure into aim authority');
