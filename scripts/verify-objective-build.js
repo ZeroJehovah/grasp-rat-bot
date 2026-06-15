@@ -841,8 +841,9 @@ function main() {
     assert(dailySummary.includes('已登录但自身实体不可见，退出等待重连'), 'daily summary does not explain no-self exits');
     assert(dailySummary.includes('!item.inferredExit'), 'inferred exits still count as completed sessions');
     assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
-    assert(dailySummary.includes('combatReasonText') && dailySummary.includes("left: '主动退出'") && dailySummary.includes('${label}：${detail}'), 'daily summary does not explain combat result reasons in Chinese');
-    assert(dailySummary.includes('说明：主动退出表示已离开当前局并等待安全重登'), 'daily summary does not explain combat result state labels');
+    assert(dailySummary.includes('combatReasonText') && dailySummary.includes('主动退出本局：${detail}') && dailySummary.includes('战斗记录收口：${detail}'), 'daily summary does not explain combat result reasons in Chinese');
+    assert(dailySummary.includes('left combat result text is not explicit') && dailySummary.includes('retreated combat result text is not explicit') && dailySummary.includes('disengaged combat result text is not explicit'), 'daily summary self-test does not cover explicit combat result labels');
+    assert(dailySummary.includes('说明：主动退出本局表示已离开当前局并等待安全重登/恢复'), 'daily summary does not explain combat result state labels');
     assert(dailySummary.includes('疑似表示只有聊天或掉落值线索') && dailySummary.includes('unconfirmedDropCoins'), 'daily summary does not separate confirmed kill rewards from unconfirmed drops');
     assert(!dailySummary.includes('登录合计: completed='), 'daily summary still prints English aggregate field names');
   });

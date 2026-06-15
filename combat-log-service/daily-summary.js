@@ -604,23 +604,23 @@ function combatReasonText(reason) {
   if (value === 'post-combat-timeout') return '后置观察超时，未继续交火';
   if (value === 'wait-for-full-stamina-and-hp') return '战后进入回血回体等待';
   if (value === 'recovery-avoid-humans') return '恢复期避开附近玩家';
-  if (value === 'enemy-leave-wait') return '已主动离开，等待安全重登';
-  if (value === 'pursuit-leave') return '被持续追击，主动离开';
-  if (value === 'combat-hp-disadvantage-leave') return '血量劣势，主动离开';
-  if (value === 'combat-low-hp-leave') return '低血或近身风险，主动离开';
-  if (value === 'combat-critical-hp-leave') return '血量过低，紧急离开';
-  if (value === 'combat-low-hp-no-damage-leave') return '低血且久攻未中，主动离开';
-  if (value === 'injury-leave') return '受伤后离开';
-  if (value === 'offline-leave') return '连接离线后离开';
-  if (value === 'stamina-budget-coin-leave') return '一小时体力预算不足，离开等待恢复';
-  if (value === 'stamina-exhausted-leave' || value === 'stamina exhausted') return '一天体力耗尽，离开等待恢复';
+  if (value === 'enemy-leave-wait') return '等待安全重登';
+  if (value === 'pursuit-leave') return '被持续追击';
+  if (value === 'combat-hp-disadvantage-leave') return '战斗血量劣势';
+  if (value === 'combat-low-hp-leave') return '战斗低血或近身风险';
+  if (value === 'combat-critical-hp-leave') return '战斗血量过低';
+  if (value === 'combat-low-hp-no-damage-leave') return '低血且久攻未中';
+  if (value === 'injury-leave') return '受伤';
+  if (value === 'offline-leave') return '连接离线';
+  if (value === 'stamina-budget-coin-leave') return '一小时体力预算不足';
+  if (value === 'stamina-exhausted-leave' || value === 'stamina exhausted') return '一天体力耗尽';
   if (value.startsWith('suspended:')) {
     if (value.includes('enemy-leave-wait')) return '离开后的重登等待中，战斗记录挂起';
     if (value.includes('login-suppressed')) return '重登等待中，战斗记录挂起';
     if (value.includes('manual-login')) return '手动登录中断战斗记录';
     return '等待状态中断战斗记录';
   }
-  if (value.includes('leave')) return '主动离开';
+  if (value.includes('leave')) return '触发离开';
   if (value.includes('recover') || value.includes('retreat') || value.includes('flee')) return '局内撤离或恢复';
   if (value.includes('timeout')) return '观察超时';
   return '原因未归类';
@@ -628,16 +628,14 @@ function combatReasonText(reason) {
 
 function resultText(result, reason) {
   const value = String(result || '');
-  const label = {
-    won: '胜利',
-    lost: '失败',
-    left: '主动退出',
-    retreated: '局内脱离',
-    disengaged: '脱战结束',
-    ongoing: '进行中'
-  }[value] || '状态未归类';
   const detail = combatReasonText(reason);
-  return detail ? `${label}：${detail}` : label;
+  if (value === 'won') return detail ? `胜利：${detail}` : '胜利';
+  if (value === 'lost') return detail ? `失败：${detail}` : '失败';
+  if (value === 'left') return detail ? `主动退出本局：${detail}` : '主动退出本局';
+  if (value === 'retreated') return detail ? `未退出本局：${detail}` : '未退出本局：局内撤退或恢复';
+  if (value === 'disengaged') return detail ? `战斗记录收口：${detail}` : '战斗记录收口';
+  if (value === 'ongoing') return detail ? `仍在记录中：${detail}` : '仍在记录中';
+  return detail ? `状态未归类：${detail}` : '状态未归类';
 }
 
 function printReport(report) {
@@ -661,7 +659,7 @@ function printReport(report) {
   console.log(`登录合计：明确退出${report.totals.completed}/${report.totals.sessions}，推断收口${report.totals.inferred}，尚未收口${report.totals.incomplete}，总耗时${formatDuration(report.totals.loginDurationMs)}，消耗体力${formatStaminaSpent(report.totals.staminaSpentMs)}，拾取刷新金币${report.totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(report.totals.afkKillCount, report.totals.afkKillRewardCoins, report.totals.afkUnconfirmedDropCoins, report.totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(report.totals.activeKillCount, report.totals.activeKillRewardCoins, report.totals.activeUnconfirmedDropCoins, report.totals.activeUnconfirmedKillCount)}，总收益${report.totals.coinsGained}币`);
   console.log('');
   console.log('## 活跃玩家战斗统计');
-  console.log('说明：主动退出表示已离开当前局并等待安全重登；局内脱离表示仍在局内撤退或恢复；脱战结束表示战斗记录因目标切换、观察超时等原因收口，不代表主动退出。');
+  console.log('说明：主动退出本局表示已离开当前局并等待安全重登/恢复；未退出本局表示仍在当前局内撤退、恢复或避战；战斗记录收口表示本条战斗因目标切换、观察超时等结束，不代表主动退出。');
   console.log('');
   if (!report.combats.length) {
     console.log('无记录');
@@ -833,6 +831,9 @@ function runSelfTest() {
   assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'immediate login exit was incorrectly counted as combat');
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
+  assertSelfTest(resultText('left', 'combat-hp-disadvantage-leave') === '主动退出本局：战斗血量劣势', 'left combat result text is not explicit');
+  assertSelfTest(resultText('retreated', 'recovery-avoid-humans') === '未退出本局：恢复期避开附近玩家', 'retreated combat result text is not explicit');
+  assertSelfTest(resultText('disengaged', 'target-switched') === '战斗记录收口：目标切换，原战斗记录结束', 'disengaged combat result text is not explicit');
   assertSelfTest(report.sessions[1].incomplete === true, 'unclosed middle session was not marked incomplete');
   assertSelfTest(report.sessions[1].nextLoginAt === 20000, 'next-login context missing for incomplete session');
   fs.rmSync(root, { recursive: true, force: true });
