@@ -442,6 +442,11 @@ function main() {
       assert(text.includes('rewardConfirmed') && text.includes('unconfirmedDropCoins'), 'kill summaries do not separate confirmed rewards from unconfirmed drops');
       assert(text.includes('staminaSpentStartMs') && text.includes('staminaSpentEndMs'), 'combat summaries do not include combat stamina range');
       assert(text.includes('selfHpDelta') && text.includes('enemyHpDelta'), 'combat summaries do not include HP deltas');
+      const importantCombatHpBody = functionBody(text, 'updateImportantCombatHp');
+      assert(importantCombatHpBody.includes('const previousStart = importantHpValue(record[startKey])'), 'important combat HP start does not use strict HP parsing');
+      assert(importantCombatHpBody.includes('if (previousStart === null) record[startKey] = value'), 'important combat HP start cannot backfill first observed HP');
+      assert(!importantCombatHpBody.includes('Number.isFinite(Number(record[startKey]))'), 'important combat HP start still treats null as numeric zero');
+      assert(functionBody(text, 'importantCombatSampleFromDecision').includes('selfHp: importantHpValue(knownHpValue(self))'), 'important combat self HP sampling does not use known HP aliases');
       assert(text.includes('closeOpenImportantSessionsBeforeStart(session'), 'unclosed important sessions are not closed before the next login');
       assert(text.includes('function importantCombatDecisionIsExitOnly'), 'important combat exit-only classifier not found');
       assert(text.includes('if (sample.exitOnly) return;'), 'exit-only combat samples can still start combat summaries');
