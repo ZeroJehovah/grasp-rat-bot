@@ -610,6 +610,8 @@ function main() {
       assert(aimBody.includes('combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource'), 'combat aim does not evaluate snapshot/native authority state');
       assert(authorityBody.includes('pressureBullet'), 'combat aim authority does not track real bullet pressure');
       assert(authorityBody.includes('serverStall.stalled || pressureBullet'), 'real bullet pressure cannot activate snapshot authority');
+      assert(authorityBody.includes('authoritativeOutOfRange'), 'combat aim authority does not immediately guard out-of-range authoritative snapshots');
+      assert(authorityBody.includes('pressure || authoritativeOutOfRange'), 'out-of-range authoritative snapshots still wait for pressure before suppressing fire');
       assert(text.includes('function combatAimTarget(self, target, options = {})'), 'combat aim target cannot receive pressure options');
       assert(combatBody.includes('combatAimTarget(self, target, { realBulletPressure })'), 'combat action does not pass real bullet pressure into aim authority');
       assert(text.includes('combatAimTarget(self, target, { realBulletPressure })'), 'leave cover does not pass real bullet pressure into aim authority');
@@ -880,6 +882,7 @@ function main() {
     assert(replay.includes('startLine: 12167') && replay.includes('endLine: 12351'), 'combat replay self-test does not cover the xmsthc reference fight');
     assert(replay.includes('2026-06-15-xmsthc-authority-divergence') && replay.includes('startLine: 5570') && replay.includes('endLine: 6237'), 'combat replay self-test does not cover the 2026-06-15 xmsthc authority-divergence fight');
     assert(replay.includes('2026-06-15-raf-authority-divergence') && replay.includes('startLine: 4421') && replay.includes('endLine: 5469'), 'combat replay self-test does not cover the 2026-06-15 raf authority-divergence fight');
+    assert(replay.includes('2026-06-16-mango-out-of-range-authority') && replay.includes('expectExtraSuppression'), 'combat replay self-test does not cover immediate out-of-range authority suppression');
   });
 
   check('grasp-rat-bot.js covers stationary full-stamina Active non-combat profit self-tests', () => {

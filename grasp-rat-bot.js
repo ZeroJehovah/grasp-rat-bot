@@ -750,9 +750,10 @@ function runSelfTest() {
     const divergence = Math.hypot(sx - rx, sy - ry);
     const serverStall = combatAimServerStallState();
     const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
-    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
+    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
+    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
     return {
       active,
       useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
@@ -815,7 +816,7 @@ function runSelfTest() {
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
-    if (authorityState?.useSnapshot) {
+    if (authorityState?.useSnapshot || authorityState?.suppressFire) {
       mode = 'snapshot-precision';
       strategy = 'snapshot-authority';
       reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence';
@@ -2484,7 +2485,7 @@ function runSelfTest() {
     const nativeAimSource = combatLiveAimTarget(self, target);
     const snapshotAimSource = combatSnapshotAimTarget(self, target);
     const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, noDamageMs, { realBulletPressure: incoming });
-    const aimSource = authorityState.useSnapshot ? snapshotAimSource : nativeAimSource;
+    const aimSource = (authorityState.useSnapshot || authorityState.suppressFire) ? snapshotAimSource : nativeAimSource;
     const aimMotionScale = combatAimMotionScale(aimSource);
     const aimMoving = speed(aimSource) >= cfg.combatStationarySpeed
       || aimMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
@@ -4111,6 +4112,24 @@ function runSelfTest() {
         return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.aimTarget?.authorityTargetOutOfRange);
       })(),
       want: 'combat-stamina-conserve:false:authority-target-out-of-range:true'
+    },
+    {
+      name: 'combat snapshot out-of-range divergence suppresses fire before stall',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        bot.testSnapshotEntities = [{ user_id: 7, name: 'target', x: 20000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 0 }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 }
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        bot.testSnapshotEntities = null;
+        return action.aimMode + ':' + action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + action.aimTarget?.x + ':' + action.aimTarget?.strategyReason;
+      })(),
+      want: 'snapshot-precision:combat-stamina-conserve:false:authority-target-out-of-range:20000:snapshot-divergence'
     },
     {
       name: 'combat real bullet pressure suppresses out-of-range snapshot authority',
@@ -15629,9 +15648,10 @@ function browserBotSource(config) {
     const divergence = Math.hypot(sx - rx, sy - ry);
     const serverStall = combatAimServerStallState();
     const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
-    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
+    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
+    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
     return {
       active,
       useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
@@ -15697,7 +15717,7 @@ function browserBotSource(config) {
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
-    if (authorityState?.useSnapshot) {
+    if (authorityState?.useSnapshot || authorityState?.suppressFire) {
       mode = 'snapshot-precision';
       strategy = 'snapshot-authority';
       reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence';
@@ -15749,7 +15769,7 @@ function browserBotSource(config) {
     const preliminaryDamage = combatAimDamageState(nativeAimSource);
     const snapshotAimSource = combatSnapshotAimTarget(self, target);
     const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, preliminaryDamage.noDamageMs, options);
-    const aimSource = authorityState.useSnapshot ? snapshotAimSource : nativeAimSource;
+    const aimSource = (authorityState.useSnapshot || authorityState.suppressFire) ? snapshotAimSource : nativeAimSource;
     const motionScale = combatAimMotionScale(aimSource);
     const moving = speed(aimSource) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));

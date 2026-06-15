@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.166"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.167"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -10420,9 +10420,10 @@
     const divergence = Math.hypot(sx - rx, sy - ry);
     const serverStall = combatAimServerStallState();
     const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
-    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
+    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
+    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
     return {
       active,
       useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
@@ -10488,7 +10489,7 @@
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
-    if (authorityState?.useSnapshot) {
+    if (authorityState?.useSnapshot || authorityState?.suppressFire) {
       mode = 'snapshot-precision';
       strategy = 'snapshot-authority';
       reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence';
@@ -10540,7 +10541,7 @@
     const preliminaryDamage = combatAimDamageState(nativeAimSource);
     const snapshotAimSource = combatSnapshotAimTarget(self, target);
     const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, preliminaryDamage.noDamageMs, options);
-    const aimSource = authorityState.useSnapshot ? snapshotAimSource : nativeAimSource;
+    const aimSource = (authorityState.useSnapshot || authorityState.suppressFire) ? snapshotAimSource : nativeAimSource;
     const motionScale = combatAimMotionScale(aimSource);
     const moving = speed(aimSource) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));

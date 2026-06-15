@@ -70,7 +70,7 @@
   - moving-target aim spread includes measured evasion physics;
   - combat aim is behavior-driven: it can switch to live/native precision when selected-target and native coordinates diverge, when server-position stall makes live movement more useful, or when target movement is mostly radial;
   - under server-position stall, long no-damage pressure, or real incoming bullet pressure from the current target, fresh snapshot/server target coordinates can become authoritative when they diverge from native/live coordinates by the configured precision threshold. This `snapshot-authority` path handles dynamic opponent attempts to exploit coordinate-authority differences instead of tailoring to a named opponent;
-  - if the authoritative snapshot/server target is outside attack range, combat suppresses fire with `authority-target-out-of-range` rather than spending stamina at the stale native/live coordinate;
+  - if a fresh divergent snapshot/server target is already outside attack range, combat suppresses fire with `authority-target-out-of-range` immediately, even before server-stall/no-damage pressure is established, rather than spending stamina at the stale native/live coordinate;
   - combat aim jitter and long no-damage aim widening are capped at `0.14rad`, because old delayed-hit attribution still showed `0.08-0.14rad` as the best stable aim bucket and higher buckets weakening sharply;
   - combat shooting is stamina-aware: ordinary combat no longer force-bypasses `shootEveryMs`, normal combat cadence is 160ms, reserve-band fire is 360ms, and fire pauses below hard reserve or when 5s stamina should be saved for dodge.
   - short-term target motion now scales aim jitter/lead down when a target is not meaningfully evading;

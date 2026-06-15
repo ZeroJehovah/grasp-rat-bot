@@ -386,8 +386,9 @@ function pressureAuthorityState(frame, options) {
       || incomingRealBullet(frame)
       || (Number(options.combatAimNoDamageMs || 0) && frame.noDamageMs >= Number(options.combatAimNoDamageMs || 0))
   );
-  const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
   const attackRange = Math.max(0, Number(options.combatAttackRange || 0));
+  const authoritativeOutOfRange = Boolean(attackRange && authorityDistance > attackRange);
+  const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
   return {
     active,
     useSnapshot: Boolean(active && (!attackRange || authorityDistance <= attackRange)),
@@ -597,6 +598,17 @@ function selfTest() {
       targetId: '20606',
       targetName: 'xmsthc',
       expectSuppressed: true
+    },
+    {
+      id: '2026-06-16-mango-out-of-range-authority',
+      file: path.join(__dirname, 'logs/2026-06-16/-_-_-_-.jsonl'),
+      startLine: 1613,
+      endLine: 2502,
+      selfId: '28886',
+      targetId: '31361',
+      targetName: 'mango',
+      expectSuppressed: true,
+      expectExtraSuppression: true
     }
   ];
   const summaries = cases.map(item => {
@@ -615,6 +627,9 @@ function selfTest() {
     const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
     if (item.expectSuppressed && (!pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)) {
       throw new Error(`${item.id} pressure authority did not suppress only no-hit logged shots`);
+    }
+    if (item.expectExtraSuppression && (!pressureAuthority || pressureAuthority.suppressed < 6)) {
+      throw new Error(`${item.id} out-of-range authority did not suppress the stale opening shots`);
     }
     return {
       id: item.id,
