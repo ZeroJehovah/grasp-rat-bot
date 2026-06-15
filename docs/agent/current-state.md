@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.164`.
 - Latest manifest SHA-256: `62ff43629b2d9c9e46953142ab7c53c4f6c0e8caf370ffd4275246b2bff079f8`.
-- Latest pushed commit: `b5a91b1 Clarify daily combat result labels`.
+- Latest pushed commit: `48900b9 Make daily combat results event-based`.
 - Latest bootstrap A versions: Tampermonkey `0.4.51`, extension `0.1.30`.
 - Current objective: optimize live action logic using measured game parameters. Priorities are survival first, then stamina-aware ROI, reduced wasteful movement/target jitter, and low-noise runtime behavior.
 - Long-term combat iteration direction: before hitting the local machine's compute limit, combat logic may continue becoming more flexible and more complex, including combat-only higher decision/react frequency, replay/evaluation driven tuning, and shared combat stance/trend layers for target, movement, shooting, and exit decisions. Each battle upgrade must preserve or improve existing winnable matchups; prefer guarded windows, self-tests, and log/replay evidence over broad global threshold changes that could make previously beatable opponents harder to beat.
