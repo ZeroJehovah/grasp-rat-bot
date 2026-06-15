@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `188`.
+- Latest bot self-test count: `189`.
 - Latest combat-log analyzer self-test count: `82`.
 - Recent important coverage:
   - local snapshot coin at `185m` cannot beat visible/native coin;
@@ -34,6 +34,7 @@
   - retreating edge-range combat targets suppress fire with `target-retreating-edge`;
   - retreat-ignored targets are not reselected without incoming bullets, while real incoming bullets can still re-engage the shooter for defense;
   - recovering state keeps already engaged stationary, active, and non-retreating grace-range combat targets under combat priority;
+  - full-HP and non-full states both keep invulnerable targets under safety flee behavior, including non-Active invulnerable nearby targets;
   - real incoming bullet shooter overrides an existing engaged target;
   - synthetic firing pressure does not override an existing engaged target;
   - emergency close combat spacing can override real-bullet dodge when too close, and combat leave cover uses spacing escape while exit is pending;
@@ -70,6 +71,7 @@
   - combat-log analyzer `npm test` covers combat-end events preserving top-level `exit` and relogin delay instead of becoming missing-exit false positives;
   - combat-log analyzer `npm test` covers `login-attempt-during-exit-hold` from both current decision login and prior `lastLogin.ignoredSuppressMs`, plus `manual-login-cleared-exit-hold`, without treating those relogin events as missing-exit false positives;
   - combat-log analyzer `npm test` covers top-level `suspended:login-suppressed` and `suspended:manual-login` combat-end reasons as relogin/session-end exit events and reason-count evidence without missing-exit false positives;
+  - daily-summary self-test filters non-combat safety avoidance closures such as legacy `recovery-avoid-humans` out of active-combat statistics;
   - combat-log analyzer `npm test` covers `ambiguous-opportunity-wait` and `coin-action-with-active-player-in-range` behavior-regression detection;
   - combat-log analyzer `npm test` covers exit/behavior reason-count summaries;
   - combat-log analyzer `npm test` covers exit safety delay summaries for safe exits, unsafe exits meeting the minimum, and unsafe exits below the minimum;
@@ -77,7 +79,7 @@
   - combat-log analyzer `npm test` covers manifest source-hash match, missing-hash, and mismatch evidence issues;
   - combat replay self-tests cover the 2026-06-14 xmsthc reference plus 2026-06-15 xmsthc and 菈菲爾 authority-divergence fights; replay estimates improved hits from `0->14`, `3->57`, and `5->73` respectively, and the `.161` xmsthc pressure-authority window suppresses 47 old shots with `suppressedLoggedHits=0`.
   - local combat-log collector sourceHash propagation smoke test passed for payload-level sourceHash on session events;
-  - static objective build verifier passed 212 checks for current manifest/source hash alignment, key objective constants, runtime ambiguous-wait removal, bootstrap layout CSS, sourceHash wiring, bootstrap version consistency, compact panel dot controls, removed visible section/status titles, tooltip-only metric labels, raw remaining/limit stamina formatting, post-login zoom-out scheduling flow, join-mode Active non-AFK combat handling, logged combat target mode/safety fields, combat session-boundary sourceHash logging, login-suppressed/manual-login combat-log suspension, pending-exit top-level exit fallback, specific exit reason preservation during leave cooldown, longest exit suppress delay selection, important local/remote summary logs including combat HP start backfill from the first valid sample and explicit daily combat result labels, safe offline immediate relogin behavior, stale enemy relogin hold clearing after online recovery, non-invulnerable active combat priority over avoidance, retreating-target disengage/fire suppression, snapshot-authority aim/fire suppression, and the stationary full-stamina Active coin-override self-test;
+  - static objective build verifier passed 212 checks for current manifest/source hash alignment, key objective constants, runtime ambiguous-wait removal, bootstrap layout CSS, sourceHash wiring, bootstrap version consistency, compact panel dot controls, removed visible section/status titles, tooltip-only metric labels, raw remaining/limit stamina formatting, post-login zoom-out scheduling flow, join-mode Active non-AFK combat handling, logged combat target mode/safety fields, combat session-boundary sourceHash logging, login-suppressed/manual-login combat-log suspension, pending-exit top-level exit fallback, specific exit reason preservation during leave cooldown, longest exit suppress delay selection, important local/remote summary logs including combat HP start backfill from the first valid sample, explicit daily combat result labels, and safety-avoidance filtering, safe offline immediate relogin behavior, stale enemy relogin hold clearing after online recovery, non-invulnerable active combat priority over avoidance, retreating-target disengage/fire suppression, snapshot-authority aim/fire suppression, and the stationary full-stamina Active coin-override self-test;
   - bot self-tests cover preserving the outer specific top-level combat-log `exit.reason` when leave detail reason is generic `cooldown`;
   - bot self-tests cover top-level combat-log `exit.safeReloginAllowed` / `exit.offlineSafety` for safe offline immediate relogin evidence;
   - bot self-tests cover top-level combat-log `exit` summaries for non-exit decisions, pending-exit decisions, canonical combat leave reason preservation, pending unsafe suppress fields, and confirmed longer relogin holds;

@@ -558,7 +558,8 @@ function main() {
       assert(body.includes('const avoidanceThreats = activeThreats.filter(isAvoidanceThreat)'), 'ordinary active threats can still enter the avoidance set');
       assert(text.includes('const isAvoidanceThreat = e => isInvulnerable(e)'), 'avoidance threat helper is not limited to invulnerable players');
       assert(body.includes('if (recoveryCombatAction) {'), 'recovery combat can still fall through to non-combat avoidance');
-      assert(body.includes('return recovery ? isRecoveryUnsafeHuman(e) : isAvoidanceThreat(e)'), 'nearby human avoidance is not limited to invulnerable players');
+      assert(body.includes('const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e))'), 'nearby safety avoidance is not limited to invulnerable players');
+      assert(body.includes("const reason = 'avoid-invulnerable-target'"), 'nearby invulnerable avoidance does not use the non-combat safety reason');
       assert(!body.includes('const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'old recovery-leave-only combat branch is still present');
       const classifyBody = functionBody(text, 'classify');
       assert(classifyBody.includes('const combatCandidateRange = combatTargetCandidateRange(self)'), 'combat target classification does not use HP-aware candidate range');
@@ -832,6 +833,8 @@ function main() {
     assert(dailySummary.includes('report.combats[0].staminaSpentMs === 2500'), 'daily summary self-test does not cover combat stamina');
     assert(dailySummary.includes('combatHasActualEngagement(combat)'), 'daily summary does not filter non-engaged combat summaries');
     assert(dailySummary.includes('immediate login exit was incorrectly counted as combat'), 'daily summary self-test does not cover immediate login exits');
+    assert(dailySummary.includes('combatIsNonCombatSafetyClosure(combat)'), 'daily summary does not filter non-combat safety avoidance closures');
+    assert(dailySummary.includes('safety avoidance was incorrectly counted as combat'), 'daily summary self-test does not cover safety avoidance filtering');
   });
 
   check('combat-log daily summary exposes incomplete exits and no-self text', () => {
@@ -843,8 +846,9 @@ function main() {
     assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
     assert(dailySummary.includes('combatReasonText') && dailySummary.includes('战后恢复：停止交战') && dailySummary.includes('敌方逃离：目标脱离交火范围'), 'daily summary does not explain combat result reasons in Chinese');
     assert(dailySummary.includes('left combat result text is not explicit') && dailySummary.includes('recovery wait result text is not explicit') && dailySummary.includes('retreating-target combat result text is not explicit') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover explicit combat result labels');
-    assert(dailySummary.includes('说明：主动退出本局表示已离开当前局；战后恢复/恢复期安全撤开'), 'daily summary does not explain combat result state labels');
+    assert(dailySummary.includes('避开无敌目标属于安全移动，不计入本表'), 'daily summary does not explain safety avoidance exclusion');
     assert(!dailySummary.includes('恢复期遇到附近玩家'), 'daily summary still implies ordinary nearby-player recovery flee behavior');
+    assert(!dailySummary.includes('恢复期安全撤开'), 'daily summary still exposes safety avoidance as a combat result label');
     assert(dailySummary.includes('疑似表示只有聊天或掉落值线索') && dailySummary.includes('unconfirmedDropCoins'), 'daily summary does not separate confirmed kill rewards from unconfirmed drops');
     assert(!dailySummary.includes('登录合计: completed='), 'daily summary still prints English aggregate field names');
   });
@@ -899,6 +903,7 @@ function main() {
     assert(sourceBot.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');
     assert(sourceBot.includes("name: 'non-full active edge target reengages instead of fleeing'"), 'non-full active edge reengage self-test not found');
     assert(sourceBot.includes("name: 'non-full invulnerable active still flees'"), 'invulnerable active flee self-test not found');
+    assert(sourceBot.includes("name: 'full hp nearby invulnerable target still flees'"), 'full-HP invulnerable safety flee self-test not found');
     assert(sourceBot.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
     assert(sourceBot.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
     assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
