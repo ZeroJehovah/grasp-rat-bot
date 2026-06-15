@@ -80,6 +80,7 @@
   - combat logging no longer starts from nearby third-party activity or AFK Drop attacks; AFK attack frames are also excluded from pre/post buffers.
   - matching combat log sessions still include about 10s pre-combat, every combat tick, and about 10s post-combat.
   - safety movement such as `avoid-invulnerable-target` does not immediately close an important combat summary; old `recovery-avoid-humans` summaries are filtered from daily active-combat statistics.
+  - important combat summaries treat post-combat recovery waits as an observation period, not a combat result; if the target does not return before the post buffer expires, the daily report folds that target loss into `敌方逃离`.
 - combat log frames and session start/end events include final decision/exit reason, a top-level `exit` summary with relogin hold, pending suppress, minimum suppress, and HP-delay fields, login/suppress/hold context, self/target HP, current combat target mode/life/active/firing/invulnerable evidence, aim strategy fields including snapshot-authority/out-of-range/real-bullet-pressure evidence, injury/pursuit context, capped nearby entities, capped bullets, control state, snapshot ages, and `combatMetrics` frame deltas for HP, distance, movement, shot cadence/result, target damage timing, bullet threat counts, nearest incoming bullet timing, and server-position stall state.
 - Targeting:
   - whitelisted target names/ids must not be attacked;

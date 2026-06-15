@@ -554,12 +554,15 @@ function main() {
     });
     check(`${file} keeps non-invulnerable active combat above avoidance`, () => {
       const body = functionBody(text, 'chooseAction');
+      const recordImportantBody = functionBody(text, 'recordImportantCombatTick');
       assert(body.includes('const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'recovery combat action is not built in chooseAction');
       assert(body.includes('const avoidanceThreats = activeThreats.filter(isAvoidanceThreat)'), 'ordinary active threats can still enter the avoidance set');
       assert(text.includes('const isAvoidanceThreat = e => isInvulnerable(e)'), 'avoidance threat helper is not limited to invulnerable players');
       assert(body.includes('if (recoveryCombatAction) {'), 'recovery combat can still fall through to non-combat avoidance');
       assert(body.includes('const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e))'), 'nearby safety avoidance is not limited to invulnerable players');
       assert(body.includes("const reason = 'avoid-invulnerable-target'"), 'nearby invulnerable avoidance does not use the non-combat safety reason');
+      assert(text.includes('function importantCombatReasonIsPostCombatObservation'), 'important combat logging does not classify post-combat observation reasons');
+      assert(recordImportantBody.includes('importantCombatReasonIsPostCombatObservation(reason)'), 'important combat logging can still close immediately on recovery wait');
       assert(!body.includes('const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'old recovery-leave-only combat branch is still present');
       const classifyBody = functionBody(text, 'classify');
       assert(classifyBody.includes('const combatCandidateRange = combatTargetCandidateRange(self)'), 'combat target classification does not use HP-aware candidate range');
@@ -844,11 +847,13 @@ function main() {
     assert(dailySummary.includes('已登录但自身实体不可见，退出等待重连'), 'daily summary does not explain no-self exits');
     assert(dailySummary.includes('!item.inferredExit'), 'inferred exits still count as completed sessions');
     assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
-    assert(dailySummary.includes('combatReasonText') && dailySummary.includes('战后恢复：停止交战') && dailySummary.includes('敌方逃离：目标脱离交火范围'), 'daily summary does not explain combat result reasons in Chinese');
-    assert(dailySummary.includes('left combat result text is not explicit') && dailySummary.includes('recovery wait result text is not explicit') && dailySummary.includes('retreating-target combat result text is not explicit') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover explicit combat result labels');
+    assert(dailySummary.includes('combatReasonText') && dailySummary.includes('敌方逃离：目标脱离交火范围') && dailySummary.includes('敌方逃离：目标消失或脱离交火范围'), 'daily summary does not fold target loss into enemy flee text');
+    assert(dailySummary.includes('left combat result text is not explicit') && dailySummary.includes('recovery wait result text is not folded into enemy flee') && dailySummary.includes('post-combat timeout result text is not folded into enemy flee') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover explicit combat result labels');
     assert(dailySummary.includes('避开无敌目标属于安全移动，不计入本表'), 'daily summary does not explain safety avoidance exclusion');
     assert(!dailySummary.includes('恢复期遇到附近玩家'), 'daily summary still implies ordinary nearby-player recovery flee behavior');
     assert(!dailySummary.includes('恢复期安全撤开'), 'daily summary still exposes safety avoidance as a combat result label');
+    assert(!dailySummary.includes('战后恢复：停止交战'), 'daily summary still exposes post-combat recovery as a combat result');
+    assert(!dailySummary.includes('交火停止'), 'daily summary still exposes post-combat timeout as a combat result');
     assert(dailySummary.includes('疑似表示只有聊天或掉落值线索') && dailySummary.includes('unconfirmedDropCoins'), 'daily summary does not separate confirmed kill rewards from unconfirmed drops');
     assert(!dailySummary.includes('登录合计: completed='), 'daily summary still prints English aggregate field names');
   });
