@@ -593,17 +593,26 @@ function main() {
       assert(text.includes('function combatAimDynamicStrategyState'), 'dynamic combat aim strategy helper not found');
       assert(text.includes('function combatAimSourceDivergenceState'), 'combat aim source divergence helper not found');
       assert(text.includes('function combatLiveAimTarget'), 'live/native combat aim helper not found');
+      assert(text.includes('function combatSnapshotAimTarget'), 'snapshot combat aim helper not found');
+      assert(text.includes('function combatAimAuthorityState'), 'combat aim authority helper not found');
       assert(text.includes('function combatAimSteadyNoDamageState'), 'steady no-damage aim helper not found');
       assert(aimBody.includes('combatAimDynamicStrategyState(self, target, aimSource'), 'combat aim does not use dynamic strategy state');
+      assert(aimBody.includes('combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource'), 'combat aim does not evaluate snapshot/native authority state');
       assert(text.includes("reason = 'coordinate-divergence'"), 'combat aim does not switch on live/source coordinate divergence');
+      assert(text.includes("strategy = 'snapshot-authority'"), 'combat aim does not switch to snapshot authority strategy');
+      assert(text.includes("reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence'"), 'snapshot authority reason not found');
       assert(text.includes("reason = 'radial-motion'"), 'combat aim does not switch on target radial movement');
       assert(text.includes("reason = 'no-damage-fallback'"), 'combat aim fallback precision reason not found');
       assert(aimBody.includes('mode: aimStrategy.mode'), 'combat aim does not use dynamic strategy mode');
       assert(aimBody.includes('precisionAim: Boolean(aimStrategy.precision)'), 'combat logs do not expose dynamic precision aim state');
-      assert(aimBody.includes('liveAim: Boolean(aimSource.nativeAimResolved)'), 'combat logs do not expose live aim state');
+      assert(aimBody.includes('liveAim: Boolean(aimSource.nativeAimResolved || aimSource.snapshotAimResolved)'), 'combat logs do not expose live/snapshot aim state');
+      assert(aimBody.includes('snapshotAim: Boolean(aimSource.snapshotAimResolved)'), 'combat logs do not expose snapshot aim state');
+      assert(aimBody.includes('authorityTargetOutOfRange: Boolean(authorityState.suppressFire)'), 'combat logs do not expose authority out-of-range state');
       assert(aimBody.includes('aimStrategyReason: aimStrategy.reason'), 'combat logs do not expose aim strategy reason');
       assert(aimBody.includes('sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm'), 'combat logs do not expose aim source divergence');
       assert(aimBody.includes('if (aimStrategy.bypassJitter) return exact'), 'dynamic precision/steady aim does not bypass jitter');
+      assert(shootingBody.includes('authorityOutOfRange'), 'combat shooting plan does not accept authority out-of-range state');
+      assert(shootingBody.includes("reason: 'authority-target-out-of-range'"), 'combat shooting plan does not suppress out-of-authority-range fire');
       assert(text.includes('function combatSpacingShouldOverrideBullet'), 'combat spacing cannot override real bullet dodge when too close');
       assert(text.includes('function combatLowHpCloseRiskState'), 'low-HP close-risk exit helper not found');
       assert(text.includes('function combatPressureDisadvantageState'), 'close-pressure HP disadvantage exit helper not found');
@@ -641,7 +650,10 @@ function main() {
       assert(combatBody.includes("engagedCombat: target.combatIntent === 'engaged'"), 'combat action does not pass engaged state to shooting plan');
       assert(combatBody.includes('targetActive: isCurrentlyActive(target)'), 'combat action does not pass active target state to shooting plan');
       assert(combatBody.includes('targetMoving'), 'combat action does not pass moving target state to shooting plan');
+      assert(combatBody.includes('authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange)'), 'combat action does not pass authority out-of-range state to shooting plan');
       assert(combatBody.includes('steady: Boolean(aim.steadyAim)'), 'combat logs do not expose steady aim state');
+      assert(combatBody.includes('snapshot: Boolean(aim.snapshotAim)'), 'combat logs do not expose snapshot aim state');
+      assert(combatBody.includes('authority: aim.authority || null'), 'combat logs do not expose aim authority evidence');
       assert(combatBody.includes("shooting.suppressed ? 'combat-stamina-conserve'"), 'combat action does not report fire suppression reason');
       assert(combatBody.includes("retreatingTarget.suppressFire ? 'combat-target-retreating'"), 'retreating edge action reason does not take precedence');
       assert(combatBody.includes("shooting.throttled ? 'combat-burst-fire'"), 'combat action does not report burst-fire reason');
@@ -828,6 +840,8 @@ function main() {
     assert(replay.includes('liveDivergencePrecisionCm: 1200'), 'combat replay tool does not use live-divergence threshold');
     assert(replay.includes('dynamic replay did not improve hits'), 'combat replay self-test does not require hit improvement');
     assert(replay.includes('startLine: 12167') && replay.includes('endLine: 12351'), 'combat replay self-test does not cover the xmsthc reference fight');
+    assert(replay.includes('2026-06-15-xmsthc-authority-divergence') && replay.includes('startLine: 5570') && replay.includes('endLine: 6237'), 'combat replay self-test does not cover the 2026-06-15 xmsthc authority-divergence fight');
+    assert(replay.includes('2026-06-15-raf-authority-divergence') && replay.includes('startLine: 4421') && replay.includes('endLine: 5469'), 'combat replay self-test does not cover the 2026-06-15 raf authority-divergence fight');
   });
 
   check('grasp-rat-bot.js covers stationary full-stamina Active non-combat profit self-tests', () => {

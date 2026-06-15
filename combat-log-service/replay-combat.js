@@ -480,23 +480,53 @@ function printReport(result) {
 }
 
 function selfTest() {
-  const file = path.join(__dirname, 'logs/2026-06-14/-_-_-_-.jsonl');
-  const result = replay({
-    ...DEFAULTS,
-    file,
-    startLine: 12167,
-    endLine: 12351,
-    selfId: '28886',
-    targetId: '20606',
-    targetName: 'xmsthc'
+  const cases = [
+    {
+      id: '2026-06-14-xmsthc-reference',
+      file: path.join(__dirname, 'logs/2026-06-14/-_-_-_-.jsonl'),
+      startLine: 12167,
+      endLine: 12351,
+      selfId: '28886',
+      targetId: '20606',
+      targetName: 'xmsthc'
+    },
+    {
+      id: '2026-06-15-xmsthc-authority-divergence',
+      file: path.join(__dirname, 'logs/2026-06-15/-_-_-_-.jsonl'),
+      startLine: 5570,
+      endLine: 6237,
+      selfId: '28886',
+      targetId: '20606',
+      targetName: 'xmsthc'
+    },
+    {
+      id: '2026-06-15-raf-authority-divergence',
+      file: path.join(__dirname, 'logs/2026-06-15/-_-_-_-.jsonl'),
+      startLine: 4421,
+      endLine: 5469,
+      selfId: '28886',
+      targetId: '32664',
+      targetName: '菈菲爾'
+    }
+  ];
+  const summaries = cases.map(item => {
+    const result = replay({ ...DEFAULTS, ...item });
+    const logged = result.scenarios.find(scenario => scenario.label === 'logged aimTarget vs live target');
+    const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
+    const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
+    if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
+    if (!(dynamic.hits > logged.hits)) {
+      throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
+    }
+    if (!(dynamicGrace.hits > 0)) throw new Error(`${item.id} dynamic replay has no hits before grace exit`);
+    return {
+      id: item.id,
+      loggedHits: logged.hits,
+      dynamicHits: dynamic.hits,
+      dynamicGraceHits: dynamicGrace.hits
+    };
   });
-  const logged = result.scenarios.find(item => item.label === 'logged aimTarget vs live target');
-  const dynamic = result.scenarios.find(item => item.label === 'dynamic strategy vs live target');
-  const dynamicGrace = result.scenarios.find(item => item.label === 'dynamic strategy before grace exit');
-  if (!logged || !dynamic || !dynamicGrace) throw new Error('missing replay scenarios');
-  if (!(dynamic.hits > logged.hits)) throw new Error(`dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
-  if (!(dynamicGrace.hits > 0)) throw new Error('dynamic replay has no hits before grace exit');
-  console.log(JSON.stringify({ ok: true, loggedHits: logged.hits, dynamicHits: dynamic.hits, dynamicGraceHits: dynamicGrace.hits }, null, 2));
+  console.log(JSON.stringify({ ok: true, cases: summaries }, null, 2));
 }
 
 function main() {
