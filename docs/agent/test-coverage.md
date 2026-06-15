@@ -73,6 +73,7 @@
   - combat-log analyzer `npm test` covers top-level `suspended:login-suppressed` and `suspended:manual-login` combat-end reasons as relogin/session-end exit events and reason-count evidence without missing-exit false positives;
   - daily-summary self-test filters non-combat safety avoidance closures such as legacy `recovery-avoid-humans` out of active-combat statistics;
   - daily-summary self-test folds post-combat recovery waits and generic post-combat timeouts into `敌方逃离` instead of exposing `战后恢复` or `交火停止` as combat results;
+  - daily-summary self-test covers mutually exclusive top-level active-combat outcomes for HP disadvantage, low HP, critical HP, enemy flee, target switch, and relogin-wait exit closures;
   - combat-log analyzer `npm test` covers `ambiguous-opportunity-wait` and `coin-action-with-active-player-in-range` behavior-regression detection;
   - combat-log analyzer `npm test` covers exit/behavior reason-count summaries;
   - combat-log analyzer `npm test` covers exit safety delay summaries for safe exits, unsafe exits meeting the minimum, and unsafe exits below the minimum;

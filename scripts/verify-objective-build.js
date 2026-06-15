@@ -847,13 +847,17 @@ function main() {
     assert(dailySummary.includes('已登录但自身实体不可见，退出等待重连'), 'daily summary does not explain no-self exits');
     assert(dailySummary.includes('!item.inferredExit'), 'inferred exits still count as completed sessions');
     assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
+    assert(dailySummary.includes('互斥一级类别') && dailySummary.includes('胜利、失败、我方主动退出、敌方逃离、目标切换'), 'daily summary does not explain mutually exclusive top-level outcomes');
     assert(dailySummary.includes('combatReasonText') && dailySummary.includes('敌方逃离：目标脱离交火范围') && dailySummary.includes('敌方逃离：目标消失或脱离交火范围'), 'daily summary does not fold target loss into enemy flee text');
-    assert(dailySummary.includes('left combat result text is not explicit') && dailySummary.includes('recovery wait result text is not folded into enemy flee') && dailySummary.includes('post-combat timeout result text is not folded into enemy flee') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover explicit combat result labels');
+    assert(dailySummary.includes('HP-disadvantage exit result text is not exclusive') && dailySummary.includes('low-HP exit result text is not exclusive') && dailySummary.includes('critical-HP exit result text is not exclusive'), 'daily summary self-test does not cover exclusive self-exit labels');
+    assert(dailySummary.includes('recovery wait result text is not folded into enemy flee') && dailySummary.includes('post-combat timeout result text is not folded into enemy flee') && dailySummary.includes('target-switched combat result text is not exclusive') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover exclusive combat result labels');
     assert(dailySummary.includes('避开无敌目标属于安全移动，不计入本表'), 'daily summary does not explain safety avoidance exclusion');
     assert(!dailySummary.includes('恢复期遇到附近玩家'), 'daily summary still implies ordinary nearby-player recovery flee behavior');
     assert(!dailySummary.includes('恢复期安全撤开'), 'daily summary still exposes safety avoidance as a combat result label');
     assert(!dailySummary.includes('战后恢复：停止交战'), 'daily summary still exposes post-combat recovery as a combat result');
     assert(!dailySummary.includes('交火停止'), 'daily summary still exposes post-combat timeout as a combat result');
+    assert(!dailySummary.includes('主动退出本局'), 'daily summary still uses the old self-exit top-level label');
+    assert(!dailySummary.includes('战斗劣势主动退出'), 'daily summary still uses a competing self-exit top-level label');
     assert(dailySummary.includes('疑似表示只有聊天或掉落值线索') && dailySummary.includes('unconfirmedDropCoins'), 'daily summary does not separate confirmed kill rewards from unconfirmed drops');
     assert(!dailySummary.includes('登录合计: completed='), 'daily summary still prints English aggregate field names');
   });
