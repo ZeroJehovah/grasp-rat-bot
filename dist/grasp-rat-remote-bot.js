@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.164"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.165"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -986,7 +986,6 @@
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
   const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
   const isAvoidanceThreat = e => isInvulnerable(e);
-  const isRecoveryUnsafeHuman = e => isAvoidanceThreat(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
   const normalizeTargetText = value => String(value ?? '').trim();
@@ -1633,7 +1632,8 @@
 	      'active-threat-return-block': '阻止回头靠近 Active 玩家',
 	      'return-block-lateral-scan': 'Active 返程冷却：横向扫描',
       'passive-panic-distance': '玩家距离过近',
-	      'recovery-avoid-humans': '回血时避开附近玩家',
+	      'avoid-invulnerable-target': '避开无敌目标',
+	      'recovery-avoid-humans': '避开无敌目标',
 	      'recovery-foot-coin': '回血时顺手拾取脚下金币',
 	      'foot-coin-priority': '贴身金币优先拾取',
 	      'foot-coin-before-active-caution': '预警区内只拾取贴身金币',
@@ -7325,7 +7325,13 @@
   function importantCombatDecisionIsExitOnly(decision, reason = decision?.reason || '') {
     const text = String(reason || '').toLowerCase();
     if (decision?.kind === 'leave' || decision?.leave) return true;
+    if (importantCombatReasonIsNonCombatSafety(text)) return true;
     return /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/.test(text);
+  }
+
+  function importantCombatReasonIsNonCombatSafety(reason) {
+    const text = String(reason || '').toLowerCase();
+    return /^(avoid-invulnerable-target|recovery-avoid-humans|passive-panic-distance|active-threat-before-bullet-range|active-threat-caution-migration|active-threat-return-block|return-block-lateral-scan)$/.test(text);
   }
 
   function importantCombatHasActualEngagement(record) {
@@ -7511,9 +7517,14 @@
     if (!active) return;
     const reason = combatLogSuspendReason(decision || {}) || String(decision?.reason || '');
     const ageMs = Math.max(0, Date.now() - Number(active.lastSampleAt || Date.now()));
+    const postBufferMs = Math.max(1000, Number(cfg.combatLogPostBufferMs || 10000) || 10000);
+    if (reason && importantCombatReasonIsNonCombatSafety(reason)) {
+      if (ageMs >= postBufferMs) finishImportantCombat('post-combat-timeout', { at: Date.now() });
+      return;
+    }
     if (reason && /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/.test(reason)) {
       finishImportantCombat(reason, { at: Date.now() });
-    } else if (ageMs >= Math.max(1000, Number(cfg.combatLogPostBufferMs || 10000) || 10000)) {
+    } else if (ageMs >= postBufferMs) {
       finishImportantCombat('post-combat-timeout', { at: Date.now() });
     }
   }
@@ -12311,6 +12322,25 @@
 	      bot.fleeLock = null;
 	      return staminaBudgetCoinLeaveAction(staminaBudgetExit);
 	    }
+    const nearbyAvoidanceRadius = Math.max(
+      Number(cfg.dangerRadius || 0) || 0,
+      Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
+      Number(cfg.recoveryAvoidRadius || 0) || 0
+    );
+    const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
+    if (nearbyAvoidanceThreats.length) {
+      const reason = 'avoid-invulnerable-target';
+      const flee = lockedFleeDirection(self, nearbyAvoidanceThreats, reason);
+      return {
+        kind: 'flee',
+        reason,
+        dx: flee.dx,
+        dy: flee.dy,
+        locked: flee.locked,
+        threats: nearbyAvoidanceThreats.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), mode: e.current_join_mode, drop: e.drop, speed: Math.round(e.speed), invulnerable: isInvulnerable(e) }))
+      };
+    }
+
 	    if (recovery && nearCoin) {
 	      bot.fleeLock = null;
 	      const dir = coinDirectionTo(self, nearCoin);
@@ -12323,23 +12353,6 @@
         ...coinMotionMeta(dir)
       };
     }
-
-    const avoidHumans = nearbyHumans.filter(e => {
-      if (e.distance > (recovery ? cfg.recoveryAvoidRadius : cfg.passivePanicRadius)) return false;
-      return recovery ? isRecoveryUnsafeHuman(e) : isAvoidanceThreat(e);
-    });
-	    if (!fullHp && avoidHumans.length) {
-	      const reason = recovery ? 'recovery-avoid-humans' : 'passive-panic-distance';
-	      const flee = lockedFleeDirection(self, avoidHumans, reason);
-	      return {
-        kind: 'flee',
-        reason,
-        dx: flee.dx,
-        dy: flee.dy,
-        locked: flee.locked,
-	        threats: avoidHumans.slice(0, 4).map(e => ({ id: e.user_id, name: e.name, d: Math.round(e.distance), mode: e.current_join_mode, drop: e.drop, speed: Math.round(e.speed) }))
-	      };
-	    }
 
 			    if (recovery) {
 	      bot.fleeLock = null;
