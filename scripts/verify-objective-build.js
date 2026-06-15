@@ -843,7 +843,8 @@ function main() {
     assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
     assert(dailySummary.includes('combatReasonText') && dailySummary.includes('战后恢复：停止交战') && dailySummary.includes('敌方逃离：目标脱离交火范围'), 'daily summary does not explain combat result reasons in Chinese');
     assert(dailySummary.includes('left combat result text is not explicit') && dailySummary.includes('recovery wait result text is not explicit') && dailySummary.includes('retreating-target combat result text is not explicit') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover explicit combat result labels');
-    assert(dailySummary.includes('说明：主动退出本局表示已离开当前局；战后恢复/战后恢复避战'), 'daily summary does not explain combat result state labels');
+    assert(dailySummary.includes('说明：主动退出本局表示已离开当前局；战后恢复/恢复期安全撤开'), 'daily summary does not explain combat result state labels');
+    assert(!dailySummary.includes('恢复期遇到附近玩家'), 'daily summary still implies ordinary nearby-player recovery flee behavior');
     assert(dailySummary.includes('疑似表示只有聊天或掉落值线索') && dailySummary.includes('unconfirmedDropCoins'), 'daily summary does not separate confirmed kill rewards from unconfirmed drops');
     assert(!dailySummary.includes('登录合计: completed='), 'daily summary still prints English aggregate field names');
   });

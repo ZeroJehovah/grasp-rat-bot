@@ -610,7 +610,7 @@ function combatReasonText(reason) {
   if (value === 'target-switched') return '目标切换，原战斗记录结束';
   if (value === 'post-combat-timeout') return '后置观察超时，未继续交火';
   if (value === 'wait-for-full-stamina-and-hp') return '战后进入回血回体等待';
-  if (value === 'recovery-avoid-humans') return '恢复期避开附近玩家';
+  if (value === 'recovery-avoid-humans') return '恢复期安全撤开';
   if (value === 'enemy-leave-wait') return '等待安全重登';
   if (value === 'pursuit-leave') return '被持续追击';
   if (value === 'combat-hp-disadvantage-leave') return '战斗血量劣势';
@@ -642,7 +642,7 @@ function resultText(result, reason, combat = null) {
   if (value === 'won') return detail ? `胜利：${detail}` : '胜利';
   if (value === 'lost') return detail ? `失败：${detail}` : '失败';
   if (reasonValue === 'wait-for-full-stamina-and-hp') return '战后恢复：停止交战，等待血量/体力恢复（未退出本局）';
-  if (reasonValue === 'recovery-avoid-humans') return '战后恢复避战：恢复期遇到附近玩家，局内避开（未退出本局）';
+  if (reasonValue === 'recovery-avoid-humans') return '恢复期安全撤开：未继续战斗，留在本局恢复';
   if (reasonValue === 'target-switched') return '切换交战目标：原目标不再作为当前战斗对象';
   if (reasonValue === 'post-combat-timeout' && /target-retreating/.test(`${startReason} ${lastReason}`)) {
     return '敌方逃离：目标脱离交火范围';
@@ -684,7 +684,7 @@ function printReport(report) {
   console.log(`登录合计：明确退出${report.totals.completed}/${report.totals.sessions}，推断收口${report.totals.inferred}，尚未收口${report.totals.incomplete}，总耗时${formatDuration(report.totals.loginDurationMs)}，消耗体力${formatStaminaSpent(report.totals.staminaSpentMs)}，拾取刷新金币${report.totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(report.totals.afkKillCount, report.totals.afkKillRewardCoins, report.totals.afkUnconfirmedDropCoins, report.totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(report.totals.activeKillCount, report.totals.activeKillRewardCoins, report.totals.activeUnconfirmedDropCoins, report.totals.activeUnconfirmedKillCount)}，总收益${report.totals.coinsGained}币`);
   console.log('');
   console.log('## 活跃玩家战斗统计');
-  console.log('说明：主动退出本局表示已离开当前局；战后恢复/战后恢复避战表示仍在本局内回血回体或避开附近玩家；敌方逃离表示目标脱离交火范围；切换交战目标表示改打其他目标；交火停止表示观察期内没有继续交火，不代表主动退出。');
+  console.log('说明：主动退出本局表示已离开当前局；战后恢复/恢复期安全撤开表示停止交战并留在本局恢复；敌方逃离表示目标脱离交火范围；切换交战目标表示改打其他目标；交火停止表示观察期内没有继续交火，不代表主动退出。');
   console.log('');
   if (!report.combats.length) {
     console.log('无记录');
@@ -858,7 +858,7 @@ function runSelfTest() {
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
   assertSelfTest(resultText('left', 'combat-hp-disadvantage-leave') === '主动退出本局：战斗血量劣势', 'left combat result text is not explicit');
   assertSelfTest(resultText('left', 'wait-for-full-stamina-and-hp') === '战后恢复：停止交战，等待血量/体力恢复（未退出本局）', 'recovery wait result text is not explicit');
-  assertSelfTest(resultText('retreated', 'recovery-avoid-humans') === '战后恢复避战：恢复期遇到附近玩家，局内避开（未退出本局）', 'retreated combat result text is not explicit');
+  assertSelfTest(resultText('retreated', 'recovery-avoid-humans') === '恢复期安全撤开：未继续战斗，留在本局恢复', 'retreated combat result text is not explicit');
   assertSelfTest(resultText('disengaged', 'target-switched') === '切换交战目标：原目标不再作为当前战斗对象', 'target-switched combat result text is not explicit');
   assertSelfTest(resultText('disengaged', 'post-combat-timeout', { lastReason: 'combat-target-retreating' }) === '敌方逃离：目标脱离交火范围', 'retreating-target combat result text is not explicit');
   assertSelfTest(resultText('left', 'enemy-leave-wait', { selfHpEnd: 38, enemyHpEnd: 44 }) === '战斗劣势主动退出：我方HP 38，对方HP 44，已离开等待安全重登', 'enemy leave wait result text is not explicit');
