@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.162`.
 - Latest manifest SHA-256: `b6040b3b9abf9461eafa336b12c6d0a6c81b427de61e6ce345b445975185098d`.
-- Latest pushed commit: pending `bootstrap-0.4.162` release commit.
+- Latest pushed commit: `71219d4 Enable pressure-triggered snapshot authority`.
 - Latest bootstrap A versions: Tampermonkey `0.4.50`, extension `0.1.29`.
 - Current objective: optimize live action logic using measured game parameters. Priorities are survival first, then stamina-aware ROI, reduced wasteful movement/target jitter, and low-noise runtime behavior.
 - Long-term combat iteration direction: before hitting the local machine's compute limit, combat logic may continue becoming more flexible and more complex, including combat-only higher decision/react frequency, replay/evaluation driven tuning, and shared combat stance/trend layers for target, movement, shooting, and exit decisions. Each battle upgrade must preserve or improve existing winnable matchups; prefer guarded windows, self-tests, and log/replay evidence over broad global threshold changes that could make previously beatable opponents harder to beat.
