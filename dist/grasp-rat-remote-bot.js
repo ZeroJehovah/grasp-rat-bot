@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.160"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.161"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -10146,6 +10146,7 @@
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
     const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
     const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
+    const authorityOutOfRange = Boolean(options.authorityOutOfRange || trend.authorityOutOfRange);
     let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
@@ -10171,6 +10172,7 @@
       closePressureFireWindow,
       steadyAimFireWindow,
       noDamageDuelFireWindow,
+      authorityOutOfRange,
       noDamageMs,
       trend: {
         stance: trend.stance || 'normal',
@@ -10186,6 +10188,9 @@
       suppressed: false,
       throttled: false
     };
+    if (authorityOutOfRange) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'authority-target-out-of-range', suppressed: true };
+    }
     if (stamina5s !== null && stamina5s < hardReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
     }
@@ -10309,10 +10314,80 @@
       originalAimTarget: target
     };
   }
+  function combatSnapshotAimTarget(self, target) {
+    const targetId = combatTargetId(target);
+    const targetName = String(target?.name || '').trim();
+    if (typeof snapshotDataFreshEnough === 'function' && !snapshotDataFreshEnough()) return null;
+    let snapshot = null;
+    try {
+      const snapshotEntities = Array.isArray(bot.testSnapshotEntities)
+        ? bot.testSnapshotEntities
+        : (Array.isArray(bot.globalState?.entities) ? bot.globalState.entities : []);
+      if (Array.isArray(snapshotEntities) && snapshotEntities.length) {
+        snapshot = snapshotEntities.find(entity => {
+          const id = combatTargetId(entity);
+          return targetId && id && String(id) === targetId;
+        }) || null;
+        if (!snapshot && targetName) snapshot = snapshotEntities.find(entity => String(entity?.name || '').trim() === targetName) || null;
+      }
+    } catch (_) {
+      snapshot = null;
+    }
+    if (!snapshot || !isAlive(snapshot) || isInvulnerable(snapshot)) return null;
+    const x = Number(snapshot.x);
+    const y = Number(snapshot.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return {
+      ...target,
+      ...snapshot,
+      user_id: snapshot.user_id ?? snapshot.id ?? target.user_id ?? target.id,
+      id: snapshot.user_id ?? snapshot.id ?? target.id ?? target.user_id,
+      hp: combatHpValue(snapshot),
+      knownHp: knownHpValue(snapshot),
+      drop: dropValue(snapshot) || target.drop,
+      distance: dist(self, snapshot),
+      speed: speed(snapshot),
+      combatIntent: target.combatIntent || snapshot.combatIntent || '',
+      snapshotAimResolved: true,
+      originalAimTarget: target
+    };
+  }
+
+  function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0) {
+    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false };
+    if (!snapshotSource) return empty;
+    const reference = nativeSource || target || {};
+    const sx = Number(snapshotSource.x);
+    const sy = Number(snapshotSource.y);
+    const rx = Number(reference.x);
+    const ry = Number(reference.y);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(rx) || !Number.isFinite(ry)) return empty;
+    const snapshotDistance = dist(self, snapshotSource);
+    const nativeDistance = dist(self, reference);
+    const baseThreshold = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionCm || 0));
+    const ratio = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionRatio || 0));
+    const threshold = Math.max(baseThreshold, Math.round(Math.max(0, Math.min(snapshotDistance, nativeDistance)) * ratio));
+    const divergence = Math.hypot(sx - rx, sy - ry);
+    const serverStall = combatAimServerStallState();
+    const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
+    const pressure = Boolean(serverStall.stalled || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
+    const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    return {
+      active,
+      useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
+      suppressFire: Boolean(active && attackRange && snapshotDistance > attackRange),
+      divergenceCm: Math.round(divergence),
+      thresholdCm: Math.round(threshold),
+      snapshotDistance: Math.round(snapshotDistance),
+      nativeDistance: Math.round(nativeDistance),
+      serverStall: Boolean(serverStall.stalled)
+    };
+  }
 
   function combatAimSourceDivergenceState(aimSource, distance) {
     const original = aimSource?.originalAimTarget;
-    const live = Boolean(aimSource?.nativeAimResolved);
+    const live = Boolean(aimSource?.nativeAimResolved || aimSource?.snapshotAimResolved);
     const ax = Number(aimSource?.x);
     const ay = Number(aimSource?.y);
     const ox = Number(original?.x);
@@ -10344,7 +10419,7 @@
     return stall && typeof stall === 'object' ? stall : {};
   }
 
-  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim) {
+  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, authorityState = null) {
     const fallbackPrecision = combatAimFallbackPrecisionState(damage?.noDamageMs);
     const sourceDivergence = combatAimSourceDivergenceState(aimSource, distance);
     const serverStall = combatAimServerStallState();
@@ -10362,7 +10437,12 @@
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
-    if (sourceDivergence.active) {
+    if (authorityState?.useSnapshot) {
+      mode = 'snapshot-precision';
+      strategy = 'snapshot-authority';
+      reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence';
+      precision = true;
+    } else if (sourceDivergence.active) {
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
@@ -10399,23 +10479,28 @@
       serverStall: Boolean(serverStall.stalled),
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
+      snapshotAuthority: authorityState || null,
       movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
     };
   }
 
   function combatAimTarget(self, target) {
-    const aimSource = combatLiveAimTarget(self, target);
+    const nativeAimSource = combatLiveAimTarget(self, target);
+    const preliminaryDamage = combatAimDamageState(nativeAimSource);
+    const snapshotAimSource = combatSnapshotAimTarget(self, target);
+    const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, preliminaryDamage.noDamageMs);
+    const aimSource = authorityState.useSnapshot ? snapshotAimSource : nativeAimSource;
     const motionScale = combatAimMotionScale(aimSource);
     const moving = speed(aimSource) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const targetDistance = Number(aimSource.distance);
     const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
-    const damage = combatAimDamageState(aimSource);
+    const damage = authorityState.useSnapshot ? combatAimDamageState(aimSource) : preliminaryDamage;
     const steadyAim = combatAimSteadyNoDamageState(aimSource, damage.noDamageMs, motionScale);
     const movement = moving
       ? combatMovementAimMode(self, aimSource, distance)
       : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
-    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim);
+    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, authorityState);
     const exact = {
       x: Number(aimSource.x),
       y: Number(aimSource.y),
@@ -10430,15 +10515,18 @@
       precisionAim: Boolean(aimStrategy.precision),
       steadyAim: Boolean(aimStrategy.steady),
       lockedAim: false,
-      liveAim: Boolean(aimSource.nativeAimResolved),
-      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+      liveAim: Boolean(aimSource.nativeAimResolved || aimSource.snapshotAimResolved),
+      snapshotAim: Boolean(aimSource.snapshotAimResolved),
+      liveDistance: (aimSource.nativeAimResolved || aimSource.snapshotAimResolved) ? Math.round(distance) : null,
       aimStrategy: aimStrategy.strategy,
       aimStrategyReason: aimStrategy.reason,
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
-      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision)
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      authorityTargetOutOfRange: Boolean(authorityState.suppressFire),
+      authority: authorityState
     };
     if (aimStrategy.bypassJitter) return exact;
     const dx = Number(aimSource.x) - Number(self.x);
@@ -10503,15 +10591,18 @@
       precisionAim: false,
       steadyAim: false,
       lockedAim: Boolean(locked),
-      liveAim: Boolean(aimSource.nativeAimResolved),
-      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+      liveAim: Boolean(aimSource.nativeAimResolved || aimSource.snapshotAimResolved),
+      snapshotAim: Boolean(aimSource.snapshotAimResolved),
+      liveDistance: (aimSource.nativeAimResolved || aimSource.snapshotAimResolved) ? Math.round(distance) : null,
       aimStrategy: aimStrategy.strategy,
       aimStrategyReason: aimStrategy.reason,
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
-      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision)
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      authorityTargetOutOfRange: Boolean(authorityState.suppressFire),
+      authority: authorityState
     };
   }
 
@@ -10547,6 +10638,7 @@
       targetDistance: distance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
+      authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       targetMoving: speed(target) >= cfg.combatStationarySpeed,
@@ -10581,12 +10673,15 @@
         steady: Boolean(aim.steadyAim),
         locked: Boolean(aim.lockedAim),
         live: Boolean(aim.liveAim),
+        snapshot: Boolean(aim.snapshotAim),
         liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
         sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
-        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        authorityTargetOutOfRange: Boolean(aim.authorityTargetOutOfRange),
+        authority: aim.authority || null
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -10778,6 +10873,7 @@
       targetDistance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
+      authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       targetMoving,
@@ -10792,6 +10888,7 @@
       targetDistance: targetDistance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
+      authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       targetMoving,
@@ -10841,12 +10938,15 @@
         steady: Boolean(aim.steadyAim),
         locked: Boolean(aim.lockedAim),
         live: Boolean(aim.liveAim),
+        snapshot: Boolean(aim.snapshotAim),
         liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
         sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
-        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        authorityTargetOutOfRange: Boolean(aim.authorityTargetOutOfRange),
+        authority: aim.authority || null
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -10873,12 +10973,15 @@
           steady: Boolean(aim.steadyAim),
           locked: Boolean(aim.lockedAim),
           live: Boolean(aim.liveAim),
+          snapshot: Boolean(aim.snapshotAim),
           liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
           sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
           sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
           serverStall: Boolean(aim.serverStallAim),
           radialPrecision: Boolean(aim.radialPrecisionAim),
-          fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
+          fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+          authorityTargetOutOfRange: Boolean(aim.authorityTargetOutOfRange),
+          authority: aim.authority || null
         },
         strafe: dodging ? {
           dx: combatMove.dx,
