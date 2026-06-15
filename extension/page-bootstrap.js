@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.29';
+  const BOOTSTRAP_VERSION = '0.1.30';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -2641,6 +2641,27 @@
     return Boolean(detail.method && !detail.error);
   }
 
+  async function probeStaleRunningBot(reason, status) {
+    if (!status?.running || status.ticking || !status.timerActive) return status;
+    const bot = window.__graspRatBot || null;
+    if (!bot || typeof bot.step !== 'function') return status;
+    const before = shortStatus(status);
+    try {
+      logBootstrap('watchdog stale tick probe start', { reason, status: before });
+      const result = bot.step('bootstrap-watchdog-stale-probe');
+      if (result && typeof result.then === 'function') {
+        await withTimeout(result, Math.min(2000, Math.max(500, cfg.staleTickMs)), 'watchdog stale tick probe');
+      }
+      const next = getBotStatus();
+      logBootstrap('watchdog stale tick probe done', { reason, before, after: shortStatus(next) });
+      return next;
+    } catch (err) {
+      state.lastError = 'watchdog stale tick probe failed: ' + (err?.message || String(err));
+      logBootstrap('watchdog stale tick probe failed', { reason, error: state.lastError, status: before });
+      return getBotStatus();
+    }
+  }
+
   async function watchdogOnce(reason = 'watchdog') {
     if (!ensureNotBlocked()) return;
     if (isAuthorizePage()) {
@@ -2677,12 +2698,20 @@
       return;
     }
     const manifest = readCachedManifest();
-    const status = getBotStatus();
-    const missing = !status || !status.running;
-    const stale = status && tickIsStale(status);
-    const blockedStrategy = runningBotUsesBlockedStrategy(status);
-    const mismatched = manifest && status && status.running
+    let status = getBotStatus();
+    let missing = !status || !status.running;
+    let stale = status && tickIsStale(status);
+    let blockedStrategy = runningBotUsesBlockedStrategy(status);
+    let mismatched = manifest && status && status.running
       && (String(status.sourceHash || '') !== String(manifest.sha256 || '') || String(status.version || '') !== String(manifest.version || ''));
+    if (!missing && stale && !mismatched && !blockedStrategy) {
+      status = await probeStaleRunningBot(reason, status);
+      missing = !status || !status.running;
+      stale = status && tickIsStale(status);
+      blockedStrategy = runningBotUsesBlockedStrategy(status);
+      mismatched = manifest && status && status.running
+        && (String(status.sourceHash || '') !== String(manifest.sha256 || '') || String(status.version || '') !== String(manifest.version || ''));
+    }
     if (missing || stale || mismatched || blockedStrategy) {
       logBootstrap('watchdog reinstall needed', { reason, missing, stale, mismatched, blockedStrategy, minVersion: MIN_REMOTE_BOT_VERSION, manifestVersion: manifest?.version || '', manifestHash: manifest?.sha256 || '', status: shortStatus(status) });
     }

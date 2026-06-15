@@ -20,6 +20,7 @@
 - `loginSnapshotGate` is exposed in status/log context. It resets on exit trigger and exit confirmation, then requires `loginSnapshotSuccessRequired = 3` consecutive successful `/snapshot` fetches before any auto or manual relogin attempt can proceed.
 - A stale ordinary offline relogin hold is cleared when the page has recovered to an alive self entity and an online native WebSocket, so the panel no longer shows an old offline-wait reason after recovery.
 - Bootstrap manifest polling defaults to 10s. Tampermonkey request transports and raw/jsDelivr fallback URLs are tried sequentially, so a successful poll should issue only one manifest network request instead of parallel duplicate raw GitHub requests.
+- Bootstrap watchdog checks a running bot's version/hash/tick health every second. When a bot is stale but still running with its timer active, the watchdog first probes `bot.step('bootstrap-watchdog-stale-probe')` and rechecks status before reinstalling cached source, so ordinary timer delay does not cause repeated same-version hot replacement.
 - Ordinary global refresh still fetches `/snapshot` and `/minimap` every `globalRefreshMs = 5000`.
 - The old movement-time server-position forced refresh probe has been removed. Movement no longer triggers extra `/snapshot` or `/minimap` requests.
 - Local/native page data is authoritative near the bot. Snapshot data is for outside-local awareness only.
