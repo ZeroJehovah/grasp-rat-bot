@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.165"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.166"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -7326,12 +7326,18 @@
     const text = String(reason || '').toLowerCase();
     if (decision?.kind === 'leave' || decision?.leave) return true;
     if (importantCombatReasonIsNonCombatSafety(text)) return true;
+    if (importantCombatReasonIsPostCombatObservation(text)) return true;
     return /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/.test(text);
   }
 
   function importantCombatReasonIsNonCombatSafety(reason) {
     const text = String(reason || '').toLowerCase();
     return /^(avoid-invulnerable-target|recovery-avoid-humans|passive-panic-distance|active-threat-before-bullet-range|active-threat-caution-migration|active-threat-return-block|return-block-lateral-scan)$/.test(text);
+  }
+
+  function importantCombatReasonIsPostCombatObservation(reason) {
+    const text = String(reason || '').toLowerCase();
+    return /^(wait-for-full-stamina-and-hp|recovery-foot-coin)$/.test(text);
   }
 
   function importantCombatHasActualEngagement(record) {
@@ -7518,7 +7524,7 @@
     const reason = combatLogSuspendReason(decision || {}) || String(decision?.reason || '');
     const ageMs = Math.max(0, Date.now() - Number(active.lastSampleAt || Date.now()));
     const postBufferMs = Math.max(1000, Number(cfg.combatLogPostBufferMs || 10000) || 10000);
-    if (reason && importantCombatReasonIsNonCombatSafety(reason)) {
+    if (reason && (importantCombatReasonIsNonCombatSafety(reason) || importantCombatReasonIsPostCombatObservation(reason))) {
       if (ageMs >= postBufferMs) finishImportantCombat('post-combat-timeout', { at: Date.now() });
       return;
     }
