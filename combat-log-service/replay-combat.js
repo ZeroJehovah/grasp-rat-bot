@@ -16,7 +16,11 @@ const DEFAULTS = {
   fallbackPrecisionNoDamageMs: 25000,
   serverStallNoDamageLeaveMs: 25000,
   serverStallNoDamagePrecisionGraceMs: 10000,
-  serverStallNoDamageHpGap: 5
+  serverStallNoDamageHpGap: 5,
+  combatAimSnapshotOutlierCloseNativeRange: 8000,
+  combatAimSnapshotOutlierCloseSnapshotRatio: 2,
+  combatAimSnapshotOutlierDisadvantageRange: 11000,
+  combatAimSnapshotOutlierNoDamageMs: 1000
 };
 
 function parseArgs(argv) {
@@ -118,6 +122,10 @@ function targetHp(frame) {
   return numberOrNull(frame.target?.hp ?? frame.entry?.decision?.target?.hp ?? frame.nearbyTarget?.hp);
 }
 
+function nearbyTargetHp(frame) {
+  return numberOrNull(frame.nearbyEntity?.hp ?? frame.nearbyEntity?.knownHp);
+}
+
 function selfHp(frame) {
   return numberOrNull(frame.self?.hp ?? frame.entry?.decision?.self?.hp);
 }
@@ -169,6 +177,15 @@ function samplesFromFrames(frames, key) {
     .filter(Boolean);
 }
 
+function samplesFromFramesBy(frames, pickPoint) {
+  return frames
+    .map(frame => {
+      const point = pickPoint(frame);
+      return point ? { at: frame.at, x: point.x, y: point.y } : null;
+    })
+    .filter(Boolean);
+}
+
 function loadFrames(options) {
   if (!options.file) throw new Error('--file is required');
   const filePath = path.resolve(options.file);
@@ -209,10 +226,12 @@ function loadFrames(options) {
       aim: pointOf(entry.aimTarget || entry.combatState?.aim),
       selfHp: null,
       targetHp: null,
+      nearbyHp: null,
       noDamageMs: 0
     };
     frame.selfHp = selfHp(frame);
     frame.targetHp = targetHp(frame);
+    frame.nearbyHp = nearbyTargetHp(frame);
     frame.noDamageMs = noDamageMs(frame);
     frames.push(frame);
   }
@@ -372,7 +391,7 @@ function pressureAuthorityState(frame, options) {
   const authority = frame.nearbyTarget;
   const reference = frame.decisionTarget;
   if (!frame.self || !authority || !reference) {
-    return { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, authorityDistance: null, referenceDistance: null };
+    return { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, authorityDistance: null, referenceDistance: null, rejectedSnapshotOutlier: false, snapshotOutlierReason: '' };
   }
   const authorityDistance = distance(frame.self, authority);
   const referenceDistance = distance(frame.self, reference);
@@ -388,7 +407,31 @@ function pressureAuthorityState(frame, options) {
   );
   const attackRange = Math.max(0, Number(options.combatAttackRange || 0));
   const authoritativeOutOfRange = Boolean(attackRange && authorityDistance > attackRange);
-  const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange));
+  const closeNativeRange = Math.max(0, Number(options.combatAimSnapshotOutlierCloseNativeRange || 0));
+  const closeSnapshotRatio = Math.max(1, Number(options.combatAimSnapshotOutlierCloseSnapshotRatio || 1));
+  const disadvantageRange = Math.max(0, Number(options.combatAimSnapshotOutlierDisadvantageRange || 0));
+  const outlierNoDamageMs = Math.max(0, Number(options.combatAimSnapshotOutlierNoDamageMs || 0));
+  const selfHpValue = frame.selfHp;
+  const targetHpValue = frame.targetHp;
+  const snapshotHpValue = frame.nearbyHp;
+  const targetMaxHp = numberOrNull(frame.target?.maxHp ?? frame.target?.max_hp ?? frame.nearbyEntity?.maxHp ?? frame.nearbyEntity?.max_hp ?? 100);
+  const closeNativeSnapshotOutlier = Boolean(authoritativeOutOfRange
+    && incomingRealBullet(frame)
+    && closeNativeRange
+    && referenceDistance <= closeNativeRange
+    && authorityDistance >= attackRange * closeSnapshotRatio);
+  const staleSnapshotHpOutlier = Boolean(incomingRealBullet(frame)
+    && disadvantageRange
+    && referenceDistance <= disadvantageRange
+    && frame.noDamageMs >= outlierNoDamageMs
+    && Number.isFinite(selfHpValue)
+    && Number.isFinite(targetHpValue)
+    && Number.isFinite(snapshotHpValue)
+    && targetHpValue > selfHpValue
+    && targetHpValue < snapshotHpValue
+    && (targetMaxHp === null || targetHpValue < targetMaxHp));
+  const rejectedSnapshotOutlier = closeNativeSnapshotOutlier || staleSnapshotHpOutlier;
+  const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange) && !rejectedSnapshotOutlier);
   return {
     active,
     useSnapshot: Boolean(active && (!attackRange || authorityDistance <= attackRange)),
@@ -396,27 +439,35 @@ function pressureAuthorityState(frame, options) {
     divergenceCm: Math.round(divergence),
     thresholdCm: Math.round(threshold),
     authorityDistance: Math.round(authorityDistance),
-    referenceDistance: Math.round(referenceDistance)
+    referenceDistance: Math.round(referenceDistance),
+    rejectedSnapshotOutlier,
+    snapshotOutlierReason: closeNativeSnapshotOutlier
+      ? 'close-native-real-bullet'
+      : (staleSnapshotHpOutlier ? 'stale-snapshot-hp' : '')
   };
 }
 
-function runPressureAuthorityScenario(shots, targetSamples, options) {
+function runPressureAuthorityScenario(shots, targetSamples, options, label = 'pressure snapshot authority vs live target') {
   let considered = 0;
   let hits = 0;
   let minDistance = Infinity;
   let firstHit = null;
   let suppressed = 0;
   let suppressedLoggedHits = 0;
+  let rejectedSnapshotOutliers = 0;
   for (const shot of shots) {
     const frame = shot.frame;
     const state = pressureAuthorityState(frame, options);
+    if (state.rejectedSnapshotOutlier) rejectedSnapshotOutliers += 1;
     if (state.suppressFire) {
       suppressed += 1;
       const logged = minDistanceForShot(frame.self, frame.aim, targetSamples, frame.at, options);
       if (logged.hit) suppressedLoggedHits += 1;
       continue;
     }
-    const aim = state.useSnapshot ? frame.nearbyTarget : (frame.aim || frame.decisionTarget || frame.nearbyTarget);
+    const aim = state.rejectedSnapshotOutlier
+      ? (frame.decisionTarget || frame.aim || frame.nearbyTarget)
+      : (state.useSnapshot ? frame.nearbyTarget : (frame.aim || frame.decisionTarget || frame.nearbyTarget));
     const result = minDistanceForShot(frame.self, aim, targetSamples, frame.at, options);
     considered += 1;
     if (result.min < minDistance) minDistance = result.min;
@@ -433,13 +484,14 @@ function runPressureAuthorityScenario(shots, targetSamples, options) {
     }
   }
   return {
-    label: 'pressure snapshot authority vs live target',
+    label,
     considered,
     hits,
     minDistanceCm: Number.isFinite(minDistance) ? Math.round(minDistance) : null,
     firstHit,
     suppressed,
-    suppressedLoggedHits
+    suppressedLoggedHits,
+    rejectedSnapshotOutliers
   };
 }
 
@@ -467,6 +519,15 @@ function replay(options) {
   const decisionSamples = samplesFromFrames(frames, 'decisionTarget');
   const liveSamples = samplesFromFrames(frames, 'nearbyTarget');
   const targetSamples = liveSamples.length ? liveSamples : decisionSamples;
+  const healthAuthoritativeSamples = samplesFromFramesBy(frames, frame => {
+    if (frame.decisionTarget
+      && Number.isFinite(frame.targetHp)
+      && Number.isFinite(frame.nearbyHp)
+      && frame.targetHp < frame.nearbyHp) {
+      return frame.decisionTarget;
+    }
+    return frame.nearbyTarget || frame.decisionTarget;
+  });
   const shots = collectShots(frames, loaded.selfId);
   const oldExitFrame = findExitFrame(frames, options.serverStallNoDamageLeaveMs, options);
   const graceWaitMs = Math.max(
@@ -477,6 +538,7 @@ function replay(options) {
   const precisionStartFrame = frames.find(frame => liveDivergenceState(frame, options).active)
     || frames.find(frame => frame.noDamageMs >= options.fallbackPrecisionNoDamageMs)
     || null;
+  const snapshotOutlierRejections = frames.filter(frame => pressureAuthorityState(frame, options).rejectedSnapshotOutlier).length;
 
   const scenarios = [
     runActualBulletScenario(shots, targetSamples, options),
@@ -487,7 +549,9 @@ function replay(options) {
     runAimScenario('old effective logged aim before server-stall exit', shots, shot => shot.frame.aim, targetSamples, options, shot => !oldExitFrame || shot.frame.at < oldExitFrame.at),
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
-    runPressureAuthorityScenario(shots, targetSamples, options)
+    runPressureAuthorityScenario(shots, targetSamples, options),
+    runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
+    runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
   ];
 
   const divergences = frames
@@ -519,6 +583,7 @@ function replay(options) {
       noDamageMs: Math.round(precisionStartFrame.noDamageMs),
       divergence: liveDivergenceState(precisionStartFrame, options)
     } : null,
+    snapshotOutlierRejections,
     oldServerStallExit: oldExitFrame ? {
       line: oldExitFrame.lineNo,
       time: formatTime(oldExitFrame.at),
@@ -548,13 +613,16 @@ function printReport(result) {
   if (result.oldServerStallExit) {
     console.log(`Old server-stall exit line ${result.oldServerStallExit.line} at ${result.oldServerStallExit.time}, HP ${result.oldServerStallExit.selfHp}/${result.oldServerStallExit.targetHp}`);
   }
+  if (result.snapshotOutlierRejections) {
+    console.log(`Snapshot outlier rejections=${result.snapshotOutlierRejections}`);
+  }
   if (result.graceExitIfStillNoHit) {
     console.log(`Grace exit if still no hit line ${result.graceExitIfStillNoHit.line} at ${result.graceExitIfStillNoHit.time}, HP ${result.graceExitIfStillNoHit.selfHp}/${result.graceExitIfStillNoHit.targetHp}`);
   }
   for (const item of result.scenarios) {
     const first = item.firstHit ? ` firstHit=line ${item.firstHit.line} ${item.firstHit.time} min=${item.firstHit.minDistanceCm}cm` : '';
     const suppressed = Number.isFinite(Number(item.suppressed))
-      ? ` suppressed=${item.suppressed} suppressedLoggedHits=${item.suppressedLoggedHits || 0}`
+      ? ` suppressed=${item.suppressed} suppressedLoggedHits=${item.suppressedLoggedHits || 0} rejectedSnapshotOutliers=${item.rejectedSnapshotOutliers || 0}`
       : '';
     console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}`);
   }
@@ -609,6 +677,27 @@ function selfTest() {
       targetName: 'mango',
       expectSuppressed: true,
       expectExtraSuppression: true
+    },
+    {
+      id: '2026-06-16-bluefeather-close-snapshot-outlier',
+      file: path.join(__dirname, 'logs/2026-06-16/-_-_-_-.jsonl'),
+      startLine: 3930,
+      endLine: 4062,
+      selfId: '28886',
+      targetId: '32934',
+      targetName: 'BlueFeather',
+      expectSnapshotOutlierRejected: true
+    },
+    {
+      id: '2026-06-16-bluefeather-losing-snapshot-outlier',
+      file: path.join(__dirname, 'logs/2026-06-16/-_-_-_-.jsonl'),
+      startLine: 4160,
+      endLine: 5065,
+      selfId: '28886',
+      targetId: '32934',
+      targetName: 'BlueFeather',
+      expectImprovedPressureAuthority: true,
+      expectSnapshotOutlierRejected: true
     }
   ];
   const summaries = cases.map(item => {
@@ -619,7 +708,8 @@ function selfTest() {
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
     if (!(dynamic.hits > logged.hits)) {
       const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
-      if (!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0) {
+      if ((!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)
+        && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }
     }
@@ -631,13 +721,25 @@ function selfTest() {
     if (item.expectExtraSuppression && (!pressureAuthority || pressureAuthority.suppressed < 6)) {
       throw new Error(`${item.id} out-of-range authority did not suppress the stale opening shots`);
     }
+    if (item.expectImprovedPressureAuthority && (!pressureAuthority || !(pressureAuthority.hits > logged.hits))) {
+      const loggedHealth = result.scenarios.find(scenario => scenario.label === 'logged aimTarget vs hp-authoritative target');
+      const guardedHealth = result.scenarios.find(scenario => scenario.label === 'guarded pressure authority vs hp-authoritative target');
+      if (!loggedHealth || !guardedHealth || !(guardedHealth.hits > loggedHealth.hits)) {
+        throw new Error(`${item.id} guarded pressure authority did not improve hits: ${pressureAuthority?.hits || 0} <= ${logged.hits}`);
+      }
+    }
+    if (item.expectSnapshotOutlierRejected && !(result.snapshotOutlierRejections > 0)) {
+      throw new Error(`${item.id} did not reject any snapshot outlier`);
+    }
     return {
       id: item.id,
       loggedHits: logged.hits,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,
       pressureSuppressed: pressureAuthority?.suppressed || 0,
-      pressureSuppressedLoggedHits: pressureAuthority?.suppressedLoggedHits || 0
+      pressureSuppressedLoggedHits: pressureAuthority?.suppressedLoggedHits || 0,
+      pressureRejectedSnapshotOutliers: pressureAuthority?.rejectedSnapshotOutliers || 0,
+      snapshotOutlierRejections: result.snapshotOutlierRejections
     };
   });
   console.log(JSON.stringify({ ok: true, cases: summaries }, null, 2));
