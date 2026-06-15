@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.163"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.164"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -7307,11 +7307,15 @@
     const minKey = prefix + 'HpMin';
     const maxKey = prefix + 'HpMax';
     const deltaKey = prefix + 'HpDelta';
-    if (!Number.isFinite(Number(record[startKey]))) record[startKey] = value;
+    const previousStart = importantHpValue(record[startKey]);
+    const previousMin = importantHpValue(record[minKey]);
+    const previousMax = importantHpValue(record[maxKey]);
+    if (previousStart === null) record[startKey] = value;
     record[endKey] = value;
-    record[minKey] = Number.isFinite(Number(record[minKey])) ? Math.min(Number(record[minKey]), value) : value;
-    record[maxKey] = Number.isFinite(Number(record[maxKey])) ? Math.max(Number(record[maxKey]), value) : value;
-    record[deltaKey] = Number.isFinite(Number(record[startKey])) ? Math.round((value - Number(record[startKey])) * 100) / 100 : null;
+    record[minKey] = previousMin === null ? value : Math.min(previousMin, value);
+    record[maxKey] = previousMax === null ? value : Math.max(previousMax, value);
+    const currentStart = importantHpValue(record[startKey]);
+    record[deltaKey] = currentStart === null ? null : Math.round((value - currentStart) * 100) / 100;
   }
 
   function importantSessionStaminaSpentMs(session = bot.session || {}) {
@@ -7356,7 +7360,7 @@
       reason,
       source: decision?.source || '',
       exitOnly: importantCombatDecisionIsExitOnly(decision, reason),
-      selfHp: importantHpValue(self?.hp),
+      selfHp: importantHpValue(knownHpValue(self)),
       target: targetSummary,
       targetHp: targetSummary.hp ?? targetSummary.displayHp
     };
