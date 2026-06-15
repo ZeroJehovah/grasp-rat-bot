@@ -589,6 +589,13 @@ function formatHpChange(start, end, delta) {
   return `${formatHp(start)}到${formatHp(end)}${deltaText}`;
 }
 
+function combatHpDisadvantageText(combat) {
+  const selfHp = Number(combat?.selfHpEnd);
+  const enemyHp = Number(combat?.enemyHpEnd);
+  if (!Number.isFinite(selfHp) || !Number.isFinite(enemyHp) || !(selfHp < enemyHp)) return '';
+  return `我方HP ${formatHp(selfHp)}，对方HP ${formatHp(enemyHp)}`;
+}
+
 function formatEnemy(enemy) {
   const name = String(enemy?.name || '').trim();
   const id = enemy?.id === null || enemy?.id === undefined || enemy?.id === '' ? '' : String(enemy.id);
@@ -626,14 +633,32 @@ function combatReasonText(reason) {
   return '原因未归类';
 }
 
-function resultText(result, reason) {
+function resultText(result, reason, combat = null) {
   const value = String(result || '');
   const detail = combatReasonText(reason);
+  const reasonValue = String(reason || '').toLowerCase();
+  const lastReason = String(combat?.lastReason || '').toLowerCase();
+  const startReason = String(combat?.startReason || '').toLowerCase();
   if (value === 'won') return detail ? `胜利：${detail}` : '胜利';
   if (value === 'lost') return detail ? `失败：${detail}` : '失败';
-  if (value === 'left') return detail ? `主动退出本局：${detail}` : '主动退出本局';
-  if (value === 'retreated') return detail ? `未退出本局：${detail}` : '未退出本局：局内撤退或恢复';
-  if (value === 'disengaged') return detail ? `战斗记录收口：${detail}` : '战斗记录收口';
+  if (reasonValue === 'wait-for-full-stamina-and-hp') return '战后恢复：停止交战，等待血量/体力恢复（未退出本局）';
+  if (reasonValue === 'recovery-avoid-humans') return '战后恢复避战：恢复期遇到附近玩家，局内避开（未退出本局）';
+  if (reasonValue === 'target-switched') return '切换交战目标：原目标不再作为当前战斗对象';
+  if (reasonValue === 'post-combat-timeout' && /target-retreating/.test(`${startReason} ${lastReason}`)) {
+    return '敌方逃离：目标脱离交火范围';
+  }
+  if (reasonValue === 'post-combat-timeout') return '交火停止：观察期内未继续交火（未退出本局）';
+  if (value === 'left') {
+    if (reasonValue === 'enemy-leave-wait') {
+      const hpText = combatHpDisadvantageText(combat);
+      return hpText
+        ? `战斗劣势主动退出：${hpText}，已离开等待安全重登`
+        : '战斗风险主动退出：已离开等待安全重登';
+    }
+    return detail ? `主动退出本局：${detail}` : '主动退出本局';
+  }
+  if (value === 'retreated') return detail ? `局内避战：${detail}（未退出本局）` : '局内避战：恢复或撤开（未退出本局）';
+  if (value === 'disengaged') return detail ? `交火停止：${detail}（未退出本局）` : '交火停止（未退出本局）';
   if (value === 'ongoing') return detail ? `仍在记录中：${detail}` : '仍在记录中';
   return detail ? `状态未归类：${detail}` : '状态未归类';
 }
@@ -659,7 +684,7 @@ function printReport(report) {
   console.log(`登录合计：明确退出${report.totals.completed}/${report.totals.sessions}，推断收口${report.totals.inferred}，尚未收口${report.totals.incomplete}，总耗时${formatDuration(report.totals.loginDurationMs)}，消耗体力${formatStaminaSpent(report.totals.staminaSpentMs)}，拾取刷新金币${report.totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(report.totals.afkKillCount, report.totals.afkKillRewardCoins, report.totals.afkUnconfirmedDropCoins, report.totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(report.totals.activeKillCount, report.totals.activeKillRewardCoins, report.totals.activeUnconfirmedDropCoins, report.totals.activeUnconfirmedKillCount)}，总收益${report.totals.coinsGained}币`);
   console.log('');
   console.log('## 活跃玩家战斗统计');
-  console.log('说明：主动退出本局表示已离开当前局并等待安全重登/恢复；未退出本局表示仍在当前局内撤退、恢复或避战；战斗记录收口表示本条战斗因目标切换、观察超时等结束，不代表主动退出。');
+  console.log('说明：主动退出本局表示已离开当前局；战后恢复/战后恢复避战表示仍在本局内回血回体或避开附近玩家；敌方逃离表示目标脱离交火范围；切换交战目标表示改打其他目标；交火停止表示观察期内没有继续交火，不代表主动退出。');
   console.log('');
   if (!report.combats.length) {
     console.log('无记录');
@@ -668,7 +693,7 @@ function printReport(report) {
     console.log('|---:|---|---|---|---:|---:|---:|---:|---|');
     report.combats.forEach((combat, index) => {
       const endedAt = number(combat.endedAt) ? formatTime(combat.endedAt) : '未记录';
-      console.log(`| ${index + 1} | ${formatEnemy(combat.enemy)} | ${formatTime(combat.startedAt)} | ${endedAt} | ${formatDuration(combat.durationMs)} | ${formatStaminaSpent(combat.staminaSpentMs)} | ${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)} | ${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)} | ${resultText(combat.result, combat.resultReason)} |`);
+      console.log(`| ${index + 1} | ${formatEnemy(combat.enemy)} | ${formatTime(combat.startedAt)} | ${endedAt} | ${formatDuration(combat.durationMs)} | ${formatStaminaSpent(combat.staminaSpentMs)} | ${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)} | ${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)} | ${resultText(combat.result, combat.resultReason, combat)} |`);
     });
     console.log('');
     console.log(`战斗合计：次数${report.totals.combats}，总耗时${formatDuration(report.totals.combatDurationMs)}，消耗体力${formatStaminaSpent(report.totals.combatStaminaSpentMs)}`);
@@ -832,8 +857,11 @@ function runSelfTest() {
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
   assertSelfTest(resultText('left', 'combat-hp-disadvantage-leave') === '主动退出本局：战斗血量劣势', 'left combat result text is not explicit');
-  assertSelfTest(resultText('retreated', 'recovery-avoid-humans') === '未退出本局：恢复期避开附近玩家', 'retreated combat result text is not explicit');
-  assertSelfTest(resultText('disengaged', 'target-switched') === '战斗记录收口：目标切换，原战斗记录结束', 'disengaged combat result text is not explicit');
+  assertSelfTest(resultText('left', 'wait-for-full-stamina-and-hp') === '战后恢复：停止交战，等待血量/体力恢复（未退出本局）', 'recovery wait result text is not explicit');
+  assertSelfTest(resultText('retreated', 'recovery-avoid-humans') === '战后恢复避战：恢复期遇到附近玩家，局内避开（未退出本局）', 'retreated combat result text is not explicit');
+  assertSelfTest(resultText('disengaged', 'target-switched') === '切换交战目标：原目标不再作为当前战斗对象', 'target-switched combat result text is not explicit');
+  assertSelfTest(resultText('disengaged', 'post-combat-timeout', { lastReason: 'combat-target-retreating' }) === '敌方逃离：目标脱离交火范围', 'retreating-target combat result text is not explicit');
+  assertSelfTest(resultText('left', 'enemy-leave-wait', { selfHpEnd: 38, enemyHpEnd: 44 }) === '战斗劣势主动退出：我方HP 38，对方HP 44，已离开等待安全重登', 'enemy leave wait result text is not explicit');
   assertSelfTest(report.sessions[1].incomplete === true, 'unclosed middle session was not marked incomplete');
   assertSelfTest(report.sessions[1].nextLoginAt === 20000, 'next-login context missing for incomplete session');
   fs.rmSync(root, { recursive: true, force: true });
