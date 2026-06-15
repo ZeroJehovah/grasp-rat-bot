@@ -733,8 +733,9 @@ function runSelfTest() {
       snapshotAimResolved: true
     };
   }
-  function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0) {
-    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false };
+  function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0, options = {}) {
+    const pressureBullet = Boolean(options.realBulletPressure || options.incomingRealBullet || options.pressure);
+    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet };
     if (!snapshotSource) return empty;
     const reference = nativeSource || target || {};
     const sx = Number(snapshotSource.x);
@@ -750,7 +751,7 @@ function runSelfTest() {
     const divergence = Math.hypot(sx - rx, sy - ry);
     const serverStall = combatAimServerStallState();
     const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
-    const pressure = Boolean(serverStall.stalled || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
+    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
     const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     return {
@@ -761,7 +762,8 @@ function runSelfTest() {
       thresholdCm: Math.round(threshold),
       snapshotDistance: Math.round(snapshotDistance),
       nativeDistance: Math.round(nativeDistance),
-      serverStall: Boolean(serverStall.stalled)
+      serverStall: Boolean(serverStall.stalled),
+      realBulletPressure: pressureBullet
     };
   }
   function combatAimSourceDivergenceState(aimSource, distance) {
@@ -2474,6 +2476,7 @@ function runSelfTest() {
 	      && hpGap > cfg.combatHighHpDisadvantageGap) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap }, bullets);
 	    }
+    const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const noDamageMs = combatTargetNoDamageMs(target);
     const retreatingTarget = combatRetreatingTargetState(self, target, target.distance, { noDamageMs });
     const motionScale = combatAimMotionScale(target);
@@ -2481,7 +2484,7 @@ function runSelfTest() {
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const nativeAimSource = combatLiveAimTarget(self, target);
     const snapshotAimSource = combatSnapshotAimTarget(self, target);
-    const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, noDamageMs);
+    const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, noDamageMs, { realBulletPressure: incoming });
     const aimSource = authorityState.useSnapshot ? snapshotAimSource : nativeAimSource;
     const aimMotionScale = combatAimMotionScale(aimSource);
     const aimMoving = speed(aimSource) >= cfg.combatStationarySpeed
@@ -2492,7 +2495,6 @@ function runSelfTest() {
       ? combatMovementAimMode(self, aimSource, aimDistance)
       : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
     const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, { noDamageMs }, aimMoving, aimDistance, aimMovement, steadyAim, authorityState);
-    const incoming = isFiringEntity(target) || (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
     const serverStallNoDamage = combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, incoming, bot.serverPositionStall);
     if (serverStallNoDamage && !retreatingTarget.disengage) {
       return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
@@ -4058,6 +4060,25 @@ function runSelfTest() {
       want: 'snapshot-precision:snapshot-authority:server-stall-snapshot:6000:true'
     },
     {
+      name: 'combat real bullet pressure activates snapshot authority aim',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        bot.testSnapshotEntities = [{ user_id: 7, name: 'target', x: 6000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 0 }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 6000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        bot.testSnapshotEntities = null;
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + action.aimTarget?.x + ':' + action.aimTarget?.authority?.realBulletPressure;
+      })(),
+      want: 'snapshot-precision:snapshot-authority:snapshot-divergence:6000:true'
+    },
+    {
       name: 'combat authoritative target out of range suppresses fire',
       got: (() => {
         const t = Date.now();
@@ -4076,6 +4097,25 @@ function runSelfTest() {
         return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.aimTarget?.authorityTargetOutOfRange);
       })(),
       want: 'combat-stamina-conserve:false:authority-target-out-of-range:true'
+    },
+    {
+      name: 'combat real bullet pressure suppresses out-of-range snapshot authority',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        bot.testSnapshotEntities = [{ user_id: 7, name: 'target', x: 20000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 0 }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        bot.testSnapshotEntities = null;
+        return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.aimTarget?.authorityTargetOutOfRange) + ':' + action.aimTarget?.authority?.realBulletPressure;
+      })(),
+      want: 'combat-stamina-conserve:false:authority-target-out-of-range:true:true'
     },
     {
       name: 'combat very close target backs away while shooting',
@@ -15505,8 +15545,9 @@ function browserBotSource(config) {
     };
   }
 
-  function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0) {
-    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false };
+  function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0, options = {}) {
+    const pressureBullet = Boolean(options.realBulletPressure || options.incomingRealBullet || options.pressure);
+    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet };
     if (!snapshotSource) return empty;
     const reference = nativeSource || target || {};
     const sx = Number(snapshotSource.x);
@@ -15522,7 +15563,7 @@ function browserBotSource(config) {
     const divergence = Math.hypot(sx - rx, sy - ry);
     const serverStall = combatAimServerStallState();
     const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
-    const pressure = Boolean(serverStall.stalled || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
+    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
     const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     return {
@@ -15533,7 +15574,8 @@ function browserBotSource(config) {
       thresholdCm: Math.round(threshold),
       snapshotDistance: Math.round(snapshotDistance),
       nativeDistance: Math.round(nativeDistance),
-      serverStall: Boolean(serverStall.stalled)
+      serverStall: Boolean(serverStall.stalled),
+      realBulletPressure: pressureBullet
     };
   }
 
@@ -15636,11 +15678,11 @@ function browserBotSource(config) {
     };
   }
 
-  function combatAimTarget(self, target) {
+  function combatAimTarget(self, target, options = {}) {
     const nativeAimSource = combatLiveAimTarget(self, target);
     const preliminaryDamage = combatAimDamageState(nativeAimSource);
     const snapshotAimSource = combatSnapshotAimTarget(self, target);
-    const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, preliminaryDamage.noDamageMs);
+    const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, preliminaryDamage.noDamageMs, options);
     const aimSource = authorityState.useSnapshot ? snapshotAimSource : nativeAimSource;
     const motionScale = combatAimMotionScale(aimSource);
     const moving = speed(aimSource) >= cfg.combatStationarySpeed
@@ -15782,7 +15824,7 @@ function browserBotSource(config) {
       }
       : null;
     if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
-    const aim = combatAimTarget(self, target);
+    const aim = combatAimTarget(self, target, { realBulletPressure });
     const shooting = combatShootingPlan(self, {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
@@ -16015,7 +16057,7 @@ function browserBotSource(config) {
       : null;
     if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
-    const aim = combatAimTarget(self, target);
+    const aim = combatAimTarget(self, target, { realBulletPressure });
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
     const trend = combatTrendState(self, {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),

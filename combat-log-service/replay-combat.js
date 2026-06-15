@@ -9,6 +9,8 @@ const DEFAULTS = {
   tickMs: 50,
   bulletSpeedPerTick: 500,
   bulletTtlMs: 1500,
+  combatAttackRange: 14500,
+  combatAimNoDamageMs: 1000,
   liveDivergencePrecisionCm: 1200,
   liveDivergencePrecisionRatio: 0.08,
   fallbackPrecisionNoDamageMs: 25000,
@@ -366,6 +368,80 @@ function dynamicAimForShot(shot, options) {
   return frame.aim || frame.decisionTarget || live;
 }
 
+function pressureAuthorityState(frame, options) {
+  const authority = frame.nearbyTarget;
+  const reference = frame.decisionTarget;
+  if (!frame.self || !authority || !reference) {
+    return { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, authorityDistance: null, referenceDistance: null };
+  }
+  const authorityDistance = distance(frame.self, authority);
+  const referenceDistance = distance(frame.self, reference);
+  const divergence = distance(authority, reference);
+  const threshold = Math.max(
+    Number(options.liveDivergencePrecisionCm || 0),
+    Math.round(Math.max(0, Math.min(authorityDistance, referenceDistance)) * Number(options.liveDivergencePrecisionRatio || 0))
+  );
+  const pressure = Boolean(
+    serverStalled(frame)
+      || incomingRealBullet(frame)
+      || (Number(options.combatAimNoDamageMs || 0) && frame.noDamageMs >= Number(options.combatAimNoDamageMs || 0))
+  );
+  const active = Boolean(threshold > 0 && divergence >= threshold && pressure);
+  const attackRange = Math.max(0, Number(options.combatAttackRange || 0));
+  return {
+    active,
+    useSnapshot: Boolean(active && (!attackRange || authorityDistance <= attackRange)),
+    suppressFire: Boolean(active && attackRange && authorityDistance > attackRange),
+    divergenceCm: Math.round(divergence),
+    thresholdCm: Math.round(threshold),
+    authorityDistance: Math.round(authorityDistance),
+    referenceDistance: Math.round(referenceDistance)
+  };
+}
+
+function runPressureAuthorityScenario(shots, targetSamples, options) {
+  let considered = 0;
+  let hits = 0;
+  let minDistance = Infinity;
+  let firstHit = null;
+  let suppressed = 0;
+  let suppressedLoggedHits = 0;
+  for (const shot of shots) {
+    const frame = shot.frame;
+    const state = pressureAuthorityState(frame, options);
+    if (state.suppressFire) {
+      suppressed += 1;
+      const logged = minDistanceForShot(frame.self, frame.aim, targetSamples, frame.at, options);
+      if (logged.hit) suppressedLoggedHits += 1;
+      continue;
+    }
+    const aim = state.useSnapshot ? frame.nearbyTarget : (frame.aim || frame.decisionTarget || frame.nearbyTarget);
+    const result = minDistanceForShot(frame.self, aim, targetSamples, frame.at, options);
+    considered += 1;
+    if (result.min < minDistance) minDistance = result.min;
+    if (result.hit) {
+      hits += 1;
+      if (!firstHit) {
+        firstHit = {
+          line: frame.lineNo,
+          time: formatTime(frame.at),
+          noDamageMs: Math.round(frame.noDamageMs),
+          minDistanceCm: Math.round(result.min)
+        };
+      }
+    }
+  }
+  return {
+    label: 'pressure snapshot authority vs live target',
+    considered,
+    hits,
+    minDistanceCm: Number.isFinite(minDistance) ? Math.round(minDistance) : null,
+    firstHit,
+    suppressed,
+    suppressedLoggedHits
+  };
+}
+
 function findExitFrame(frames, waitMs, options) {
   return frames.find(frame => {
     const hp = frame.selfHp;
@@ -409,7 +485,8 @@ function replay(options) {
     runAimScenario('exact live target vs live target', shots, shot => shot.frame.nearbyTarget, targetSamples, options),
     runAimScenario('old effective logged aim before server-stall exit', shots, shot => shot.frame.aim, targetSamples, options, shot => !oldExitFrame || shot.frame.at < oldExitFrame.at),
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
-    runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at)
+    runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
+    runPressureAuthorityScenario(shots, targetSamples, options)
   ];
 
   const divergences = frames
@@ -475,7 +552,10 @@ function printReport(result) {
   }
   for (const item of result.scenarios) {
     const first = item.firstHit ? ` firstHit=line ${item.firstHit.line} ${item.firstHit.time} min=${item.firstHit.minDistanceCm}cm` : '';
-    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}`);
+    const suppressed = Number.isFinite(Number(item.suppressed))
+      ? ` suppressed=${item.suppressed} suppressedLoggedHits=${item.suppressedLoggedHits || 0}`
+      : '';
+    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}`);
   }
 }
 
@@ -507,6 +587,16 @@ function selfTest() {
       selfId: '28886',
       targetId: '32664',
       targetName: '菈菲爾'
+    },
+    {
+      id: '2026-06-15-xmsthc-pressure-authority',
+      file: path.join(__dirname, 'logs/2026-06-15/-_-_-_-.jsonl'),
+      startLine: 9113,
+      endLine: 9465,
+      selfId: '28886',
+      targetId: '20606',
+      targetName: 'xmsthc',
+      expectSuppressed: true
     }
   ];
   const summaries = cases.map(item => {
@@ -516,14 +606,23 @@ function selfTest() {
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
     if (!(dynamic.hits > logged.hits)) {
-      throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
+      const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
+      if (!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0) {
+        throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
+      }
     }
     if (!(dynamicGrace.hits > 0)) throw new Error(`${item.id} dynamic replay has no hits before grace exit`);
+    const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
+    if (item.expectSuppressed && (!pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)) {
+      throw new Error(`${item.id} pressure authority did not suppress only no-hit logged shots`);
+    }
     return {
       id: item.id,
       loggedHits: logged.hits,
       dynamicHits: dynamic.hits,
-      dynamicGraceHits: dynamicGrace.hits
+      dynamicGraceHits: dynamicGrace.hits,
+      pressureSuppressed: pressureAuthority?.suppressed || 0,
+      pressureSuppressedLoggedHits: pressureAuthority?.suppressedLoggedHits || 0
     };
   });
   console.log(JSON.stringify({ ok: true, cases: summaries }, null, 2));
