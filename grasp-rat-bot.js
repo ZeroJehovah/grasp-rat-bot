@@ -8820,12 +8820,14 @@ function browserBotSource(config) {
         Math.round(Number(offlineDetail?.holdRemainingMs || 0)),
         Math.round(Number(bot.offlineReloginUntil || 0) - t)
       )
-    };
-    bot.pursuitReloginUntil = 0;
-    bot.offlineReloginUntil = 0;
-    bot.lastEnemyLeaveResult = clearExitHoldDetail(bot.lastEnemyLeaveResult, reason, t);
-    bot.lastPursuitLeaveResult = clearExitHoldDetail(bot.lastPursuitLeaveResult, reason, t);
-    bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
+	    };
+	    bot.pursuitReloginUntil = 0;
+	    bot.offlineReloginUntil = 0;
+	    bot.lastEnemyLeaveWaitMs = 0;
+	    bot.lastOfflineLeaveWaitMs = 0;
+	    bot.lastEnemyLeaveResult = clearExitHoldDetail(bot.lastEnemyLeaveResult, reason, t);
+	    bot.lastPursuitLeaveResult = clearExitHoldDetail(bot.lastPursuitLeaveResult, reason, t);
+	    bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
     bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
     bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
     bot.pendingExit = null;
@@ -9431,21 +9433,47 @@ function browserBotSource(config) {
     return Math.round(remaining);
   }
 
-  function clearLoginSuppressMatching(pattern) {
-    try {
-      const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
-      if (!pattern.test(suppressReason)) return false;
+	  function clearLoginSuppressMatching(pattern) {
+	    try {
+	      const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+	      if (!pattern.test(suppressReason)) return false;
       localStorage.removeItem(LOGIN_SUPPRESS_KEY);
       localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
       return true;
     } catch (_) {
       return false;
-    }
-  }
+	    }
+	  }
 
-  function clearOfflineReloginHold(reason = 'online self restored') {
-    const t = Date.now();
-    bot.offlineReloginUntil = 0;
+	  function clearEnemyReloginHold(reason = 'online self restored') {
+	    const t = Date.now();
+	    const details = [
+	      activeEnemyLeaveDetail(t),
+	      bot.lastEnemyLeaveResult,
+	      bot.lastPursuitLeaveResult,
+	      bot.lastCombatLeaveResult,
+	      bot.lastInjuryLeaveResult
+	    ].filter(Boolean);
+	    bot.pursuitReloginUntil = 0;
+	    bot.lastEnemyLeaveWaitMs = 0;
+	    bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;
+	    for (const detail of details) {
+	      if (!detail || typeof detail !== 'object') continue;
+	      detail.onlineRecoveryAt = t;
+	      detail.onlineRecoveryReason = String(reason || 'online self restored');
+	      clearExitHoldDetail(detail, reason, t);
+	    }
+	    bot.lastEnemyLeaveResult = null;
+	    bot.lastPursuitLeaveResult = null;
+	    bot.lastCombatLeaveResult = null;
+	    bot.lastInjuryLeaveResult = null;
+	    clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+	    clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
+	  }
+
+	  function clearOfflineReloginHold(reason = 'online self restored') {
+	    const t = Date.now();
+	    bot.offlineReloginUntil = 0;
     bot.lastOfflineLeaveWaitMs = 0;
     bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;
     if (bot.lastOfflineLeaveResult && typeof bot.lastOfflineLeaveResult === 'object') {
@@ -17766,11 +17794,16 @@ function browserBotSource(config) {
         if (cfg.once) bot.stop('once');
         return;
       }
-      const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
-	      if (enemyHoldRemainingMs > 0) {
-	        const enemyLeaveDetail = activeEnemyLeaveDetail();
-	        bot.pursuit = null;
-	        stopMotionSafely('enemy-leave-wait');
+	      const enemyHoldControl = summarizeControl();
+	      let enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
+	      if (enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen) {
+	        clearEnemyReloginHold('online self restored during enemy hold');
+	        enemyHoldRemainingMs = 0;
+	      }
+		      if (enemyHoldRemainingMs > 0) {
+		        const enemyLeaveDetail = activeEnemyLeaveDetail();
+		        bot.pursuit = null;
+		        stopMotionSafely('enemy-leave-wait');
 	        refreshGlobalState(false).catch(err => {
 	          bot.globalState.error = err.message || String(err);
 	        });
@@ -17778,10 +17811,10 @@ function browserBotSource(config) {
           kind: 'wait',
           reason: 'enemy-leave-wait',
           dx: 0,
-          dy: 0,
-          self: self ? summarizeSelf(self) : null,
-	          currentUserId: getCurrentUserId(),
-	          control: summarizeControl(),
+	          dy: 0,
+	          self: self ? summarizeSelf(self) : null,
+		          currentUserId: getCurrentUserId(),
+		          control: enemyHoldControl,
 	          holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs(),
 	          displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
 	          leave: null,

@@ -797,6 +797,18 @@ function main() {
       assert(body.includes('clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'safe offline path does not clear persistent hold state');
       assert(body.includes('return 0'), 'safe offline path does not return without suppress');
     });
+    check(`${file} clears stale enemy relogin hold after online recovery`, () => {
+      const clearBody = functionBody(text, 'clearEnemyReloginHold');
+      assert(clearBody.includes('bot.pursuitReloginUntil = 0'), 'enemy online recovery does not clear enemy hold until');
+      assert(clearBody.includes('bot.lastEnemyLeaveWaitMs = 0'), 'enemy online recovery does not clear stale wait duration');
+      assert(clearBody.includes('clearPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'enemy online recovery does not clear persistent hold state');
+      assert(clearBody.includes('clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'enemy online recovery does not clear matching login suppress');
+      const manualBody = functionBody(text, 'clearCurrentReloginHold');
+      assert(manualBody.includes('bot.lastEnemyLeaveWaitMs = 0'), 'manual login hold clear leaves stale enemy wait duration');
+      assert(manualBody.includes('bot.lastOfflineLeaveWaitMs = 0'), 'manual login hold clear leaves stale offline wait duration');
+      assert(text.includes("clearEnemyReloginHold('online self restored during enemy hold')"), 'main tick does not clear stale enemy hold after online recovery');
+      assert(text.includes('enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen'), 'enemy hold recovery is not gated on alive self and online websocket');
+    });
   }
 
   check('combat-log daily summary merges all daily JSONL important logs', () => {

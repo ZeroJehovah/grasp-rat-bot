@@ -9,6 +9,7 @@
   - repeated successful exits from the same identified enemy back off to at least 30 minutes on the second consecutive leave and 1 hour on the third or later.
   - enemy/offline leave reason, target/player context, and remaining relogin wait are persisted in localStorage across page reloads.
   - enemy/offline relogin hold waits are display-only; they stop movement and show the persisted reason/countdown, but do not keep sending leave requests.
+  - stale enemy/offline relogin holds are cleared once the page has recovered to an alive self entity with an online native WebSocket, so manual or external successful relogin cannot leave the bot stopped in an old wait state.
   - attempted combat/injury/pursuit/offline leave requests establish pending exit even when the transport reports a timeout/HTML error, so HP-based relogin hold can start after conservative exit confirmation.
   - stamina-budget leave requests prime a non-offline login suppress immediately after an attempted leave command, so a page/context refresh before exit confirmation does not cause immediate auto-login.
   - attempted unsafe exits from injury, combat disadvantage, pursuit, reconnect churn, server-position stall, or unsafe offline conditions prime a pending local login suppress for at least `unsafeExitReloginMinDelayMs` without setting confirmed enemy/offline hold state, so page reloads cannot instantly relogin but pending cover/retry behavior continues while still alive.
