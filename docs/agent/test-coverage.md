@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `186`.
+- Latest bot self-test count: `188`.
 - Latest combat-log analyzer self-test count: `82`.
 - Recent important coverage:
   - local snapshot coin at `185m` cannot beat visible/native coin;
@@ -28,7 +28,7 @@
   - short 5s stamina exhaustion stops combat movement while keeping shooting enabled;
   - very close combat still backs away, but 50m mid-range no longer backs away by default;
   - long no-damage combat target triggers `combat-pressure-close`;
-  - server-stall snapshot authority aim uses fresh snapshot/server coordinates when native/live coordinates diverge under pressure;
+  - server-stall or real-bullet-pressure snapshot authority aim uses fresh snapshot/server coordinates when native/live coordinates diverge under pressure;
   - authoritative snapshot/server targets outside attack range suppress fire with `authority-target-out-of-range`;
   - retreating out-of-range combat targets disengage instead of chasing;
   - retreating edge-range combat targets suppress fire with `target-retreating-edge`;
@@ -75,7 +75,7 @@
   - combat-log analyzer `npm test` covers exit safety delay summaries for safe exits, unsafe exits meeting the minimum, and unsafe exits below the minimum;
   - combat-log analyzer `npm test` covers reason-specific required-delay auditing for `stamina-budget-coin-leave`, including `exit-delay-below-required`;
   - combat-log analyzer `npm test` covers manifest source-hash match, missing-hash, and mismatch evidence issues;
-  - combat replay self-tests cover the 2026-06-14 xmsthc reference plus 2026-06-15 xmsthc and 菈菲爾 authority-divergence fights; replay estimates improved hits from `0->14`, `3->57`, and `5->73` respectively.
+  - combat replay self-tests cover the 2026-06-14 xmsthc reference plus 2026-06-15 xmsthc and 菈菲爾 authority-divergence fights; replay estimates improved hits from `0->14`, `3->57`, and `5->73` respectively, and the `.161` xmsthc pressure-authority window suppresses 47 old shots with `suppressedLoggedHits=0`.
   - local combat-log collector sourceHash propagation smoke test passed for payload-level sourceHash on session events;
   - static objective build verifier passed 210 checks for current manifest/source hash alignment, key objective constants, runtime ambiguous-wait removal, bootstrap layout CSS, sourceHash wiring, bootstrap version consistency, compact panel dot controls, removed visible section/status titles, tooltip-only metric labels, raw remaining/limit stamina formatting, post-login zoom-out scheduling flow, join-mode Active non-AFK combat handling, logged combat target mode/safety fields, combat session-boundary sourceHash logging, login-suppressed/manual-login combat-log suspension, pending-exit top-level exit fallback, specific exit reason preservation during leave cooldown, longest exit suppress delay selection, important local/remote summary logs, safe offline immediate relogin behavior, non-invulnerable active combat priority over avoidance, retreating-target disengage/fire suppression, snapshot-authority aim/fire suppression, and the stationary full-stamina Active coin-override self-test;
   - bot self-tests cover preserving the outer specific top-level combat-log `exit.reason` when leave detail reason is generic `cooldown`;

@@ -589,6 +589,7 @@ function main() {
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
       const aimBody = functionBody(text, 'combatAimTarget');
+      const authorityBody = functionBody(text, 'combatAimAuthorityState');
       assert(text.includes('function combatAimFallbackPrecisionState'), 'fallback precision aim helper not found');
       assert(text.includes('function combatAimDynamicStrategyState'), 'dynamic combat aim strategy helper not found');
       assert(text.includes('function combatAimSourceDivergenceState'), 'combat aim source divergence helper not found');
@@ -598,6 +599,11 @@ function main() {
       assert(text.includes('function combatAimSteadyNoDamageState'), 'steady no-damage aim helper not found');
       assert(aimBody.includes('combatAimDynamicStrategyState(self, target, aimSource'), 'combat aim does not use dynamic strategy state');
       assert(aimBody.includes('combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource'), 'combat aim does not evaluate snapshot/native authority state');
+      assert(authorityBody.includes('pressureBullet'), 'combat aim authority does not track real bullet pressure');
+      assert(authorityBody.includes('serverStall.stalled || pressureBullet'), 'real bullet pressure cannot activate snapshot authority');
+      assert(text.includes('function combatAimTarget(self, target, options = {})'), 'combat aim target cannot receive pressure options');
+      assert(combatBody.includes('combatAimTarget(self, target, { realBulletPressure })'), 'combat action does not pass real bullet pressure into aim authority');
+      assert(text.includes('combatAimTarget(self, target, { realBulletPressure })'), 'leave cover does not pass real bullet pressure into aim authority');
       assert(text.includes("reason = 'coordinate-divergence'"), 'combat aim does not switch on live/source coordinate divergence');
       assert(text.includes("strategy = 'snapshot-authority'"), 'combat aim does not switch to snapshot authority strategy');
       assert(text.includes("reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence'"), 'snapshot authority reason not found');
