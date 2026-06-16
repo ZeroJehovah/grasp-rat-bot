@@ -3,6 +3,11 @@
 
 const http = require('http');
 const fs = require('fs');
+const {
+  staminaExhaustedWindowLabel,
+  offlineLeaveSummaryText,
+  combatLogExitSummaryFromDecision
+} = require('./src/shared/exit-summary');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -21,7 +26,7 @@ function parseArgs(args) {
     selfTest: false,
     bringToFront: false,
     printSource: false,
-    statusEvery: 1000,
+    statusEvery: 30000,
     pageWs: '',
     overrides: {},
   };
@@ -71,7 +76,7 @@ Options:
   --front                 Bring the game tab to the foreground while attaching
   --print-source          Print the browser injection source and exit
   --page-ws <url>         Attach directly to a page WebSocketDebuggerUrl
-  --status-every <ms>     Browser console status interval. Default: 1000
+  --status-every <ms>     Browser console status interval. Use 0 to disable. Default: 30000
   --bot-version <value>   Version label exposed in browser bot status
   --danger-radius <cm>    Flee from active local units within this range
   --global-attack-max <cm>  Max distance for far Drop targets
@@ -101,74 +106,6 @@ function writeStdoutSync(text) {
       throw err;
     }
   }
-}
-
-function staminaExhaustedWindowLabel(staminaState) {
-  const raw = Array.isArray(staminaState?.longExhausted)
-    ? staminaState.longExhausted
-    : (Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : []);
-  const windows = [];
-  for (const item of raw) {
-    const key = String(item || '').toLowerCase();
-    if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
-  }
-  return windows.join('/');
-}
-
-function offlineLeaveSummaryText(reason, offlineSafety) {
-  if (offlineSafety?.staminaBudgetExit) return '一小时体力不足以拾取最近金币，退出等待重连';
-  const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
-  if (staminaLabel === '1h') return '一小时体力到达限制，退出等待重连';
-  if (staminaLabel === '1d') return '一天体力到达限制，退出等待重连';
-  if (staminaLabel === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
-  const text = String(reason || '').toLowerCase();
-  if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
-  if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
-  if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
-  if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
-  if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
-  return '网络连接离线，退出等待重连';
-}
-
-function combatLogExitSummaryFromDecision(decision) {
-  const leave = decision?.leave || null;
-  const detail = leave || decision || {};
-  const leaveReason = String(leave?.reason || '');
-  const decisionReason = String(decision?.reason || '');
-  const pendingExit = decision?.pendingExit && typeof decision.pendingExit === 'object' ? decision.pendingExit : null;
-  const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : '';
-  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(decisionReason)
-    ? decisionReason
-    : '';
-  const reason = canonicalCombatReason
-    || (leaveReason && leaveReason !== 'cooldown' ? leaveReason : '')
-    || (pendingExit ? 'pending-exit-active' : '')
-    || exitishDecisionReason
-    || decisionReason
-    || leaveReason;
-  const isExit = Boolean(leave)
-    || Boolean(pendingExit)
-    || decision?.kind === 'leave'
-    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
-  if (!isExit) return null;
-  return {
-    reason,
-    summary: leave?.summary || leave?.exitSummary || pendingExit?.summary || decision?.exitSummary || decision?.displayReason || '',
-    displayReason: leave?.displayReason || pendingExit?.displayReason || decision?.displayReason || '',
-    attempted: leave ? Boolean(leave.attempted) : null,
-    error: leave?.error || pendingExit?.lastError || '',
-    safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed),
-    offlineSafety: detail.offlineSafety || decision?.offlineSafety || null,
-    reloginUntil: detail.reloginUntil || 0,
-    holdRemainingMs: detail.holdRemainingMs || 0,
-    reloginDelayMs: detail.reloginDelayMs || 0,
-    pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
-    pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
-    pendingLoginSuppressReason: detail.pendingLoginSuppressReason || '',
-    pendingLoginSuppressMinimumDelayMs: detail.pendingLoginSuppressMinimumDelayMs || 0,
-    pendingLoginSuppressHpDelayMs: detail.pendingLoginSuppressHpDelayMs || 0,
-    pendingLoginSuppressHp: detail.pendingLoginSuppressHp || null
-  };
 }
 
 function runSelfTest() {
@@ -5849,7 +5786,7 @@ function browserBotSource(config) {
 	    sourceUrl: String(config.sourceUrl || ''),
 	    injectedBy: String(config.injectedBy || 'cdp'),
     tickMs: 120,
-    statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
+    statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000),
     dangerRadius: 17000,
     activeCautionRadius: 23000,
     activeCautionExitMargin: 2000,
@@ -6153,6 +6090,7 @@ function browserBotSource(config) {
     serverPositionStallHoldMs: 6000,
     serverPositionCommandFreshMs: 900,
     directWsControlEnabled: true,
+    directWsServerMarkerProbe: false,
     directWsVelocityRepeatMs: 50,
     directWsVelocityRepeatHoldMs: 220,
     directWsStopRepeatCount: 3,
@@ -11850,6 +11788,7 @@ function browserBotSource(config) {
 	      nativeLastVel: nativeState?.lastVel || '',
 	      nativeKeys,
       directWsControl: Boolean(cfg.directWsControlEnabled),
+      directWsServerMarkerProbe: Boolean(cfg.directWsServerMarkerProbe),
       directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
       lastDirectVelocity: bot.lastDirectVelocity || '',
       lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Date.now() - Number(bot.lastDirectVelocityAt || 0) : null,
@@ -13891,12 +13830,18 @@ function browserBotSource(config) {
 	      notePageOwnsReconnect();
 	      return false;
 	    }
+	    if (!cfg.directWsServerMarkerProbe) {
+	      setNativeKeys(native.state, dx, dy);
+	    }
 	    const message = directWsVelocityMessage(dx, dy);
 	    const t = now();
 	    const dedupeMs = Math.max(0, Math.min(45, Number(cfg.directWsVelocityRepeatMs || 50) - 5));
 	    if (!force && message === bot.lastDirectVelocity && t - Number(bot.lastDirectVelocityAt || 0) < dedupeMs) return true;
 	    try {
 	      native.ws.send(message);
+	      if (cfg.directWsServerMarkerProbe) {
+	        setNativeKeys(native.state, dx, dy);
+	      }
 	      bot.lastDirectVelocity = message;
 	      bot.lastDirectVelocityAt = t;
 	      bot.control.lastMessageAt = Date.now();
@@ -19522,7 +19467,7 @@ function browserBotSource(config) {
       };
       updateBotPanel(bot.lastDecision);
 
-	      if (Date.now() - bot.lastStatusAt >= cfg.statusEvery) {
+	      if (cfg.statusEvery > 0 && Date.now() - bot.lastStatusAt >= cfg.statusEvery) {
 	        bot.lastStatusAt = Date.now();
 	        console.log('[grasp-rat-bot:status]', safeStringify(bot.lastDecision));
 	      }

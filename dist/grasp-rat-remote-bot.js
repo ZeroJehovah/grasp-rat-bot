@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.175"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.176"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -73,7 +73,7 @@
 	    sourceUrl: String(config.sourceUrl || ''),
 	    injectedBy: String(config.injectedBy || 'cdp'),
     tickMs: 120,
-    statusEvery: Math.max(250, Number(config.statusEvery) || 1000),
+    statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000),
     dangerRadius: 17000,
     activeCautionRadius: 23000,
     activeCautionExitMargin: 2000,
@@ -377,6 +377,7 @@
     serverPositionStallHoldMs: 6000,
     serverPositionCommandFreshMs: 900,
     directWsControlEnabled: true,
+    directWsServerMarkerProbe: false,
     directWsVelocityRepeatMs: 50,
     directWsVelocityRepeatHoldMs: 220,
     directWsStopRepeatCount: 3,
@@ -6113,6 +6114,7 @@
 	      nativeLastVel: nativeState?.lastVel || '',
 	      nativeKeys,
       directWsControl: Boolean(cfg.directWsControlEnabled),
+      directWsServerMarkerProbe: Boolean(cfg.directWsServerMarkerProbe),
       directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
       lastDirectVelocity: bot.lastDirectVelocity || '',
       lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Date.now() - Number(bot.lastDirectVelocityAt || 0) : null,
@@ -8154,12 +8156,18 @@
 	      notePageOwnsReconnect();
 	      return false;
 	    }
+	    if (!cfg.directWsServerMarkerProbe) {
+	      setNativeKeys(native.state, dx, dy);
+	    }
 	    const message = directWsVelocityMessage(dx, dy);
 	    const t = now();
 	    const dedupeMs = Math.max(0, Math.min(45, Number(cfg.directWsVelocityRepeatMs || 50) - 5));
 	    if (!force && message === bot.lastDirectVelocity && t - Number(bot.lastDirectVelocityAt || 0) < dedupeMs) return true;
 	    try {
 	      native.ws.send(message);
+	      if (cfg.directWsServerMarkerProbe) {
+	        setNativeKeys(native.state, dx, dy);
+	      }
 	      bot.lastDirectVelocity = message;
 	      bot.lastDirectVelocityAt = t;
 	      bot.control.lastMessageAt = Date.now();
@@ -13785,7 +13793,7 @@
       };
       updateBotPanel(bot.lastDecision);
 
-	      if (Date.now() - bot.lastStatusAt >= cfg.statusEvery) {
+	      if (cfg.statusEvery > 0 && Date.now() - bot.lastStatusAt >= cfg.statusEvery) {
 	        bot.lastStatusAt = Date.now();
 	        console.log('[grasp-rat-bot:status]', safeStringify(bot.lastDecision));
 	      }

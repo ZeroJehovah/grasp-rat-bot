@@ -23,11 +23,13 @@ http://127.0.0.1:18765/combat-log
 curl http://127.0.0.1:18765/health
 ```
 
-日志默认写入：
+日志默认按类型拆分写入：
 
 ```text
-combat-log-service/logs/YYYY-MM-DD/<combatId>.jsonl
+combat-log-service/logs/YYYY-MM-DD/<kind>/<combatId>.jsonl
 ```
+
+`<kind>` 通常是 `combat`、`important`、`audit` 或 `misc`。需要旧版平铺结构时可加 `--flat-files`。
 
 ## 参数
 

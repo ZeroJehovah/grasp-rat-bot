@@ -229,6 +229,10 @@ function main() {
     check(`${file} accepts injected sourceHash`, () => {
       assert(text.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
     });
+    check(`${file} reduces routine browser status logging`, () => {
+      assert(text.includes('statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000)'), 'runtime statusEvery default/disable logic not found');
+      assert(text.includes('if (cfg.statusEvery > 0 && Date.now() - bot.lastStatusAt >= cfg.statusEvery)'), 'status log cannot be disabled with statusEvery=0');
+    });
     check(`${file} formats display distances in meters`, () => {
       const distanceBody = functionBody(text, 'formatDistance');
       assert(distanceBody.includes('const meters = n / 100'), 'formatDistance does not convert cm to meters');
@@ -240,11 +244,13 @@ function main() {
     });
     check(`${file} sends movement and shots through the native page WebSocket`, () => {
       assert(text.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
+      assert(text.includes('directWsServerMarkerProbe: false'), 'server-marker probe must be disabled by default');
       assert(text.includes('function sendDirectNativeVelocity'), 'direct WebSocket velocity sender not found');
       assert(text.includes('function scheduleDirectVelocityRepeat'), 'direct WebSocket velocity repeat scheduler not found');
       const directVelocityBody = functionBody(text, 'sendDirectNativeVelocity');
       const nativeVelocityBody = functionBody(text, 'sendNativeVelocity');
-      assert(!directVelocityBody.includes('setNativeKeys'), 'direct WebSocket velocity should not update local page keys/prediction');
+      assert(directVelocityBody.includes('if (!cfg.directWsServerMarkerProbe)'), 'direct velocity does not guard normal key sync behind probe mode');
+      assert(directVelocityBody.includes('setNativeKeys(native.state, dx, dy)'), 'direct WebSocket velocity no longer keeps local page prediction in sync');
       const directSendIndex = nativeVelocityBody.indexOf('if (sendDirectNativeVelocity(dx, dy, force)) return true');
       const fallbackKeySyncIndex = nativeVelocityBody.indexOf('setNativeKeys(native.state, dx, dy)');
       assert(directSendIndex !== -1, 'native velocity does not prefer direct WebSocket sends');
@@ -254,6 +260,7 @@ function main() {
       assert(functionBody(text, 'cancelVelocityStopTimer').includes('cancelDirectVelocityRepeat()'), 'precision/stop cleanup does not cancel direct repeat sends');
       assert(functionBody(text, 'sendNativeShoot').includes("native.ws.send('shoot '"), 'shooting does not prefer direct native WebSocket sends');
       assert(functionBody(text, 'summarizeControl').includes('directWsControl: Boolean(cfg.directWsControlEnabled)'), 'control status does not expose direct WebSocket control');
+      assert(functionBody(text, 'summarizeControl').includes('directWsServerMarkerProbe: Boolean(cfg.directWsServerMarkerProbe)'), 'control status does not expose server-marker probe mode');
     });
     check(`${file} freezes session uptime while self is missing`, () => {
       const sessionBody = functionBody(text, 'summarizeSessionStats');
@@ -403,9 +410,11 @@ function main() {
 	      assert(body.includes('login-suppressed'), 'login-suppressed suspend reason not found');
 	      assert(body.includes('login-snapshot-gate'), 'login-snapshot-gate suspend reason not found');
 	      assert(body.includes('manual-login'), 'manual-login suspend reason not found');
-	    });
+    });
     check(`${file} keeps specific exit reason during leave cooldown`, () => {
-      const body = functionBody(text, 'combatLogExitSummaryFromDecision');
+      const body = file === 'grasp-rat-bot.js'
+        ? readText('src/shared/exit-summary.js')
+        : functionBody(text, 'combatLogExitSummaryFromDecision');
       assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
       assert(body.includes('exitishDecisionReason'), 'decision exit reason fallback not found for cooldown leave detail');
       assert(body.includes("pendingExit ? 'pending-exit-active'"), 'pending exit fallback not found for active pending exit frames');
@@ -853,7 +862,7 @@ function main() {
   check('combat-log daily summary merges all daily JSONL important logs', () => {
     const dailySummary = readText('combat-log-service/daily-summary.js');
     assert(dailySummary.includes('listJsonlFiles(dayDir)'), 'daily summary does not scan the day directory');
-    assert(dailySummary.includes("item.name.endsWith('.jsonl')"), 'daily summary does not read all JSONL files');
+    assert(dailySummary.includes('function walk(dir)') && dailySummary.includes("item.name.endsWith('.jsonl')"), 'daily summary does not recursively read all JSONL files');
     assert(dailySummary.includes("item.type === 'important-log'") || dailySummary.includes("entry.type === 'important-log'"), 'daily summary does not filter important logs');
     assert(dailySummary.includes('importantEventsById'), 'daily summary does not dedupe important logs by id');
     assert(dailySummary.includes('mergeSession(sessions.get(event.session.sessionId), event.session)'), 'daily summary does not merge session-start/end records');
@@ -898,8 +907,20 @@ function main() {
     assert(pkg.scripts && pkg.scripts['daily:self-test'] === 'node daily-summary.js --self-test', 'daily summary self-test npm script missing');
     assert(pkg.scripts && pkg.scripts.replay === 'node replay-combat.js', 'combat replay npm script missing');
     assert(pkg.scripts && pkg.scripts['replay:self-test'] === 'node replay-combat.js --self-test', 'combat replay self-test npm script missing');
+    assert(String(pkg.scripts.test || '').includes('server.js --self-test'), 'npm test does not run collector self-test');
     assert(String(pkg.scripts.test || '').includes('daily-summary.js --self-test'), 'npm test does not run daily summary self-test');
     assert(String(pkg.scripts.test || '').includes('replay-combat.js --self-test'), 'npm test does not run combat replay self-test');
+  });
+
+  check('combat-log collector splits large logs by kind', () => {
+    const server = readText('combat-log-service/server.js');
+    assert(server.includes('splitFiles: true'), 'collector split-files default is not enabled');
+    assert(server.includes("if (entry?.criticalLog || entry?.exitAuditLogId || /audit|critical/.test(type)) return 'audit'"), 'collector does not split audit logs');
+    assert(server.includes("if (entry?.importantLog || type === 'important-log') return 'important'"), 'collector does not split important logs');
+    assert(server.includes("if (/^combat(?:-|$)/.test(type)) return 'combat'"), 'collector does not split combat logs');
+    assert(server.includes('path.join(rootDir, day, logKind(payload, entry), `${combatId}.jsonl`)'), 'collector does not write kind subdirectories');
+    assert(server.includes('--flat-files'), 'collector does not expose legacy flat-file switch');
+    assert(server.includes('missing split file'), 'collector self-test does not cover split files');
   });
 
   check('combat replay tool verifies reference combat improvement', () => {
@@ -1026,6 +1047,9 @@ function main() {
     check(`${file} suppresses routine bootstrap console noise`, () => {
       assert(text.includes('function shouldLogBootstrap'), 'bootstrap log filter not found');
       assert(text.includes('debugBootstrapLogging'), 'bootstrap verbose logging switch not found');
+      assert(text.includes('statusEvery: 30000'), 'bootstrap statusEvery default is not reduced');
+      assert(text.includes('Number(storedStatusEveryRaw) === 1000 ? DEFAULTS.statusEvery'), 'bootstrap does not migrate old 1000ms statusEvery default');
+      assert(text.includes('storedStatusEvery === 0 ? 0 : Math.max(1000'), 'bootstrap cannot disable status logging with statusEvery=0');
       assert(text.includes('watchdog ok|watchdog skipped: busy|poll skipped: busy|poll ok: bot current'), 'routine watchdog/poll logs are not filtered');
       assert(text.includes('manifest fetch start|manifest fetch try|manifest fetch ok|manifest fetch complete'), 'routine manifest fetch logs are not filtered');
     });

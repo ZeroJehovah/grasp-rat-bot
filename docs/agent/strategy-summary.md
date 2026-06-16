@@ -26,7 +26,7 @@
 - Control transport:
   - the page/native WebSocket remains the only game WebSocket; the bot does not create or reconnect a second socket;
   - runtime movement now prefers direct `native.ws.send('vel dx dy')` on that existing socket, with 50ms short-hold repeats for sustained movement and repeated zero-velocity stop commands;
-  - nonzero direct movement sends intentionally do not update the page's local `keys` / predicted movement state, so the server-position marker can reflect the lower-latency server command path instead of being hidden by local client prediction; stop/exit cleanup still clears native keys and local velocity state;
+  - nonzero direct movement sends keep the page's local `keys` / predicted movement state synchronized by default, preserving the self-position cadence used by combat distance, dodge, spacing, and exit decisions; the optional `directWsServerMarkerProbe` diagnostic mode can defer that sync for server-marker checks, but it is off by default;
   - runtime shooting now prefers direct `native.ws.send('shoot targetX targetY startX startY')` on the same socket, falling back to native page helpers if direct send fails;
   - behavior logic remains based on native/realtime visible state, so combat target selection, aim, firing, spacing, exits, and profit priority do not switch back to snapshot/server-coordinate parsing because of the faster transport.
 - Cloudflare error pages are detected by the remote bot and bootstrap layers and refresh every 5 seconds while the error page remains; full-page BunkerWeb 403 pages refresh every 10 minutes.
@@ -93,6 +93,7 @@
   - safety movement such as `avoid-invulnerable-target` does not immediately close an important combat summary; old `recovery-avoid-humans` summaries are filtered from daily active-combat statistics.
   - important combat summaries treat post-combat recovery waits as an observation period, not a combat result; if the target does not return before the post buffer expires, the daily report folds that target loss into `敌方逃离`.
 - combat log frames and session start/end events include final decision/exit reason, a top-level `exit` summary with relogin hold, pending suppress, minimum suppress, and HP-delay fields, login/suppress/hold context, self/target HP, current combat target mode/life/active/firing/invulnerable evidence, aim strategy fields for live/native precision, injury/pursuit context, capped nearby entities, capped bullets, control state, snapshot ages, and `combatMetrics` frame deltas for HP, distance, movement, shot cadence/result, target damage timing, bullet threat counts, nearest incoming bullet timing, and server-position stall state.
+- The local combat-log collector writes split JSONL files by default under `logs/YYYY-MM-DD/combat/`, `important/`, `audit/`, or `misc/`; analysis and daily-summary tools recurse through those day subdirectories. Use `node server.js --flat-files` only when the legacy `logs/YYYY-MM-DD/<combatId>.jsonl` layout is needed.
 - Targeting:
   - whitelisted target names/ids must not be attacked;
   - invulnerable targets are not valid opportunity/combat targets;
