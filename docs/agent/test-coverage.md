@@ -23,6 +23,7 @@
   - Drop=3 AFK target in attack range beats 400m visible coin;
   - low target motion shrinks combat aim jitter;
   - moving combat targets use intercept aim, and the intercept solver leads lateral targets with render-delay compensation;
+  - CDP validation on 2026-06-17 showed direct float `vel` components such as `0.6 0.8` and `0.9239 0.3827` do not move the player, while `2 1` collapses to the same 45° diagonal as `1 1`; movement remains 8-direction quantized and does not accept continuous float vectors;
   - precise incoming signed-lane direction overrides a stale opposite strafe lock;
   - pressure-close diagonal strafe keeps a target-closing axis while preserving dodge movement;
   - close target jitter and long no-damage aim widening stay capped at `0.14rad`;
