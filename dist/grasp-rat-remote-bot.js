@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.174"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.175"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -8150,7 +8150,6 @@
 	    if (!cfg.directWsControlEnabled) return false;
 	    const native = getNativeControl();
 	    if (!native) return false;
-	    setNativeKeys(native.state, dx, dy);
 	    if (!syncNativeControl(native)) {
 	      notePageOwnsReconnect();
 	      return false;
@@ -8208,8 +8207,8 @@
 	  function sendNativeVelocity(dx, dy, force = false) {
 	    const native = getNativeControl();
 	    if (!native) return false;
-	    setNativeKeys(native.state, dx, dy);
 	    if (sendDirectNativeVelocity(dx, dy, force)) return true;
+	    setNativeKeys(native.state, dx, dy);
 	    if (!syncNativeControl(native)) {
 	      notePageOwnsReconnect();
 	      return false;

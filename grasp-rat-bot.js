@@ -13887,7 +13887,6 @@ function browserBotSource(config) {
 	    if (!cfg.directWsControlEnabled) return false;
 	    const native = getNativeControl();
 	    if (!native) return false;
-	    setNativeKeys(native.state, dx, dy);
 	    if (!syncNativeControl(native)) {
 	      notePageOwnsReconnect();
 	      return false;
@@ -13945,8 +13944,8 @@ function browserBotSource(config) {
 	  function sendNativeVelocity(dx, dy, force = false) {
 	    const native = getNativeControl();
 	    if (!native) return false;
-	    setNativeKeys(native.state, dx, dy);
 	    if (sendDirectNativeVelocity(dx, dy, force)) return true;
+	    setNativeKeys(native.state, dx, dy);
 	    if (!syncNativeControl(native)) {
 	      notePageOwnsReconnect();
 	      return false;

@@ -242,7 +242,13 @@ function main() {
       assert(text.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
       assert(text.includes('function sendDirectNativeVelocity'), 'direct WebSocket velocity sender not found');
       assert(text.includes('function scheduleDirectVelocityRepeat'), 'direct WebSocket velocity repeat scheduler not found');
-      assert(functionBody(text, 'sendNativeVelocity').includes('if (sendDirectNativeVelocity(dx, dy, force)) return true'), 'native velocity does not prefer direct WebSocket sends');
+      const directVelocityBody = functionBody(text, 'sendDirectNativeVelocity');
+      const nativeVelocityBody = functionBody(text, 'sendNativeVelocity');
+      assert(!directVelocityBody.includes('setNativeKeys'), 'direct WebSocket velocity should not update local page keys/prediction');
+      const directSendIndex = nativeVelocityBody.indexOf('if (sendDirectNativeVelocity(dx, dy, force)) return true');
+      const fallbackKeySyncIndex = nativeVelocityBody.indexOf('setNativeKeys(native.state, dx, dy)');
+      assert(directSendIndex !== -1, 'native velocity does not prefer direct WebSocket sends');
+      assert(fallbackKeySyncIndex === -1 || fallbackKeySyncIndex > directSendIndex, 'native velocity syncs local keys before direct WebSocket send');
       assert(functionBody(text, 'safeSendVelocity').includes('scheduleDirectVelocityRepeat(dx, dy, force)'), 'safe velocity path does not schedule direct repeat sends');
       assert(functionBody(text, 'stopMotionSafely').includes('scheduleDirectVelocityRepeat(0, 0, true)'), 'stop path does not repeat direct zero velocity');
       assert(functionBody(text, 'cancelVelocityStopTimer').includes('cancelDirectVelocityRepeat()'), 'precision/stop cleanup does not cancel direct repeat sends');
