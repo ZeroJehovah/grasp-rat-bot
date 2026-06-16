@@ -1,8 +1,8 @@
 {
-  "version": "bootstrap-0.4.173",
-  "builtAt": "2026-06-16T17:09:07.497Z",
+  "version": "bootstrap-0.4.174",
+  "builtAt": "2026-06-16T17:37:15.887Z",
   "scriptUrl": "https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/grasp-rat-remote-bot.js",
-  "sha256": "4bc8ca4de64e4d6a5563248d1b7ed3c9a92acb6625878f6940fac887e68722d9",
+  "sha256": "1734e68874c186820ed39eb22d52b84511d79b824f7389a1e4df5f66c067b26d",
   "statusEvery": 1000,
   "config": {}
 }

@@ -25,6 +25,9 @@
   - moving combat targets use intercept aim, and the intercept solver leads lateral targets with render-delay compensation;
   - CDP validation on 2026-06-17 showed direct float `vel` components such as `0.6 0.8` and `0.9239 0.3827` do not move the player, while `2 1` collapses to the same 45° diagonal as `1 1`; movement remains 8-direction quantized and does not accept continuous float vectors;
   - real incoming bullets use an 8-direction threat-field dodge, including multi-bullet threat count logging and a regression check that the selected legal direction improves CPA safety over a worse fixed diagonal;
+  - short-window opponent motion profiling identifies repeated lateral flips and feeds aim confidence;
+  - low-confidence distant moving combat targets throttle fire to the configured point-fire cadence;
+  - losing exchange-rate samples trigger `combat-hp-disadvantage-leave` before the broad static HP-gap threshold;
   - precise incoming signed-lane direction overrides a stale opposite strafe lock;
   - pressure-close diagonal strafe keeps a target-closing axis while preserving dodge movement;
   - close target jitter and long no-damage aim widening stay capped at `0.14rad`;

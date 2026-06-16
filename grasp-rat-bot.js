@@ -233,6 +233,17 @@ function runSelfTest() {
     combatRenderDelayTicks: 2,
     combatInterceptMaxTicks: 30,
     combatInterceptSpreadScale: 0.18,
+    combatMotionHistoryWindowMs: 2000,
+    combatMotionHistoryMaxSamples: 80,
+    combatAimLowConfidenceThreshold: 0.6,
+    combatAimLowConfidenceMinDistance: 9000,
+    combatAimLowConfidenceMotionScale: 0.65,
+    combatAimLowConfidenceEveryMs: 520,
+    combatTradeEstimateWindowMs: 6000,
+    combatTradeEstimateMinWindowMs: 1800,
+    combatTradeEstimateMinSelfDamage: 6,
+    combatTradeEstimateSafetyFactor: 1.15,
+    combatTradeEstimateMinEnemyDps: 1.5,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
@@ -747,6 +758,143 @@ function runSelfTest() {
       scale = Math.max(scale, recent * Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15)));
     }
     return scale;
+  }
+  function combatMotionSample(self, target, at = Date.now()) {
+    if (!target) return null;
+    const x = Number(target.x);
+    const y = Number(target.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const distance = self ? (Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target)) : Number(target.distance);
+    return {
+      at,
+      x,
+      y,
+      vx: Number(target.vx) || 0,
+      vy: Number(target.vy) || 0,
+      distance: Number.isFinite(distance) ? distance : null,
+      hp: knownHpValue(target),
+      selfHp: knownHpValue(self)
+    };
+  }
+  function combatMotionSamplesWithCurrent(self, target, t = Date.now(), windowMsOverride = null) {
+    const id = target?.user_id ?? target?.id;
+    const previous = bot.combatTarget || null;
+    const same = previous && id !== null && id !== undefined && String(previous.id ?? '') === String(id);
+    const windowMs = Math.max(250, Number(windowMsOverride || cfg.combatMotionHistoryWindowMs || 2000));
+    const maxSamples = Math.max(2, Math.round(Number(cfg.combatMotionHistoryMaxSamples || 80)));
+    const samples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples.slice() : [];
+    const current = combatMotionSample(self, target, t);
+    if (current) samples.push(current);
+    return samples
+      .filter(sample => sample && Number.isFinite(Number(sample.at)) && t - Number(sample.at) <= windowMs)
+      .sort((a, b) => Number(a.at) - Number(b.at))
+      .slice(-maxSamples);
+  }
+  function combatOpponentProfile(self, target, targetDistance = null) {
+    const samples = combatMotionSamplesWithCurrent(self, target, Date.now(), Math.max(250, Number(cfg.combatMotionHistoryWindowMs || 2000)));
+    const threshold = Math.max(1, Number(cfg.combatStationarySpeed || 5));
+    let lateralFlips = 0;
+    let previousLateralSign = 0;
+    let radialSum = 0;
+    let radialCount = 0;
+    let speedSum = 0;
+    let dotSum = 0;
+    let dotCount = 0;
+    for (const sample of samples) {
+      const sx = Number(sample.x);
+      const sy = Number(sample.y);
+      const vx = Number(sample.vx) || 0;
+      const vy = Number(sample.vy) || 0;
+      const dx = sx - Number(self?.x || 0);
+      const dy = sy - Number(self?.y || 0);
+      const d = Math.max(1, Math.hypot(dx, dy));
+      const radial = (dx / d) * vx + (dy / d) * vy;
+      const lateral = (dx / d) * vy - (dy / d) * vx;
+      const lateralSign = Math.abs(lateral) >= threshold ? Math.sign(lateral) : 0;
+      if (lateralSign && previousLateralSign && lateralSign !== previousLateralSign) lateralFlips += 1;
+      if (lateralSign) previousLateralSign = lateralSign;
+      radialSum += radial;
+      radialCount += 1;
+      speedSum += Math.hypot(vx, vy);
+    }
+    for (let i = 1; i < samples.length; i += 1) {
+      const a = samples[i - 1];
+      const b = samples[i];
+      const av = Math.hypot(Number(a.vx) || 0, Number(a.vy) || 0);
+      const bv = Math.hypot(Number(b.vx) || 0, Number(b.vy) || 0);
+      if (av >= threshold && bv >= threshold) {
+        dotSum += ((Number(a.vx) || 0) * (Number(b.vx) || 0) + (Number(a.vy) || 0) * (Number(b.vy) || 0)) / (av * bv);
+        dotCount += 1;
+      }
+    }
+    const durationMs = samples.length >= 2 ? Math.max(0, Number(samples[samples.length - 1].at) - Number(samples[0].at)) : 0;
+    const velocityStability = dotCount ? clampValue((dotSum / dotCount + 1) / 2, 0, 1) : 0.5;
+    const avgRadialSpeed = radialCount ? radialSum / radialCount : 0;
+    const avgSpeed = samples.length ? speedSum / samples.length : speed(target);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : (Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target));
+    const strafePattern = Boolean(samples.length >= 4 && lateralFlips >= 2 && durationMs >= 600);
+    const kiting = Boolean(samples.length >= 3
+      && avgRadialSpeed >= Math.max(3, threshold)
+      && distance >= Math.max(0, Number(cfg.combatSpacingPreferredRange || 0))
+      && (isFiringEntity(target) || isCurrentlyActive(target)));
+    const maneuverScale = clampValue((1 - velocityStability) * 0.7 + Math.min(1, lateralFlips / 3) * 0.45 + (kiting ? 0.2 : 0), 0, 1);
+    const aimConfidenceScale = clampValue(1.08 - maneuverScale * 0.45, 0.55, 1.08);
+    return {
+      sampleCount: samples.length,
+      durationMs,
+      lateralFlips,
+      velocityStability,
+      avgRadialSpeed,
+      avgSpeed,
+      strafePattern,
+      kiting,
+      maneuverScale,
+      aimConfidenceScale
+    };
+  }
+  function combatTradeEstimate(self, target) {
+    const previous = bot.combatTarget || null;
+    const id = target?.user_id ?? target?.id;
+    const same = previous && id !== null && id !== undefined && String(previous.id ?? '') === String(id);
+    if (!same) return null;
+    const t = Date.now();
+    const windowMs = Math.max(1000, Number(cfg.combatTradeEstimateWindowMs || 6000));
+    const samples = combatMotionSamplesWithCurrent(self, target, t, windowMs)
+      .filter(sample => t - Number(sample.at) <= windowMs && Number.isFinite(Number(sample.hp)) && Number.isFinite(Number(sample.selfHp)));
+    if (samples.length < 3) return null;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const elapsedMs = Math.max(1, Number(last.at) - Number(first.at));
+    if (elapsedMs < Math.max(500, Number(cfg.combatTradeEstimateMinWindowMs || 1800))) return null;
+    const targetDamage = Math.max(0, Number(first.hp) - Number(last.hp));
+    const selfDamage = Math.max(0, Number(first.selfHp) - Number(last.selfHp));
+    const myDps = targetDamage / elapsedMs * 1000;
+    const enemyDps = selfDamage / elapsedMs * 1000;
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const tKillMs = myDps > 0.05 ? targetHp / myDps * 1000 : Infinity;
+    const tDeathMs = enemyDps > 0.05 ? selfHp / enemyDps * 1000 : Infinity;
+    const minSelfDamage = Math.max(0, Number(cfg.combatTradeEstimateMinSelfDamage || 6));
+    const minEnemyDps = Math.max(0, Number(cfg.combatTradeEstimateMinEnemyDps || 1.5));
+    const safetyFactor = Math.max(1, Number(cfg.combatTradeEstimateSafetyFactor || 1.15));
+    const disadvantaged = Boolean(
+      selfDamage >= minSelfDamage
+      && enemyDps >= minEnemyDps
+      && tDeathMs < tKillMs * safetyFactor
+      && targetHp > 1
+    );
+    return {
+      active: disadvantaged,
+      sampleCount: samples.length,
+      elapsedMs,
+      selfDamage,
+      targetDamage,
+      myDps,
+      enemyDps,
+      tKillMs,
+      tDeathMs,
+      safetyFactor
+    };
   }
   function combatLiveAimTarget(self, target) {
     const targetId = target?.user_id ?? target?.id;
@@ -2261,10 +2409,16 @@ function runSelfTest() {
         const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance))
           ? '，距离' + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + '米'
           : '';
-        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
-      }
-      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
-    }
+	        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
+	      }
+	      if (combatState?.tradeEstimate) {
+	        const estimate = combatState.tradeEstimate;
+	        const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? '，预计承伤倒计时' + Math.round(Number(estimate.tDeathMs) / 1000) + '秒' : '';
+	        const killText = Number.isFinite(Number(estimate.tKillMs)) ? '，预计击杀需' + Math.round(Number(estimate.tKillMs) / 1000) + '秒' : '';
+	        return '与' + actorLabel(target) + '战斗，交换比劣势' + deathText + killText + '，提前退出';
+	      }
+	      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
+	    }
     if (reason === 'combat-low-hp-no-damage-leave') {
       const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
         ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
@@ -2577,9 +2731,25 @@ function runSelfTest() {
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
-    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
-    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
-    let effectiveDodgeReserveMs = dodgeReserveMs;
+	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
+	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
+	    const aimConfidence = Number.isFinite(Number(options.aimConfidence))
+	      ? Math.max(0, Math.min(1, Number(options.aimConfidence)))
+	      : null;
+	    const lowConfidenceThreshold = Math.max(0, Math.min(1, Number(cfg.combatAimLowConfidenceThreshold || 0)));
+	    const lowConfidenceMinDistance = Math.max(0, Number(cfg.combatAimLowConfidenceMinDistance || 0));
+	    const lowConfidenceMotionScale = Math.max(0, Number(cfg.combatAimLowConfidenceMotionScale || 0));
+	    const lowConfidenceEveryMs = Math.max(conserveEveryMs, Number(cfg.combatAimLowConfidenceEveryMs || conserveEveryMs));
+	    const lowConfidenceWindow = Boolean(
+	      aimConfidence !== null
+	      && lowConfidenceThreshold > 0
+	      && aimConfidence < lowConfidenceThreshold
+	      && Number(options.targetDistance || 0) >= lowConfidenceMinDistance
+	      && (options.targetMoving || Number(options.motionScale || 0) >= lowConfidenceMotionScale)
+	      && !closePressureFireWindow
+	      && !steadyAimFireWindow
+	    );
+	    let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
@@ -2603,8 +2773,10 @@ function runSelfTest() {
       highHpFireWindow,
       closePressureFireWindow,
       steadyAimFireWindow,
-      noDamageDuelFireWindow,
-      noDamageMs,
+	      noDamageDuelFireWindow,
+	      aimConfidence,
+	      lowConfidenceWindow,
+	      noDamageMs,
       trend: {
         stance: trend.stance || 'normal',
         hpGap: Number.isFinite(Number(trend.hpGap)) ? Number(trend.hpGap) : null,
@@ -2625,11 +2797,14 @@ function runSelfTest() {
     if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
     }
-    if (stamina5s !== null && stamina5s < reserveMs) {
-      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
-    }
-    return base;
-  }
+	    if (stamina5s !== null && stamina5s < reserveMs) {
+	      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
+	    }
+	    if (lowConfidenceWindow) {
+	      return { ...base, shootEveryMs: lowConfidenceEveryMs, reason: 'low-confidence-burst', throttled: true };
+	    }
+	    return base;
+	  }
 
   function chooseCombatAction(self, target, bullets = []) {
     const selfHp = hpValue(self);
@@ -2664,11 +2839,20 @@ function runSelfTest() {
       || aimMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const aimDistance = Number.isFinite(Number(aimSource.distance)) ? Number(aimSource.distance) : dist(self, aimSource);
     const steadyAim = combatAimSteadyNoDamageState(target, noDamageMs, motionScale);
-    const aimMovement = aimMoving
-      ? combatMovementAimMode(self, aimSource, aimDistance)
-      : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
-    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, { noDamageMs }, aimMoving, aimDistance, aimMovement, steadyAim);
-    const serverStallNoDamage = combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, incoming, bot.serverPositionStall);
+	    const aimMovement = aimMoving
+	      ? combatMovementAimMode(self, aimSource, aimDistance)
+	      : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
+	    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, { noDamageMs }, aimMoving, aimDistance, aimMovement, steadyAim);
+	    const opponentProfile = combatOpponentProfile(self, aimSource, aimDistance);
+	    const intercept = aimMoving && !aimStrategy.bypassJitter
+	      ? combatInterceptSolution(self, aimSource, aimDistance, aimMotionScale)
+	      : null;
+	    const aimConfidence = aimStrategy.bypassJitter
+	      ? 1
+	      : (intercept
+	        ? clampValue(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1)
+	        : Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, aimMotionScale * 0.35)))));
+	    const serverStallNoDamage = combatServerStallNoDamageLeaveState(selfHp, targetHp, noDamageMs, incoming, bot.serverPositionStall);
     if (serverStallNoDamage && !retreatingTarget.disengage) {
       return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
         hpGap: serverStallNoDamage.hpGap,
@@ -2696,13 +2880,20 @@ function runSelfTest() {
       return combatLeaveAction('combat-low-hp-leave', self, target, { closeRisk }, bullets);
     }
     const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, target.distance, incoming);
-    if (pressureDisadvantage) {
-      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
-        hpGap: pressureDisadvantage.hpGap,
-        pressureDisadvantage
-      }, bullets);
-    }
-    const pressureClose = retreatingTarget.active
+	    if (pressureDisadvantage) {
+	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
+	        hpGap: pressureDisadvantage.hpGap,
+	        pressureDisadvantage
+	      }, bullets);
+	    }
+	    const tradeEstimate = combatTradeEstimate(self, target);
+	    if (tradeEstimate?.active) {
+	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
+	        hpGap,
+	        tradeEstimate
+	      }, bullets);
+	    }
+	    const pressureClose = retreatingTarget.active
       ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
       : combatPressureCloseVector(self, target, target.distance, selfHp);
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
@@ -2741,9 +2932,11 @@ function runSelfTest() {
       steadyAim: steadyAim.active,
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isActive(target),
-      targetMoving: moving,
-      noDamageMs
-    });
+	      targetMoving: moving,
+	      noDamageMs,
+	      aimConfidence,
+	      motionScale: aimMotionScale
+	    });
     let shooting = combatShootingPlan(self, {
       trend,
       needsMovement: Boolean(requestedDx || requestedDy),
@@ -2753,10 +2946,12 @@ function runSelfTest() {
       targetHp,
       steadyAim: steadyAim.active,
       engagedCombat: target.combatIntent === 'engaged',
-      targetActive: isActive(target),
-      targetMoving: moving,
-      noDamageMs
-    });
+	      targetActive: isActive(target),
+	      targetMoving: moving,
+	      noDamageMs,
+	      aimConfidence,
+	      motionScale: aimMotionScale
+	    });
     if (retreatingTarget.suppressFire) {
       shooting = {
         ...shooting,
@@ -2797,9 +2992,12 @@ function runSelfTest() {
         sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
         sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
         serverStall: Boolean(aimStrategy.serverStall),
-        radialPrecision: Boolean(aimStrategy.radialPrecision),
-        fallbackPrecision: Boolean(aimStrategy.fallbackPrecision)
-      },
+	        radialPrecision: Boolean(aimStrategy.radialPrecision),
+	        fallbackPrecision: Boolean(aimStrategy.fallbackPrecision),
+	        aimConfidence: Number(Number(aimConfidence).toFixed(2)),
+	        intercept: Boolean(intercept),
+	        opponentProfile
+	      },
       target: {
         id: target.user_id,
         name: target.name,
@@ -2834,8 +3032,9 @@ function runSelfTest() {
           noDamageMs: Math.round(pressureClose.noDamageMs)
         } : null,
         noDamageMs,
-        steadyAim,
-        movementSuppressed,
+	        steadyAim,
+	        opponentProfile,
+	        movementSuppressed,
         shooting,
         incomingBullet: anyThreat ? {
           id: anyThreat.id,
@@ -4574,6 +4773,54 @@ function runSelfTest() {
       want: 'combat-stamina-conserve:false:false'
     },
     {
+      name: 'combat low confidence distant mover throttles fire cadence',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 7,
+          at: t - 1200,
+          lastDamageAt: t - 1200,
+          hp: 100,
+          motionSamples: [
+            { at: t - 1200, x: 12000, y: -200, vx: 0, vy: 50, hp: 100, selfHp: 100 },
+            { at: t - 850, x: 12000, y: 400, vx: 0, vy: -50, hp: 100, selfHp: 100 },
+            { at: t - 500, x: 12000, y: -100, vx: 0, vy: 50, hp: 100, selfHp: 100 }
+          ]
+        };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+          { user_id: 7, x: 12000, y: 200, distance: 12002, current_join_mode: 'Active', hp: 100, vx: 0, vy: -50, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + action.combatState?.shooting?.reason + ':' + action.shootEveryMs + ':' + Boolean(action.aimTarget?.opponentProfile?.strafePattern);
+      })(),
+      want: 'combat-burst-fire:low-confidence-burst:520:true'
+    },
+    {
+      name: 'combat trade estimate exits losing exchange before static hp gap',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 7,
+          at: t - 4000,
+          lastDamageAt: t - 500,
+          hp: 95,
+          motionSamples: [
+            { at: t - 4000, x: 10000, y: 0, vx: 35, vy: 0, hp: 100, selfHp: 100 },
+            { at: t - 2500, x: 10200, y: 0, vx: 35, vy: 0, hp: 98, selfHp: 92 },
+            { at: t - 1000, x: 10400, y: 0, vx: 35, vy: 0, hp: 95, selfHp: 84 }
+          ]
+        };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 80, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+          { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 90, vx: 35, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + Boolean(action.combatState?.tradeEstimate?.active) + ':' + Math.round(action.combatState?.tradeEstimate?.selfDamage || 0);
+      })(),
+      want: 'combat-hp-disadvantage-leave:true:20'
+    },
+    {
       name: 'combat native tick interval tightens only during combat',
       got: (() => {
         const t = 100000;
@@ -5668,9 +5915,20 @@ function browserBotSource(config) {
     combatBulletSpeedPerTick: 500,
     combatBulletHitRadiusCm: 90,
     combatRenderDelayTicks: 2,
-    combatInterceptMaxTicks: 30,
-    combatInterceptSpreadScale: 0.18,
-    combatAimNoDamageMs: 1000,
+	    combatInterceptMaxTicks: 30,
+	    combatInterceptSpreadScale: 0.18,
+	    combatMotionHistoryWindowMs: 2000,
+	    combatMotionHistoryMaxSamples: 80,
+	    combatAimLowConfidenceThreshold: 0.6,
+	    combatAimLowConfidenceMinDistance: 9000,
+	    combatAimLowConfidenceMotionScale: 0.65,
+	    combatAimLowConfidenceEveryMs: 520,
+	    combatTradeEstimateWindowMs: 6000,
+	    combatTradeEstimateMinWindowMs: 1800,
+	    combatTradeEstimateMinSelfDamage: 6,
+	    combatTradeEstimateSafetyFactor: 1.15,
+	    combatTradeEstimateMinEnemyDps: 1.5,
+	    combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
     combatAimFallbackPrecisionNoDamageMs: 25000,
@@ -9378,8 +9636,14 @@ function browserBotSource(config) {
           : '';
 	        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
 	      }
+	      if (combatState?.tradeEstimate) {
+	        const estimate = combatState.tradeEstimate;
+	        const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? '，预计承伤倒计时' + formatDurationMs(estimate.tDeathMs) : '';
+	        const killText = Number.isFinite(Number(estimate.tKillMs)) ? '，预计击杀需' + formatDurationMs(estimate.tKillMs) : '';
+	        return '与' + actorLabel(target) + '战斗，交换比劣势' + deathText + killText + '，提前退出';
+	      }
 	      return '与' + actorLabel(target) + '战斗，血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + '，劣势退出';
-    }
+	    }
     if (reason === 'combat-low-hp-no-damage-leave') {
       const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
         ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
@@ -13113,10 +13377,16 @@ function browserBotSource(config) {
     const lastDamageAt = damaged
       ? t
       : (same ? Number(previous.lastDamageAt || previous.at || t) : t);
-    const lastInRangeAt = targetDistance <= Number(cfg.combatAttackRange || 0)
-      ? t
-      : (same ? Number(previous.lastInRangeAt || previous.at || t) : t);
-    bot.combatTarget = {
+	    const lastInRangeAt = targetDistance <= Number(cfg.combatAttackRange || 0)
+	      ? t
+	      : (same ? Number(previous.lastInRangeAt || previous.at || t) : t);
+	    const motionSamples = combatMotionSamplesWithCurrent(
+	      self,
+	      target,
+	      t,
+	      Math.max(Number(cfg.combatMotionHistoryWindowMs || 2000), Number(cfg.combatTradeEstimateWindowMs || 6000))
+	    );
+	    bot.combatTarget = {
       id,
       at: t,
       firstSeenAt: same ? Number(previous.firstSeenAt || previous.at || t) : t,
@@ -13131,10 +13401,11 @@ function browserBotSource(config) {
       intent: action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '',
       lastDamageAt,
       lastInRangeAt,
-      lastDamageAmount: damaged ? Math.max(0, previousHp - currentHp) : Number(previous?.lastDamageAmount || 0),
-      noDamageMs: Math.max(0, t - lastDamageAt),
-      self: summarizeSelf(self)
-    };
+	      lastDamageAmount: damaged ? Math.max(0, previousHp - currentHp) : Number(previous?.lastDamageAmount || 0),
+	      noDamageMs: Math.max(0, t - lastDamageAt),
+	      motionSamples,
+	      self: summarizeSelf(self)
+	    };
   }
 
   function clearCombatEngagement(reason = '') {
@@ -15536,6 +15807,147 @@ function browserBotSource(config) {
     return scale;
   }
 
+  function combatMotionSample(self, target, at = Date.now()) {
+    if (!target) return null;
+    const x = Number(target.x);
+    const y = Number(target.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const distance = self ? (Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target)) : Number(target.distance);
+    return {
+      at,
+      x,
+      y,
+      vx: Number(target.vx) || 0,
+      vy: Number(target.vy) || 0,
+      distance: Number.isFinite(distance) ? distance : null,
+      hp: knownHpValue(target),
+      selfHp: knownHpValue(self)
+    };
+  }
+
+  function combatMotionSamplesWithCurrent(self, target, t = Date.now(), windowMsOverride = null) {
+    const id = combatTargetId(target);
+    const previous = bot.combatTarget || null;
+    const same = previous && id && String(previous.id ?? '') === id;
+    const windowMs = Math.max(250, Number(windowMsOverride || cfg.combatMotionHistoryWindowMs || 2000));
+    const maxSamples = Math.max(2, Math.round(Number(cfg.combatMotionHistoryMaxSamples || 80)));
+    const samples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples.slice() : [];
+    const current = combatMotionSample(self, target, t);
+    if (current) samples.push(current);
+    return samples
+      .filter(sample => sample && Number.isFinite(Number(sample.at)) && t - Number(sample.at) <= windowMs)
+      .sort((a, b) => Number(a.at) - Number(b.at))
+      .slice(-maxSamples);
+  }
+
+  function combatOpponentProfile(self, target, targetDistance = null) {
+    const samples = combatMotionSamplesWithCurrent(self, target, Date.now(), Math.max(250, Number(cfg.combatMotionHistoryWindowMs || 2000)));
+    const threshold = Math.max(1, Number(cfg.combatStationarySpeed || 5));
+    let lateralFlips = 0;
+    let previousLateralSign = 0;
+    let radialSum = 0;
+    let radialCount = 0;
+    let speedSum = 0;
+    let dotSum = 0;
+    let dotCount = 0;
+    for (const sample of samples) {
+      const sx = Number(sample.x);
+      const sy = Number(sample.y);
+      const vx = Number(sample.vx) || 0;
+      const vy = Number(sample.vy) || 0;
+      const dx = sx - Number(self?.x || 0);
+      const dy = sy - Number(self?.y || 0);
+      const d = Math.max(1, Math.hypot(dx, dy));
+      const radial = (dx / d) * vx + (dy / d) * vy;
+      const lateral = (dx / d) * vy - (dy / d) * vx;
+      const lateralSign = Math.abs(lateral) >= threshold ? Math.sign(lateral) : 0;
+      if (lateralSign && previousLateralSign && lateralSign !== previousLateralSign) lateralFlips += 1;
+      if (lateralSign) previousLateralSign = lateralSign;
+      radialSum += radial;
+      radialCount += 1;
+      speedSum += Math.hypot(vx, vy);
+    }
+    for (let i = 1; i < samples.length; i += 1) {
+      const a = samples[i - 1];
+      const b = samples[i];
+      const av = Math.hypot(Number(a.vx) || 0, Number(a.vy) || 0);
+      const bv = Math.hypot(Number(b.vx) || 0, Number(b.vy) || 0);
+      if (av >= threshold && bv >= threshold) {
+        dotSum += ((Number(a.vx) || 0) * (Number(b.vx) || 0) + (Number(a.vy) || 0) * (Number(b.vy) || 0)) / (av * bv);
+        dotCount += 1;
+      }
+    }
+    const durationMs = samples.length >= 2 ? Math.max(0, Number(samples[samples.length - 1].at) - Number(samples[0].at)) : 0;
+    const velocityStability = dotCount ? clamp((dotSum / dotCount + 1) / 2, 0, 1) : 0.5;
+    const avgRadialSpeed = radialCount ? radialSum / radialCount : 0;
+    const avgSpeed = samples.length ? speedSum / samples.length : speed(target);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : (Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target));
+    const strafePattern = Boolean(samples.length >= 4 && lateralFlips >= 2 && durationMs >= 600);
+    const kiting = Boolean(samples.length >= 3
+      && avgRadialSpeed >= Math.max(3, threshold)
+      && distance >= Math.max(0, Number(cfg.combatSpacingPreferredRange || 0))
+      && (isFiringEntity(target) || isCurrentlyActive(target)));
+    const maneuverScale = clamp((1 - velocityStability) * 0.7 + Math.min(1, lateralFlips / 3) * 0.45 + (kiting ? 0.2 : 0), 0, 1);
+    const aimConfidenceScale = clamp(1.08 - maneuverScale * 0.45, 0.55, 1.08);
+    return {
+      sampleCount: samples.length,
+      durationMs,
+      lateralFlips,
+      velocityStability,
+      avgRadialSpeed,
+      avgSpeed,
+      strafePattern,
+      kiting,
+      maneuverScale,
+      aimConfidenceScale
+    };
+  }
+
+  function combatTradeEstimate(self, target) {
+    const previous = bot.combatTarget || null;
+    const id = combatTargetId(target);
+    const same = previous && id && String(previous.id ?? '') === id;
+    if (!same) return null;
+    const t = Date.now();
+    const windowMs = Math.max(1000, Number(cfg.combatTradeEstimateWindowMs || 6000));
+    const samples = combatMotionSamplesWithCurrent(self, target, t, windowMs)
+      .filter(sample => t - Number(sample.at) <= windowMs && Number.isFinite(Number(sample.hp)) && Number.isFinite(Number(sample.selfHp)));
+    if (samples.length < 3) return null;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const elapsedMs = Math.max(1, Number(last.at) - Number(first.at));
+    if (elapsedMs < Math.max(500, Number(cfg.combatTradeEstimateMinWindowMs || 1800))) return null;
+    const targetDamage = Math.max(0, Number(first.hp) - Number(last.hp));
+    const selfDamage = Math.max(0, Number(first.selfHp) - Number(last.selfHp));
+    const myDps = targetDamage / elapsedMs * 1000;
+    const enemyDps = selfDamage / elapsedMs * 1000;
+    const selfHp = hpValue(self);
+    const targetHp = combatHpValue(target);
+    const tKillMs = myDps > 0.05 ? targetHp / myDps * 1000 : Infinity;
+    const tDeathMs = enemyDps > 0.05 ? selfHp / enemyDps * 1000 : Infinity;
+    const minSelfDamage = Math.max(0, Number(cfg.combatTradeEstimateMinSelfDamage || 6));
+    const minEnemyDps = Math.max(0, Number(cfg.combatTradeEstimateMinEnemyDps || 1.5));
+    const safetyFactor = Math.max(1, Number(cfg.combatTradeEstimateSafetyFactor || 1.15));
+    const disadvantaged = Boolean(
+      selfDamage >= minSelfDamage
+      && enemyDps >= minEnemyDps
+      && tDeathMs < tKillMs * safetyFactor
+      && targetHp > 1
+    );
+    return {
+      active: disadvantaged,
+      sampleCount: samples.length,
+      elapsedMs,
+      selfDamage,
+      targetDamage,
+      myDps,
+      enemyDps,
+      tKillMs,
+      tDeathMs,
+      safetyFactor
+    };
+  }
+
   function opportunityEffectiveStaminaCost(staminaCost) {
     const floor = Math.max(1, Number(cfg.opportunityDistanceFloor || 1));
     const d = Math.max(0, Number(staminaCost) || 0);
@@ -15959,9 +16371,25 @@ function browserBotSource(config) {
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
-    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
-    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
-    let effectiveDodgeReserveMs = dodgeReserveMs;
+	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
+	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
+	    const aimConfidence = Number.isFinite(Number(options.aimConfidence))
+	      ? Math.max(0, Math.min(1, Number(options.aimConfidence)))
+	      : null;
+	    const lowConfidenceThreshold = Math.max(0, Math.min(1, Number(cfg.combatAimLowConfidenceThreshold || 0)));
+	    const lowConfidenceMinDistance = Math.max(0, Number(cfg.combatAimLowConfidenceMinDistance || 0));
+	    const lowConfidenceMotionScale = Math.max(0, Number(cfg.combatAimLowConfidenceMotionScale || 0));
+	    const lowConfidenceEveryMs = Math.max(conserveEveryMs, Number(cfg.combatAimLowConfidenceEveryMs || conserveEveryMs));
+	    const lowConfidenceWindow = Boolean(
+	      aimConfidence !== null
+	      && lowConfidenceThreshold > 0
+	      && aimConfidence < lowConfidenceThreshold
+	      && Number(options.targetDistance || 0) >= lowConfidenceMinDistance
+	      && (options.targetMoving || Number(options.motionScale || 0) >= lowConfidenceMotionScale)
+	      && !closePressureFireWindow
+	      && !steadyAimFireWindow
+	    );
+	    let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
@@ -15985,8 +16413,10 @@ function browserBotSource(config) {
       highHpFireWindow,
       closePressureFireWindow,
       steadyAimFireWindow,
-      noDamageDuelFireWindow,
-      noDamageMs,
+	      noDamageDuelFireWindow,
+	      aimConfidence,
+	      lowConfidenceWindow,
+	      noDamageMs,
       trend: {
         stance: trend.stance || 'normal',
         hpGap: Number.isFinite(Number(trend.hpGap)) ? Number(trend.hpGap) : null,
@@ -16007,11 +16437,14 @@ function browserBotSource(config) {
     if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
     }
-    if (stamina5s !== null && stamina5s < reserveMs) {
-      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
-    }
-    return base;
-  }
+	    if (stamina5s !== null && stamina5s < reserveMs) {
+	      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
+	    }
+	    if (lowConfidenceWindow) {
+	      return { ...base, shootEveryMs: lowConfidenceEveryMs, reason: 'low-confidence-burst', throttled: true };
+	    }
+	    return base;
+	  }
 
   function combatAimNoDamageLevel(widenMs) {
     const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
@@ -16288,12 +16721,13 @@ function browserBotSource(config) {
     const nativeAimSource = combatLiveAimTarget(self, target);
     const preliminaryDamage = combatAimDamageState(nativeAimSource);
     const aimSource = nativeAimSource;
-    const motionScale = combatAimMotionScale(aimSource);
-    const moving = speed(aimSource) >= cfg.combatStationarySpeed
-      || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
-    const targetDistance = Number(aimSource.distance);
-    const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
-    const damage = preliminaryDamage;
+	    const motionScale = combatAimMotionScale(aimSource);
+	    const moving = speed(aimSource) >= cfg.combatStationarySpeed
+	      || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+	    const targetDistance = Number(aimSource.distance);
+	    const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
+    const opponentProfile = combatOpponentProfile(self, aimSource, distance);
+	    const damage = preliminaryDamage;
     const steadyAim = combatAimSteadyNoDamageState(aimSource, damage.noDamageMs, motionScale);
     const movement = moving
       ? combatMovementAimMode(self, aimSource, distance)
@@ -16321,9 +16755,11 @@ function browserBotSource(config) {
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
-      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
-    };
-    if (aimStrategy.bypassJitter) return exact;
+	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+	      aimConfidence: aimStrategy.bypassJitter ? 1 : null,
+	      opponentProfile,
+	    };
+	    if (aimStrategy.bypassJitter) return exact;
     const dx = Number(aimSource.x) - Number(self.x);
     const dy = Number(aimSource.y) - Number(self.y);
     const baseLimit = combatAimJitterLimit(distance, motionScale);
@@ -16344,15 +16780,16 @@ function browserBotSource(config) {
       && Number(previousAim.noDamageBucket || 0) === noDamageBucket
       && Number(previousAim.motionBucket ?? motionBucket) === motionBucket
       && now() < Number(previousAim.until || 0);
-    if (intercept) {
-      let spreadAngle = 0;
+	    if (intercept) {
+	      const interceptConfidence = clamp(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1);
+	      let spreadAngle = 0;
       const locked = lockCompatible && Number.isFinite(Number(previousAim.spreadAngle));
       if (locked) {
         spreadAngle = Number(previousAim.spreadAngle);
         sign = Math.sign(Number(previousAim.sign || sign)) || sign;
       } else {
         const spreadScale = Math.max(0, Number(cfg.combatInterceptSpreadScale ?? 0.18));
-        const uncertainty = 1 - Math.max(0, Math.min(1, Number(intercept.confidence) || 0));
+	        const uncertainty = 1 - Math.max(0, Math.min(1, interceptConfidence));
         const randomLimit = jitterLimit * spreadScale * (0.35 + uncertainty) * (noDamageLevel ? 1.35 : 1);
         spreadAngle = (Math.random() * 2 - 1) * randomLimit;
         bot.combatAim = {
@@ -16406,9 +16843,11 @@ function browserBotSource(config) {
         interceptFlightTicks: intercept.flightTicks,
         interceptFlightMs: intercept.flightMs,
         interceptLeadDistance: intercept.leadDistance,
-        interceptConfidence: intercept.confidence
-      };
-    }
+	        interceptConfidence,
+	        aimConfidence: interceptConfidence,
+	        opponentProfile
+	      };
+	    }
     let angle = 0;
     const locked = lockCompatible && Number.isFinite(Number(previousAim.angle));
     if (locked) {
@@ -16461,10 +16900,12 @@ function browserBotSource(config) {
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
-      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
-      interceptAim: false
-    };
-  }
+	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+	      interceptAim: false,
+	      aimConfidence: Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, motionScale * 0.35)))),
+	      opponentProfile
+	    };
+	  }
 
   function combatLeaveCoverAction(self, target, bullets, targetDistance = null) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
@@ -16498,11 +16939,13 @@ function browserBotSource(config) {
       targetDistance: distance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
-      engagedCombat: target.combatIntent === 'engaged',
-      targetActive: isCurrentlyActive(target),
-      targetMoving: speed(target) >= cfg.combatStationarySpeed,
-      noDamageMs: Number(aim.noDamageMs || 0)
-    });
+	      engagedCombat: target.combatIntent === 'engaged',
+	      targetActive: isCurrentlyActive(target),
+	      targetMoving: speed(target) >= cfg.combatStationarySpeed,
+	      noDamageMs: Number(aim.noDamageMs || 0),
+	      aimConfidence: aim.aimConfidence,
+	      motionScale: aim.motionScale
+	    });
     return {
       reason: movementSuppressed
         ? 'combat-stamina-hold'
@@ -16538,11 +16981,13 @@ function browserBotSource(config) {
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
         fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
-        intercept: Boolean(aim.interceptAim),
-        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
-        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
-        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null
-      },
+	        intercept: Boolean(aim.interceptAim),
+	        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+	        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+	        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null,
+	        aimConfidence: Number.isFinite(Number(aim.aimConfidence)) ? Number(Number(aim.aimConfidence).toFixed(2)) : null,
+	        opponentProfile: aim.opponentProfile || null
+	      },
       incomingBullet: pressure ? {
         id: pressure.id,
         ownerId: pressure.ownerId,
@@ -16636,15 +17081,24 @@ function browserBotSource(config) {
       return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
     const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
-    if (pressureDisadvantage) {
-      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
-        selfHp,
-        targetHp,
-        hpGap: pressureDisadvantage.hpGap,
-        pressureDisadvantage
-      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-    }
-    const serverStallNoDamage = combatServerStallNoDamageLeaveState(
+	    if (pressureDisadvantage) {
+	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+	        selfHp,
+	        targetHp,
+	        hpGap: pressureDisadvantage.hpGap,
+	        pressureDisadvantage
+	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+	    }
+	    const tradeEstimate = combatTradeEstimate(self, target);
+	    if (tradeEstimate?.active) {
+	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+	        selfHp,
+	        targetHp,
+	        hpGap,
+	        tradeEstimate
+	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+	    }
+	    const serverStallNoDamage = combatServerStallNoDamageLeaveState(
       selfHp,
       targetHp,
       damageState.noDamageMs,
@@ -16743,9 +17197,11 @@ function browserBotSource(config) {
       steadyAim: Boolean(aim.steadyAim),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
-      targetMoving,
-      noDamageMs: Number(aim.noDamageMs || 0)
-    });
+	      targetMoving,
+	      noDamageMs: Number(aim.noDamageMs || 0),
+	      aimConfidence: aim.aimConfidence,
+	      motionScale: aim.motionScale
+	    });
     let shooting = combatShootingPlan(self, {
       trend,
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
@@ -16755,11 +17211,13 @@ function browserBotSource(config) {
       targetDistance: targetDistance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
-      engagedCombat: target.combatIntent === 'engaged',
-      targetActive: isCurrentlyActive(target),
-      targetMoving,
-      noDamageMs: Number(aim.noDamageMs || 0)
-    });
+	      engagedCombat: target.combatIntent === 'engaged',
+	      targetActive: isCurrentlyActive(target),
+	      targetMoving,
+	      noDamageMs: Number(aim.noDamageMs || 0),
+	      aimConfidence: aim.aimConfidence,
+	      motionScale: aim.motionScale
+	    });
     if (retreatingTarget.suppressFire) {
       shooting = {
         ...shooting,
@@ -16810,11 +17268,13 @@ function browserBotSource(config) {
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
         fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
-        intercept: Boolean(aim.interceptAim),
-        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
-        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
-        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null
-      },
+	        intercept: Boolean(aim.interceptAim),
+	        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+	        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+	        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null,
+	        aimConfidence: Number.isFinite(Number(aim.aimConfidence)) ? Number(Number(aim.aimConfidence).toFixed(2)) : null,
+	        opponentProfile: aim.opponentProfile || null
+	      },
       incomingBullet: pressure ? {
         id: pressure.id,
         ownerId: pressure.ownerId,
@@ -16850,8 +17310,10 @@ function browserBotSource(config) {
         intercept: Boolean(aim.interceptAim),
         interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
         interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
-        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null
-        },
+	        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null,
+	        aimConfidence: Number.isFinite(Number(aim.aimConfidence)) ? Number(Number(aim.aimConfidence).toFixed(2)) : null,
+	        opponentProfile: aim.opponentProfile || null
+	        },
         strafe: dodging ? {
           dx: combatMove.dx,
           dy: combatMove.dy,
