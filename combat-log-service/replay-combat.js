@@ -189,24 +189,23 @@ function samplesFromFramesBy(frames, pickPoint) {
 function loadFrames(options) {
   if (!options.file) throw new Error('--file is required');
   const filePath = path.resolve(options.file);
-  const lines = fs.readFileSync(filePath, 'utf8').split(/\n/);
   const start = Math.max(1, Number(options.startLine || 1));
-  const end = Math.min(lines.length, Number(options.endLine || lines.length));
+  const requestedEnd = Number(options.endLine || 0);
+  const end = requestedEnd > 0 ? requestedEnd : Infinity;
   const frames = [];
   let inferredSelfId = options.selfId;
   let inferredTargetId = options.targetId;
   let inferredTargetName = options.targetName;
 
-  for (let lineNo = start; lineNo <= end; lineNo += 1) {
-    const raw = lines[lineNo - 1];
-    if (!raw || !raw.trim()) continue;
+  const processLine = (raw, lineNo) => {
+    if (lineNo < start || lineNo > end || !raw || !raw.trim()) return;
     let entry;
     try {
       entry = JSON.parse(raw);
     } catch (_) {
-      continue;
+      return;
     }
-    if (entry.type !== 'combat-frame') continue;
+    if (entry.type !== 'combat-frame') return;
     const self = entry.self || entry.decision?.self || null;
     if (!inferredSelfId && (self?.id ?? self?.user_id) !== undefined) inferredSelfId = String(self.id ?? self.user_id);
     const target = targetFromEntry(entry, { targetId: inferredTargetId, targetName: inferredTargetName });
@@ -234,6 +233,29 @@ function loadFrames(options) {
     frame.nearbyHp = nearbyTargetHp(frame);
     frame.noDamageMs = noDamageMs(frame);
     frames.push(frame);
+  };
+
+  const fd = fs.openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  let carry = '';
+  let lineNo = 1;
+  try {
+    while (lineNo <= end) {
+      const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (!bytes) break;
+      carry += buffer.toString('utf8', 0, bytes);
+      let newline;
+      while ((newline = carry.indexOf('\n')) !== -1) {
+        const raw = carry.slice(0, newline).replace(/\r$/, '');
+        carry = carry.slice(newline + 1);
+        processLine(raw, lineNo);
+        lineNo += 1;
+        if (lineNo > end) break;
+      }
+    }
+    if (lineNo <= end && carry) processLine(carry.replace(/\r$/, ''), lineNo);
+  } finally {
+    fs.closeSync(fd);
   }
   if (!frames.length) throw new Error('no combat-frame entries matched the selected line range');
   return {
