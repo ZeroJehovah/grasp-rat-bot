@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `191`.
+- Latest bot self-test count: `192`.
 - Latest combat-log analyzer self-test count: `82`.
 - Recent important coverage:
   - local snapshot coin at `185m` cannot beat visible/native coin;
@@ -22,6 +22,7 @@
   - nearby Drop=3 AFK target beats far single coin by stamina ROI;
   - Drop=3 AFK target in attack range beats 400m visible coin;
   - low target motion shrinks combat aim jitter;
+  - moving combat targets use intercept aim, and the intercept solver leads lateral targets with render-delay compensation;
   - precise incoming signed-lane direction overrides a stale opposite strafe lock;
   - pressure-close diagonal strafe keeps a target-closing axis while preserving dodge movement;
   - close target jitter and long no-damage aim widening stay capped at `0.14rad`;

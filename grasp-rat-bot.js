@@ -230,6 +230,9 @@ function runSelfTest() {
     combatTargetDodgeSpeedPerTick: 50,
     combatBulletSpeedPerTick: 500,
     combatBulletHitRadiusCm: 90,
+    combatRenderDelayTicks: 2,
+    combatInterceptMaxTicks: 30,
+    combatInterceptSpreadScale: 0.18,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
@@ -660,6 +663,73 @@ function runSelfTest() {
       targetSpeed
     };
   }
+
+  function combatInterceptSolution(self, target, distance = null, motionScale = 1) {
+    const sx = Number(self?.x);
+    const sy = Number(self?.y);
+    const px = Number(target?.x);
+    const py = Number(target?.y);
+    const vx = Number(target?.vx) || 0;
+    const vy = Number(target?.vy) || 0;
+    if (![sx, sy, px, py].every(Number.isFinite)) return null;
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const renderDelayTicks = Math.max(0, Number(cfg.combatRenderDelayTicks ?? 2));
+    const compensatedX = px + vx * renderDelayTicks;
+    const compensatedY = py + vy * renderDelayTicks;
+    const dx = compensatedX - sx;
+    const dy = compensatedY - sy;
+    const c = dx * dx + dy * dy;
+    if (!(c > 0)) return null;
+    const targetSpeedSq = vx * vx + vy * vy;
+    const a = targetSpeedSq - bulletSpeed * bulletSpeed;
+    const b = 2 * (dx * vx + dy * vy);
+    const eps = 1e-6;
+    const roots = [];
+    if (Math.abs(a) < eps) {
+      if (Math.abs(b) > eps) roots.push(-c / b);
+    } else {
+      const disc = b * b - 4 * a * c;
+      if (disc < -eps) return null;
+      const sqrtDisc = Math.sqrt(Math.max(0, disc));
+      roots.push((-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a));
+    }
+    const maxByRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000) / bulletSpeed);
+    const configuredMax = Number(cfg.combatInterceptMaxTicks || 0);
+    const maxTicks = Math.max(1, configuredMax > 0 ? Math.min(configuredMax, maxByRange) : maxByRange);
+    const t = roots
+      .filter(value => Number.isFinite(value) && value > 0 && value <= maxTicks)
+      .sort((aTick, bTick) => aTick - bTick)[0];
+    if (!Number.isFinite(t)) return null;
+    const x = compensatedX + vx * t;
+    const y = compensatedY + vy * t;
+    const travelDistance = Math.hypot(x - sx, y - sy);
+    const bulletRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000));
+    if (travelDistance > bulletRange + Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90))) return null;
+    const rawDistance = Number.isFinite(Number(distance)) ? Math.max(1, Number(distance)) : Math.hypot(px - sx, py - sy);
+    const targetSpeed = Math.sqrt(targetSpeedSq);
+    const maxTargetSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const speedRatio = targetSpeed / maxTargetSpeed;
+    const timeFactor = 1 - Math.min(1, t / maxTicks) * 0.35;
+    const speedPenalty = Math.max(0, speedRatio - 1) * 0.2;
+    const motionPenalty = Math.max(0, Math.min(1, Number(motionScale) || 0)) * 0.08;
+    const confidence = Math.max(0.25, Math.min(1, 0.62 + timeFactor * 0.25 - speedPenalty - motionPenalty));
+    return {
+      x,
+      y,
+      flightTicks: t,
+      flightMs: t * 50,
+      travelDistance,
+      currentDistance: rawDistance,
+      leadDistance: Math.hypot(x - px, y - py),
+      renderDelayTicks,
+      compensatedX,
+      compensatedY,
+      targetVx: vx,
+      targetVy: vy,
+      targetSpeed,
+      confidence
+    };
+  }
   function combatAimMotionScale(target) {
     const maxSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
     const observedSpeed = Math.max(
@@ -749,8 +819,8 @@ function runSelfTest() {
       && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
       && Math.abs(Number(movement.lateralRatio || 0)) <= radialMax
       && Number(distance) <= Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0)));
-    let mode = moving ? 'jitter' : 'exact';
-    let strategy = moving ? 'jitter' : 'exact';
+    let mode = moving ? 'intercept' : 'exact';
+    let strategy = moving ? 'intercept' : 'exact';
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
@@ -3887,12 +3957,12 @@ function runSelfTest() {
       want: '-1,-1:1,-1:true'
     },
 	    {
-	      name: 'combat moving target uses jitter aim',
+	      name: 'combat moving target uses intercept aim',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, vx: 30, death_reward_preview: 7 }]
       }).aimMode,
-      want: 'jitter'
+      want: 'intercept'
     },
     {
       name: 'combat moving target jitter expands at close range',
@@ -3912,6 +3982,23 @@ function runSelfTest() {
     {
       name: 'combat far target jitter covers measured dodge window',
       got: combatAimJitterLimit(14500) >= 0.1,
+      want: true
+    },
+    {
+      name: 'combat intercept solution leads lateral target with render compensation',
+      got: (() => {
+        const solution = combatInterceptSolution(
+          { x: 0, y: 0 },
+          { x: 10000, y: 0, vx: 0, vy: 50 },
+          10000,
+          1
+        );
+        return Boolean(solution
+          && solution.y > 1000
+          && solution.flightTicks > 20
+          && solution.flightTicks < 23
+          && solution.renderDelayTicks === 2);
+      })(),
       want: true
     },
     {
@@ -3947,7 +4034,7 @@ function runSelfTest() {
       want: 'steady:0:true:combat-burst-fire:true'
     },
     {
-      name: 'combat moving long no-damage target keeps jitter aim',
+      name: 'combat moving long no-damage target keeps intercept aim',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 12000, lastDamageAt: Date.now() - 12000, hp: 100 };
         const action = chooseCombatAction(
@@ -3957,7 +4044,7 @@ function runSelfTest() {
         bot.combatTarget = null;
         return action.aimMode;
       })(),
-      want: 'jitter'
+      want: 'intercept'
     },
     {
       name: 'combat coordinate divergence immediately uses live precision aim',
@@ -5341,6 +5428,9 @@ function browserBotSource(config) {
     combatTargetDodgeSpeedPerTick: 50,
     combatBulletSpeedPerTick: 500,
     combatBulletHitRadiusCm: 90,
+    combatRenderDelayTicks: 2,
+    combatInterceptMaxTicks: 30,
+    combatInterceptSpreadScale: 0.18,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
@@ -15640,6 +15730,73 @@ function browserBotSource(config) {
     };
   }
 
+  function combatInterceptSolution(self, target, distance = null, motionScale = 1) {
+    const sx = Number(self?.x);
+    const sy = Number(self?.y);
+    const px = Number(target?.x);
+    const py = Number(target?.y);
+    const vx = Number(target?.vx) || 0;
+    const vy = Number(target?.vy) || 0;
+    if (![sx, sy, px, py].every(Number.isFinite)) return null;
+    const bulletSpeed = Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500));
+    const renderDelayTicks = Math.max(0, Number(cfg.combatRenderDelayTicks ?? 2));
+    const compensatedX = px + vx * renderDelayTicks;
+    const compensatedY = py + vy * renderDelayTicks;
+    const dx = compensatedX - sx;
+    const dy = compensatedY - sy;
+    const c = dx * dx + dy * dy;
+    if (!(c > 0)) return null;
+    const targetSpeedSq = vx * vx + vy * vy;
+    const a = targetSpeedSq - bulletSpeed * bulletSpeed;
+    const b = 2 * (dx * vx + dy * vy);
+    const eps = 1e-6;
+    const roots = [];
+    if (Math.abs(a) < eps) {
+      if (Math.abs(b) > eps) roots.push(-c / b);
+    } else {
+      const disc = b * b - 4 * a * c;
+      if (disc < -eps) return null;
+      const sqrtDisc = Math.sqrt(Math.max(0, disc));
+      roots.push((-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a));
+    }
+    const maxByRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000) / bulletSpeed);
+    const configuredMax = Number(cfg.combatInterceptMaxTicks || 0);
+    const maxTicks = Math.max(1, configuredMax > 0 ? Math.min(configuredMax, maxByRange) : maxByRange);
+    const t = roots
+      .filter(value => Number.isFinite(value) && value > 0 && value <= maxTicks)
+      .sort((aTick, bTick) => aTick - bTick)[0];
+    if (!Number.isFinite(t)) return null;
+    const x = compensatedX + vx * t;
+    const y = compensatedY + vy * t;
+    const travelDistance = Math.hypot(x - sx, y - sy);
+    const bulletRange = Math.max(1, Number(cfg.combatBulletRangeCm || cfg.combatAttackRange || 15000));
+    if (travelDistance > bulletRange + Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90))) return null;
+    const rawDistance = Number.isFinite(Number(distance)) ? Math.max(1, Number(distance)) : Math.hypot(px - sx, py - sy);
+    const targetSpeed = Math.sqrt(targetSpeedSq);
+    const maxTargetSpeed = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const speedRatio = targetSpeed / maxTargetSpeed;
+    const timeFactor = 1 - Math.min(1, t / maxTicks) * 0.35;
+    const speedPenalty = Math.max(0, speedRatio - 1) * 0.2;
+    const motionPenalty = Math.max(0, Math.min(1, Number(motionScale) || 0)) * 0.08;
+    const confidence = Math.max(0.25, Math.min(1, 0.62 + timeFactor * 0.25 - speedPenalty - motionPenalty));
+    return {
+      x,
+      y,
+      flightTicks: t,
+      flightMs: t * 50,
+      travelDistance,
+      currentDistance: rawDistance,
+      leadDistance: Math.hypot(x - px, y - py),
+      renderDelayTicks,
+      compensatedX,
+      compensatedY,
+      targetVx: vx,
+      targetVy: vy,
+      targetSpeed,
+      confidence
+    };
+  }
+
   function combatLiveAimTarget(self, target) {
     const targetId = combatTargetId(target);
     const targetName = String(target?.name || '').trim();
@@ -15724,8 +15881,8 @@ function browserBotSource(config) {
       && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
       && Math.abs(Number(movement.lateralRatio || 0)) <= radialMax
       && Number(distance) <= Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0)));
-    let mode = moving ? 'jitter' : 'exact';
-    let strategy = moving ? 'jitter' : 'exact';
+    let mode = moving ? 'intercept' : 'exact';
+    let strategy = moving ? 'intercept' : 'exact';
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
@@ -15823,14 +15980,80 @@ function browserBotSource(config) {
     if (!sign) sign = Math.random() < 0.5 ? -1 : 1;
     const noDamageBucket = noDamageLevel ? Math.floor(damage.widenMs / stepMs) + 1 : 0;
     const motionBucket = Math.round(motionScale * 10);
-    let angle = 0;
-    const locked = previousAim
+    const intercept = combatInterceptSolution(self, aimSource, distance, motionScale);
+    const lockCompatible = previousAim
       && String(previousAim.targetId || '') === targetId
       && String(previousAim.movementMode || '') === movement.mode
       && Number(previousAim.noDamageBucket || 0) === noDamageBucket
       && Number(previousAim.motionBucket ?? motionBucket) === motionBucket
-      && now() < Number(previousAim.until || 0)
-      && Number.isFinite(Number(previousAim.angle));
+      && now() < Number(previousAim.until || 0);
+    if (intercept) {
+      let spreadAngle = 0;
+      const locked = lockCompatible && Number.isFinite(Number(previousAim.spreadAngle));
+      if (locked) {
+        spreadAngle = Number(previousAim.spreadAngle);
+        sign = Math.sign(Number(previousAim.sign || sign)) || sign;
+      } else {
+        const spreadScale = Math.max(0, Number(cfg.combatInterceptSpreadScale ?? 0.18));
+        const uncertainty = 1 - Math.max(0, Math.min(1, Number(intercept.confidence) || 0));
+        const randomLimit = jitterLimit * spreadScale * (0.35 + uncertainty) * (noDamageLevel ? 1.35 : 1);
+        spreadAngle = (Math.random() * 2 - 1) * randomLimit;
+        bot.combatAim = {
+          targetId,
+          angle: spreadAngle,
+          spreadAngle,
+          sign,
+          movementMode: movement.mode,
+          noDamageBucket,
+          motionBucket,
+          intercept: true,
+          until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
+        };
+      }
+      const interceptDx = Number(intercept.x) - Number(self.x);
+      const interceptDy = Number(intercept.y) - Number(self.y);
+      const cos = Math.cos(spreadAngle);
+      const sin = Math.sin(spreadAngle);
+      const currentAngle = Math.atan2(dy, dx);
+      const predictedAngle = Math.atan2(interceptDy, interceptDx);
+      let relativeAngle = predictedAngle - currentAngle + spreadAngle;
+      while (relativeAngle > Math.PI) relativeAngle -= Math.PI * 2;
+      while (relativeAngle < -Math.PI) relativeAngle += Math.PI * 2;
+      return {
+        x: Number(self.x) + interceptDx * cos - interceptDy * sin,
+        y: Number(self.y) + interceptDx * sin + interceptDy * cos,
+        mode: 'intercept',
+        moving,
+        angle: relativeAngle,
+        jitterLimit,
+        distance,
+        motionScale,
+        movementMode: movement.mode,
+        radialSpeed: movement.radialSpeed,
+        lateralSpeed: movement.lateralSpeed,
+        noDamageMs: damage.noDamageMs,
+        noDamageWidened: Boolean(noDamageLevel),
+        precisionAim: false,
+        steadyAim: false,
+        lockedAim: Boolean(locked),
+        liveAim: Boolean(aimSource.nativeAimResolved),
+        liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
+        aimStrategy: aimStrategy.strategy,
+        aimStrategyReason: 'quadratic-intercept',
+        sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
+        sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
+        serverStallAim: Boolean(aimStrategy.serverStall),
+        radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
+        fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+        interceptAim: true,
+        interceptFlightTicks: intercept.flightTicks,
+        interceptFlightMs: intercept.flightMs,
+        interceptLeadDistance: intercept.leadDistance,
+        interceptConfidence: intercept.confidence
+      };
+    }
+    let angle = 0;
+    const locked = lockCompatible && Number.isFinite(Number(previousAim.angle));
     if (locked) {
       angle = Number(previousAim.angle);
       sign = Math.sign(Number(previousAim.sign || sign)) || sign;
@@ -15850,6 +16073,7 @@ function browserBotSource(config) {
         movementMode: movement.mode,
         noDamageBucket,
         motionBucket,
+        intercept: false,
         until: now() + Math.max(80, Number(cfg.combatAimLockMs) || 450)
       };
     }
@@ -15875,12 +16099,13 @@ function browserBotSource(config) {
       liveAim: Boolean(aimSource.nativeAimResolved),
       liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
       aimStrategy: aimStrategy.strategy,
-      aimStrategyReason: aimStrategy.reason,
+      aimStrategyReason: 'intercept-fallback',
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
       fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      interceptAim: false
     };
   }
 
@@ -15955,7 +16180,11 @@ function browserBotSource(config) {
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
-        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        intercept: Boolean(aim.interceptAim),
+        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -16215,7 +16444,11 @@ function browserBotSource(config) {
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
-        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        intercept: Boolean(aim.interceptAim),
+        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -16247,7 +16480,11 @@ function browserBotSource(config) {
           sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
           serverStall: Boolean(aim.serverStallAim),
           radialPrecision: Boolean(aim.radialPrecisionAim),
-          fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
+          fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        intercept: Boolean(aim.interceptAim),
+        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
+        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
+        interceptConfidence: Number.isFinite(Number(aim.interceptConfidence)) ? Number(Number(aim.interceptConfidence).toFixed(2)) : null
         },
         strafe: dodging ? {
           dx: combatMove.dx,
