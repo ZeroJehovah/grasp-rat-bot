@@ -23,6 +23,11 @@
   - WebSocket reconnect churn is treated as an offline exit condition as soon as the rolling reconnect window reaches the threshold, even if the page has just re-opened the socket.
   - logged-in/no-self reconnect traps are treated as offline exits: reconnect churn exits immediately, and a 30s no-self timeout exits even without churn.
   - every relogin attempt must pass `loginSnapshotGate` after the exit reset; existing cooldown/suppress waits and the 3 consecutive successful `/snapshot` gate must both be satisfied before login clicks.
+- Control transport:
+  - the page/native WebSocket remains the only game WebSocket; the bot does not create or reconnect a second socket;
+  - runtime movement now prefers direct `native.ws.send('vel dx dy')` on that existing socket, with 50ms short-hold repeats for sustained movement and repeated zero-velocity stop commands;
+  - runtime shooting now prefers direct `native.ws.send('shoot targetX targetY startX startY')` on the same socket, falling back to native page helpers if direct send fails;
+  - behavior logic remains based on native/realtime visible state, so combat target selection, aim, firing, spacing, exits, and profit priority do not switch back to snapshot/server-coordinate parsing because of the faster transport.
 - Cloudflare error pages are detected by the remote bot and bootstrap layers and refresh every 5 seconds while the error page remains; full-page BunkerWeb 403 pages refresh every 10 minutes.
   - Bootstrap panels render with DOM/textContent instead of innerHTML so Trusted Types/CSP protected error pages do not break the panel.
 - Tampermonkey and extension panels are embedded into the native left sidebar between Entity Control and Chat. The native title, Runtime Metrics, View Control, minimap dock, and native login button are hidden with `display:none`, and the script immediate-login button appears in the native login button position in Entity Control only while the page is not logged in. The injected layout forces `.app` to horizontal flex, `.side` to `min(336px,100vw)`, and `.workspace` back to a relative flex/grid item with `inset:auto`; `.map-shell`/`#world` fill the remaining viewport so tall/narrow native media rules cannot shift the game center or stretch the side panel across the page. Tampermonkey panel version is `0.4.47`; extension panel version is `0.1.26`.

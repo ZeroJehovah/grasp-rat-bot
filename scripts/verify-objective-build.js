@@ -76,6 +76,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootConserveEveryMs', value: 360 },
   { key: 'combatShootRecoveryEveryMs', value: 700 },
   { key: 'combatNativeTickMinMs', value: 80 },
+  { key: 'directWsVelocityRepeatMs', value: 50 },
+  { key: 'directWsVelocityRepeatHoldMs', value: 220 },
+  { key: 'directWsStopRepeatCount', value: 3 },
   { key: 'combatAimFallbackPrecisionNoDamageMs', value: 25000 },
   { key: 'combatAimLiveDivergencePrecisionCm', value: 1200 },
   { key: 'combatAimLiveDivergencePrecisionRatio', value: 0.08 },
@@ -234,6 +237,17 @@ function main() {
       assert(staminaSummaryBody.includes("最近金币距离' + formatDistance(detail.distance)"), 'stamina budget leave summary does not use meter distance formatting');
       const pursuitSummaryBody = functionBody(text, 'pursuitLeaveSummary');
       assert(pursuitSummaryBody.includes("'，距离' + formatDistance(distance)"), 'pursuit leave summary does not use meter distance formatting');
+    });
+    check(`${file} sends movement and shots through the native page WebSocket`, () => {
+      assert(text.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
+      assert(text.includes('function sendDirectNativeVelocity'), 'direct WebSocket velocity sender not found');
+      assert(text.includes('function scheduleDirectVelocityRepeat'), 'direct WebSocket velocity repeat scheduler not found');
+      assert(functionBody(text, 'sendNativeVelocity').includes('if (sendDirectNativeVelocity(dx, dy, force)) return true'), 'native velocity does not prefer direct WebSocket sends');
+      assert(functionBody(text, 'safeSendVelocity').includes('scheduleDirectVelocityRepeat(dx, dy, force)'), 'safe velocity path does not schedule direct repeat sends');
+      assert(functionBody(text, 'stopMotionSafely').includes('scheduleDirectVelocityRepeat(0, 0, true)'), 'stop path does not repeat direct zero velocity');
+      assert(functionBody(text, 'cancelVelocityStopTimer').includes('cancelDirectVelocityRepeat()'), 'precision/stop cleanup does not cancel direct repeat sends');
+      assert(functionBody(text, 'sendNativeShoot').includes("native.ws.send('shoot '"), 'shooting does not prefer direct native WebSocket sends');
+      assert(functionBody(text, 'summarizeControl').includes('directWsControl: Boolean(cfg.directWsControlEnabled)'), 'control status does not expose direct WebSocket control');
     });
     check(`${file} freezes session uptime while self is missing`, () => {
       const sessionBody = functionBody(text, 'summarizeSessionStats');

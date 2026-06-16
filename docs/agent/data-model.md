@@ -2,7 +2,7 @@
 
 
 - The page owns the game WebSocket lifecycle. The bot must not create or reconnect a second socket.
-- Control should use the page/native WebSocket and native page state when available.
+- Control should use the page/native WebSocket and native page state when available. The bot may send `vel` and `shoot` messages directly on the existing native page WebSocket for lower command-path overhead, but it must not create or reconnect a second socket.
 - A current user id plus page/native WebSocket in `CONNECTING` or `OPEN` state counts as an active page game session for login/status purposes, even if `tmpGameSessionToken` is unavailable.
 - Confirmed exits and successful/HTTP 403 leave completions must stop game-operation motion immediately. The stop path clears native movement keys, velocity vectors, `lastVel`, touch movement, and any pending precision pulse timer before the bot continues relogin/hold bookkeeping.
 - Tampermonkey and extension bootstraps can pass persisted runtime config to the remote bot, including combat logging enabled/address.

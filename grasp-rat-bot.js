@@ -5565,6 +5565,10 @@ function browserBotSource(config) {
     serverPositionNoMoveStallMs: 0,
     serverPositionStallHoldMs: 6000,
     serverPositionCommandFreshMs: 900,
+    directWsControlEnabled: true,
+    directWsVelocityRepeatMs: 50,
+    directWsVelocityRepeatHoldMs: 220,
+    directWsStopRepeatCount: 3,
     serverPositionSnapshotMaxAgeMs: 2500,
     serverPositionClientMoveMin: 300,
     serverPositionServerMoveMax: 80,
@@ -5857,6 +5861,12 @@ function browserBotSource(config) {
     nativeOpenHandler: null,
     nativeCloseHandler: null,
     nativeErrorHandler: null,
+    directVelocityTimer: 0,
+    directVelocityRepeatToken: 0,
+    directVelocityRepeatUntil: 0,
+    directVelocityStopRepeatsLeft: 0,
+    lastDirectVelocityAt: 0,
+    lastDirectVelocity: '',
     lastNativeTickAt: 0,
     seenEntities: new Map(),
     session: {
@@ -11246,6 +11256,10 @@ function browserBotSource(config) {
 	      nativeCurrentVel,
 	      nativeLastVel: nativeState?.lastVel || '',
 	      nativeKeys,
+      directWsControl: Boolean(cfg.directWsControlEnabled),
+      directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
+      lastDirectVelocity: bot.lastDirectVelocity || '',
+      lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Date.now() - Number(bot.lastDirectVelocityAt || 0) : null,
       serverPositionStall
 	    };
 	  }
@@ -13185,6 +13199,7 @@ function browserBotSource(config) {
 	      clearTimeout(bot.velocityStopTimer);
 	      bot.velocityStopTimer = 0;
 	    }
+	    cancelDirectVelocityRepeat();
 	    bot.velocityPulseToken += 1;
 	  }
 
@@ -13236,10 +13251,11 @@ function browserBotSource(config) {
 	  function stopMotionSafely(reason = '') {
 	    const native = getNativeControl();
 	    if (native?.wsOpen) {
+	      stopLocalMotionOnly(reason);
 	      bot.control.lastVelocity = '0 0';
 	      bot.control.lastVelocityAt = now();
 	      const sent = sendNativeVelocity(0, 0, true);
-	      stopLocalMotionOnly(reason);
+	      if (sent) scheduleDirectVelocityRepeat(0, 0, true);
 	      return Boolean(sent);
 	    }
 	    return stopLocalMotionOnly(reason);
@@ -13253,10 +13269,84 @@ function browserBotSource(config) {
 	    return true;
 	  }
 
+	  function cancelDirectVelocityRepeat() {
+	    bot.directVelocityRepeatToken += 1;
+	    bot.directVelocityRepeatUntil = 0;
+	    bot.directVelocityStopRepeatsLeft = 0;
+	    if (bot.directVelocityTimer) {
+	      clearTimeout(bot.directVelocityTimer);
+	      bot.directVelocityTimer = 0;
+	    }
+	  }
+
+	  function directWsVelocityMessage(dx, dy) {
+	    return 'vel ' + clamp(Math.round(dx), -1, 1) + ' ' + clamp(Math.round(dy), -1, 1);
+	  }
+
+	  function sendDirectNativeVelocity(dx, dy, force = false) {
+	    if (!cfg.directWsControlEnabled) return false;
+	    const native = getNativeControl();
+	    if (!native) return false;
+	    setNativeKeys(native.state, dx, dy);
+	    if (!syncNativeControl(native)) {
+	      notePageOwnsReconnect();
+	      return false;
+	    }
+	    const message = directWsVelocityMessage(dx, dy);
+	    const t = now();
+	    const dedupeMs = Math.max(0, Math.min(45, Number(cfg.directWsVelocityRepeatMs || 50) - 5));
+	    if (!force && message === bot.lastDirectVelocity && t - Number(bot.lastDirectVelocityAt || 0) < dedupeMs) return true;
+	    try {
+	      native.ws.send(message);
+	      bot.lastDirectVelocity = message;
+	      bot.lastDirectVelocityAt = t;
+	      bot.control.lastMessageAt = Date.now();
+	      bot.control.transport = 'native-page-direct-ws';
+	      return true;
+	    } catch (err) {
+	      bot.control.lastError = 'direct native velocity: ' + (err.message || String(err));
+	      return false;
+	    }
+	  }
+
+	  function scheduleDirectVelocityRepeat(dx, dy, force = false) {
+	    if (!cfg.directWsControlEnabled || cfg.dryRun) return;
+	    const repeatMs = Math.max(20, Number(cfg.directWsVelocityRepeatMs || 50));
+	    const holdMs = Math.max(repeatMs, Number(cfg.directWsVelocityRepeatHoldMs || 220));
+	    const moving = Boolean(dx || dy);
+	    if (!moving) {
+	      bot.directVelocityRepeatUntil = 0;
+	      bot.directVelocityStopRepeatsLeft = Math.max(0, Math.round(Number(cfg.directWsStopRepeatCount || 0)));
+	    } else {
+	      bot.directVelocityRepeatUntil = now() + holdMs;
+	      bot.directVelocityStopRepeatsLeft = 0;
+	    }
+	    bot.directVelocityRepeatToken += 1;
+	    const token = bot.directVelocityRepeatToken;
+	    if (bot.directVelocityTimer) clearTimeout(bot.directVelocityTimer);
+	    const run = () => {
+	      try {
+	        if (bot.directVelocityRepeatToken !== token) return;
+	        bot.directVelocityTimer = 0;
+	        const keepMoving = moving && now() <= Number(bot.directVelocityRepeatUntil || 0);
+	        const keepStopping = !moving && Number(bot.directVelocityStopRepeatsLeft || 0) > 0;
+	        if (!keepMoving && !keepStopping) return;
+	        if (!moving) bot.directVelocityStopRepeatsLeft = Math.max(0, Number(bot.directVelocityStopRepeatsLeft || 0) - 1);
+	        sendDirectNativeVelocity(dx, dy, true);
+	        bot.directVelocityTimer = setTimeout(run, repeatMs);
+	      } catch (err) {
+	        bot.directVelocityTimer = 0;
+	        recordUnhandledTickError('direct-velocity-repeat', err);
+	      }
+	    };
+	    bot.directVelocityTimer = setTimeout(run, repeatMs);
+	  }
+
 	  function sendNativeVelocity(dx, dy, force = false) {
 	    const native = getNativeControl();
 	    if (!native) return false;
 	    setNativeKeys(native.state, dx, dy);
+	    if (sendDirectNativeVelocity(dx, dy, force)) return true;
 	    if (!syncNativeControl(native)) {
 	      notePageOwnsReconnect();
 	      return false;
@@ -13290,7 +13380,11 @@ function browserBotSource(config) {
       bot.control.lastNonZeroVelocityAt = 0;
       if (!bot.serverPositionStall?.stalled || !cfg.serverPositionStallOfflineEnabled) resetServerPositionStall('zero-velocity');
     }
-	    if (sendNativeVelocity(dx, dy, force)) return true;
+	    if (sendNativeVelocity(dx, dy, force)) {
+	      scheduleDirectVelocityRepeat(dx, dy, force);
+	      return true;
+	    }
+	    cancelDirectVelocityRepeat();
 	    return wsSend('vel ' + vel);
 	  }
 
@@ -13354,6 +13448,18 @@ function browserBotSource(config) {
 	      return false;
 	    }
 	    aimAt(target);
+	    if (cfg.directWsControlEnabled && self && target) {
+	      const startX = Math.round(Number(self.x) || 0);
+	      const startY = Math.round(Number(self.y) || 0);
+	      try {
+	        native.ws.send('shoot ' + Math.round(Number(target.x) || 0) + ' ' + Math.round(Number(target.y) || 0) + ' ' + startX + ' ' + startY);
+	        bot.control.lastMessageAt = Date.now();
+	        bot.control.transport = 'native-page-direct-ws';
+	        return true;
+	      } catch (err) {
+	        bot.control.lastError = 'direct native shoot: ' + (err.message || String(err));
+	      }
+	    }
 	    if (typeof shoot !== 'function') return false;
 	    try {
 	      Promise.resolve(shoot()).catch(err => {
