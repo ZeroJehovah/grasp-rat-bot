@@ -1,6 +1,6 @@
 # Game Parameter Debug Notes
 
-Last updated: 2026-06-10 02:00 CST
+Last updated: 2026-06-17
 
 This document records the live CDP debug setup and measured game parameters for `https://grasp-rat-game.h-e.top/`.
 
@@ -60,6 +60,42 @@ Verified game target:
 title: 囤囤鼠历险记
 url: https://grasp-rat-game.h-e.top/
 ```
+
+## Next-Time Workflow
+
+Use this exact flow for future live validation so the CDP connection does not need to be rediscovered:
+
+1. The user starts Chrome on Windows with remote debugging enabled on a port that is actually free. If `9222` is blocked by excluded TCP ranges, pick another free high port.
+2. The user adds or confirms a Windows `netsh interface portproxy` from the Chrome loopback port to a WSL-reachable bridge port.
+3. The user keeps the game tab open on `https://grasp-rat-game.h-e.top/` and tells the agent the bridge URL.
+4. The agent verifies the bridge from WSL:
+
+   ```bash
+   curl http://<bridge-host>:<bridge-port>/json/version
+   curl http://<bridge-host>:<bridge-port>/json/list
+   ```
+
+5. The agent selects the game page and runs short, one-shot CDP `Runtime.evaluate` probes.
+6. If the game exits unexpectedly or nearby danger appears, pause validation until the user explicitly resumes it.
+
+User side:
+
+- Start Chrome.
+- Create or confirm the portproxy.
+- Leave the game page open.
+- Watch the screen and tell the agent to stop if the session exits or becomes unsafe.
+
+Agent side:
+
+- Read the CDP endpoints.
+- Pick the game tab.
+- Run only short read-only probes unless the user explicitly approves movement or another active test.
+- Avoid starting `grasp-rat-bot.js` or `grasp-rat-monitor.js` for this validation path.
+
+Known good bridge examples from this machine:
+
+- Windows Chrome on `127.0.0.1:9444` bridged to WSL on `172.24.0.1:9445`.
+- A later working bridge used the same pattern with `9222` on Windows forwarded to a higher WSL-facing port.
 
 Notes from setup:
 
