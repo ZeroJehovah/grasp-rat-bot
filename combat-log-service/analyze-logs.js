@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { StringDecoder } = require('string_decoder');
 
 const DEFAULTS = {
   dir: path.join(__dirname, 'logs'),
@@ -161,21 +162,48 @@ function walkJsonlFiles(rootDir) {
   return files.sort();
 }
 
-function parseJsonl(file) {
-  const text = fs.readFileSync(file, 'utf8');
-  const lines = text.split(/\n/);
+function parseJsonl(file, onEntry = null) {
   const entries = [];
   const errors = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (!line) continue;
+  let scannedEntries = 0;
+  let lineNumber = 0;
+  let carry = '';
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = fs.openSync(file, 'r');
+  const decoder = new StringDecoder('utf8');
+  const handleLine = rawLine => {
+    lineNumber += 1;
+    const line = rawLine.trim();
+    if (!line) return;
     try {
-      entries.push({ line: i + 1, entry: JSON.parse(line) });
+      const item = { line: lineNumber, entry: JSON.parse(line) };
+      scannedEntries += 1;
+      if (typeof onEntry === 'function') onEntry(item);
+      else entries.push(item);
     } catch (err) {
-      errors.push({ line: i + 1, error: err?.message || String(err) });
+      errors.push({ line: lineNumber, error: err?.message || String(err) });
     }
+  };
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      carry += decoder.write(buffer.subarray(0, bytesRead));
+      let start = 0;
+      let newline = carry.indexOf('\n', start);
+      while (newline !== -1) {
+        handleLine(carry.slice(start, newline));
+        start = newline + 1;
+        newline = carry.indexOf('\n', start);
+      }
+      carry = carry.slice(start);
+    }
+    carry += decoder.end();
+    if (carry) handleLine(carry);
+  } finally {
+    fs.closeSync(fd);
   }
-  return { entries, errors };
+  return { entries, errors, scannedEntries };
 }
 
 function numberOrZero(value) {
@@ -635,7 +663,6 @@ function eventSignature(entry) {
 }
 
 function auditFile(file, rootDir, options) {
-  const parsed = parseJsonl(file);
   const relFile = path.relative(rootDir, file) || file;
   const versions = new Set();
   const exitEvents = [];
@@ -651,9 +678,9 @@ function auditFile(file, rootDir, options) {
   let includedEntries = 0;
   let firstAt = 0;
   let lastAt = 0;
-  for (const item of parsed.entries) {
+  const parsed = parseJsonl(file, item => {
     const entry = item.entry;
-    if (!entryMatchesFilters(entry, options)) continue;
+    if (!entryMatchesFilters(entry, options)) return;
     includedEntries += 1;
     const t = entryTime(entry);
     if (t && (!firstAt || t < firstAt)) firstAt = t;
@@ -763,7 +790,7 @@ function auditFile(file, rootDir, options) {
       if (t && t > event.lastAt) event.lastAt = t;
       event.count += 1;
     }
-    if (!isExitish(entry)) continue;
+    if (!isExitish(entry)) return;
     const signature = eventSignature(entry) || `${item.line}:${exitReason(entry)}`;
     const existing = activeBySignature.get(signature);
     const timeGap = existing && t && existing.lastAt ? Math.abs(t - Number(existing.lastAt || 0)) : 0;
@@ -836,7 +863,7 @@ function auditFile(file, rootDir, options) {
     for (const issue of issues) {
       if (!event.issues.includes(issue)) event.issues.push(issue);
     }
-  }
+  });
   for (const event of exitEvents) {
     const baseRequiredMs = event.unsafe ? Math.max(0, Number(options.minUnsafeDelayMs || 0) || 0) : 0;
     if (Number(event.requiredDelayMs || 0) > baseRequiredMs && Number(event.delayMs || 0) < Number(event.requiredDelayMs || 0)) {
@@ -846,7 +873,7 @@ function auditFile(file, rootDir, options) {
   return {
     file: relFile,
     entries: includedEntries,
-    scannedEntries: parsed.entries.length,
+    scannedEntries: parsed.scannedEntries,
     parseErrors: parsed.errors,
     versions: Array.from(versions).sort(),
     sourceHashes: Array.from(sourceHashes).sort(),
