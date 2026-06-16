@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.176"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.177"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -24,54 +24,56 @@
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
 	      const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
-		  const previousBot = window[BOT_KEY] || null;
-	  const preserved = {
-	    attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
-	    killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
-	    seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
-	    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
-	    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
-	    combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
-	    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
-	    lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === 'object' ? { ...previousBot.lastCombatLogMetric } : null,
-		    lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
-		    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
-		    opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
-		    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
-	    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
-		    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
-		    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
-		    importantLogging: previousBot?.importantLogging && typeof previousBot.importantLogging === 'object'
-		      ? {
-		        ...previousBot.importantLogging,
-		        activeCombat: previousBot.importantLogging.activeCombat && typeof previousBot.importantLogging.activeCombat === 'object'
-		          ? { ...previousBot.importantLogging.activeCombat }
-		          : null,
-		        queuedRemoteIds: Array.isArray(previousBot.importantLogging.queuedRemoteIds)
-		          ? previousBot.importantLogging.queuedRemoteIds.slice(-500)
-		          : []
-		      }
-		      : null,
-		    loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
-		    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
-	    postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
-	    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
-	      ? {
-	        ...previousBot.combatLogging,
-	        preBuffer: Array.isArray(previousBot.combatLogging.preBuffer) ? previousBot.combatLogging.preBuffer.slice(-160) : [],
-	        pending: Array.isArray(previousBot.combatLogging.pending) ? previousBot.combatLogging.pending.slice(-1000) : []
-	      }
-	      : null,
-	    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
-	  };
-	  const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
-	  const cfg = {
-	    dryRun: Boolean(config.dryRun),
-	    once: Boolean(config.once),
-	    version: String(config.version || 'dev'),
-	    sourceHash: String(config.sourceHash || ''),
-	    sourceUrl: String(config.sourceUrl || ''),
-	    injectedBy: String(config.injectedBy || 'cdp'),
+		  function buildBrowserPreservedState(previousBot) {
+  return {
+    attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
+    killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
+    seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
+    session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
+    combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
+    combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
+    combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
+    lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === 'object' ? { ...previousBot.lastCombatLogMetric } : null,
+    lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
+    opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
+    opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
+    pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
+    lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
+    lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
+    exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,
+    importantLogging: previousBot?.importantLogging && typeof previousBot.importantLogging === 'object'
+      ? {
+        ...previousBot.importantLogging,
+        activeCombat: previousBot.importantLogging.activeCombat && typeof previousBot.importantLogging.activeCombat === 'object'
+          ? { ...previousBot.importantLogging.activeCombat }
+          : null,
+        queuedRemoteIds: Array.isArray(previousBot.importantLogging.queuedRemoteIds)
+          ? previousBot.importantLogging.queuedRemoteIds.slice(-500)
+          : []
+      }
+      : null,
+    loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
+    leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
+    postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
+    combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
+      ? {
+        ...previousBot.combatLogging,
+        preBuffer: Array.isArray(previousBot.combatLogging.preBuffer) ? previousBot.combatLogging.preBuffer.slice(-160) : [],
+        pending: Array.isArray(previousBot.combatLogging.pending) ? previousBot.combatLogging.pending.slice(-1000) : []
+      }
+      : null,
+    coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
+  };
+}
+
+		  function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
+  return {
+    dryRun: Boolean(config.dryRun),
+    once: Boolean(config.once),
+    version: String(config.version || 'dev'),
+    sourceHash: String(config.sourceHash || ''),
+    sourceUrl: String(config.sourceUrl || ''),
+    injectedBy: String(config.injectedBy || 'cdp'),
     tickMs: 120,
     statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000),
     dangerRadius: 17000,
@@ -139,20 +141,20 @@
     combatBulletSpeedPerTick: 500,
     combatBulletHitRadiusCm: 90,
     combatRenderDelayTicks: 2,
-	    combatInterceptMaxTicks: 30,
-	    combatInterceptSpreadScale: 0.18,
-	    combatMotionHistoryWindowMs: 2000,
-	    combatMotionHistoryMaxSamples: 80,
-	    combatAimLowConfidenceThreshold: 0.6,
-	    combatAimLowConfidenceMinDistance: 9000,
-	    combatAimLowConfidenceMotionScale: 0.65,
-	    combatAimLowConfidenceEveryMs: 520,
-	    combatTradeEstimateWindowMs: 6000,
-	    combatTradeEstimateMinWindowMs: 1800,
-	    combatTradeEstimateMinSelfDamage: 6,
-	    combatTradeEstimateSafetyFactor: 1.15,
-	    combatTradeEstimateMinEnemyDps: 1.5,
-	    combatAimNoDamageMs: 1000,
+    combatInterceptMaxTicks: 30,
+    combatInterceptSpreadScale: 0.18,
+    combatMotionHistoryWindowMs: 2000,
+    combatMotionHistoryMaxSamples: 80,
+    combatAimLowConfidenceThreshold: 0.6,
+    combatAimLowConfidenceMinDistance: 9000,
+    combatAimLowConfidenceMotionScale: 0.65,
+    combatAimLowConfidenceEveryMs: 520,
+    combatTradeEstimateWindowMs: 6000,
+    combatTradeEstimateMinWindowMs: 1800,
+    combatTradeEstimateMinSelfDamage: 6,
+    combatTradeEstimateSafetyFactor: 1.15,
+    combatTradeEstimateMinEnemyDps: 1.5,
+    combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
     combatAimFallbackPrecisionNoDamageMs: 25000,
@@ -225,23 +227,23 @@
     opportunityEstimatedDamagePerShot: 3,
     opportunityCoinPickupStaminaMs: 0,
     opportunityLongStaminaReserveMs: 1500,
-	    opportunityStickBonus: 0,
-		    opportunitySwitchMargin: 3000,
-			    opportunitySwitchRelativeMargin: 0.1,
+    opportunityStickBonus: 0,
+    opportunitySwitchMargin: 3000,
+    opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
     opportunityMissingHoldMs: 7000,
     opportunityOscillationSwitchLimit: 5,
     opportunitySameCoinRadius: 1200,
-				    opportunityVisibleDistance: 50000,
-				    opportunityNearbyPriorityDistance: 50000,
-	    coinMaxDistance: 18000,
-	    coinDangerRadius: 25000,
-	    invulnerableActiveCoinDangerRadius: 36000,
-	    invulnerableActiveCoinHeadingBlockRadius: 65000,
-	    invulnerableActiveCoinHeadingLaneRadius: 18000,
-	    invulnerableActiveCoinHeadingCosMin: 0.55,
-	    invulnerableActiveCoinHeadingMinDistance: 1500,
-	    stationaryActiveCoinDangerRadius: 12000,
+    opportunityVisibleDistance: 50000,
+    opportunityNearbyPriorityDistance: 50000,
+    coinMaxDistance: 18000,
+    coinDangerRadius: 25000,
+    invulnerableActiveCoinDangerRadius: 36000,
+    invulnerableActiveCoinHeadingBlockRadius: 65000,
+    invulnerableActiveCoinHeadingLaneRadius: 18000,
+    invulnerableActiveCoinHeadingCosMin: 0.55,
+    invulnerableActiveCoinHeadingMinDistance: 1500,
+    stationaryActiveCoinDangerRadius: 12000,
     globalCoinMaxDistance: 50000,
     patrolCoinMaxDistance: 22000,
     scanCoinMaxDistance: 22000,
@@ -255,11 +257,11 @@
     fieldMigrationNearbyCoinBlockDistance: 30000,
     snapshotCoinMaxDistance: 1200000,
     snapshotCoinClusterRadius: 22000,
-	    snapshotCoinClusterMinCoins: 2,
-	    snapshotSingleCoinMaxDistance: 22000,
-	    snapshotSingleCoinDistancePerAmount: 30000,
-	    snapshotCoinIdleMaxMs: 60000,
-	    snapshotCoinStaleMs: 30000,
+    snapshotCoinClusterMinCoins: 2,
+    snapshotSingleCoinMaxDistance: 22000,
+    snapshotSingleCoinDistancePerAmount: 30000,
+    snapshotCoinIdleMaxMs: 60000,
+    snapshotCoinStaleMs: 30000,
     patrolHeadingMs: 26000,
     patrolStaminaThreshold: 6500,
     chaseCoinStaminaThreshold: 0,
@@ -339,19 +341,19 @@
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
     staminaExhaustedThresholdMs: 1000,
-	    staminaResetGraceMs: 10000,
-	    staminaBudgetReloginDelayMs: 1800000,
-	    loginSnapshotSuccessRequired: 3,
-	    loginSnapshotProbeMinMs: 5000,
-	    autoLogin: true,
-	    loginCooldownMs: 5000,
+    staminaResetGraceMs: 10000,
+    staminaBudgetReloginDelayMs: 1800000,
+    loginSnapshotSuccessRequired: 3,
+    loginSnapshotProbeMinMs: 5000,
+    autoLogin: true,
+    loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
     fleeLockMs: 1400,
-	    pursuitLeaveMs: 300000,
-	    pursuitLeaveNonFullHpMs: 90000,
-	    pursuitLeaveInvulnerableMs: 60000,
-	    pursuitLeaveNonFullHpInvulnerableMs: 45000,
-	    pursuitLostGraceMs: 10000,
+    pursuitLeaveMs: 300000,
+    pursuitLeaveNonFullHpMs: 90000,
+    pursuitLeaveInvulnerableMs: 60000,
+    pursuitLeaveNonFullHpInvulnerableMs: 45000,
+    pursuitLostGraceMs: 10000,
     pursuitLeaveRetryMs: 1000,
     pursuitTrackRadius: 42000,
     pursuitTowardCosMin: 0.25,
@@ -359,10 +361,10 @@
     offlineLeaveMs: 3000,
     offlineUnsafeLeaveMs: 0,
     offlineSafeLeaveMs: 3000,
-	    offlineReconnectChurnWindowMs: 10000,
-	    offlineReconnectChurnMinEvents: 3,
-	    gameSessionNoSelfLeaveMs: 30000,
-	    offlinePassiveDangerRadius: 2500,
+    offlineReconnectChurnWindowMs: 10000,
+    offlineReconnectChurnMinEvents: 3,
+    gameSessionNoSelfLeaveMs: 30000,
+    offlinePassiveDangerRadius: 2500,
     offlineLeaveRetryMs: 600,
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
@@ -386,31 +388,37 @@
     serverPositionServerMoveMax: 80,
     serverPositionGapMin: 400,
     sessionResetMissingMs: 10000,
-	    reloadAfterNoSelfMs: 45000,
-	    reloadAfterOfflineMs: 20000,
-	    cloudflareErrorReloadMs: 5000,
-	    page403ErrorReloadMs: 600000,
-	    globalRefreshTimeoutMs: 1500,
-	    combatLoggingEnabled: Boolean(config.combatLoggingEnabled && combatLogEndpointConfigured),
-	    combatLogEndpoint: combatLogEndpointConfigured ? String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log') : '',
-	    combatLogEndpointConfigured,
-	    combatLogPreBufferMs: 10000,
-	    combatLogPostBufferMs: 10000,
-	    combatLogFlushMs: 1000,
-	    combatLogBatchMaxEntries: 50,
-	    combatLogMaxPendingEntries: 1000,
-	    combatLogMaxBulletEntries: 24,
-		    combatLogMaxEntityEntries: 12,
+    reloadAfterNoSelfMs: 45000,
+    reloadAfterOfflineMs: 20000,
+    cloudflareErrorReloadMs: 5000,
+    page403ErrorReloadMs: 600000,
+    globalRefreshTimeoutMs: 1500,
+    combatLoggingEnabled: Boolean(config.combatLoggingEnabled && combatLogEndpointConfigured),
+    combatLogEndpoint: combatLogEndpointConfigured ? String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log') : '',
+    combatLogEndpointConfigured,
+    combatLogPreBufferMs: 10000,
+    combatLogPostBufferMs: 10000,
+    combatLogFlushMs: 1000,
+    combatLogBatchMaxEntries: 50,
+    combatLogMaxPendingEntries: 1000,
+    combatLogMaxBulletEntries: 24,
+    combatLogMaxEntityEntries: 12,
     postLoginZoomOutClicks: 4,
     postLoginZoomStartDelayMs: 350,
     postLoginZoomOutIntervalMs: 80,
     postLoginZoomArmMissingMs: 1000,
-	    status: '',
+    status: '',
     ...config,
     // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
     allowNativeReconnect: false,
     allowBotWebSocketFallback: false
   };
+}
+
+		  const previousBot = window[BOT_KEY] || null;
+	  const preserved = buildBrowserPreservedState(previousBot);
+	  const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
+	  const cfg = buildRuntimeDefaults(config, combatLogEndpointConfigured);
 
 	  function readPersistentExitState(key, t = Date.now()) {
 	    let state = null;
@@ -1529,22 +1537,45 @@
 	  }
 
 	  function escapeHtml(value) {
-	    return String(value ?? '').replace(/[&<>"']/g, ch => ({
-	      '&': '&amp;',
-	      '<': '&lt;',
-	      '>': '&gt;',
-	      '"': '&quot;',
-	      "'": '&#39;'
-	    }[ch]));
-	  }
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+}
 
 	  function formatDistance(value) {
-	    const n = Number(value);
-	    if (!Number.isFinite(n)) return '-';
-	    const meters = n / 100;
-	    if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + '米';
-	    return Math.round(meters) + '米';
-	  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '-';
+  const meters = n / 100;
+  if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + '米';
+  return Math.round(meters) + '米';
+}
+
+	  function formatDurationMs(ms) {
+  const value = Math.max(0, Math.round(Number(ms) || 0));
+  if (value >= 3600000) {
+    const minutes = Math.round(value / 60000);
+    if (minutes % 60 === 0) return Math.round(minutes / 60) + '小时';
+    return minutes + '分钟';
+  }
+  if (value >= 60000) return Math.round(value / 60000) + '分钟';
+  if (value >= 1000) return Math.round(value / 1000) + '秒';
+  return value + 'ms';
+}
+
+	  function actorLabel(actor) {
+  if (!actor) return '未知目标';
+  const id = actor.user_id ?? actor.id ?? actor.targetId;
+  return actor.name || actor.label || (id !== undefined && id !== null && id !== '' ? '#' + id : '未知目标');
+}
+
+	  function hpDisplay(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? String(Math.round(n)) : '-';
+}
 
   function formatStaminaDisplay(self) {
     if (!self) return '-';
@@ -1789,45 +1820,45 @@
 			  }
 
       function safeStringify(value) {
-        const seen = new WeakSet();
-        try {
-          const text = JSON.stringify(value, function (_key, item) {
-            if (typeof item === 'bigint') return String(item);
-            if (item && typeof item === 'object') {
-              if (seen.has(item)) return '[Circular]';
-              seen.add(item);
-            }
-            return item;
-          });
-          return String(text || '');
-        } catch (err) {
-          try {
-            return JSON.stringify({ error: err?.message || String(err) });
-          } catch (_) {
-            return '{"error":"stringify failed"}';
-          }
-        }
+  const seen = new WeakSet();
+  try {
+    const text = JSON.stringify(value, function (_key, item) {
+      if (typeof item === 'bigint') return String(item);
+      if (item && typeof item === 'object') {
+        if (seen.has(item)) return '[Circular]';
+        seen.add(item);
       }
+      return item;
+    });
+    return String(text || '');
+  } catch (err) {
+    try {
+      return JSON.stringify({ error: err?.message || String(err) });
+    } catch (_) {
+      return '{"error":"stringify failed"}';
+    }
+  }
+}
 
       function arrayCount(value) {
         return Array.isArray(value) ? value.length : 0;
       }
 
       function safeJsonClone(value) {
-        try {
-          return JSON.parse(safeStringify(value));
-        } catch (_) {
-          return null;
-        }
-      }
+  try {
+    return JSON.parse(safeStringify(value));
+  } catch (_) {
+    return null;
+  }
+}
 
       function sanitizeCombatLogIdPart(value, fallback = 'unknown') {
-        const text = String(value || fallback)
-          .replace(/[^w.-]+/g, '_')
-          .replace(/^_+|_+$/g, '')
-          .slice(0, 80);
-        return text || fallback;
-      }
+  const text = String(value || fallback)
+    .replace(/[^\w.-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return text || fallback;
+}
 
       function combatLogEntryFailureKey(entry) {
         if (!entry || typeof entry !== 'object') return '';
@@ -3724,40 +3755,17 @@
 	    };
 	  }
 
-  function actorLabel(actor) {
-    if (!actor) return '未知目标';
-    const id = actor.user_id ?? actor.id ?? actor.targetId;
-    return actor.name || actor.label || (id !== undefined && id !== null && id !== '' ? '#' + id : '未知目标');
+  function staminaExhaustedWindowLabel(staminaState) {
+  const raw = Array.isArray(staminaState?.longExhausted)
+    ? staminaState.longExhausted
+    : (Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : []);
+  const windows = [];
+  for (const item of raw) {
+    const key = String(item || '').toLowerCase();
+    if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
   }
-
-  function hpDisplay(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? String(Math.round(n)) : '-';
-  }
-
-	  function formatDurationMs(ms) {
-	    const value = Math.max(0, Math.round(Number(ms) || 0));
-	    if (value >= 3600000) {
-	      const minutes = Math.round(value / 60000);
-	      if (minutes % 60 === 0) return Math.round(minutes / 60) + '小时';
-      return minutes + '分钟';
-    }
-    if (value >= 60000) return Math.round(value / 60000) + '分钟';
-	    if (value >= 1000) return Math.round(value / 1000) + '秒';
-	    return value + 'ms';
-	  }
-
-	  function staminaExhaustedWindowLabel(staminaState) {
-	    const raw = Array.isArray(staminaState?.longExhausted)
-	      ? staminaState.longExhausted
-	      : (Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : []);
-	    const windows = [];
-	    for (const item of raw) {
-	      const key = String(item || '').toLowerCase();
-	      if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
-	    }
-	    return windows.join('/');
-	  }
+  return windows.join('/');
+}
 
 	  function leaveWaitDisplay(base, detail) {
 	    const summary = String(base || '').trim();

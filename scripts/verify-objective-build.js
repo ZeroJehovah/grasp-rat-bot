@@ -190,6 +190,10 @@ function main() {
   const manifest = readJson('dist/manifest.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
+  const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
+  const sharedDisplayFormatSource = readText('src/shared/display-format.js');
+  const sharedPreservedStateSource = readText('src/shared/browser-preserved-state.js');
+  const sharedRuntimeDefaultsSource = readText('src/shared/runtime-defaults.js');
   const generatedSource = generateRemoteSource(manifest);
   const distHash = sha256Hex(distSource);
   const generatedHash = sha256Hex(generatedSource);
@@ -219,22 +223,37 @@ function main() {
     return generatedHash;
   });
 
+  check('source bot splits shared helpers while generated runtime stays single file', () => {
+    assert(sourceBot.includes("require('./src/shared/exit-summary')"), 'exit-summary module import not found');
+    assert(sourceBot.includes("require('./src/shared/runtime-utils')"), 'runtime-utils module import not found');
+    assert(sourceBot.includes("require('./src/shared/display-format')"), 'display-format module import not found');
+    assert(sourceBot.includes("require('./src/shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
+    assert(sourceBot.includes("require('./src/shared/runtime-defaults')"), 'runtime-defaults module import not found');
+    assert(sourceBot.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
+    assert(sourceBot.includes('${formatDistance.toString()}'), 'formatDistance is not injected from the shared module');
+    assert(sourceBot.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
+    assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
+    assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
+  });
+
   for (const file of REMOTE_BOT_FILES) {
     const text = file === 'grasp-rat-bot.js' ? sourceBot : distSource;
+    const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
     for (const invariant of NUMERIC_INVARIANTS) {
       check(`${file} has ${invariant.key}=${invariant.value}`, () => {
-        assert(expectObjectNumber(text, invariant.key, invariant.value), `${invariant.key}: ${invariant.value} not found`);
+        assert(expectObjectNumber(defaultConfigSource, invariant.key, invariant.value), `${invariant.key}: ${invariant.value} not found`);
       });
     }
     check(`${file} accepts injected sourceHash`, () => {
-      assert(text.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
+      assert(defaultConfigSource.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
     });
     check(`${file} reduces routine browser status logging`, () => {
-      assert(text.includes('statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000)'), 'runtime statusEvery default/disable logic not found');
+      assert(defaultConfigSource.includes('statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000)'), 'runtime statusEvery default/disable logic not found');
       assert(text.includes('if (cfg.statusEvery > 0 && Date.now() - bot.lastStatusAt >= cfg.statusEvery)'), 'status log cannot be disabled with statusEvery=0');
     });
     check(`${file} formats display distances in meters`, () => {
-      const distanceBody = functionBody(text, 'formatDistance');
+      const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : text;
+      const distanceBody = functionBody(displayFormatSource, 'formatDistance');
       assert(distanceBody.includes('const meters = n / 100'), 'formatDistance does not convert cm to meters');
       assert(distanceBody.includes("+ '米'"), 'formatDistance does not append meter unit');
       const staminaSummaryBody = functionBody(text, 'staminaBudgetCoinLeaveSummary');
@@ -242,9 +261,30 @@ function main() {
       const pursuitSummaryBody = functionBody(text, 'pursuitLeaveSummary');
       assert(pursuitSummaryBody.includes("'，距离' + formatDistance(distance)"), 'pursuit leave summary does not use meter distance formatting');
     });
+    check(`${file} keeps shared runtime utility helpers available`, () => {
+      const runtimeUtilsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeUtilsSource : text;
+      assert(functionBody(runtimeUtilsSource, 'safeStringify').includes('new WeakSet()'), 'safeStringify circular guard not found');
+      assert(functionBody(runtimeUtilsSource, 'safeJsonClone').includes('JSON.parse(safeStringify(value))'), 'safeJsonClone does not use safeStringify');
+      assert(functionBody(runtimeUtilsSource, 'sanitizeCombatLogIdPart').includes("replace(/[^\\w.-]+/g, '_')"), 'combat log id sanitizer not found');
+    });
+    check(`${file} keeps shared display formatting helpers available`, () => {
+      const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : text;
+      assert(functionBody(displayFormatSource, 'escapeHtml').includes('&amp;'), 'escapeHtml entity map not found');
+      assert(functionBody(displayFormatSource, 'formatDurationMs').includes("+ '小时'"), 'duration formatter does not handle hours');
+      assert(functionBody(displayFormatSource, 'actorLabel').includes('actor.targetId'), 'actorLabel does not include targetId fallback');
+      assert(functionBody(displayFormatSource, 'hpDisplay').includes('Math.round(n)'), 'hpDisplay does not round numeric HP');
+    });
+    check(`${file} keeps shared browser initialization helpers available`, () => {
+      const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text;
+      const defaultsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
+      assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('combatRetreatIgnore instanceof Map'), 'preserved-state helper does not preserve combat retreat maps');
+      assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('preBuffer: Array.isArray'), 'preserved-state helper does not bound combat prebuffer');
+      assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowNativeReconnect: false'), 'runtime defaults do not keep native reconnect disabled');
+      assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowBotWebSocketFallback: false'), 'runtime defaults do not keep bot websocket fallback disabled');
+    });
     check(`${file} sends movement and shots through the native page WebSocket`, () => {
-      assert(text.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
-      assert(text.includes('directWsServerMarkerProbe: false'), 'server-marker probe must be disabled by default');
+      assert(defaultConfigSource.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
+      assert(defaultConfigSource.includes('directWsServerMarkerProbe: false'), 'server-marker probe must be disabled by default');
       assert(text.includes('function sendDirectNativeVelocity'), 'direct WebSocket velocity sender not found');
       assert(text.includes('function scheduleDirectVelocityRepeat'), 'direct WebSocket velocity repeat scheduler not found');
       const directVelocityBody = functionBody(text, 'sendDirectNativeVelocity');
@@ -329,7 +369,8 @@ function main() {
       assert(actionBody.includes('postAttackTarget'), 'post-attack wait should keep metadata for the killed target position');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
-      assert(text.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
+      const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text;
+      assert(preservedSource.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
       assert(text.includes('armed: preserved.postLoginZoom ? Boolean(preserved.postLoginZoom.armed) : true'), 'post-login zoom armed state does not reuse preserved state');
       assert(text.includes("appliedKey: String(preserved.postLoginZoom?.appliedKey || '')"), 'post-login zoom applied key is not preserved');
       assert(text.includes("scheduledKey: String(preserved.postLoginZoom?.scheduledKey || '')"), 'post-login zoom scheduled key is not preserved');
@@ -571,7 +612,7 @@ function main() {
 	      const tickBody = functionBody(text, 'tick');
 	      assert(tickBody.includes('const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs()'), 'main tick does not check post-exit motion lock before choosing actions');
 	      assert(tickBody.includes('postExitDecisionWithoutTarget({'), 'main tick does not publish a targetless post-exit wait decision');
-	      assert(text.includes('exitMotionStopLockMs: 8000'), 'exit motion stop lock duration not configured');
+	      assert(defaultConfigSource.includes('exitMotionStopLockMs: 8000'), 'exit motion stop lock duration not configured');
 	    });
 	    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
 	      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
