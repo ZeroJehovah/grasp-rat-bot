@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.30';
+  const BOOTSTRAP_VERSION = '0.1.31';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -45,7 +45,7 @@
     requestTimeoutMs: 7000,
     fallbackStaggerMs: 1200,
     staleTickMs: 3000,
-    statusEvery: 1000,
+    statusEvery: 30000,
     scriptStartupTimeoutMs: 2500,
     installConfirmMs: 3500,
     restartAfterCacheUpdateMs: 800,
@@ -375,6 +375,8 @@
       storedBoolean(readStored('combatLogEndpointConfigured', DEFAULTS.combatLogEndpointConfigured))
       || storedCombatLogEndpoint
     );
+    const storedStatusEveryRaw = readStored('statusEvery', DEFAULTS.statusEvery);
+    const storedStatusEvery = Number(storedStatusEveryRaw) === 1000 ? DEFAULTS.statusEvery : Number(storedStatusEveryRaw);
     cfg = {
       manifestUrl: String(readStored('manifestUrl', DEFAULTS.manifestUrl) || DEFAULTS.manifestUrl),
       loaderUpdateUrl: String(readStored('loaderUpdateUrl', DEFAULTS.loaderUpdateUrl) || DEFAULTS.loaderUpdateUrl),
@@ -385,7 +387,7 @@
       requestTimeoutMs: Math.max(3000, Number(readStored('requestTimeoutMs', DEFAULTS.requestTimeoutMs)) || DEFAULTS.requestTimeoutMs),
       fallbackStaggerMs: Math.max(0, Number(readStored('fallbackStaggerMs', DEFAULTS.fallbackStaggerMs)) || DEFAULTS.fallbackStaggerMs),
       staleTickMs: Math.max(1000, Number(readStored('staleTickMs', DEFAULTS.staleTickMs)) || DEFAULTS.staleTickMs),
-      statusEvery: Math.max(250, Number(readStored('statusEvery', DEFAULTS.statusEvery)) || DEFAULTS.statusEvery),
+      statusEvery: storedStatusEvery === 0 ? 0 : Math.max(1000, storedStatusEvery || DEFAULTS.statusEvery),
       scriptStartupTimeoutMs: Math.max(500, Number(readStored('scriptStartupTimeoutMs', DEFAULTS.scriptStartupTimeoutMs)) || DEFAULTS.scriptStartupTimeoutMs),
       installConfirmMs: Math.max(1000, Number(readStored('installConfirmMs', DEFAULTS.installConfirmMs)) || DEFAULTS.installConfirmMs),
       restartAfterCacheUpdateMs: Math.max(0, Number(readStored('restartAfterCacheUpdateMs', DEFAULTS.restartAfterCacheUpdateMs)) || DEFAULTS.restartAfterCacheUpdateMs),
@@ -2280,7 +2282,7 @@
     logBootstrap('install source start', { reason, version: manifest.version, sha256: manifest.sha256, sourceBytes: String(source || '').length, currentStatus: shortStatus() });
     window.__graspRatBotRuntimeConfig = {
       ...(manifest.config || {}),
-      statusEvery: Math.max(250, Number(manifest.statusEvery || cfg.statusEvery) || 1000),
+      statusEvery: Number(manifest.statusEvery ?? cfg.statusEvery) === 0 ? 0 : Math.max(1000, Number(manifest.statusEvery || cfg.statusEvery) || DEFAULTS.statusEvery),
       version: String(manifest.version || 'remote'),
       sourceHash: String(manifest.sha256 || ''),
       sourceUrl: String(manifest.scriptUrl || ''),

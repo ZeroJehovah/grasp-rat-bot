@@ -53,10 +53,16 @@ function latestDay(root) {
 
 function listJsonlFiles(dayDir) {
   if (!fs.existsSync(dayDir)) return [];
-  return fs.readdirSync(dayDir, { withFileTypes: true })
-    .filter(item => item.isFile() && item.name.endsWith('.jsonl'))
-    .map(item => path.join(dayDir, item.name))
-    .sort();
+  const files = [];
+  function walk(dir) {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, item.name);
+      if (item.isDirectory()) walk(fullPath);
+      else if (item.isFile() && item.name.endsWith('.jsonl')) files.push(fullPath);
+    }
+  }
+  walk(dayDir);
+  return files.sort();
 }
 
 function readEntries(dayDir) {
@@ -70,7 +76,7 @@ function readEntries(dayDir) {
         const entry = JSON.parse(line);
         entries.push({
           ...entry,
-          __file: path.basename(file),
+          __file: path.relative(dayDir, file),
           __line: index + 1,
           __at: Number(entry.at || entry.receivedAt || 0) || 0
         });
@@ -78,7 +84,7 @@ function readEntries(dayDir) {
         entries.push({
           type: 'parse-error',
           error: err.message || String(err),
-          __file: path.basename(file),
+          __file: path.relative(dayDir, file),
           __line: index + 1,
           __at: 0
         });

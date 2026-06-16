@@ -15,7 +15,7 @@ function parseArgs(args) {
     fileName: 'grasp-rat-remote-bot.js',
     version: process.env.GRASP_RAT_BOT_VERSION || buildVersion(),
     scriptUrl: process.env.GRASP_RAT_SCRIPT_URL || 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/grasp-rat-remote-bot.js',
-    statusEvery: 1000,
+    statusEvery: 30000,
   };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -57,7 +57,7 @@ Options:
   --file-name <name>       Remote bot file name. Default: grasp-rat-remote-bot.js
   --version <value>        Version label. Default: UTC timestamp
   --script-url <url>       Public URL for the generated bot file
-  --status-every <ms>      Browser console status interval. Default: 1000
+  --status-every <ms>      Browser console status interval. Use 0 to disable. Default: 30000
 `);
 }
 
