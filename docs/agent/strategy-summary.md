@@ -26,6 +26,7 @@
 - Control transport:
   - the page/native WebSocket remains the only game WebSocket; the bot does not create or reconnect a second socket;
   - runtime movement now prefers direct `native.ws.send('vel dx dy')` on that existing socket, with 50ms short-hold repeats for sustained movement and repeated zero-velocity stop commands;
+  - nonzero direct movement sends intentionally do not update the page's local `keys` / predicted movement state, so the server-position marker can reflect the lower-latency server command path instead of being hidden by local client prediction; stop/exit cleanup still clears native keys and local velocity state;
   - runtime shooting now prefers direct `native.ws.send('shoot targetX targetY startX startY')` on the same socket, falling back to native page helpers if direct send fails;
   - behavior logic remains based on native/realtime visible state, so combat target selection, aim, firing, spacing, exits, and profit priority do not switch back to snapshot/server-coordinate parsing because of the faster transport.
 - Cloudflare error pages are detected by the remote bot and bootstrap layers and refresh every 5 seconds while the error page remains; full-page BunkerWeb 403 pages refresh every 10 minutes.
