@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.168"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.169"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -144,10 +144,6 @@
     combatAimFallbackPrecisionNoDamageMs: 25000,
     combatAimLiveDivergencePrecisionCm: 1200,
     combatAimLiveDivergencePrecisionRatio: 0.08,
-    combatAimSnapshotOutlierCloseNativeRange: 8000,
-    combatAimSnapshotOutlierCloseSnapshotRatio: 2,
-    combatAimSnapshotOutlierDisadvantageRange: 11000,
-    combatAimSnapshotOutlierNoDamageMs: 1000,
     combatAimRadialPrecisionLateralRatio: 0.35,
     combatAimSteadyNoDamageMs: 6000,
     combatAimSteadySpeedMax: 5,
@@ -8801,11 +8797,23 @@
     const entities = Array.from(globalById.values());
     const offensiveEntities = entities.filter(entityFreshEnoughForOffense);
     const attackableEntities = offensiveEntities.filter(e => !isWhitelistedTarget(e));
+    const realtimeEntities = attackableEntities.filter(e => e.native && !e.minimapOnly);
     const activeThreats = entities
       .filter(e => isCurrentlyActive(e))
       .map(e => decorateActiveThreat(self, e))
       .sort((a, b) => a.distance - b.distance);
     const inactiveTargets = attackableEntities
+      .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
+      .filter(e => e.distance <= cfg.attackRange)
+      .sort((a, b) => {
+        const stickyA = bot.lastTarget && String(bot.lastTarget.kind) === 'enemy' && String(bot.lastTarget.id) === String(a.user_id);
+        const stickyB = bot.lastTarget && String(bot.lastTarget.kind) === 'enemy' && String(bot.lastTarget.id) === String(b.user_id);
+        if (stickyA !== stickyB && now() - bot.lastTargetAt < cfg.targetStickMs) return stickyA ? -1 : 1;
+        if (b.drop !== a.drop) return b.drop - a.drop;
+        return a.distance - b.distance;
+      });
+    const realtimeInactiveTargets = realtimeEntities
       .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
       .filter(e => e.distance <= cfg.attackRange)
@@ -8830,9 +8838,19 @@
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
+    const realtimeCoins = allCoins.filter(c => !isSnapshotOnlyCoin(c));
+    const realtimeNearCoins = coins.filter(c => !isSnapshotOnlyCoin(c));
     const globalTargets = attackableEntities
       .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: true }))
+      .filter(e => e.distance <= cfg.globalAttackMaxDistance)
+      .sort((a, b) => {
+        if (b.drop !== a.drop) return b.drop - a.drop;
+        return a.distance - b.distance;
+      });
+    const realtimeGlobalTargets = realtimeEntities
+      .filter(e => !isCurrentlyActive(e) && dropValue(e) > 0 && !isInvulnerable(e))
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), global: false }))
       .filter(e => e.distance <= cfg.globalAttackMaxDistance)
       .sort((a, b) => {
         if (b.drop !== a.drop) return b.drop - a.drop;
@@ -8862,6 +8880,7 @@
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
+    const realtimeGlobalCoins = globalCoins.filter(c => !isSnapshotOnlyCoin(c));
 	    const patrolCoins = coinDrops
 	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: Boolean(c.snapshot) }))
       .filter(c => c.amount > 0 && c.distance <= cfg.patrolCoinMaxDistance)
@@ -8869,6 +8888,7 @@
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
+    const realtimePatrolCoins = patrolCoins.filter(c => !isSnapshotOnlyCoin(c));
 	    const scanCoins = coinDrops
 	      .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0), global: Boolean(c.snapshot) }))
       .filter(c => c.amount > 0 && c.distance <= cfg.scanCoinMaxDistance)
@@ -8876,6 +8896,7 @@
         if (a.distance !== b.distance) return a.distance - b.distance;
         return b.amount - a.amount;
       });
+    const realtimeScanCoins = scanCoins.filter(c => !isSnapshotOnlyCoin(c));
 	    const nearbyHumans = entities
 	      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
 	      .sort((a, b) => a.distance - b.distance);
@@ -8883,7 +8904,7 @@
     const combatTargets = attackableEntities
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
       .filter(e => !isInvulnerable(e))
-      .filter(e => !nativeMeta.available || e.native)
+      .filter(e => e.native)
       .filter(e => e.distance <= combatCandidateRange)
       .sort((a, b) => {
         const stickyA = bot.lastTarget?.kind === 'enemy' && String(bot.lastTarget.id) === String(a.user_id);
@@ -8893,7 +8914,30 @@
         return a.distance - b.distance;
       });
 	    const snapshotCoins = allCoins.filter(c => isSnapshotOnlyCoin(c) && c.distance <= cfg.snapshotCoinMaxDistance);
-	    return { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets };
+	    return {
+      entities,
+      realtimeEntities,
+      activeThreats,
+      inactiveTargets,
+      realtimeInactiveTargets,
+      coins,
+      realtimeNearCoins,
+      allCoins,
+      realtimeCoins,
+      snapshotCoins,
+      globalTargets,
+      realtimeGlobalTargets,
+      minimapDropTargets,
+      globalCoins,
+      realtimeGlobalCoins,
+      patrolCoins,
+      realtimePatrolCoins,
+      scanCoins,
+      realtimeScanCoins,
+      nearbyHumans,
+      combatTargets,
+      bullets
+    };
 	  }
 
   function summarizeOfflineThreat(entity) {
@@ -9294,6 +9338,7 @@
   function pickOpportunisticShotTarget(self, entities) {
     const candidates = (entities || [])
       .filter(e => Number(e.user_id) !== Number(self.user_id))
+      .filter(e => e.native)
       .filter(entityFreshEnoughForOffense)
       .filter(isAlive)
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
@@ -10199,7 +10244,6 @@
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
     const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
     const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
-    const authorityOutOfRange = Boolean(options.authorityOutOfRange || trend.authorityOutOfRange);
     let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
@@ -10225,7 +10269,6 @@
       closePressureFireWindow,
       steadyAimFireWindow,
       noDamageDuelFireWindow,
-      authorityOutOfRange,
       noDamageMs,
       trend: {
         stance: trend.stance || 'normal',
@@ -10241,9 +10284,6 @@
       suppressed: false,
       throttled: false
     };
-    if (authorityOutOfRange) {
-      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'authority-target-out-of-range', suppressed: true };
-    }
     if (stamina5s !== null && stamina5s < hardReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
     }
@@ -10367,111 +10407,9 @@
       originalAimTarget: target
     };
   }
-  function combatSnapshotAimTarget(self, target) {
-    const targetId = combatTargetId(target);
-    const targetName = String(target?.name || '').trim();
-    if (typeof snapshotDataFreshEnough === 'function' && !snapshotDataFreshEnough()) return null;
-    let snapshot = null;
-    try {
-      const snapshotEntities = Array.isArray(bot.testSnapshotEntities)
-        ? bot.testSnapshotEntities
-        : (Array.isArray(bot.globalState?.entities) ? bot.globalState.entities : []);
-      if (Array.isArray(snapshotEntities) && snapshotEntities.length) {
-        snapshot = snapshotEntities.find(entity => {
-          const id = combatTargetId(entity);
-          return targetId && id && String(id) === targetId;
-        }) || null;
-        if (!snapshot && targetName) snapshot = snapshotEntities.find(entity => String(entity?.name || '').trim() === targetName) || null;
-      }
-    } catch (_) {
-      snapshot = null;
-    }
-    if (!snapshot || !isAlive(snapshot) || isInvulnerable(snapshot)) return null;
-    const x = Number(snapshot.x);
-    const y = Number(snapshot.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    return {
-      ...target,
-      ...snapshot,
-      user_id: snapshot.user_id ?? snapshot.id ?? target.user_id ?? target.id,
-      id: snapshot.user_id ?? snapshot.id ?? target.id ?? target.user_id,
-      hp: combatHpValue(snapshot),
-      knownHp: knownHpValue(snapshot),
-      drop: dropValue(snapshot) || target.drop,
-      distance: dist(self, snapshot),
-      speed: speed(snapshot),
-      combatIntent: target.combatIntent || snapshot.combatIntent || '',
-      snapshotAimResolved: true,
-      originalAimTarget: target
-    };
-  }
-
-  function combatAimAuthorityState(self, target, nativeSource, snapshotSource, noDamageMs = 0, options = {}) {
-    const pressureBullet = Boolean(options.realBulletPressure || options.incomingRealBullet || options.pressure);
-    const empty = { active: false, useSnapshot: false, suppressFire: false, divergenceCm: null, thresholdCm: null, snapshotDistance: null, nativeDistance: null, serverStall: false, realBulletPressure: pressureBullet, rejectedSnapshotOutlier: false, snapshotOutlierReason: '' };
-    if (!snapshotSource) return empty;
-    const reference = nativeSource || target || {};
-    const sx = Number(snapshotSource.x);
-    const sy = Number(snapshotSource.y);
-    const rx = Number(reference.x);
-    const ry = Number(reference.y);
-    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(rx) || !Number.isFinite(ry)) return empty;
-    const snapshotDistance = dist(self, snapshotSource);
-    const nativeDistance = dist(self, reference);
-    const baseThreshold = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionCm || 0));
-    const ratio = Math.max(0, Number(cfg.combatAimLiveDivergencePrecisionRatio || 0));
-    const threshold = Math.max(baseThreshold, Math.round(Math.max(0, Math.min(snapshotDistance, nativeDistance)) * ratio));
-    const divergence = Math.hypot(sx - rx, sy - ry);
-    const serverStall = combatAimServerStallState();
-    const minNoDamageMs = Math.max(0, Number(cfg.combatAimNoDamageMs || 0));
-    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
-    const authoritativeOutOfRange = Boolean(attackRange && snapshotDistance > attackRange);
-    const pressure = Boolean(serverStall.stalled || pressureBullet || (minNoDamageMs && Number(noDamageMs || 0) >= minNoDamageMs));
-    const closeNativeRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierCloseNativeRange || 0));
-    const closeSnapshotRatio = Math.max(1, Number(cfg.combatAimSnapshotOutlierCloseSnapshotRatio || 1));
-    const disadvantageRange = Math.max(0, Number(cfg.combatAimSnapshotOutlierDisadvantageRange || 0));
-    const outlierNoDamageMs = Math.max(0, Number(cfg.combatAimSnapshotOutlierNoDamageMs || 0));
-    const selfHp = hpValue(self);
-    const targetHp = combatHpValue(target);
-    const snapshotHp = combatHpValue(snapshotSource);
-    const targetMaxHp = Number(target?.max_hp ?? target?.maxHp ?? 100);
-    const closeNativeSnapshotOutlier = Boolean(authoritativeOutOfRange
-      && pressureBullet
-      && closeNativeRange
-      && nativeDistance <= closeNativeRange
-      && snapshotDistance >= attackRange * closeSnapshotRatio);
-    const staleSnapshotHpOutlier = Boolean(pressureBullet
-      && disadvantageRange
-      && nativeDistance <= disadvantageRange
-      && Number(noDamageMs || 0) >= outlierNoDamageMs
-      && Number.isFinite(selfHp)
-      && Number.isFinite(targetHp)
-      && Number.isFinite(snapshotHp)
-      && targetHp > selfHp
-      && targetHp < snapshotHp
-      && (!Number.isFinite(targetMaxHp) || targetHp < targetMaxHp));
-    const rejectedSnapshotOutlier = closeNativeSnapshotOutlier || staleSnapshotHpOutlier;
-    const active = Boolean(threshold > 0 && divergence >= threshold && (pressure || authoritativeOutOfRange) && !rejectedSnapshotOutlier);
-    return {
-      active,
-      useSnapshot: Boolean(active && (!attackRange || snapshotDistance <= attackRange)),
-      suppressFire: Boolean(active && attackRange && snapshotDistance > attackRange),
-      divergenceCm: Math.round(divergence),
-      thresholdCm: Math.round(threshold),
-      snapshotDistance: Math.round(snapshotDistance),
-      nativeDistance: Math.round(nativeDistance),
-      serverStall: Boolean(serverStall.stalled),
-      realBulletPressure: pressureBullet,
-      rejectedSnapshotOutlier,
-      snapshotOutlierReason: closeNativeSnapshotOutlier
-        ? 'close-native-real-bullet'
-        : (staleSnapshotHpOutlier ? 'stale-snapshot-hp' : '')
-    };
-  }
-
   function combatAimSourceDivergenceState(aimSource, distance) {
     const original = aimSource?.originalAimTarget;
-    const live = Boolean(aimSource?.nativeAimResolved || aimSource?.snapshotAimResolved);
+    const live = Boolean(aimSource?.nativeAimResolved);
     const ax = Number(aimSource?.x);
     const ay = Number(aimSource?.y);
     const ox = Number(original?.x);
@@ -10503,7 +10441,7 @@
     return stall && typeof stall === 'object' ? stall : {};
   }
 
-  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, authorityState = null) {
+  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim) {
     const fallbackPrecision = combatAimFallbackPrecisionState(damage?.noDamageMs);
     const sourceDivergence = combatAimSourceDivergenceState(aimSource, distance);
     const serverStall = combatAimServerStallState();
@@ -10521,12 +10459,7 @@
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
-    if (authorityState?.useSnapshot || authorityState?.suppressFire) {
-      mode = 'snapshot-precision';
-      strategy = 'snapshot-authority';
-      reason = authorityState.serverStall ? 'server-stall-snapshot' : 'snapshot-divergence';
-      precision = true;
-    } else if (sourceDivergence.active) {
+    if (sourceDivergence.active) {
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
@@ -10563,7 +10496,6 @@
       serverStall: Boolean(serverStall.stalled),
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
-      snapshotAuthority: authorityState || null,
       movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
     };
   }
@@ -10571,20 +10503,18 @@
   function combatAimTarget(self, target, options = {}) {
     const nativeAimSource = combatLiveAimTarget(self, target);
     const preliminaryDamage = combatAimDamageState(nativeAimSource);
-    const snapshotAimSource = combatSnapshotAimTarget(self, target);
-    const authorityState = combatAimAuthorityState(self, target, nativeAimSource, snapshotAimSource, preliminaryDamage.noDamageMs, options);
-    const aimSource = (authorityState.useSnapshot || authorityState.suppressFire) ? snapshotAimSource : nativeAimSource;
+    const aimSource = nativeAimSource;
     const motionScale = combatAimMotionScale(aimSource);
     const moving = speed(aimSource) >= cfg.combatStationarySpeed
       || motionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const targetDistance = Number(aimSource.distance);
     const distance = Number.isFinite(targetDistance) ? targetDistance : dist(self, aimSource);
-    const damage = authorityState.useSnapshot ? combatAimDamageState(aimSource) : preliminaryDamage;
+    const damage = preliminaryDamage;
     const steadyAim = combatAimSteadyNoDamageState(aimSource, damage.noDamageMs, motionScale);
     const movement = moving
       ? combatMovementAimMode(self, aimSource, distance)
       : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
-    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, authorityState);
+    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim);
     const exact = {
       x: Number(aimSource.x),
       y: Number(aimSource.y),
@@ -10599,9 +10529,8 @@
       precisionAim: Boolean(aimStrategy.precision),
       steadyAim: Boolean(aimStrategy.steady),
       lockedAim: false,
-      liveAim: Boolean(aimSource.nativeAimResolved || aimSource.snapshotAimResolved),
-      snapshotAim: Boolean(aimSource.snapshotAimResolved),
-      liveDistance: (aimSource.nativeAimResolved || aimSource.snapshotAimResolved) ? Math.round(distance) : null,
+      liveAim: Boolean(aimSource.nativeAimResolved),
+      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
       aimStrategy: aimStrategy.strategy,
       aimStrategyReason: aimStrategy.reason,
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
@@ -10609,8 +10538,6 @@
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
       fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
-      authorityTargetOutOfRange: Boolean(authorityState.suppressFire),
-      authority: authorityState
     };
     if (aimStrategy.bypassJitter) return exact;
     const dx = Number(aimSource.x) - Number(self.x);
@@ -10675,9 +10602,8 @@
       precisionAim: false,
       steadyAim: false,
       lockedAim: Boolean(locked),
-      liveAim: Boolean(aimSource.nativeAimResolved || aimSource.snapshotAimResolved),
-      snapshotAim: Boolean(aimSource.snapshotAimResolved),
-      liveDistance: (aimSource.nativeAimResolved || aimSource.snapshotAimResolved) ? Math.round(distance) : null,
+      liveAim: Boolean(aimSource.nativeAimResolved),
+      liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
       aimStrategy: aimStrategy.strategy,
       aimStrategyReason: aimStrategy.reason,
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
@@ -10685,8 +10611,6 @@
       serverStallAim: Boolean(aimStrategy.serverStall),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
       fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
-      authorityTargetOutOfRange: Boolean(authorityState.suppressFire),
-      authority: authorityState
     };
   }
 
@@ -10722,7 +10646,6 @@
       targetDistance: distance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
-      authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       targetMoving: speed(target) >= cfg.combatStationarySpeed,
@@ -10757,15 +10680,12 @@
         steady: Boolean(aim.steadyAim),
         locked: Boolean(aim.lockedAim),
         live: Boolean(aim.liveAim),
-        snapshot: Boolean(aim.snapshotAim),
         liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
         sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
-        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
-        authorityTargetOutOfRange: Boolean(aim.authorityTargetOutOfRange),
-        authority: aim.authority || null
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -10957,7 +10877,6 @@
       targetDistance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
-      authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       targetMoving,
@@ -10972,7 +10891,6 @@
       targetDistance: targetDistance,
       targetHp,
       steadyAim: Boolean(aim.steadyAim),
-      authorityOutOfRange: Boolean(aim.authorityTargetOutOfRange),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       targetMoving,
@@ -11022,15 +10940,12 @@
         steady: Boolean(aim.steadyAim),
         locked: Boolean(aim.lockedAim),
         live: Boolean(aim.liveAim),
-        snapshot: Boolean(aim.snapshotAim),
         liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
         sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
-        fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
-        authorityTargetOutOfRange: Boolean(aim.authorityTargetOutOfRange),
-        authority: aim.authority || null
+        fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
       },
       incomingBullet: pressure ? {
         id: pressure.id,
@@ -11057,15 +10972,12 @@
           steady: Boolean(aim.steadyAim),
           locked: Boolean(aim.lockedAim),
           live: Boolean(aim.liveAim),
-          snapshot: Boolean(aim.snapshotAim),
           liveDistance: Number.isFinite(Number(aim.liveDistance)) ? Math.round(Number(aim.liveDistance)) : null,
           sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
           sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
           serverStall: Boolean(aim.serverStallAim),
           radialPrecision: Boolean(aim.radialPrecisionAim),
-          fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
-          authorityTargetOutOfRange: Boolean(aim.authorityTargetOutOfRange),
-          authority: aim.authority || null
+          fallbackPrecision: Boolean(aim.fallbackPrecisionAim)
         },
         strafe: dodging ? {
           dx: combatMove.dx,
@@ -11706,7 +11618,7 @@
 		    return applyOpportunityOscillationLock(sorted, current, chosen);
 		  }
 
-  function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups) {
+  function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
     const opportunities = [];
     const coinById = new Map();
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
@@ -11770,8 +11682,10 @@
 	      });
 	    }
 
-	    const missingHeld = buildMissingHeldOpportunity(self, activeThreats, opportunities);
-	    if (missingHeld) opportunities.push(missingHeld);
+	    if (!options.disableMissingHold) {
+	      const missingHeld = buildMissingHeldOpportunity(self, activeThreats, opportunities);
+	      if (missingHeld) opportunities.push(missingHeld);
+	    }
 			    const best = chooseStableOpportunity(opportunities);
 		    if (!best) return null;
 		    const action = best.action();
@@ -12214,7 +12128,30 @@
   }
 
   function chooseAction(self) {
-    const { entities, activeThreats, inactiveTargets, coins, allCoins, snapshotCoins, globalTargets, minimapDropTargets, globalCoins, patrolCoins, scanCoins, nearbyHumans, combatTargets, bullets } = classify(self);
+    const {
+      entities,
+      realtimeEntities,
+      activeThreats,
+      inactiveTargets,
+      realtimeInactiveTargets,
+      coins,
+      realtimeNearCoins,
+      allCoins,
+      realtimeCoins,
+      snapshotCoins,
+      globalTargets,
+      realtimeGlobalTargets,
+      minimapDropTargets,
+      globalCoins,
+      realtimeGlobalCoins,
+      patrolCoins,
+      realtimePatrolCoins,
+      scanCoins,
+      realtimeScanCoins,
+      nearbyHumans,
+      combatTargets,
+      bullets
+    } = classify(self);
     bot.lastActionEntities = entities;
     const fullHp = isFullHp(self);
     const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
@@ -12329,9 +12266,9 @@
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
       : cfg.nearCoinPriorityDistance;
-    const nearCoin = pickCoin(self, coins, coinThreats, nearCoinLimit);
-    const footCoin = pickCoin(self, coins, coinThreats, cfg.footCoinPriorityDistance);
-    const postAttackCoin = pickPostAttackDropCoin(self, allCoins, coinThreats, entities, {
+    const nearCoin = pickCoin(self, realtimeNearCoins, coinThreats, nearCoinLimit);
+    const footCoin = pickCoin(self, realtimeNearCoins, coinThreats, cfg.footCoinPriorityDistance);
+    const postAttackCoin = pickPostAttackDropCoin(self, realtimeCoins, coinThreats, entities, {
       includeSingle: !recovery,
       maxDistance: recovery ? cfg.postAttackRecoveryDropMaxDistance : cfg.postAttackDropCoinMaxDistance,
       minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0
@@ -12347,7 +12284,7 @@
       action.postAttackTarget = postAttackCoin.postAttackTarget;
       return action;
     }
-    const postAttackWaitTarget = pickPostAttackDropWaitTarget(self, allCoins, coinThreats, entities);
+    const postAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
     if (postAttackWaitTarget) {
       bot.fleeLock = null;
       clearOpportunityChoiceFor('enemy', postAttackWaitTarget.id);
@@ -12355,7 +12292,7 @@
     }
 	    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
 	      self,
-	      safeCoinCandidates(allCoins, coinThreats, cfg.snapshotCoinMaxDistance, self)
+	      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self)
 	    );
 	    if (staminaBudgetExit) {
 	      bot.fleeLock = null;
@@ -12442,20 +12379,18 @@
         dx: dir.dx,
         dy: dir.dy,
         ...coinMotionMeta(dir)
-      }, self, entities, { recovery });
+      }, self, realtimeEntities, { recovery });
     }
 
-    const localRealtimeCoin = pickRealtimeLocalCoin(self, allCoins, coinThreats);
-    const snapshotCompetitionCoin = localRealtimeCoin ? null : pickSnapshotCoinDestination(self, snapshotCoins, coinThreats);
+    const localRealtimeCoin = pickRealtimeLocalCoin(self, realtimeCoins, coinThreats);
     const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
-      ? pickCoinField(self, allCoins, coinThreats)
+      ? pickCoinField(self, realtimeCoins, coinThreats)
       : null;
     const opportunityCoinGroups = [
-      { coins, maxDistance: cfg.coinMaxDistance },
-      { coins: globalCoins, maxDistance: cfg.globalCoinMaxDistance },
-      { coins: patrolCoins, maxDistance: cfg.patrolCoinMaxDistance },
-      ...(fieldCompetitionCoin ? [{ coins: [fieldCompetitionCoin], maxDistance: cfg.fieldMigrationMaxDistance }] : []),
-      ...(snapshotCompetitionCoin ? [{ coins: [snapshotCompetitionCoin], maxDistance: cfg.snapshotCoinMaxDistance }] : [])
+      { coins: realtimeNearCoins, maxDistance: cfg.coinMaxDistance },
+      { coins: realtimeGlobalCoins, maxDistance: cfg.globalCoinMaxDistance },
+      { coins: realtimePatrolCoins, maxDistance: cfg.patrolCoinMaxDistance },
+      ...(fieldCompetitionCoin ? [{ coins: [fieldCompetitionCoin], maxDistance: cfg.fieldMigrationMaxDistance }] : [])
     ];
     const profitableCombatTarget = pickProfitableCombatTarget(self, combatTargets, bullets, opportunityCoinGroups, coinThreats);
     if (profitableCombatTarget) {
@@ -12466,10 +12401,10 @@
 
     const opportunityEnemyGroups = fullHp
       ? [
-        inactiveTargets.filter(isAfkProfitTarget),
-        globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target))
+        realtimeInactiveTargets.filter(isAfkProfitTarget),
+        realtimeGlobalTargets.filter(isAfkProfitTarget)
       ]
-      : [inactiveTargets, globalTargets, minimapDropTargets];
+      : [realtimeInactiveTargets, realtimeGlobalTargets];
     const opportunity = pickBestOpportunity(
       self,
       coinThreats,
@@ -12478,10 +12413,10 @@
     );
     if (opportunity) {
       bot.fleeLock = null;
-      return attachOpportunisticShot(opportunity, self, entities, { recovery });
+      return attachOpportunisticShot(opportunity, self, realtimeEntities, { recovery });
     }
 
-    const distantCoin = pickDistantCoin(self, allCoins, coinThreats);
+    const distantCoin = pickDistantCoin(self, realtimeCoins, coinThreats);
     if (distantCoin) {
       bot.fleeLock = null;
       const dir = coinDirectionTo(self, distantCoin);
@@ -12492,7 +12427,7 @@
         dx: dir.dx,
         dy: dir.dy,
         ...coinMotionMeta(dir)
-      }, self, entities, { recovery });
+      }, self, realtimeEntities, { recovery });
     }
 
     if (localRealtimeCoin) {
@@ -12503,7 +12438,7 @@
         snapshotCoinNavigationReason(localRealtimeCoin),
         localRealtimeCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
       );
-      return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, action), self, entities, { recovery });
+      return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, action), self, realtimeEntities, { recovery });
     }
 
     if (hasReturnBlockThreat(avoidanceThreats)) {
@@ -12511,32 +12446,38 @@
       return buildReturnBlockScanAction(self, avoidanceThreats, nearbyHumans);
     }
 
-    const snapshotCoin = snapshotCompetitionCoin;
-    if (snapshotCoin) {
-      bot.fleeLock = null;
-      const action = buildCoinAction(
-        self,
-        snapshotCoin,
-        snapshotCoinNavigationReason(snapshotCoin),
-        'seek-coin'
-      );
-      action.target.fieldMembers = snapshotCoin.snapshotMembers;
-      action.target.fieldAmount = snapshotCoin.snapshotAmount;
-      action.target.snapshotAgeMs = Number.isFinite(snapshotCoin.snapshotAgeMs) ? Math.round(snapshotCoin.snapshotAgeMs) : null;
-      action.score = Math.round(snapshotCoin.snapshotScore ?? action.score ?? 0);
-      return attachOpportunisticShot(action, self, entities, { recovery });
-    }
-
 	    bot.fleeLock = null;
-	    const shotWait = buildOpportunisticShotWait(self, entities, { recovery });
+	    const shotWait = buildOpportunisticShotWait(self, realtimeEntities, { recovery });
 	    if (shotWait) return shotWait;
+
+    const snapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { ignoreRealtimeLocalCoin: true });
+    const snapshotEnemyGroups = fullHp
+      ? [
+        globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target) && !target.native),
+        minimapDropTargets
+      ]
+      : [
+        globalTargets.filter(target => !target.native),
+        minimapDropTargets
+      ];
+    const snapshotOpportunity = pickBestOpportunity(
+      self,
+      coinThreats,
+      snapshotCoin ? [{ coins: [snapshotCoin], maxDistance: cfg.snapshotCoinMaxDistance }] : [],
+      snapshotEnemyGroups,
+      { disableMissingHold: true }
+    );
+    if (snapshotOpportunity) {
+      bot.fleeLock = null;
+      return snapshotOpportunity;
+    }
 		    const snapshotWaitNow = Date.now();
 		    if (!isSnapshotCoinWaitAction(bot.lastDecision) || !bot.snapshotCoinWaitSince) bot.snapshotCoinWaitSince = snapshotWaitNow;
 		    const snapshotWaitAgeMs = Math.max(0, snapshotWaitNow - Number(bot.snapshotCoinWaitSince || snapshotWaitNow));
 		    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
 	    const snapshotWaitMaxMs = Math.max(0, Number(cfg.snapshotCoinIdleMaxMs || 0));
 	    const snapshotWaitRemainingMs = Math.max(0, snapshotWaitMaxMs - snapshotWaitAgeMs);
-		    if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
+		    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
 		      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
 		      if (idleSnapshotCoin) {
 	        const action = buildCoinAction(
@@ -12552,15 +12493,15 @@
 	        action.snapshotWaitAgeMs = Math.round(snapshotWaitAgeMs);
 	        action.snapshotIdleFallback = true;
 	        action.score = Math.round(idleSnapshotCoin.snapshotScore ?? action.score ?? 0);
-	        return attachOpportunisticShot(action, self, entities, { recovery });
+	        return attachOpportunisticShot(action, self, realtimeEntities, { recovery });
 	      }
 	    }
 	    const blockedTargets = [
-	      ...globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target)),
+	      ...globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target) && !target.native),
 	      ...minimapDropTargets,
-	      ...inactiveTargets
+	      ...realtimeInactiveTargets
 	    ];
-	    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, allCoins, blockedTargets);
+	    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, realtimeCoins, blockedTargets);
 	    const waitReason = staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-snapshot-coin';
 	    const sourceSummary = bot.lastCoinSourceSummary || {};
 	    const waitDisplay = staminaBlocked

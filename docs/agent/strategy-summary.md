@@ -39,9 +39,9 @@
 - Coin routing:
   - nearby and foot coins are prioritized before broader opportunities;
   - post-attack dropped coins are prioritized when appropriate;
-  - far snapshot clusters can still be pursued, but only outside the local/view authority radius;
-  - safe affordable realtime/native coins inside the 500m local authority radius block far snapshot competition and snapshot idle fallback, and are used as visible-coin fallback targets when no higher-priority action wins;
-  - known coin-field migration is scored in the same opportunity pool as snapshot coin routing, so it shares ROI comparison and switch hysteresis instead of competing as a separate fallback branch.
+  - realtime/native visible coins always win before any snapshot fallback;
+  - visible/native AFK Drop targets also win before snapshot fallback, so ordinary profit flow uses visible收益 first and only touches snapshot targets when no visible/realtime profit exists;
+  - known coin-field migration is scored in the same opportunity pool as visible coin routing, so it shares ROI comparison and switch hysteresis instead of competing as a separate fallback branch.
   - far low-value single snapshot coins are gated by distance/value during normal selection, but after 60s of continuous snapshot-coin waiting the bot chases a safe, fresh far snapshot coin instead of idling, even when ordinary long-window stamina ROI budget would otherwise keep it waiting.
   - visible/native coin opportunities use visible coin reasons, not snapshot navigation reasons.
   - when no action is chosen because only non-coin targets exceed the 1h/1d stamina budget, the wait reason remains `wait-for-stamina-budget`; coin-budget waits are no longer allowed to reach the 60s snapshot fallback when the nearest safe coin is unaffordable by 1h stamina.
@@ -69,9 +69,7 @@
   - combat leave decisions now keep a combat cover action while the page has not yet confirmed exit: the bot continues dodge/spacing movement and planned shooting when self is still visible/alive instead of stopping in place under incoming fire.
   - moving-target aim spread includes measured evasion physics;
   - combat aim is behavior-driven: it can switch to live/native precision when selected-target and native coordinates diverge, when server-position stall makes live movement more useful, or when target movement is mostly radial;
-  - under server-position stall, long no-damage pressure, or real incoming bullet pressure from the current target, fresh snapshot/server target coordinates can become authoritative when they diverge from native/live coordinates by the configured precision threshold. This `snapshot-authority` path handles dynamic opponent attempts to exploit coordinate-authority differences instead of tailoring to a named opponent;
-  - if a fresh divergent snapshot/server target is already outside attack range, combat suppresses fire with `authority-target-out-of-range` immediately, even before server-stall/no-damage pressure is established, rather than spending stamina at the stale native/live coordinate;
-  - snapshot-authority is rejected when its HP evidence is stale against the selected native/decision target while the bot is losing a real-bullet duel, so an old snapshot coordinate cannot keep aiming away from the target that has already taken damage;
+  - combat aim and fire use live/native targets only; snapshot data is not consulted for combat target, aim, or fire decisions.
   - combat aim jitter and long no-damage aim widening are capped at `0.14rad`, because old delayed-hit attribution still showed `0.08-0.14rad` as the best stable aim bucket and higher buckets weakening sharply;
   - combat shooting is stamina-aware: ordinary combat no longer force-bypasses `shootEveryMs`, normal combat cadence is 160ms, reserve-band fire is 360ms, and fire pauses below hard reserve or when 5s stamina should be saved for dodge.
   - short-term target motion now scales aim jitter/lead down when a target is not meaningfully evading;
@@ -82,7 +80,7 @@
   - matching combat log sessions still include about 10s pre-combat, every combat tick, and about 10s post-combat.
   - safety movement such as `avoid-invulnerable-target` does not immediately close an important combat summary; old `recovery-avoid-humans` summaries are filtered from daily active-combat statistics.
   - important combat summaries treat post-combat recovery waits as an observation period, not a combat result; if the target does not return before the post buffer expires, the daily report folds that target loss into `敌方逃离`.
-- combat log frames and session start/end events include final decision/exit reason, a top-level `exit` summary with relogin hold, pending suppress, minimum suppress, and HP-delay fields, login/suppress/hold context, self/target HP, current combat target mode/life/active/firing/invulnerable evidence, aim strategy fields including snapshot-authority/out-of-range/real-bullet-pressure evidence, injury/pursuit context, capped nearby entities, capped bullets, control state, snapshot ages, and `combatMetrics` frame deltas for HP, distance, movement, shot cadence/result, target damage timing, bullet threat counts, nearest incoming bullet timing, and server-position stall state.
+- combat log frames and session start/end events include final decision/exit reason, a top-level `exit` summary with relogin hold, pending suppress, minimum suppress, and HP-delay fields, login/suppress/hold context, self/target HP, current combat target mode/life/active/firing/invulnerable evidence, aim strategy fields for live/native precision, injury/pursuit context, capped nearby entities, capped bullets, control state, snapshot ages, and `combatMetrics` frame deltas for HP, distance, movement, shot cadence/result, target damage timing, bullet threat counts, nearest incoming bullet timing, and server-position stall state.
 - Targeting:
   - whitelisted target names/ids must not be attacked;
   - invulnerable targets are not valid opportunity/combat targets;

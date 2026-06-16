@@ -24,6 +24,8 @@
 - Ordinary global refresh still fetches `/snapshot` and `/minimap` every `globalRefreshMs = 5000`.
 - The old movement-time server-position forced refresh probe has been removed. Movement no longer triggers extra `/snapshot` or `/minimap` requests.
 - Local/native page data is authoritative near the bot. Snapshot data is for outside-local awareness only.
+- Combat target, aim, and fire decisions use native/realtime visible entities and bullets only. Realtime visual range is larger than attack range, so combat does not need snapshot data.
+- Ordinary profit routing first considers native/realtime visible coins and visible AFK targets. Snapshot coins or snapshot/minimap Drop targets are only fallback inputs after no visible/realtime profit is available.
 - For coins specifically: inside the local/view authority radius, do not use `/snapshot` coin drops. Real visible/local coins must come from native page coin state.
 - Native coin discovery includes the page render helper `getRenderCoinDrops()` plus native state coin/list fields; it accepts arrays, Map/Set values, object maps, single coin objects, and render/state getter functions. This is the authoritative source for visible viewport coins.
 - Snapshot coins are accepted only outside `max(nativeCoinAuthoritativeRadius, nativeState.viewRadiusCm/view_radius_cm/viewRadius/view_radius)`; `nativeCoinAuthoritativeRadius` is 50000cm.
