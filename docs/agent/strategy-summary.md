@@ -70,6 +70,8 @@
   - incoming bullet pressure takes precedence over spacing and can reselect a retreat-ignored shooter for defense, but it does not bypass the retreating-target disengage/fire-suppression rules;
   - tangent dodge uses signed bullet lane when available;
   - precise incoming signed-lane direction can override a stale opposite strafe lock; old logs showed conflicting locked strafe signs had worse self-damage/target-damage balance than aligned signs.
+  - real incoming bullets are evaluated as a multi-bullet threat field over the 8 legal movement directions; the selected dodge remains integer `dx/dy` in `-1/0/1`, matching CDP validation that native `vel` does not accept continuous float movement vectors.
+  - combat logs expose `incomingBullet.threatCount` and `combatState.strafe.threatField` so live reviews can compare the selected dodge direction, direct-hit count, CPA distance, and time-to-impact.
   - if an already engaged target exists but another in-range player is the owner of a real incoming bullet threat, the bot temporarily prioritizes that shooter; synthetic `firing` pressure alone does not steal target focus.
   - combat leave decisions now keep a combat cover action while the page has not yet confirmed exit: the bot continues dodge/spacing movement and planned shooting when self is still visible/alive instead of stopping in place under incoming fire.
   - moving-target aim spread includes measured evasion physics;

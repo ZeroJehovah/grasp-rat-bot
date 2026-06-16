@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.172"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":1000,"version":"bootstrap-0.4.173"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -9532,9 +9532,18 @@
     };
   }
 
-  function incomingBulletThreat(self, target = null, bullets = getBullets()) {
+  function combatMoveVelocityForDirection(dx, dy) {
+    const x = clamp(Math.round(Number(dx) || 0), -1, 1);
+    const y = clamp(Math.round(Number(dy) || 0), -1, 1);
+    if (!(x || y)) return { vx: 0, vy: 0 };
+    const speedPerTick = Math.max(1, Number(cfg.combatTargetDodgeSpeedPerTick || 50));
+    const axisSpeed = x && y ? Math.round(speedPerTick / Math.SQRT2) : speedPerTick;
+    return { vx: x * axisSpeed, vy: y * axisSpeed };
+  }
+
+  function combatBulletThreats(self, target = null, bullets = getBullets()) {
     const selfId = Number(self?.user_id);
-    let best = null;
+    const items = [];
     for (const raw of bullets || []) {
       const bullet = normalizeBullet(raw, raw?.native ? 'native' : 'snapshot');
       if (!bullet) continue;
@@ -9554,10 +9563,12 @@
       const laneDistance = Math.abs(signedLaneDistance);
       if (laneDistance > cfg.combatBulletLaneRadius) continue;
       const timeToImpactMs = projection / speedValue * 50;
+      const impactTicks = projection / speedValue;
+      const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
       const score = (cfg.combatBulletLaneRadius - laneDistance) * 1000
         + (cfg.combatBulletLookaheadDistance - projection)
         + Math.max(0, 1500 - timeToImpactMs);
-      const item = {
+      items.push({
         id: bullet.id,
         ownerId: bullet.ownerId,
         x: bullet.x,
@@ -9568,11 +9579,105 @@
         projection,
         laneDistance,
         signedLaneDistance,
+        impactTicks,
         timeToImpactMs,
+        hitRadius,
+        directHit: laneDistance <= hitRadius,
         score
-      };
-      if (!best || item.score > best.score) best = item;
+      });
     }
+    return items.sort((a, b) => b.score - a.score || a.timeToImpactMs - b.timeToImpactMs);
+  }
+
+  function incomingBulletThreat(self, target = null, bullets = getBullets()) {
+    const threats = combatBulletThreats(self, target, bullets);
+    const best = threats[0] || null;
+    if (!best) return null;
+    return {
+      ...best,
+      threatCount: threats.length,
+      threats: threats.slice(0, 6)
+    };
+  }
+
+  function combatThreatFieldCandidate(self, threats, dx, dy) {
+    const move = combatMoveVelocityForDirection(dx, dy);
+    let safetyScore = 0;
+    let minCpaDistance = Infinity;
+    let minTimeToImpactMs = Infinity;
+    let directHitCount = 0;
+    for (const threat of threats || []) {
+      const rx = Number(threat.x) - Number(self.x);
+      const ry = Number(threat.y) - Number(self.y);
+      const rvx = (Number(threat.vx) || 0) - move.vx;
+      const rvy = (Number(threat.vy) || 0) - move.vy;
+      const relSpeedSq = rvx * rvx + rvy * rvy;
+      const rawImpactTicks = Number(threat.impactTicks);
+      const horizonTicks = Math.max(0, Math.min(
+        Number.isFinite(rawImpactTicks) ? rawImpactTicks + 1 : 30,
+        Number(cfg.combatBulletLookaheadDistance || 42000) / Math.max(1, Number(cfg.combatBulletSpeedPerTick || 500))
+      ));
+      const cpaTicks = relSpeedSq > 0.000001
+        ? clamp(-(rx * rvx + ry * rvy) / relSpeedSq, 0, horizonTicks)
+        : 0;
+      const cpaX = rx + rvx * cpaTicks;
+      const cpaY = ry + rvy * cpaTicks;
+      const cpaDistance = Math.hypot(cpaX, cpaY);
+      const hitRadius = Math.max(0, Number(threat.hitRadius ?? cfg.combatBulletHitRadiusCm ?? 90));
+      const timeToImpactMs = Number(threat.timeToImpactMs);
+      const urgency = Number.isFinite(timeToImpactMs) ? Math.max(0.35, 1.8 - Math.min(1500, timeToImpactMs) / 1500) : 1;
+      minCpaDistance = Math.min(minCpaDistance, cpaDistance);
+      if (Number.isFinite(timeToImpactMs)) minTimeToImpactMs = Math.min(minTimeToImpactMs, timeToImpactMs);
+      if (cpaDistance <= hitRadius) directHitCount += 1;
+      safetyScore += Math.min(5000, cpaDistance) * urgency;
+      if (cpaDistance <= hitRadius) safetyScore -= (hitRadius - cpaDistance + 1) * 100000 * urgency;
+      else if (cpaDistance <= hitRadius * 3) safetyScore -= (hitRadius * 3 - cpaDistance) * 300 * urgency;
+    }
+    return {
+      dx: clamp(Math.round(Number(dx) || 0), -1, 1),
+      dy: clamp(Math.round(Number(dy) || 0), -1, 1),
+      safetyScore,
+      minCpaDistance,
+      minTimeToImpactMs,
+      directHitCount
+    };
+  }
+
+  function combatBulletThreatField(self, threats, options = {}) {
+    const list = (threats || []).filter(Boolean).slice(0, 6);
+    if (!list.length) return null;
+    const preferred = options.preferred || {};
+    const preferredDx = clamp(Math.round(Number(preferred.dx) || 0), -1, 1);
+    const preferredDy = clamp(Math.round(Number(preferred.dy) || 0), -1, 1);
+    const target = options.target || null;
+    const approachX = target ? Math.sign(Number(target.x) - Number(self.x)) || 0 : 0;
+    const approachY = target ? Math.sign(Number(target.y) - Number(self.y)) || 0 : 0;
+    const directions = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+      { dx: 1, dy: 1 },
+      { dx: 1, dy: -1 },
+      { dx: -1, dy: 1 },
+      { dx: -1, dy: -1 }
+    ];
+    const scored = directions.map(item => {
+      const candidate = combatThreatFieldCandidate(self, list, item.dx, item.dy);
+      let bias = 0;
+      if (candidate.dx === preferredDx && candidate.dy === preferredDy) bias += 120;
+      if (options.preferClosing) {
+        if (candidate.dx && approachX && candidate.dx === approachX) bias += 40;
+        if (candidate.dy && approachY && candidate.dy === approachY) bias += 40;
+      }
+      return { ...candidate, safetyScore: candidate.safetyScore + bias };
+    }).sort((a, b) => {
+      if (a.directHitCount !== b.directHitCount) return a.directHitCount - b.directHitCount;
+      if (b.safetyScore !== a.safetyScore) return b.safetyScore - a.safetyScore;
+      return b.minCpaDistance - a.minCpaDistance;
+    });
+    const best = scored[0] || null;
+    if (!best) return null;
     return best;
   }
 
@@ -9705,6 +9810,17 @@
     const until = strafeSign.until;
 
 	    let { dx, dy, closingBiased } = combatStrafeVector(self, target, pressure, sign, options);
+    const threatField = !pressure.synthetic
+      ? combatBulletThreatField(self, pressure.threats || [pressure], {
+        preferred: { dx, dy },
+        target,
+        preferClosing: Boolean(options.preferClosing)
+      })
+      : null;
+    if (threatField) {
+      dx = threatField.dx;
+      dy = threatField.dy;
+    }
     if (!(dx || dy) && existing && (existing.dx || existing.dy)) {
       dx = clamp(Math.round(Number(existing.dx) || 0), -1, 1);
       dy = clamp(Math.round(Number(existing.dy) || 0), -1, 1);
@@ -9718,6 +9834,7 @@
       sign,
       dx,
       dy,
+      threatField,
       until,
       carryUntil: t + carryMs
     };
@@ -9728,6 +9845,7 @@
 	      lockOverridden: Boolean(strafeSign.lockOverridden),
       closingBiased: Boolean(closingBiased),
 	      carried: false,
+      threatField,
       active: true,
       sign,
       precise: Boolean(preciseSign),
@@ -10942,6 +11060,7 @@
         laneDistance: Math.round(Number(pressure.laneDistance || 0)),
         signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
         timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        threatCount: Number(pressure.threatCount || (Array.isArray(pressure.threats) ? pressure.threats.length : 1)),
         synthetic: Boolean(pressure.synthetic),
         reason: pressure.reason || ''
       } : null,
@@ -10954,7 +11073,14 @@
         precise: Boolean(strafe.precise),
         locked: Boolean(strafe.locked),
         lockOverridden: Boolean(strafe.lockOverridden),
-        carried: Boolean(strafe.carried)
+        carried: Boolean(strafe.carried),
+        threatField: strafe.threatField ? {
+          dx: strafe.threatField.dx,
+          dy: strafe.threatField.dy,
+          directHitCount: strafe.threatField.directHitCount,
+          minCpaDistance: Number.isFinite(Number(strafe.threatField.minCpaDistance)) ? Math.round(Number(strafe.threatField.minCpaDistance)) : null,
+          minTimeToImpactMs: Number.isFinite(Number(strafe.threatField.minTimeToImpactMs)) ? Math.round(Number(strafe.threatField.minTimeToImpactMs)) : null
+        } : null
       } : null,
       spacing: spacing.active ? {
         dx: spacing.dx,
@@ -11206,6 +11332,7 @@
         laneDistance: Math.round(Number(pressure.laneDistance || 0)),
         signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
         timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        threatCount: Number(pressure.threatCount || (Array.isArray(pressure.threats) ? pressure.threats.length : 1)),
         synthetic: Boolean(pressure.synthetic),
         reason: pressure.reason || ''
       } : null,
@@ -11246,7 +11373,14 @@
 	          carried: Boolean(strafe.carried),
           holdRemainingMs: strafe.holdRemainingMs || 0,
           carryRemainingMs: strafe.carryRemainingMs || 0,
-          spacingMerged: Boolean(combatMove.spacingMerged)
+          spacingMerged: Boolean(combatMove.spacingMerged),
+          threatField: strafe.threatField ? {
+            dx: strafe.threatField.dx,
+            dy: strafe.threatField.dy,
+            directHitCount: strafe.threatField.directHitCount,
+            minCpaDistance: Number.isFinite(Number(strafe.threatField.minCpaDistance)) ? Math.round(Number(strafe.threatField.minCpaDistance)) : null,
+            minTimeToImpactMs: Number.isFinite(Number(strafe.threatField.minTimeToImpactMs)) ? Math.round(Number(strafe.threatField.minTimeToImpactMs)) : null
+          } : null
         } : null,
         spacing: spacingActive ? {
           dx: spacing.dx,
