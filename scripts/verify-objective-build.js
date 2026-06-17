@@ -696,6 +696,17 @@ function main() {
       assert(text.includes('function combatAimDynamicStrategyState'), 'dynamic combat aim strategy helper not found');
       assert(text.includes('function combatAimSourceDivergenceState'), 'combat aim source divergence helper not found');
       assert(text.includes('function combatLiveAimTarget'), 'live/native combat aim helper not found');
+      assert(text.includes('function realtimeEntityWorldPoint'), 'render/realtime entity coordinate helper not found');
+      assert(text.includes('function mergeCombatEntitySource'), 'combat log realtime/snapshot merge helper not found');
+      const realtimePointBody = functionBody(text, 'realtimeEntityWorldPoint');
+      const nativeEntityBody = functionBody(text, 'getNativeEntityList');
+      const combatLogMergeBody = functionBody(text, 'mergeCombatEntitySource');
+      assert(realtimePointBody.includes('preferRender') && realtimePointBody.includes('visual_x') && realtimePointBody.includes('render_x'), 'render entity coordinate resolution does not prefer visual/render coordinates');
+      assert(nativeEntityBody.includes('targetOverlayRenderEntities()'), 'combat realtime entity list does not read render-visible entities');
+      assert(nativeEntityBody.includes("add(entity, entity?.overlaySource || 'render', { render: true })"), 'render-visible entities are not merged with render source metadata');
+      assert(nativeEntityBody.includes('mergeRealtimeEntity(byKey.get(key), entity)'), 'realtime entity list does not dedupe/merge native and render entities');
+      assert(combatLogMergeBody.includes('incomingSnapshotOnly'), 'combat log merge does not detect snapshot-only overwrites');
+      assert(combatLogMergeBody.includes('...entity') && combatLogMergeBody.includes('...previous') && combatLogMergeBody.includes('snapshot: true'), 'combat log merge does not preserve realtime coordinates while keeping snapshot evidence');
       assert(text.includes('function combatAimSteadyNoDamageState'), 'steady no-damage aim helper not found');
       assert(aimBody.includes('combatAimDynamicStrategyState(self, target, aimSource'), 'combat aim does not use dynamic strategy state');
       assert(text.includes('function combatAimTarget(self, target, options = {})'), 'combat aim target cannot receive pressure options');
