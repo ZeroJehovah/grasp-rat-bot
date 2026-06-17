@@ -1165,11 +1165,6 @@
       && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
   };
 
-  function removeTargetOverlay() {
-    const overlay = document.getElementById(TARGET_OVERLAY_ID);
-    if (overlay) overlay.remove();
-  }
-
   function exitMotionStopLockRemainingMs(t = Date.now()) {
     const stoppedAt = Number(bot.lastExitMotionStopAt || 0);
     if (!stoppedAt) return 0;
@@ -1216,6 +1211,12 @@
         updateBotPanel(bot.lastDecision);
       } catch (_) {}
     }
+  }
+
+
+  function removeTargetOverlay() {
+    const overlay = document.getElementById(TARGET_OVERLAY_ID);
+    if (overlay) overlay.remove();
   }
 
   function targetOverlaySuppressedAfterExit(decision) {
@@ -1510,6 +1511,8 @@
     } catch (_) {}
   }
 
+
+
 	  function ensureBotPanel() {
 	    return null;
 	    if (!document.body) return null;
@@ -1547,7 +1550,8 @@
 	    if (panel) panel.remove();
 	  }
 
-	  function escapeHtml(value) {
+
+function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
     '&': '&amp;',
     '<': '&lt;',
@@ -1557,7 +1561,7 @@
   }[ch]));
 }
 
-	  function formatDistance(value) {
+function formatDistance(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
   const meters = n / 100;
@@ -1565,7 +1569,7 @@
   return Math.round(meters) + '米';
 }
 
-	  function formatDurationMs(ms) {
+function formatDurationMs(ms) {
   const value = Math.max(0, Math.round(Number(ms) || 0));
   if (value >= 3600000) {
     const minutes = Math.round(value / 60000);
@@ -1577,16 +1581,17 @@
   return value + 'ms';
 }
 
-	  function actorLabel(actor) {
+function actorLabel(actor) {
   if (!actor) return '未知目标';
   const id = actor.user_id ?? actor.id ?? actor.targetId;
   return actor.name || actor.label || (id !== undefined && id !== null && id !== '' ? '#' + id : '未知目标');
 }
 
-	  function hpDisplay(value) {
+function hpDisplay(value) {
   const n = Number(value);
   return Number.isFinite(n) ? String(Math.round(n)) : '-';
 }
+
 
   function formatStaminaDisplay(self) {
     if (!self) return '-';
@@ -1829,6 +1834,7 @@
 			    if (typeof log === 'function') log('[bot] ' + text, 'info');
 			    console.log('[grasp-rat-bot]', text, detail || '');
 			  }
+
 
       function safeStringify(value) {
   const seen = new WeakSet();
@@ -2124,8 +2130,8 @@
 
       function newExitAuditId(source, reason) {
         bot.exitAudit.sequence = Number(bot.exitAudit.sequence || 0) + 1;
-        const clean = String(source || 'exit').replace(/[^w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'exit';
-        const why = String(reason || '').replace(/[^w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'reason';
+        const clean = String(source || 'exit').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'exit';
+        const why = String(reason || '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'reason';
         return clean + '-' + Date.now().toString(36) + '-' + bot.exitAudit.sequence + '-' + why;
       }
 
@@ -3175,6 +3181,7 @@
         }
         flushCombatLogs(false);
       }
+
 
       function recordUnhandledTickError(source, err) {
         const entry = {
