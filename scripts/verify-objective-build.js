@@ -194,10 +194,19 @@ function main() {
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
+  const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
+  const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
+  const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
   const sharedDisplayFormatSource = readText('src/shared/display-format.js');
   const sharedPreservedStateSource = readText('src/shared/browser-preserved-state.js');
   const sharedRuntimeDefaultsSource = readText('src/shared/runtime-defaults.js');
+  const sourceRuntimeText = [
+    sourceBot,
+    targetOverlaySourceModule,
+    statusPanelSourceModule,
+    combatLogSourceModule
+  ].join('\n');
   const generatedSource = generateRemoteSource(manifest);
   const distHash = sha256Hex(distSource);
   const generatedHash = sha256Hex(generatedSource);
@@ -233,15 +242,34 @@ function main() {
     assert(sourceBot.includes("require('./src/shared/display-format')"), 'display-format module import not found');
     assert(sourceBot.includes("require('./src/shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(sourceBot.includes("require('./src/shared/runtime-defaults')"), 'runtime-defaults module import not found');
+    assert(sourceBot.includes("require('./src/browser/target-overlay-source')"), 'target-overlay source module import not found');
+    assert(sourceBot.includes("require('./src/browser/status-panel-source')"), 'status-panel source module import not found');
+    assert(sourceBot.includes("require('./src/browser/combat-log-source')"), 'combat-log source module import not found');
     assert(sourceBot.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
-    assert(sourceBot.includes('${formatDistance.toString()}'), 'formatDistance is not injected from the shared module');
     assert(sourceBot.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
+    assert(sourceBot.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
+    assert(sourceBot.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
+    assert(sourceBot.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
+  check('browser UI source modules export overlay, status panel, and combat-log runtime fragments', () => {
+    assert(targetOverlaySourceModule.includes('function targetOverlaySource() {'), 'target-overlay source factory not found');
+    assert(targetOverlaySourceModule.includes('module.exports = {\n  targetOverlaySource'), 'target-overlay module export not found');
+    assert(functionBody(targetOverlaySourceModule, 'targetOverlaySource').includes('String.raw`'), 'target-overlay source factory does not return raw browser source');
+    assert(statusPanelSourceModule.includes('function statusPanelSource(helpers = {}) {'), 'status-panel source factory not found');
+    assert(statusPanelSourceModule.includes('module.exports = {\n  statusPanelSource'), 'status-panel module export not found');
+    assert(functionBody(statusPanelSourceModule, 'statusPanelSource').includes('typeof escapeHtml === \'function\' ? escapeHtml.toString() : \'\''), 'status-panel source factory does not inline shared display helpers');
+    assert(functionBody(statusPanelSourceModule, 'statusPanelSource').includes('typeof formatDistance === \'function\' ? formatDistance.toString() : \'\''), 'status-panel source factory does not inline distance formatter');
+    assert(combatLogSourceModule.includes('function combatLogSource(helpers = {}) {'), 'combat-log source factory not found');
+    assert(combatLogSourceModule.includes('module.exports = {\n  combatLogSource'), 'combat-log module export not found');
+    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('String.raw`'), 'combat-log source factory does not return raw browser source');
+    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};'), 'combat-log source factory does not inline exit-summary helper');
+  });
+
   for (const file of REMOTE_BOT_FILES) {
-    const text = file === 'grasp-rat-bot.js' ? sourceBot : distSource;
+    const text = file === 'grasp-rat-bot.js' ? sourceRuntimeText : distSource;
     const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
     for (const invariant of NUMERIC_INVARIANTS) {
       check(`${file} has ${invariant.key}=${invariant.value}`, () => {
@@ -609,7 +637,9 @@ function main() {
 	      const waitBody = functionBody(text, 'pendingExitWaitDecision');
 	      assert(waitBody.includes("target: confirmed ? null : (cover?.target || pending.target || null)"), 'confirmed pending-exit wait can still expose a target');
 	      assert(waitBody.includes('combatCover: confirmed ? null : (cover || null)'), 'confirmed pending-exit wait can still expose combat cover');
-	      const overlayBody = functionBody(text, 'renderTargetOverlay');
+	      const overlayBody = file === 'grasp-rat-bot.js'
+	        ? functionBody(targetOverlaySourceModule, 'targetOverlaySource')
+	        : functionBody(text, 'renderTargetOverlay');
 	      assert(overlayBody.includes('targetOverlaySuppressedAfterExit(decision)'), 'target overlay is not suppressed after exit');
 	      const actionVelocityBody = functionBody(text, 'sendActionVelocity');
 	      assert(actionVelocityBody.includes('const lockRemainingMs = exitMotionStopLockRemainingMs()'), 'action velocity does not check exit motion lock');
