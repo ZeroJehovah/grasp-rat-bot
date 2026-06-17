@@ -197,6 +197,7 @@ function main() {
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
+  const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
   const sharedDisplayFormatSource = readText('src/shared/display-format.js');
   const sharedPreservedStateSource = readText('src/shared/browser-preserved-state.js');
@@ -205,7 +206,8 @@ function main() {
     sourceBot,
     targetOverlaySourceModule,
     statusPanelSourceModule,
-    combatLogSourceModule
+    combatLogSourceModule,
+    importantLogSourceModule
   ].join('\n');
   const generatedSource = generateRemoteSource(manifest);
   const distHash = sha256Hex(distSource);
@@ -245,16 +247,18 @@ function main() {
     assert(sourceBot.includes("require('./src/browser/target-overlay-source')"), 'target-overlay source module import not found');
     assert(sourceBot.includes("require('./src/browser/status-panel-source')"), 'status-panel source module import not found');
     assert(sourceBot.includes("require('./src/browser/combat-log-source')"), 'combat-log source module import not found');
+    assert(sourceBot.includes("require('./src/browser/important-log-source')"), 'important-log source module import not found');
     assert(sourceBot.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
     assert(sourceBot.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
     assert(sourceBot.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
     assert(sourceBot.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
     assert(sourceBot.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
+    assert(sourceBot.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
-  check('browser UI source modules export overlay, status panel, and combat-log runtime fragments', () => {
+  check('browser UI source modules export overlay, status panel, combat-log, and important-log runtime fragments', () => {
     assert(targetOverlaySourceModule.includes('function targetOverlaySource() {'), 'target-overlay source factory not found');
     assert(targetOverlaySourceModule.includes('module.exports = {\n  targetOverlaySource'), 'target-overlay module export not found');
     assert(functionBody(targetOverlaySourceModule, 'targetOverlaySource').includes('String.raw`'), 'target-overlay source factory does not return raw browser source');
@@ -266,6 +270,9 @@ function main() {
     assert(combatLogSourceModule.includes('module.exports = {\n  combatLogSource'), 'combat-log module export not found');
     assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('String.raw`'), 'combat-log source factory does not return raw browser source');
     assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};'), 'combat-log source factory does not inline exit-summary helper');
+    assert(importantLogSourceModule.includes('function importantLogSource() {'), 'important-log source factory not found');
+    assert(importantLogSourceModule.includes('module.exports = {\n  importantLogSource'), 'important-log module export not found');
+    assert(functionBody(importantLogSourceModule, 'importantLogSource').includes('String.raw`'), 'important-log source factory does not return raw browser source');
   });
 
   for (const file of REMOTE_BOT_FILES) {

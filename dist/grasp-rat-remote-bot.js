@@ -7727,6 +7727,7 @@ function hpDisplay(value) {
     };
   }
 
+
   function attackPlayerCategory(target, action = {}) {
     if (!target) return 'unknown';
     const afkProfit = isAfkProfitTarget(target);
