@@ -60,6 +60,7 @@
 - Combat:
   - defensive combat beats normal coin logic when a real threat exists;
   - any non-whitelisted, non-invulnerable Active enemy inside `combatAttackRange` is a defensive combat target even if it is stationary, full-stamina, zero-drop, and not firing, so combat immediately beats coin pickup;
+  - if a non-invulnerable Active threat is inside `combatAttackRange` but is temporarily unavailable as a combat target, such as during a retreat-ignore window, the bot waits with `combat-active-threat-wait` instead of taking foot/visible coins in that danger window;
   - combat HP disadvantage checks run as soon as the Active target enters combat selection, before waiting for a bullet/injury trigger;
   - close combat backs away while shooting inside the shorter 45m spacing threshold;
   - combat logging analysis showed 105-145m fights had very poor hit yield versus 30-75m, so default combat spacing now favors 45-65m instead of 75-105m;
@@ -76,8 +77,9 @@
   - if an already engaged target exists but another in-range player is the owner of a real incoming bullet threat, the bot temporarily prioritizes that shooter; synthetic `firing` pressure alone does not steal target focus.
   - combat leave decisions now keep a combat cover action while the page has not yet confirmed exit: the bot continues dodge/spacing movement and planned shooting when self is still visible/alive instead of stopping in place under incoming fire.
   - moving-target aim spread includes measured evasion physics;
-  - combat aim is behavior-driven: it can switch to live/native precision when selected-target and native coordinates diverge, when server-position stall makes live movement more useful, or when target movement is mostly radial;
+  - combat aim is behavior-driven: it can switch to live/native precision when selected-target and native coordinates diverge, when real incoming bullet pressure makes current visible position more reliable than intercept lead, when server-position stall makes live movement more useful, or when target movement is mostly radial;
   - combat aim and fire use live/native targets only; snapshot data is not consulted for combat target, aim, or fire decisions.
+  - real-bullet live precision logs `aimTarget.realBulletPrecision` and `strategyReason=real-bullet-pressure`, so battle reviews can separate this branch from coordinate-divergence, server-stall, and radial-motion precision.
   - moving-target combat aim now prefers a physical quadratic intercept solution using measured bullet speed (`500cm/tick`), render-delay compensation (`2` ticks), bullet range/max-flight guards, and a confidence-weighted small spread; the older angular jitter lead remains only as a fallback when no valid intercept solution is available;
   - the current combat target now keeps a short motion sample window. The bot derives a lightweight opponent profile from lateral direction flips, velocity stability, and receding/kiting behavior; this profile scales intercept confidence and is exposed in aim/combat logs.
   - low-confidence distant moving targets are no longer fired at full cadence: when intercept confidence is below `0.6` beyond 90m with meaningful target motion, combat fire uses a 520ms point-fire cadence while keeping ordinary close/high-confidence fire unchanged.

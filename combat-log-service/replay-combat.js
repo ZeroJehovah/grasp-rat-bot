@@ -409,6 +409,12 @@ function dynamicAimForShot(shot, options) {
   return frame.aim || frame.decisionTarget || live;
 }
 
+function realBulletPrecisionAimForShot(shot) {
+  const frame = shot.frame;
+  if (incomingRealBullet(frame) && frame.nearbyTarget) return frame.nearbyTarget;
+  return frame.aim || frame.decisionTarget || frame.nearbyTarget;
+}
+
 function pressureAuthorityState(frame, options) {
   const authority = frame.nearbyTarget;
   const reference = frame.decisionTarget;
@@ -568,6 +574,7 @@ function replay(options) {
     runAimScenario('exact decision.target vs decision trajectory', shots, shot => shot.frame.decisionTarget, decisionSamples, options),
     runAimScenario('exact decision.target vs live target', shots, shot => shot.frame.decisionTarget, targetSamples, options),
     runAimScenario('exact live target vs live target', shots, shot => shot.frame.nearbyTarget, targetSamples, options),
+    runAimScenario('real-bullet live precision vs live target', shots, realBulletPrecisionAimForShot, targetSamples, options),
     runAimScenario('old effective logged aim before server-stall exit', shots, shot => shot.frame.aim, targetSamples, options, shot => !oldExitFrame || shot.frame.at < oldExitFrame.at),
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
@@ -680,6 +687,26 @@ function selfTest() {
       targetName: '菈菲爾'
     },
     {
+      id: '2026-06-17-xmsthc-real-bullet-live-precision',
+      file: path.join(__dirname, 'logs/2026-06-17/20260617010950-self-28886-vs-xmsthc.jsonl'),
+      startLine: 1,
+      endLine: 438,
+      selfId: '28886',
+      targetId: '20606',
+      targetName: 'xmsthc',
+      expectRealBulletPrecisionImproved: true
+    },
+    {
+      id: '2026-06-17-motor-real-bullet-live-precision',
+      file: path.join(__dirname, 'logs/2026-06-17/20260617005325-self-28886-vs-Motor.jsonl'),
+      startLine: 1,
+      endLine: 610,
+      selfId: '28886',
+      targetId: '32906',
+      targetName: 'Motor',
+      expectRealBulletPrecisionImproved: true
+    },
+    {
       id: '2026-06-15-xmsthc-pressure-authority',
       file: path.join(__dirname, 'logs/2026-06-15/-_-_-_-.jsonl'),
       startLine: 9113,
@@ -725,6 +752,7 @@ function selfTest() {
   const summaries = cases.map(item => {
     const result = replay({ ...DEFAULTS, ...item });
     const logged = result.scenarios.find(scenario => scenario.label === 'logged aimTarget vs live target');
+    const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
@@ -736,6 +764,9 @@ function selfTest() {
       }
     }
     if (!(dynamicGrace.hits > 0)) throw new Error(`${item.id} dynamic replay has no hits before grace exit`);
+    if (item.expectRealBulletPrecisionImproved && (!realBulletPrecision || !(realBulletPrecision.hits > logged.hits))) {
+      throw new Error(`${item.id} real-bullet live precision did not improve hits: ${realBulletPrecision?.hits || 0} <= ${logged.hits}`);
+    }
     const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
     if (item.expectSuppressed && (!pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)) {
       throw new Error(`${item.id} pressure authority did not suppress only no-hit logged shots`);
@@ -756,6 +787,7 @@ function selfTest() {
     return {
       id: item.id,
       loggedHits: logged.hits,
+      realBulletPrecisionHits: realBulletPrecision?.hits || 0,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,
       pressureSuppressed: pressureAuthority?.suppressed || 0,

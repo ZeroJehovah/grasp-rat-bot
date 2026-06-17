@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.177"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.178"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -9143,6 +9143,39 @@
     return safety;
   }
 
+  function pickActiveCombatWaitThreat(activeThreats) {
+    const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    return (activeThreats || [])
+      .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
+      .filter(threat => isCurrentlyActive(threat) || isFiringEntity(threat) || isMovingThreat(threat))
+      .filter(threat => Number(threat.distance || 0) <= range)
+      .sort((a, b) => {
+        if (isFiringEntity(a) !== isFiringEntity(b)) return isFiringEntity(a) ? -1 : 1;
+        return Number(a.distance || Infinity) - Number(b.distance || Infinity);
+      })[0] || null;
+  }
+
+  function activeCombatThreatWaitAction(threat) {
+    return {
+      kind: 'wait',
+      reason: 'combat-active-threat-wait',
+      dx: 0,
+      dy: 0,
+      shoot: false,
+      forceShoot: false,
+      activeThreat: threat ? {
+        id: threat.user_id ?? threat.id ?? null,
+        name: threat.name || '',
+        distance: Math.round(Number(threat.distance || 0)),
+        drop: Number(threat.drop || 0),
+        speed: Math.round(Number(threat.speed || 0)),
+        moving: Boolean(threat.moving),
+        firing: isFiringEntity(threat),
+        mode: threat.current_join_mode || threat.mode || ''
+      } : null
+    };
+  }
+
 	  function coinThreatDangerRadius(threat) {
 	    const base = Number(threat?.coinDangerRadius ?? cfg.coinDangerRadius);
 	    if (isInvulnerableActive(threat)) return Math.max(base, Number(cfg.invulnerableActiveCoinDangerRadius || 0));
@@ -10936,19 +10969,24 @@
     return stall && typeof stall === 'object' ? stall : {};
   }
 
-  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim) {
+  function combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, options = {}) {
     const fallbackPrecision = combatAimFallbackPrecisionState(damage?.noDamageMs);
     const sourceDivergence = combatAimSourceDivergenceState(aimSource, distance);
     const serverStall = combatAimServerStallState();
     const live = Boolean(aimSource?.nativeAimResolved);
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     const radialMax = Math.max(0, Number(cfg.combatAimRadialPrecisionLateralRatio || 0));
+    const realBulletPrecision = Boolean(live
+      && moving
+      && options.realBulletPressure
+      && (!attackRange || Number(distance) <= attackRange));
     const radialPrecision = Boolean(live
       && moving
       && radialMax > 0
       && movement
       && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
       && Math.abs(Number(movement.lateralRatio || 0)) <= radialMax
-      && Number(distance) <= Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0)));
+      && (!attackRange || Number(distance) <= attackRange));
     let mode = moving ? 'intercept' : 'exact';
     let strategy = moving ? 'intercept' : 'exact';
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
@@ -10958,6 +10996,11 @@
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
+      precision = true;
+    } else if (realBulletPrecision) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'real-bullet-pressure';
       precision = true;
     } else if (live && serverStall.stalled) {
       mode = 'live-precision';
@@ -10989,6 +11032,7 @@
       bypassJitter: Boolean(!moving || precision || steady),
       sourceDivergence,
       serverStall: Boolean(serverStall.stalled),
+      realBulletPrecision,
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
       movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
@@ -11010,7 +11054,9 @@
     const movement = moving
       ? combatMovementAimMode(self, aimSource, distance)
       : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
-    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim);
+    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, {
+      realBulletPressure: Boolean(options.realBulletPressure)
+    });
     const exact = {
       x: Number(aimSource.x),
       y: Number(aimSource.y),
@@ -11032,6 +11078,7 @@
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
+      realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
 	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
 	      aimConfidence: aimStrategy.bypassJitter ? 1 : null,
@@ -11115,6 +11162,7 @@
         sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
         sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
         serverStallAim: Boolean(aimStrategy.serverStall),
+        realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
         radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
         fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
         interceptAim: true,
@@ -11177,6 +11225,7 @@
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
+      realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
 	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
 	      interceptAim: false,
@@ -11257,6 +11306,7 @@
         sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
+        realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
         fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
 	        intercept: Boolean(aim.interceptAim),
@@ -11544,6 +11594,7 @@
         sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
         sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
         serverStall: Boolean(aim.serverStallAim),
+        realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
         fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
 	        intercept: Boolean(aim.interceptAim),
@@ -11583,6 +11634,7 @@
           sourceDivergenceCm: Number.isFinite(Number(aim.sourceDivergenceCm)) ? Math.round(Number(aim.sourceDivergenceCm)) : null,
           sourceDivergenceThresholdCm: Number.isFinite(Number(aim.sourceDivergenceThresholdCm)) ? Math.round(Number(aim.sourceDivergenceThresholdCm)) : null,
           serverStall: Boolean(aim.serverStallAim),
+          realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
           radialPrecision: Boolean(aim.radialPrecisionAim),
           fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
         intercept: Boolean(aim.interceptAim),
@@ -12870,6 +12922,20 @@
       bot.fleeLock = null;
       bot.returnBlockScan = null;
       return buildCombatAction(self, defensiveCombatTarget, bullets);
+    }
+    const activeCombatWaitThreat = pickActiveCombatWaitThreat(activeThreats);
+    if (!recovery && activeCombatWaitThreat) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      bot.lastSafety.activeCombatWaitThreat = {
+        id: activeCombatWaitThreat.user_id,
+        name: activeCombatWaitThreat.name,
+        distance: Math.round(activeCombatWaitThreat.distance),
+        speed: Math.round(activeCombatWaitThreat.speed),
+        moving: Boolean(activeCombatWaitThreat.moving),
+        firing: isFiringEntity(activeCombatWaitThreat)
+      };
+      return activeCombatThreatWaitAction(activeCombatWaitThreat);
     }
     if (!fullHp && closeThreats.length) {
       const flee = lockedFleeDirection(self, closeThreats, 'active-threat-before-bullet-range');
