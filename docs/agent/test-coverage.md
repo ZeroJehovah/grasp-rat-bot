@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `201`.
+- Latest bot self-test count: `203`.
 - Latest combat-log analyzer self-test count: `82`.
 - Recent important coverage:
   - local snapshot coin at `185m` cannot beat visible/native coin;
@@ -27,7 +27,7 @@
   - real incoming bullets use an 8-direction threat-field dodge, including multi-bullet threat count logging and a regression check that the selected legal direction improves CPA safety over a worse fixed diagonal;
   - short-window opponent motion profiling identifies repeated lateral flips and feeds aim confidence;
   - low-confidence distant moving combat targets throttle fire to the configured point-fire cadence;
-  - losing exchange-rate samples trigger `combat-hp-disadvantage-leave` before the broad static HP-gap threshold;
+  - high-HP static HP-gap and losing exchange-rate samples first record a combat disadvantage observation, then trigger `combat-hp-disadvantage-leave` after the configured confirmation window;
   - precise incoming signed-lane direction overrides a stale opposite strafe lock;
   - pressure-close diagonal strafe keeps a target-closing axis while preserving dodge movement;
   - close target jitter and long no-damage aim widening stay capped at `0.14rad`;

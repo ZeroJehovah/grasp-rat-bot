@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.178"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.179"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -33,6 +33,7 @@
     combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
     combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
     combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
+    combatDisadvantageObservation: previousBot?.combatDisadvantageObservation && typeof previousBot.combatDisadvantageObservation === 'object' ? { ...previousBot.combatDisadvantageObservation } : null,
     lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === 'object' ? { ...previousBot.lastCombatLogMetric } : null,
     lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
     opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
@@ -110,6 +111,9 @@
     combatLowHpLeaveThreshold: 50,
     combatLowHpCloseRiskMargin: 5,
     combatHighHpDisadvantageGap: 20,
+    combatDisadvantageConfirmMs: 2500,
+    combatDisadvantageMinEngageMs: 3500,
+    combatDisadvantageMinSamples: 4,
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
     combatLowHpNoDamageMinGap: 0,
@@ -583,6 +587,7 @@
     combatTarget: preserved.combatTarget,
     combatRetreatIgnore: preserved.combatRetreatIgnore,
     combatAim: preserved.combatAim,
+    combatDisadvantageObservation: preserved.combatDisadvantageObservation,
     lastCombatLogMetric: preserved.lastCombatLogMetric,
     lastCombatShot: preserved.lastCombatShot,
     combatLogging: {
@@ -7686,6 +7691,7 @@
     bot.lastCombatTargetClear = { at: Date.now(), reason };
     bot.combatTarget = null;
     bot.combatAim = null;
+    clearCombatDisadvantageObservation(reason || 'combat-engagement-cleared');
   }
 
   function killIdentityMatches(item, victim, id) {
@@ -10463,6 +10469,56 @@
     bot.combatRetreatIgnore.set(id, t + Math.max(1000, Number(cfg.combatRetreatIgnoreMs || 0) || 15000));
   }
 
+  function clearCombatDisadvantageObservation(reason = '') {
+    if (!bot.combatDisadvantageObservation) return;
+    bot.lastCombatDisadvantageObservationClear = { at: Date.now(), reason };
+    bot.combatDisadvantageObservation = null;
+  }
+
+  function combatDisadvantageObservationState(target, kind, evidence = {}) {
+    const id = combatTargetId(target);
+    if (!id || !kind) return null;
+    const t = Date.now();
+    const previous = bot.combatDisadvantageObservation || null;
+    const same = previous && String(previous.id || '') === id && String(previous.kind || '') === String(kind);
+    const currentTarget = bot.combatTarget && String(bot.combatTarget.id ?? '') === id ? bot.combatTarget : null;
+    const firstAt = same ? Number(previous.firstAt || previous.at || t) : t;
+    const count = Math.max(1, same ? Number(previous.count || 1) + 1 : 1);
+    const engagedAt = Number(currentTarget?.firstSeenAt || currentTarget?.at || firstAt || t);
+    const observedMs = Math.max(0, t - firstAt);
+    const engagedMs = Math.max(0, t - engagedAt);
+    const confirmMs = Math.max(0, Number(cfg.combatDisadvantageConfirmMs || 0));
+    const minEngageMs = Math.max(0, Number(cfg.combatDisadvantageMinEngageMs || 0));
+    const minSamples = Math.max(1, Math.round(Number(cfg.combatDisadvantageMinSamples || 1)));
+    const sampleCount = Math.max(
+      count,
+      Math.round(Number(evidence?.sampleCount || 0)),
+      Array.isArray(currentTarget?.motionSamples) ? currentTarget.motionSamples.length : 0
+    );
+    const remainingMs = Math.max(0, confirmMs - observedMs, minEngageMs - engagedMs);
+    const samplesRemaining = Math.max(0, minSamples - sampleCount);
+    const state = {
+      active: true,
+      id,
+      kind: String(kind),
+      firstAt,
+      at: t,
+      observedMs: Math.round(observedMs),
+      engagedMs: Math.round(engagedMs),
+      count,
+      sampleCount,
+      confirmMs,
+      minEngageMs,
+      minSamples,
+      remainingMs: Math.round(remainingMs),
+      samplesRemaining,
+      ready: remainingMs <= 0 && samplesRemaining <= 0,
+      evidence
+    };
+    bot.combatDisadvantageObservation = state;
+    return state;
+  }
+
   function combatAimDamageState(target) {
     const id = combatTargetId(target);
     const previous = bot.combatTarget;
@@ -11390,15 +11446,19 @@
 	    }
 	    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
 	      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-	    }
+    }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
     const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
-	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
-	      && Number.isFinite(hpGap)
-	      && hpGap > cfg.combatHighHpDisadvantageGap) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-	    }
+    let disadvantageObservation = null;
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'hp-gap', { selfHp, targetHp, hpGap });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+      }
+    }
     const pressure = combatPressureThreat(self, target, bullets);
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
     const spacing = combatSpacingVector(self, target, targetDistance);
@@ -11417,15 +11477,25 @@
 	        pressureDisadvantage
 	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
-	    const tradeEstimate = combatTradeEstimate(self, target);
-	    if (tradeEstimate?.active) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
-	        selfHp,
-	        targetHp,
-	        hpGap,
-	        tradeEstimate
-	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-	    }
+    const tradeEstimate = combatTradeEstimate(self, target);
+    if (!disadvantageObservation && tradeEstimate?.active) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'trade-estimate', {
+        selfHp,
+        targetHp,
+        hpGap,
+        ...tradeEstimate
+      });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+          selfHp,
+          targetHp,
+          hpGap,
+          tradeEstimate,
+          disadvantageObservation
+        }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+      }
+    }
+    if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
 	    const serverStallNoDamage = combatServerStallNoDamageLeaveState(
       selfHp,
       targetHp,
@@ -11444,6 +11514,7 @@
     }
     if (retreatingTarget.disengage) {
       rememberCombatRetreatIgnore(target);
+      clearCombatDisadvantageObservation('target-retreating');
       clearCombatEngagement('target-retreating');
       return {
         kind: 'wait',
@@ -11687,6 +11758,7 @@
         } : null,
         movementSuppressed,
         shooting,
+        disadvantageObservation,
         retreatingTarget: retreatingTarget.active ? retreatingTarget : null
       }
     };
