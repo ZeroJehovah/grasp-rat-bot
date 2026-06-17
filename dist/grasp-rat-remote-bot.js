@@ -3224,7 +3224,18 @@ function hpDisplay(value) {
         };
       }
 
-		  function requestReload(reason) {
+		function staminaExhaustedWindowLabel(staminaState) {
+  const raw = Array.isArray(staminaState?.longExhausted)
+    ? staminaState.longExhausted
+    : (Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : []);
+  const windows = [];
+  for (const item of raw) {
+    const key = String(item || '').toLowerCase();
+    if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
+  }
+  return windows.join('/');
+}
+  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
 		    if (exitAuditFlushPending()) {
@@ -3266,12 +3277,12 @@ function hpDisplay(value) {
 	    if (location.origin !== 'https://grasp-rat-game.h-e.top') return null;
 	    const title = String(document.title || '');
 	    const text = String(document.body?.innerText || '').slice(0, 5000);
-	    const combined = title + '\n' + text;
-	    const isCloudflareError = /Error\s*1033/i.test(combined)
-	      || /Cloudflare\s+Tunnel\s+error/i.test(combined)
-	      || (/Cloudflare/i.test(combined) && /unable\s+to\s+resolve/i.test(combined));
+	    const combined = title + '\\n' + text;
+	    const isCloudflareError = /Error\\s*1033/i.test(combined)
+	      || /Cloudflare\\s+Tunnel\\s+error/i.test(combined)
+	      || (/Cloudflare/i.test(combined) && /unable\\s+to\\s+resolve/i.test(combined));
 	    const isBunkerWebError = /BunkerWeb/i.test(combined)
-	      && (/\b403\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\s+error/i.test(combined) || /Access\s+is\s+forbidden/i.test(combined));
+	      && (/\\b403\\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\\s+error/i.test(combined) || /Access\\s+is\\s+forbidden/i.test(combined));
 	    if (!isCloudflareError && !isBunkerWebError) return null;
 	    const t = Date.now();
 	    const provider = isBunkerWebError ? 'bunkerweb' : 'cloudflare';
@@ -3284,7 +3295,7 @@ function hpDisplay(value) {
 	    } catch (_) {}
 	    const elapsedMs = lastReloadAt ? t - lastReloadAt : intervalMs;
 	    const remainingMs = Math.max(0, intervalMs - elapsedMs);
-	    const code = /Error\s*1033/i.test(combined) ? '1033' : (isBunkerWebError ? '403' : '');
+	    const code = /Error\\s*1033/i.test(combined) ? '1033' : (isBunkerWebError ? '403' : '');
 	    const label = isBunkerWebError ? 'BunkerWeb 403 错误页' : (code ? 'Cloudflare Error ' + code : 'Cloudflare 错误页');
 	    return {
 	      error: true,
@@ -3473,7 +3484,7 @@ function hpDisplay(value) {
     const candidates = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"]'));
     return candidates.find(el => {
       const text = controlText(el);
-      return /zooms*out|缩小|缩放-|地图-|视图-/i.test(text);
+      return /zoom\s*out|缩小|缩放-|地图-|视图-/i.test(text);
     }) || null;
   }
 
@@ -3806,19 +3817,9 @@ function hpDisplay(value) {
 	    };
 	  }
 
-  function staminaExhaustedWindowLabel(staminaState) {
-  const raw = Array.isArray(staminaState?.longExhausted)
-    ? staminaState.longExhausted
-    : (Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : []);
-  const windows = [];
-  for (const item of raw) {
-    const key = String(item || '').toLowerCase();
-    if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
-  }
-  return windows.join('/');
-}
 
-	  function leaveWaitDisplay(base, detail) {
+
+  function leaveWaitDisplay(base, detail) {
 	    const summary = String(base || '').trim();
 	    const waitMs = Number(detail?.reloginDelayMs ?? detail?.holdRemainingMs ?? 0);
 	    if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
