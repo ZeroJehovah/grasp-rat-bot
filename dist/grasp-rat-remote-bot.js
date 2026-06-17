@@ -5978,7 +5978,8 @@ function hpDisplay(value) {
     return detail;
   }
 
-	  function getNativeState() {
+
+  function getNativeState() {
 	    try {
 	      return typeof state === 'object' && state ? state : null;
 	    } catch (_) {
@@ -6681,6 +6682,8 @@ function hpDisplay(value) {
     return Promise.race([request, timeout]).finally(() => clearTimeout(timer));
   }
 
+
+
   function summarizeSelf(self) {
     const stamina = summarizeStamina(self);
     return {
@@ -7006,6 +7009,7 @@ function hpDisplay(value) {
     list.push(item);
     while (list.length > max) list.shift();
   }
+
 
   function importantLogDay(t = Date.now()) {
     const d = new Date(Number(t) || Date.now());

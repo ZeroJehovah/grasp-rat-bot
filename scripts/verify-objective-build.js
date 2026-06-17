@@ -199,6 +199,8 @@ function main() {
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
+  const nativeStateSourceModule = readText('src/browser/native-state-source.js');
+  const runtimeSummarySourceModule = readText('src/browser/runtime-summary-source.js');
   const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
   const sharedDisplayFormatSource = readText('src/shared/display-format.js');
   const sharedPreservedStateSource = readText('src/shared/browser-preserved-state.js');
@@ -209,7 +211,9 @@ function main() {
     statusPanelSourceModule,
     combatLogSourceModule,
     importantLogSourceModule,
-    controlLoginSourceModule
+    controlLoginSourceModule,
+    nativeStateSourceModule,
+    runtimeSummarySourceModule
   ].join('\n');
   const generatedSource = generateRemoteSource(manifest);
   const distHash = sha256Hex(distSource);
@@ -251,6 +255,8 @@ function main() {
     assert(sourceBot.includes("require('./src/browser/combat-log-source')"), 'combat-log source module import not found');
     assert(sourceBot.includes("require('./src/browser/important-log-source')"), 'important-log source module import not found');
     assert(sourceBot.includes("require('./src/browser/control-login-source')"), 'control-login source module import not found');
+    assert(sourceBot.includes("require('./src/browser/native-state-source')"), 'native-state source module import not found');
+    assert(sourceBot.includes("require('./src/browser/runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(sourceBot.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
     assert(sourceBot.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
     assert(sourceBot.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
@@ -258,6 +264,8 @@ function main() {
     assert(sourceBot.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(sourceBot.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(sourceBot.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
+    assert(sourceBot.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
+    assert(sourceBot.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
     assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
@@ -281,6 +289,15 @@ function main() {
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('typeof staminaExhaustedWindowLabel === \'function\' ? staminaExhaustedWindowLabel.toString() : \'\''), 'control-login source factory does not inline stamina window helper');
+    assert(nativeStateSourceModule.includes('function nativeStateSource() {'), 'native-state source factory not found');
+    assert(nativeStateSourceModule.includes('module.exports = {\n  nativeStateSource'), 'native-state module export not found');
+    assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('String.raw`'), 'native-state source factory does not return raw browser source');
+    assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('function getNativeState()'), 'native-state source factory does not include native state helpers');
+    assert(runtimeSummarySourceModule.includes('function runtimeSummarySource() {'), 'runtime-summary source factory not found');
+    assert(runtimeSummarySourceModule.includes('module.exports = {\n  runtimeSummarySource'), 'runtime-summary module export not found');
+    assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('String.raw`'), 'runtime-summary source factory does not return raw browser source');
+    assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('function summarizeSelf(self)'), 'runtime-summary source factory does not include self summary helper');
+    assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('function assessServerPositionStall(self)'), 'runtime-summary source factory does not include server-position stall helper');
   });
 
   for (const file of REMOTE_BOT_FILES) {
