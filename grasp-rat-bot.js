@@ -413,6 +413,12 @@ function runSelfTest() {
     || truthyFlag(e?.attacking)
     || truthyFlag(e?.is_attacking);
   const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
+  const hasCombatActivitySignalForTest = e => isActive(e)
+    || truthyFlag(e?.active)
+    || truthyFlag(e?.currentlyActive)
+    || truthyFlag(e?.combat)
+    || truthyFlag(e?.engagedCombat)
+    || String(e?.combatIntent || '') === 'engaged';
   const isAvoidanceThreat = e => isInvulnerable(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
@@ -3024,6 +3030,7 @@ function runSelfTest() {
         fallbackPrecision: Boolean(aimStrategy.fallbackPrecision),
 	        aimConfidence: Number(Number(aimConfidence).toFixed(2)),
 	        intercept: Boolean(intercept),
+        interceptConfidence: intercept ? Number(Number(intercept.confidence || 0).toFixed(2)) : null,
 	        opponentProfile
 	      },
       target: {
@@ -3257,6 +3264,7 @@ function runSelfTest() {
     const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
+      .filter(threat => hasCombatActivitySignalForTest(threat))
       .filter(threat => Number(threat.distance || 0) <= range)
       .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
   }
@@ -6574,6 +6582,12 @@ function browserBotSource(config) {
     || truthyFlag(e?.is_attacking);
   const isMovingThreat = e => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
   const isCurrentlyActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
+  const hasCombatActivitySignal = e => isCurrentlyActive(e)
+    || truthyFlag(e?.active)
+    || truthyFlag(e?.currentlyActive)
+    || truthyFlag(e?.combat)
+    || truthyFlag(e?.engagedCombat)
+    || String(e?.combatIntent || '') === 'engaged';
   const isAvoidanceThreat = e => isInvulnerable(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
@@ -7744,9 +7758,42 @@ function browserBotSource(config) {
           firing: isFiringEntity(entity),
           invulnerable: isInvulnerable(entity),
           native: Boolean(entity.native),
+          render: Boolean(entity.render || entity.nativeRender),
+          realtime: Boolean(entity.realtime || entity.native || entity.render || entity.nativeRender),
           snapshot: Boolean(entity.snapshot),
           combatIntent: entity.combatIntent || '',
           recentlyMoved: Boolean(entity.recentlyMoved)
+        };
+      }
+
+      function mergeCombatEntitySource(previous, entity) {
+        if (!previous) return entity;
+        const previousRealtime = Boolean(previous.native || previous.render || previous.realtime);
+        const incomingSnapshotOnly = Boolean(entity.snapshot && !entity.native && !entity.render && !entity.realtime);
+        if (previousRealtime && incomingSnapshotOnly) {
+          return {
+            ...entity,
+            ...previous,
+            snapshot: true,
+            native: Boolean(previous.native),
+            render: Boolean(previous.render),
+            realtime: true,
+            hp: previous.hp ?? entity.hp,
+            knownHp: previous.knownHp ?? entity.knownHp,
+            max_hp: previous.max_hp ?? entity.max_hp,
+            maxHp: previous.maxHp ?? entity.maxHp,
+            death_reward_preview: previous.death_reward_preview ?? entity.death_reward_preview,
+            death_drop_coins: previous.death_drop_coins ?? entity.death_drop_coins,
+            drop: previous.drop ?? entity.drop
+          };
+        }
+        return {
+          ...previous,
+          ...entity,
+          native: Boolean(previous.native || entity.native),
+          render: Boolean(previous.render || entity.render || entity.nativeRender),
+          realtime: Boolean(previous.realtime || entity.realtime || previous.native || entity.native || previous.render || entity.render || entity.nativeRender),
+          snapshot: Boolean(previous.snapshot || entity.snapshot)
         };
       }
 
@@ -7758,7 +7805,7 @@ function browserBotSource(config) {
           const key = id === undefined || id === null || id === ''
             ? 'xy:' + Math.round(Number(entity.x) || 0) + ':' + Math.round(Number(entity.y) || 0)
             : 'id:' + id;
-          byId.set(key, { ...(byId.get(key) || {}), ...entity });
+          byId.set(key, mergeCombatEntitySource(byId.get(key), entity));
         };
         if (Array.isArray(bot.lastActionEntities)) {
           for (const entity of bot.lastActionEntities) add(entity);
@@ -11635,14 +11682,91 @@ function browserBotSource(config) {
 	  }
 
 	  function getEntities() {
+	    const realtimeEntities = getNativeEntityList();
+	    if (Array.isArray(realtimeEntities) && realtimeEntities.length) return realtimeEntities;
 	    const nativeState = getNativeState();
 	    if (Array.isArray(nativeState?.entities) && nativeState.entities.length) return nativeState.entities;
 	    return bot.globalState.entities || [];
 	  }
 
+  function realtimeEntityWorldPoint(value, preferRender = false) {
+    if (!value || typeof value !== 'object') return null;
+    const point = value.position || value.pos || value.point || value.coord || null;
+    const renderX = firstFiniteNumber(value.visual_x, value.visualX, value.render_x, value.renderX);
+    const renderY = firstFiniteNumber(value.visual_y, value.visualY, value.render_y, value.renderY);
+    const x = preferRender && Number.isFinite(renderX)
+      ? renderX
+      : firstFiniteNumber(value.x, value.pos_x, value.posX, value.world_x, value.worldX, value.coord_x, value.coordX, value.center_x, value.centerX, point?.x, renderX);
+    const y = preferRender && Number.isFinite(renderY)
+      ? renderY
+      : firstFiniteNumber(value.y, value.pos_y, value.posY, value.world_y, value.worldY, value.coord_y, value.coordY, value.center_y, value.centerY, point?.y, renderY);
+    return Number.isFinite(x) && Number.isFinite(y) ? { ...value, x, y } : null;
+  }
+
+  function realtimeEntityKey(entity) {
+    const id = entity?.user_id ?? entity?.userId ?? entity?.id;
+    if (id !== undefined && id !== null && id !== '') return 'id:' + id;
+    const point = realtimeEntityWorldPoint(entity, Boolean(entity?.render || entity?.nativeRender));
+    if (!point) return '';
+    return 'xy:' + Math.round(Number(point.x) || 0) + ':' + Math.round(Number(point.y) || 0);
+  }
+
+  function normalizeRealtimeEntity(raw, source, options = {}) {
+    if (!raw || typeof raw !== 'object') return null;
+    const point = realtimeEntityWorldPoint(raw, Boolean(options.render || raw.render || raw.nativeRender));
+    if (!point) return null;
+    return {
+      ...raw,
+      user_id: raw.user_id ?? raw.userId ?? raw.id,
+      id: raw.id ?? raw.user_id ?? raw.userId,
+      x: Number(point.x),
+      y: Number(point.y),
+      native: true,
+      realtime: true,
+      render: Boolean(options.render || raw.render || raw.nativeRender),
+      nativeSource: raw.nativeSource || raw.overlaySource || source
+    };
+  }
+
+  function mergeRealtimeEntity(previous, next) {
+    if (!previous) return next;
+    return {
+      ...previous,
+      ...next,
+      native: Boolean(previous.native || next.native),
+      realtime: Boolean(previous.realtime || next.realtime),
+      render: Boolean(previous.render || next.render),
+      snapshot: Boolean(previous.snapshot || next.snapshot)
+    };
+  }
+
   function getNativeEntityList() {
     const nativeState = getNativeState();
-    return Array.isArray(nativeState?.entities) ? nativeState.entities : null;
+    const hasNativeArray = Array.isArray(nativeState?.entities);
+    const byKey = new Map();
+    const add = (raw, source, options = {}) => {
+      const entity = normalizeRealtimeEntity(raw, source, options);
+      if (!entity) return;
+      const key = realtimeEntityKey(entity);
+      if (!key) return;
+      byKey.set(key, mergeRealtimeEntity(byKey.get(key), entity));
+    };
+    if (hasNativeArray) {
+      for (const entity of nativeState.entities) add(entity, 'state.entities');
+    }
+    let renderEntities = [];
+    try {
+      renderEntities = targetOverlayRenderEntities();
+    } catch (_) {
+      renderEntities = [];
+    }
+    if (Array.isArray(renderEntities)) {
+      for (const entity of renderEntities) {
+        add(entity, entity?.overlaySource || 'render', { render: true });
+      }
+    }
+    if (byKey.size) return Array.from(byKey.values());
+    return hasNativeArray ? [] : null;
   }
 
   function listFromNativeCoinValue(value) {
@@ -14593,9 +14717,10 @@ function browserBotSource(config) {
     const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
-      .filter(threat => isCurrentlyActive(threat) || isFiringEntity(threat) || isMovingThreat(threat))
+      .filter(threat => hasCombatActivitySignal(threat))
       .filter(threat => Number(threat.distance || 0) <= range)
       .sort((a, b) => {
+        if (hasCombatActivitySignal(a) !== hasCombatActivitySignal(b)) return hasCombatActivitySignal(a) ? -1 : 1;
         if (isFiringEntity(a) !== isFiringEntity(b)) return isFiringEntity(a) ? -1 : 1;
         return Number(a.distance || Infinity) - Number(b.distance || Infinity);
       })[0] || null;
@@ -16577,10 +16702,10 @@ function browserBotSource(config) {
       realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
 	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
-	      aimConfidence: aimStrategy.bypassJitter ? 1 : null,
-	      opponentProfile,
-	    };
-	    if (aimStrategy.bypassJitter) return exact;
+      aimConfidence: aimStrategy.bypassJitter ? 1 : null,
+      opponentProfile,
+    };
+    if (aimStrategy.bypassJitter) return exact;
     const dx = Number(aimSource.x) - Number(self.x);
     const dy = Number(aimSource.y) - Number(self.y);
     const baseLimit = combatAimJitterLimit(distance, motionScale);
