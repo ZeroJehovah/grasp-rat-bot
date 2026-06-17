@@ -193,6 +193,7 @@ function main() {
   const manifest = readJson('dist/manifest.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
+  const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
   const sharedDisplayFormatSource = readText('src/shared/display-format.js');
   const sharedPreservedStateSource = readText('src/shared/browser-preserved-state.js');
@@ -412,7 +413,7 @@ function main() {
       assert(text.includes('postLoginZoom: this.postLoginZoom'), 'status does not expose postLoginZoom state');
     });
     check(`${file} ignores join-mode-only Active for defensive combat`, () => {
-      const expectedMin = file === 'grasp-rat-bot.js' ? 2 : 1;
+      const expectedMin = 1;
       assert(
         countMatches(text, /const isJoinModeActive = e => e\?\.current_join_mode === 'Active' \|\| e\?\.mode === 'Active';/g) >= expectedMin,
         'join-mode Active helper not found'
@@ -740,9 +741,9 @@ function main() {
       assert(text.includes('function combatRetreatingTargetState'), 'retreating combat target helper not found');
       assert(text.includes('function combatRetreatIgnoreActive'), 'retreat-ignore helper not found');
       assert(text.includes('function rememberCombatRetreatIgnore'), 'retreat-ignore writer not found');
-      assert(text.includes('combatServerStallNoDamageLeaveMs: 25000'), 'server-stall no-damage exit wait is not configured');
-      assert(text.includes('combatServerStallNoDamagePrecisionGraceMs: 10000'), 'server-stall no-damage exit does not allow precision aim grace');
-      assert(text.includes('combatServerStallNoDamageHpGap: 5'), 'server-stall no-damage HP gap is not configured');
+      assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageLeaveMs', 25000), 'server-stall no-damage exit wait is not configured');
+      assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamagePrecisionGraceMs', 10000), 'server-stall no-damage exit does not allow precision aim grace');
+      assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageHpGap', 5), 'server-stall no-damage HP gap is not configured');
       assert(functionBody(text, 'combatServerStallNoDamageLeaveState').includes('effectiveWaitMs'), 'server-stall no-damage exit does not use an effective precision-grace wait');
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
@@ -999,64 +1000,71 @@ function main() {
     assert(replay.includes('2026-06-16-mango-out-of-range-authority') && replay.includes('expectExtraSuppression'), 'combat replay self-test does not cover immediate out-of-range authority suppression');
   });
 
-  check('grasp-rat-bot.js covers stationary full-stamina Active non-combat profit self-tests', () => {
+  check('source bot delegates self-test coverage to the extracted node self-test module', () => {
+    assert(sourceBot.includes("require('./src/node/run-self-test')"), 'run-self-test module import not found');
+    assert(sourceBot.includes('if (options.selfTest) {') && sourceBot.includes('runSelfTest();'), 'self-test entrypoint no longer delegates to runSelfTest');
+    assert(nodeSelfTestSource.includes('function runSelfTest() {'), 'run-self-test module does not export a runSelfTest function');
+    assert(nodeSelfTestSource.includes("module.exports = {\n  runSelfTest"), 'run-self-test module does not export runSelfTest');
+  });
+
+  check('run-self-test module covers stationary full-stamina Active non-combat profit self-tests', () => {
     assert(
-      /name: 'stationary full-stamina active zero drop does not beat coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'coin'/.test(sourceBot),
+      /name: 'stationary full-stamina active zero drop does not beat coin pickup'[\s\S]*current_join_mode: 'Active'[\s\S]*stamina_5s_remaining_milli: 10000[\s\S]*coins: \[\{ drop_id: 2, x: 5000, y: 0, amount: 1 \}\][\s\S]*want: 'coin'/.test(nodeSelfTestSource),
       'stationary full-stamina Active zero-drop no-combat self-test not found'
     );
     assert(
-      /name: 'stationary full-stamina active with drop is non-combat profit attack'[\s\S]*current_join_mode: 'Active'[\s\S]*death_reward_preview: 20[\s\S]*want: 'attack:false:best-opportunity-afk-drop-target'/.test(sourceBot),
+      /name: 'stationary full-stamina active with drop is non-combat profit attack'[\s\S]*current_join_mode: 'Active'[\s\S]*death_reward_preview: 20[\s\S]*want: 'attack:false:best-opportunity-afk-drop-target'/.test(nodeSelfTestSource),
       'stationary full-stamina Active profit attack non-combat self-test not found'
     );
   });
 
-  check('grasp-rat-bot.js covers visible opportunity ROI self-tests', () => {
-    assert(sourceBot.includes("name: 'higher roi 200m coin beats 150m coin inside visible pool'"), 'visible coin ROI self-test not found');
-    assert(sourceBot.includes("name: 'visible high afk drop beats opposite one coin by stamina roi'"), 'visible AFK-vs-coin ROI self-test not found');
-    assert(sourceBot.includes("name: 'near afk drop target beats far snapshot cluster by yield'"), 'visible AFK-vs-snapshot self-test not found');
-    assert(sourceBot.includes("name: 'visible afk target beats richer snapshot fallback'"), 'explicit visible AFK-before-snapshot self-test not found');
-    assert(sourceBot.includes("name: '500m drop five afk loses to 100m one coin by pickup travel cost'"), 'full pickup travel cost self-test not found');
-    assert(sourceBot.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
-    assert(sourceBot.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
-    assert(sourceBot.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
-    assert(sourceBot.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
-    assert(sourceBot.includes("name: 'high drop kill waits at last target position before coin refresh'"), 'post-kill drop wait self-test not found');
-    assert(sourceBot.includes("name: 'alive high drop target does not trigger post kill wait'"), 'alive-target no-wait self-test not found');
-    assert(sourceBot.includes("name: 'unshot high drop target disappearance does not trigger post kill wait'"), 'unshot-target no-wait self-test not found');
-    assert(sourceBot.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
+  check('run-self-test module covers visible opportunity ROI self-tests', () => {
+    assert(nodeSelfTestSource.includes("name: 'higher roi 200m coin beats 150m coin inside visible pool'"), 'visible coin ROI self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'visible high afk drop beats opposite one coin by stamina roi'"), 'visible AFK-vs-coin ROI self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'near afk drop target beats far snapshot cluster by yield'"), 'visible AFK-vs-snapshot self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'visible afk target beats richer snapshot fallback'"), 'explicit visible AFK-before-snapshot self-test not found');
+    assert(nodeSelfTestSource.includes("name: '500m drop five afk loses to 100m one coin by pickup travel cost'"), 'full pickup travel cost self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'high drop kill waits at last target position before coin refresh'"), 'post-kill drop wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'alive high drop target does not trigger post kill wait'"), 'alive-target no-wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'unshot high drop target disappearance does not trigger post kill wait'"), 'unshot-target no-wait self-test not found');
+    assert(nodeSelfTestSource.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
   });
 
-  check('grasp-rat-bot.js covers combat fire discipline self-tests', () => {
-    assert(sourceBot.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
-    assert(sourceBot.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');
-    assert(sourceBot.includes("name: 'non-full active edge target reengages instead of fleeing'"), 'non-full active edge reengage self-test not found');
-    assert(sourceBot.includes("name: 'non-full invulnerable active still flees'"), 'invulnerable active flee self-test not found');
-    assert(sourceBot.includes("name: 'full hp nearby invulnerable target still flees'"), 'full-HP invulnerable safety flee self-test not found');
-    assert(sourceBot.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
-    assert(sourceBot.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
-    assert(sourceBot.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
-    assert(sourceBot.includes("name: 'combat close pressure fire window keeps mid hp shooting'"), 'close-pressure fire window self-test not found');
-    assert(sourceBot.includes("name: 'combat long no-damage active duel resumes reserve-band fire'"), 'long no-damage duel fire self-test not found');
-    assert(sourceBot.includes("name: 'combat coordinate divergence immediately uses live precision aim'"), 'coordinate-divergence live precision self-test not found');
-    assert(sourceBot.includes("name: 'combat radial live target uses precision aim without waiting'"), 'radial-motion live precision self-test not found');
-    assert(sourceBot.includes("name: 'combat trend classifies long no-damage duel stance'"), 'combat trend stance self-test not found');
-    assert(sourceBot.includes("name: 'combat native tick interval tightens only during combat'"), 'combat-only native tick self-test not found');
-    assert(sourceBot.includes("name: 'combat action suppresses same-target pursuit leave'"), 'same-target pursuit suppression self-test not found');
-    assert(sourceBot.includes("name: 'defensive target switch requires immediate incoming bullet'"), 'defensive target switch self-test not found');
-    assert(sourceBot.includes("name: 'high hp combat gap observes before leaving'"), 'combat disadvantage observation self-test not found');
-    assert(sourceBot.includes("name: 'confirmed high hp combat gap leaves after observation'"), 'confirmed HP-gap exit self-test not found');
-    assert(sourceBot.includes("name: 'combat trade estimate observes losing exchange before exit'"), 'trade-estimate observation self-test not found');
-    assert(sourceBot.includes("name: 'confirmed combat trade estimate exits losing exchange'"), 'confirmed trade-estimate exit self-test not found');
-    assert(sourceBot.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
-    assert(sourceBot.includes("name: 'combat server stall no-damage waits for precision aim grace'"), 'server-stall precision grace self-test not found');
-    assert(sourceBot.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');
-    assert(sourceBot.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
-    assert(sourceBot.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
-    assert(sourceBot.includes("name: 'retreating out-of-range combat target disengages instead of chasing'"), 'retreating target disengage self-test not found');
-    assert(sourceBot.includes("name: 'retreating edge combat target suppresses fire'"), 'retreating edge fire suppression self-test not found');
-    assert(sourceBot.includes("name: 'retreat ignored target is not reselected without incoming bullet'"), 'retreat-ignore target selection self-test not found');
-    assert(sourceBot.includes("name: 'incoming bullet can reengage retreat ignored target'"), 'retreat-ignore incoming override self-test not found');
-    assert(sourceBot.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');
+  check('run-self-test module covers combat fire discipline self-tests', () => {
+    assert(nodeSelfTestSource.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'non-full active edge target reengages instead of fleeing'"), 'non-full active edge reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'non-full invulnerable active still flees'"), 'invulnerable active flee self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'full hp nearby invulnerable target still flees'"), 'full-HP invulnerable safety flee self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat preserves dodge stamina by pausing fire'"), 'dodge stamina reserve self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat reserve band uses burst fire without force shooting'"), 'burst fire self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat close pressure fire window keeps mid hp shooting'"), 'close-pressure fire window self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat long no-damage active duel resumes reserve-band fire'"), 'long no-damage duel fire self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat coordinate divergence immediately uses live precision aim'"), 'coordinate-divergence live precision self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat radial live target uses precision aim without waiting'"), 'radial-motion live precision self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat trend classifies long no-damage duel stance'"), 'combat trend stance self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat native tick interval tightens only during combat'"), 'combat-only native tick self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat action suppresses same-target pursuit leave'"), 'same-target pursuit suppression self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'defensive target switch requires immediate incoming bullet'"), 'defensive target switch self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'high hp combat gap observes before leaving'"), 'combat disadvantage observation self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'confirmed high hp combat gap leaves after observation'"), 'confirmed HP-gap exit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat trade estimate observes losing exchange before exit'"), 'trade-estimate observation self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'confirmed combat trade estimate exits losing exchange'"), 'confirmed trade-estimate exit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat server stall no-damage waits for precision aim grace'"), 'server-stall precision grace self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'retreating out-of-range combat target disengages instead of chasing'"), 'retreating target disengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'retreating edge combat target suppresses fire'"), 'retreating edge fire suppression self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'retreat ignored target is not reselected without incoming bullet'"), 'retreat-ignore target selection self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'incoming bullet can reengage retreat ignored target'"), 'retreat-ignore incoming override self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');
   });
 
   const obsoleteReason = ['wait', 'for', 'clear', 'opportunity'].join('-');
