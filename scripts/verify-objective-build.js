@@ -60,6 +60,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatRetreatDistanceDeltaMin', value: 600 },
   { key: 'combatRetreatIgnoreMs', value: 15000 },
   { key: 'combatLowHpCloseRiskMargin', value: 5 },
+  { key: 'combatDisadvantageConfirmMs', value: 2500 },
+  { key: 'combatDisadvantageMinEngageMs', value: 3500 },
+  { key: 'combatDisadvantageMinSamples', value: 4 },
   { key: 'combatSpacingEmergencyRange', value: 3000 },
   { key: 'combatSpacingLowHpThreshold', value: 70 },
   { key: 'combatPressureCloseMinHp', value: 60 },
@@ -278,6 +281,7 @@ function main() {
       const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text;
       const defaultsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
       assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('combatRetreatIgnore instanceof Map'), 'preserved-state helper does not preserve combat retreat maps');
+      assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('combatDisadvantageObservation'), 'preserved-state helper does not preserve combat disadvantage observation');
       assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('preBuffer: Array.isArray'), 'preserved-state helper does not bound combat prebuffer');
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowNativeReconnect: false'), 'runtime defaults do not keep native reconnect disabled');
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowBotWebSocketFallback: false'), 'runtime defaults do not keep bot websocket fallback disabled');
@@ -1028,6 +1032,10 @@ function main() {
     assert(sourceBot.includes("name: 'combat native tick interval tightens only during combat'"), 'combat-only native tick self-test not found');
     assert(sourceBot.includes("name: 'combat action suppresses same-target pursuit leave'"), 'same-target pursuit suppression self-test not found');
     assert(sourceBot.includes("name: 'defensive target switch requires immediate incoming bullet'"), 'defensive target switch self-test not found');
+    assert(sourceBot.includes("name: 'high hp combat gap observes before leaving'"), 'combat disadvantage observation self-test not found');
+    assert(sourceBot.includes("name: 'confirmed high hp combat gap leaves after observation'"), 'confirmed HP-gap exit self-test not found');
+    assert(sourceBot.includes("name: 'combat trade estimate observes losing exchange before exit'"), 'trade-estimate observation self-test not found');
+    assert(sourceBot.includes("name: 'confirmed combat trade estimate exits losing exchange'"), 'confirmed trade-estimate exit self-test not found');
     assert(sourceBot.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
     assert(sourceBot.includes("name: 'combat server stall no-damage waits for precision aim grace'"), 'server-stall precision grace self-test not found');
     assert(sourceBot.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');

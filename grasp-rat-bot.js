@@ -155,6 +155,9 @@ function runSelfTest() {
     combatLowHpLeaveThreshold: 50,
     combatLowHpCloseRiskMargin: 5,
     combatHighHpDisadvantageGap: 20,
+    combatDisadvantageConfirmMs: 2500,
+    combatDisadvantageMinEngageMs: 3500,
+    combatDisadvantageMinSamples: 4,
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
     combatLowHpNoDamageMinGap: 0,
@@ -372,7 +375,7 @@ function runSelfTest() {
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), opportunityChoice: null, opportunitySwitchLock: null };
+  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -1920,6 +1923,56 @@ function runSelfTest() {
     bot.combatRetreatIgnore.set(id, t + Math.max(1000, Number(cfg.combatRetreatIgnoreMs || 0) || 15000));
   }
 
+  function clearCombatDisadvantageObservation(reason = '') {
+    if (!bot.combatDisadvantageObservation) return;
+    bot.lastCombatDisadvantageObservationClear = { at: Date.now(), reason };
+    bot.combatDisadvantageObservation = null;
+  }
+
+  function combatDisadvantageObservationState(target, kind, evidence = {}) {
+    const id = combatTargetId(target);
+    if (!id || !kind) return null;
+    const t = Date.now();
+    const previous = bot.combatDisadvantageObservation || null;
+    const same = previous && String(previous.id || '') === id && String(previous.kind || '') === String(kind);
+    const currentTarget = bot.combatTarget && String(bot.combatTarget.id ?? '') === id ? bot.combatTarget : null;
+    const firstAt = same ? Number(previous.firstAt || previous.at || t) : t;
+    const count = Math.max(1, same ? Number(previous.count || 1) + 1 : 1);
+    const engagedAt = Number(currentTarget?.firstSeenAt || currentTarget?.at || firstAt || t);
+    const observedMs = Math.max(0, t - firstAt);
+    const engagedMs = Math.max(0, t - engagedAt);
+    const confirmMs = Math.max(0, Number(cfg.combatDisadvantageConfirmMs || 0));
+    const minEngageMs = Math.max(0, Number(cfg.combatDisadvantageMinEngageMs || 0));
+    const minSamples = Math.max(1, Math.round(Number(cfg.combatDisadvantageMinSamples || 1)));
+    const sampleCount = Math.max(
+      count,
+      Math.round(Number(evidence?.sampleCount || 0)),
+      Array.isArray(currentTarget?.motionSamples) ? currentTarget.motionSamples.length : 0
+    );
+    const remainingMs = Math.max(0, confirmMs - observedMs, minEngageMs - engagedMs);
+    const samplesRemaining = Math.max(0, minSamples - sampleCount);
+    const state = {
+      active: true,
+      id,
+      kind: String(kind),
+      firstAt,
+      at: t,
+      observedMs: Math.round(observedMs),
+      engagedMs: Math.round(engagedMs),
+      count,
+      sampleCount,
+      confirmMs,
+      minEngageMs,
+      minSamples,
+      remainingMs: Math.round(remainingMs),
+      samplesRemaining,
+      ready: remainingMs <= 0 && samplesRemaining <= 0,
+      evidence
+    };
+    bot.combatDisadvantageObservation = state;
+    return state;
+  }
+
   function pickEngagedCombatTarget(self, entities) {
     const engaged = bot.combatTarget;
     if (!engaged?.id) return null;
@@ -2776,11 +2829,15 @@ function runSelfTest() {
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
     const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
-	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
-	      && Number.isFinite(hpGap)
-	      && hpGap > cfg.combatHighHpDisadvantageGap) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap }, bullets);
-	    }
+    let disadvantageObservation = null;
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'hp-gap', { selfHp, targetHp, hpGap });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveAction('combat-hp-disadvantage-leave', self, target, { hpGap, disadvantageObservation }, bullets);
+      }
+    }
     const targetThreat = incomingBulletThreatForTest(self, target, bullets);
     const anyThreat = targetThreat || incomingBulletThreatForTest(self, null, bullets);
     const targetBulletSeen = (bullets || []).some(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) === Number(target.user_id));
@@ -2821,6 +2878,7 @@ function runSelfTest() {
     }
     if (retreatingTarget.disengage) {
       rememberCombatRetreatIgnore(target);
+      clearCombatDisadvantageObservation('target-retreating');
       bot.combatTarget = null;
       return {
         kind: 'wait',
@@ -2845,13 +2903,23 @@ function runSelfTest() {
 	        pressureDisadvantage
 	      }, bullets);
 	    }
-	    const tradeEstimate = combatTradeEstimate(self, target);
-	    if (tradeEstimate?.active) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
-	        hpGap,
-	        tradeEstimate
-	      }, bullets);
-	    }
+    const tradeEstimate = combatTradeEstimate(self, target);
+    if (!disadvantageObservation && tradeEstimate?.active) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'trade-estimate', {
+        selfHp,
+        targetHp,
+        hpGap,
+        ...tradeEstimate
+      });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
+          hpGap,
+          tradeEstimate,
+          disadvantageObservation
+        }, bullets);
+      }
+    }
+    if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
 	    const pressureClose = retreatingTarget.active
       ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
       : combatPressureCloseVector(self, target, target.distance, selfHp);
@@ -2994,6 +3062,7 @@ function runSelfTest() {
         noDamageMs,
 	        steadyAim,
 	        opponentProfile,
+        disadvantageObservation,
 	        movementSuppressed,
         shooting,
         incomingBullet: anyThreat ? {
@@ -3420,13 +3489,16 @@ function runSelfTest() {
       want: 'attack'
     },
     {
-      name: 'active combat hp gap disadvantage leaves instead of taking coin',
-      got: choose({
-        self: { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 70, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 91, death_reward_preview: 30 }],
-        coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
-      }).reason,
-      want: 'combat-hp-disadvantage-leave'
+      name: 'active combat hp gap disadvantage observes instead of taking coin',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 70, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 91, death_reward_preview: 30 }],
+          coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
+        });
+        return action.kind + ':' + action.reason + ':' + action.combatState?.disadvantageObservation?.kind + ':' + Boolean(action.combatState?.disadvantageObservation?.ready);
+      })(),
+      want: 'attack:combat-spacing:hp-gap:false'
     },
     {
       name: 'near profitable active combat beats far snapshot cluster by yield',
@@ -3978,13 +4050,44 @@ function runSelfTest() {
       }).exitSummary,
       want: '与强敌战斗，血量19低于20，紧急退出'
     },
-	    {
-	      name: 'high hp combat gap over threshold leaves immediately',
-	      got: choose({
-        self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 91, firing: true }]
-      }).reason,
-      want: 'combat-hp-disadvantage-leave'
+    {
+      name: 'high hp combat gap observes before leaving',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 91, firing: true }]
+        });
+        const observation = action.combatState?.disadvantageObservation;
+        return action.kind + ':' + action.reason + ':' + observation?.kind + ':' + Boolean(observation?.ready);
+      })(),
+      want: 'attack:combat-tangent-dodge:hp-gap:false'
+    },
+    {
+      name: 'confirmed high hp combat gap leaves after observation',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 4,
+          at: t - 5000,
+          firstSeenAt: t - 5000,
+          hp: 91,
+          motionSamples: [
+            { at: t - 5000, hp: 91, selfHp: 70 },
+            { at: t - 3900, hp: 91, selfHp: 70 },
+            { at: t - 2800, hp: 91, selfHp: 70 },
+            { at: t - 1700, hp: 91, selfHp: 70 }
+          ]
+        };
+        bot.combatDisadvantageObservation = { id: '4', kind: 'hp-gap', firstAt: t - 3000, at: t - 100, count: 4 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+          { user_id: 4, x: 10000, y: 0, distance: 10000, current_join_mode: 'Passive', hp: 91, firing: true }
+        );
+        bot.combatTarget = null;
+        bot.combatDisadvantageObservation = null;
+        return action.reason + ':' + action.combatState?.disadvantageObservation?.kind + ':' + Boolean(action.combatState?.disadvantageObservation?.ready);
+      })(),
+      want: 'combat-hp-disadvantage-leave:hp-gap:true'
     },
     {
       name: 'recovering combat gap at threshold keeps fighting',
@@ -4801,7 +4904,7 @@ function runSelfTest() {
       want: 'combat-burst-fire:low-confidence-burst:520:true'
     },
     {
-      name: 'combat trade estimate exits losing exchange before static hp gap',
+      name: 'combat trade estimate observes losing exchange before exit',
       got: (() => {
         const t = Date.now();
         bot.combatTarget = {
@@ -4820,9 +4923,37 @@ function runSelfTest() {
           { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 90, vx: 35, drop: 20 }
         );
         bot.combatTarget = null;
-        return action.reason + ':' + Boolean(action.combatState?.tradeEstimate?.active) + ':' + Math.round(action.combatState?.tradeEstimate?.selfDamage || 0);
+        bot.combatDisadvantageObservation = null;
+        return action.reason + ':' + action.combatState?.disadvantageObservation?.kind + ':' + Boolean(action.combatState?.disadvantageObservation?.ready) + ':' + Math.round(action.combatState?.disadvantageObservation?.evidence?.selfDamage || 0);
       })(),
-      want: 'combat-hp-disadvantage-leave:true:20'
+      want: 'combat-attack:trade-estimate:false:20'
+    },
+    {
+      name: 'confirmed combat trade estimate exits losing exchange',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 7,
+          at: t - 5200,
+          firstSeenAt: t - 5200,
+          lastDamageAt: t - 500,
+          hp: 95,
+          motionSamples: [
+            { at: t - 5200, x: 10000, y: 0, vx: 35, vy: 0, hp: 100, selfHp: 100 },
+            { at: t - 3600, x: 10200, y: 0, vx: 35, vy: 0, hp: 98, selfHp: 92 },
+            { at: t - 2100, x: 10400, y: 0, vx: 35, vy: 0, hp: 95, selfHp: 84 }
+          ]
+        };
+        bot.combatDisadvantageObservation = { id: '7', kind: 'trade-estimate', firstAt: t - 3000, at: t - 100, count: 4 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 80, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+          { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 90, vx: 35, drop: 20 }
+        );
+        bot.combatTarget = null;
+        bot.combatDisadvantageObservation = null;
+        return action.reason + ':' + Boolean(action.combatState?.tradeEstimate?.active) + ':' + action.combatState?.disadvantageObservation?.kind + ':' + Boolean(action.combatState?.disadvantageObservation?.ready);
+      })(),
+      want: 'combat-hp-disadvantage-leave:true:trade-estimate:true'
     },
     {
       name: 'combat native tick interval tightens only during combat',
@@ -6007,6 +6138,7 @@ function browserBotSource(config) {
     combatTarget: preserved.combatTarget,
     combatRetreatIgnore: preserved.combatRetreatIgnore,
     combatAim: preserved.combatAim,
+    combatDisadvantageObservation: preserved.combatDisadvantageObservation,
     lastCombatLogMetric: preserved.lastCombatLogMetric,
     lastCombatShot: preserved.lastCombatShot,
     combatLogging: {
@@ -12999,6 +13131,7 @@ function browserBotSource(config) {
     bot.lastCombatTargetClear = { at: Date.now(), reason };
     bot.combatTarget = null;
     bot.combatAim = null;
+    clearCombatDisadvantageObservation(reason || 'combat-engagement-cleared');
   }
 
   function killIdentityMatches(item, victim, id) {
@@ -15776,6 +15909,56 @@ function browserBotSource(config) {
     bot.combatRetreatIgnore.set(id, t + Math.max(1000, Number(cfg.combatRetreatIgnoreMs || 0) || 15000));
   }
 
+  function clearCombatDisadvantageObservation(reason = '') {
+    if (!bot.combatDisadvantageObservation) return;
+    bot.lastCombatDisadvantageObservationClear = { at: Date.now(), reason };
+    bot.combatDisadvantageObservation = null;
+  }
+
+  function combatDisadvantageObservationState(target, kind, evidence = {}) {
+    const id = combatTargetId(target);
+    if (!id || !kind) return null;
+    const t = Date.now();
+    const previous = bot.combatDisadvantageObservation || null;
+    const same = previous && String(previous.id || '') === id && String(previous.kind || '') === String(kind);
+    const currentTarget = bot.combatTarget && String(bot.combatTarget.id ?? '') === id ? bot.combatTarget : null;
+    const firstAt = same ? Number(previous.firstAt || previous.at || t) : t;
+    const count = Math.max(1, same ? Number(previous.count || 1) + 1 : 1);
+    const engagedAt = Number(currentTarget?.firstSeenAt || currentTarget?.at || firstAt || t);
+    const observedMs = Math.max(0, t - firstAt);
+    const engagedMs = Math.max(0, t - engagedAt);
+    const confirmMs = Math.max(0, Number(cfg.combatDisadvantageConfirmMs || 0));
+    const minEngageMs = Math.max(0, Number(cfg.combatDisadvantageMinEngageMs || 0));
+    const minSamples = Math.max(1, Math.round(Number(cfg.combatDisadvantageMinSamples || 1)));
+    const sampleCount = Math.max(
+      count,
+      Math.round(Number(evidence?.sampleCount || 0)),
+      Array.isArray(currentTarget?.motionSamples) ? currentTarget.motionSamples.length : 0
+    );
+    const remainingMs = Math.max(0, confirmMs - observedMs, minEngageMs - engagedMs);
+    const samplesRemaining = Math.max(0, minSamples - sampleCount);
+    const state = {
+      active: true,
+      id,
+      kind: String(kind),
+      firstAt,
+      at: t,
+      observedMs: Math.round(observedMs),
+      engagedMs: Math.round(engagedMs),
+      count,
+      sampleCount,
+      confirmMs,
+      minEngageMs,
+      minSamples,
+      remainingMs: Math.round(remainingMs),
+      samplesRemaining,
+      ready: remainingMs <= 0 && samplesRemaining <= 0,
+      evidence
+    };
+    bot.combatDisadvantageObservation = state;
+    return state;
+  }
+
   function combatAimDamageState(target) {
     const id = combatTargetId(target);
     const previous = bot.combatTarget;
@@ -16703,15 +16886,19 @@ function browserBotSource(config) {
 	    }
 	    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
 	      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-	    }
+    }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
     const hpGap = Number(knownTargetHp) - Number(knownSelfHp);
-	    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
-	      && Number.isFinite(hpGap)
-	      && hpGap > cfg.combatHighHpDisadvantageGap) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-	    }
+    let disadvantageObservation = null;
+    if (knownSelfHp > cfg.combatLowHpLeaveThreshold
+      && Number.isFinite(hpGap)
+      && hpGap > cfg.combatHighHpDisadvantageGap) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'hp-gap', { selfHp, targetHp, hpGap });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+      }
+    }
     const pressure = combatPressureThreat(self, target, bullets);
     const realBulletPressure = Boolean(pressure && !pressure.synthetic);
     const spacing = combatSpacingVector(self, target, targetDistance);
@@ -16730,15 +16917,25 @@ function browserBotSource(config) {
 	        pressureDisadvantage
 	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
-	    const tradeEstimate = combatTradeEstimate(self, target);
-	    if (tradeEstimate?.active) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
-	        selfHp,
-	        targetHp,
-	        hpGap,
-	        tradeEstimate
-	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
-	    }
+    const tradeEstimate = combatTradeEstimate(self, target);
+    if (!disadvantageObservation && tradeEstimate?.active) {
+      disadvantageObservation = combatDisadvantageObservationState(target, 'trade-estimate', {
+        selfHp,
+        targetHp,
+        hpGap,
+        ...tradeEstimate
+      });
+      if (disadvantageObservation?.ready) {
+        return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+          selfHp,
+          targetHp,
+          hpGap,
+          tradeEstimate,
+          disadvantageObservation
+        }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+      }
+    }
+    if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
 	    const serverStallNoDamage = combatServerStallNoDamageLeaveState(
       selfHp,
       targetHp,
@@ -16757,6 +16954,7 @@ function browserBotSource(config) {
     }
     if (retreatingTarget.disengage) {
       rememberCombatRetreatIgnore(target);
+      clearCombatDisadvantageObservation('target-retreating');
       clearCombatEngagement('target-retreating');
       return {
         kind: 'wait',
@@ -17000,6 +17198,7 @@ function browserBotSource(config) {
         } : null,
         movementSuppressed,
         shooting,
+        disadvantageObservation,
         retreatingTarget: retreatingTarget.active ? retreatingTarget : null
       }
     };
