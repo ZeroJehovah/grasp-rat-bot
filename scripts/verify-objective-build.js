@@ -687,6 +687,7 @@ function main() {
       assert(shootingBody.includes('forceShoot: false'), 'combat shooting plan can still force-shoot');
       const combatBody = functionBody(text, 'buildCombatAction');
       const aimBody = functionBody(text, 'combatAimTarget');
+      const chooseActionBody = functionBody(text, 'chooseAction');
       assert(text.includes('function combatAimFallbackPrecisionState'), 'fallback precision aim helper not found');
       assert(text.includes('function combatAimDynamicStrategyState'), 'dynamic combat aim strategy helper not found');
       assert(text.includes('function combatAimSourceDivergenceState'), 'combat aim source divergence helper not found');
@@ -696,7 +697,9 @@ function main() {
       assert(text.includes('function combatAimTarget(self, target, options = {})'), 'combat aim target cannot receive pressure options');
       assert(combatBody.includes('combatAimTarget(self, target, { realBulletPressure })'), 'combat action does not pass real bullet pressure into aim');
       assert(text.includes('combatAimTarget(self, target, { realBulletPressure })'), 'leave cover does not pass real bullet pressure into aim');
+      assert(aimBody.includes('realBulletPressure: Boolean(options.realBulletPressure)'), 'combat aim does not pass real bullet pressure into dynamic strategy');
       assert(text.includes("reason = 'coordinate-divergence'"), 'combat aim does not switch on live/source coordinate divergence');
+      assert(text.includes("reason = 'real-bullet-pressure'"), 'combat aim does not switch to live precision under real bullet pressure');
       assert(text.includes("reason = 'server-stall-live'"), 'combat aim does not switch to server-stall live precision');
       assert(text.includes("reason = 'radial-motion'"), 'combat aim does not switch on target radial movement');
       assert(text.includes("reason = 'no-damage-fallback'"), 'combat aim fallback precision reason not found');
@@ -706,7 +709,13 @@ function main() {
       assert(!aimBody.includes('snapshotAim:'), 'combat logs still expose snapshot aim state');
       assert(aimBody.includes('aimStrategyReason: aimStrategy.reason'), 'combat logs do not expose aim strategy reason');
       assert(aimBody.includes('sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm'), 'combat logs do not expose aim source divergence');
+      assert(aimBody.includes('realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision)'), 'combat logs do not expose real-bullet precision aim state');
       assert(aimBody.includes('if (aimStrategy.bypassJitter) return exact'), 'dynamic precision/steady aim does not bypass jitter');
+      assert(text.includes('function pickActiveCombatWaitThreat'), 'active combat wait threat helper not found');
+      assert(text.includes('function activeCombatThreatWaitAction'), 'active combat wait action helper not found');
+      assert(text.includes("reason: 'combat-active-threat-wait'"), 'active combat wait action reason not found');
+      assert(chooseActionBody.includes('const activeCombatWaitThreat = pickActiveCombatWaitThreat(activeThreats)'), 'chooseAction does not compute active combat wait threat');
+      assert(chooseActionBody.includes('return activeCombatThreatWaitAction(activeCombatWaitThreat)'), 'chooseAction does not wait instead of taking coins near active combat threats');
       assert(!shootingBody.includes('authorityOutOfRange'), 'combat shooting plan still accepts authority out-of-range state');
       assert(!shootingBody.includes("reason: 'authority-target-out-of-range'"), 'combat shooting plan still suppresses out-of-authority-range fire');
       assert(text.includes('function combatSpacingShouldOverrideBullet'), 'combat spacing cannot override real bullet dodge when too close');
