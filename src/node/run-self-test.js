@@ -819,12 +819,21 @@ function runSelfTest() {
       && moving
       && options.realBulletPressure
       && (!attackRange || Number(distance) <= attackRange));
+    const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+    const liveIntercept = Boolean(live
+      && moving
+      && movement
+      && lateralRatio > radialMax
+      && (
+        realBulletPrecision
+        || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+      ));
     const radialPrecision = Boolean(live
       && moving
       && radialMax > 0
       && movement
       && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
-      && Math.abs(Number(movement.lateralRatio || 0)) <= radialMax
+      && lateralRatio <= radialMax
       && (!attackRange || Number(distance) <= attackRange));
     let mode = moving ? 'intercept' : 'exact';
     let strategy = moving ? 'intercept' : 'exact';
@@ -836,11 +845,17 @@ function runSelfTest() {
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
       precision = true;
+    } else if (realBulletPrecision && liveIntercept) {
+      strategy = 'live-intercept';
+      reason = 'real-bullet-pressure-intercept';
     } else if (realBulletPrecision) {
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'real-bullet-pressure';
       precision = true;
+    } else if (live && serverStall.stalled && liveIntercept) {
+      strategy = 'live-intercept';
+      reason = 'server-stall-live-intercept';
     } else if (live && serverStall.stalled) {
       mode = 'live-precision';
       strategy = 'live-precision';
@@ -871,6 +886,7 @@ function runSelfTest() {
       bypassJitter: Boolean(!moving || precision || steady),
       sourceDivergence,
       serverStall: Boolean(serverStall.stalled),
+      liveIntercept,
       realBulletPrecision,
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
@@ -2915,6 +2931,7 @@ function runSelfTest() {
         sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
         sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
         serverStall: Boolean(aimStrategy.serverStall),
+        liveIntercept: Boolean(aimStrategy.liveIntercept),
         realBulletPrecision: Boolean(aimStrategy.realBulletPrecision),
         radialPrecision: Boolean(aimStrategy.radialPrecision),
         fallbackPrecision: Boolean(aimStrategy.fallbackPrecision),
@@ -4537,7 +4554,7 @@ function runSelfTest() {
         bot.serverPositionStall = null;
         bot.testNativeEntities = null;
         bot.testSnapshotEntities = null;
-        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + action.aimTarget?.x + ':' + Boolean(action.aimTarget?.snapshot);
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + action.aimTarget?.x + ':' + Boolean(action.aimTarget?.liveIntercept);
       })(),
       want: 'live-precision:live-precision:server-stall-live:10000:false'
     },
@@ -4556,9 +4573,61 @@ function runSelfTest() {
         bot.combatTarget = null;
         bot.testNativeEntities = null;
         bot.testSnapshotEntities = null;
-        return action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + action.aimTarget?.x + ':' + Boolean(action.aimTarget?.snapshot) + ':' + Boolean(action.aimTarget?.realBulletPrecision);
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + action.aimTarget?.x + ':' + Boolean(action.aimTarget?.liveIntercept) + ':' + Boolean(action.aimTarget?.realBulletPrecision);
       })(),
-      want: 'live-precision:real-bullet-pressure:10000:false:true'
+      want: 'live-precision:live-precision:real-bullet-pressure:10000:false:true'
+    },
+    {
+      name: 'combat server-stall lateral live target keeps intercept',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t - 7000, lastDamageAt: t - 7000, hp: 100 };
+        bot.serverPositionStall = { stalled: true, reason: 'server-position-stalled', movingMs: 7000, gap: 4200 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 6000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 0, vy: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 }
+        );
+        bot.combatTarget = null;
+        bot.serverPositionStall = null;
+        bot.testNativeEntities = null;
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + Boolean(action.aimTarget?.liveIntercept);
+      })(),
+      want: 'intercept:live-intercept:server-stall-live-intercept:true'
+    },
+    {
+      name: 'combat real bullet pressure lateral live target keeps intercept',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 50, motionObservedSpeed: 50, recentlyMoved: true }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 6000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 0, vy: 50, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + Boolean(action.aimTarget?.liveIntercept) + ':' + Boolean(action.aimTarget?.realBulletPrecision);
+      })(),
+      want: 'intercept:live-intercept:real-bullet-pressure-intercept:true:true'
+    },
+    {
+      name: 'combat real bullet pressure radial target still uses live precision',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: -50, vy: 0, motionObservedSpeed: 50, recentlyMoved: true }];
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 6000 },
+          { user_id: 7, name: 'target', x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: -50, vy: 0, motionObservedSpeed: 50, recentlyMoved: true, drop: 20 },
+          [{ ownerId: 7 }]
+        );
+        bot.combatTarget = null;
+        bot.testNativeEntities = null;
+        return action.aimMode + ':' + action.aimTarget?.strategy + ':' + action.aimTarget?.strategyReason + ':' + Boolean(action.aimTarget?.liveIntercept) + ':' + Boolean(action.aimTarget?.radialPrecision);
+      })(),
+      want: 'live-precision:live-precision:real-bullet-pressure:false:true'
     },
     {
       name: 'combat out-of-range snapshot does not suppress fire',

@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.180"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.181"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -11166,12 +11166,21 @@ function hpDisplay(value) {
       && moving
       && options.realBulletPressure
       && (!attackRange || Number(distance) <= attackRange));
+    const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+    const liveIntercept = Boolean(live
+      && moving
+      && movement
+      && lateralRatio > radialMax
+      && (
+        realBulletPrecision
+        || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+      ));
     const radialPrecision = Boolean(live
       && moving
       && radialMax > 0
       && movement
       && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0)
-      && Math.abs(Number(movement.lateralRatio || 0)) <= radialMax
+      && lateralRatio <= radialMax
       && (!attackRange || Number(distance) <= attackRange));
     let mode = moving ? 'intercept' : 'exact';
     let strategy = moving ? 'intercept' : 'exact';
@@ -11183,11 +11192,17 @@ function hpDisplay(value) {
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
       precision = true;
+    } else if (realBulletPrecision && liveIntercept) {
+      strategy = 'live-intercept';
+      reason = 'real-bullet-pressure-intercept';
     } else if (realBulletPrecision) {
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'real-bullet-pressure';
       precision = true;
+    } else if (live && serverStall.stalled && liveIntercept) {
+      strategy = 'live-intercept';
+      reason = 'server-stall-live-intercept';
     } else if (live && serverStall.stalled) {
       mode = 'live-precision';
       strategy = 'live-precision';
@@ -11218,6 +11233,7 @@ function hpDisplay(value) {
       bypassJitter: Boolean(!moving || precision || steady),
       sourceDivergence,
       serverStall: Boolean(serverStall.stalled),
+      liveIntercept,
       realBulletPrecision,
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
@@ -11291,16 +11307,20 @@ function hpDisplay(value) {
       && Number(previousAim.noDamageBucket || 0) === noDamageBucket
       && Number(previousAim.motionBucket ?? motionBucket) === motionBucket
       && now() < Number(previousAim.until || 0);
-	    if (intercept) {
-	      const interceptConfidence = clamp(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1);
-	      let spreadAngle = 0;
+    if (intercept) {
+      const interceptStrategyReason = aimStrategy.liveIntercept
+        ? (aimStrategy.reason || 'live-intercept')
+        : 'quadratic-intercept';
+      const interceptConfidence = clamp(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1);
+      let spreadAngle = 0;
       const locked = lockCompatible && Number.isFinite(Number(previousAim.spreadAngle));
       if (locked) {
         spreadAngle = Number(previousAim.spreadAngle);
         sign = Math.sign(Number(previousAim.sign || sign)) || sign;
       } else {
-        const spreadScale = Math.max(0, Number(cfg.combatInterceptSpreadScale ?? 0.18));
-	        const uncertainty = 1 - Math.max(0, Math.min(1, interceptConfidence));
+        const spreadScale = Math.max(0, Number(cfg.combatInterceptSpreadScale ?? 0.18))
+          * (aimStrategy.liveIntercept ? 0.35 : 1);
+        const uncertainty = 1 - Math.max(0, Math.min(1, interceptConfidence));
         const randomLimit = jitterLimit * spreadScale * (0.35 + uncertainty) * (noDamageLevel ? 1.35 : 1);
         spreadAngle = (Math.random() * 2 - 1) * randomLimit;
         bot.combatAim = {
@@ -11344,10 +11364,11 @@ function hpDisplay(value) {
         liveAim: Boolean(aimSource.nativeAimResolved),
         liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
         aimStrategy: aimStrategy.strategy,
-        aimStrategyReason: 'quadratic-intercept',
+        aimStrategyReason: interceptStrategyReason,
         sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
         sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
         serverStallAim: Boolean(aimStrategy.serverStall),
+        liveInterceptAim: Boolean(aimStrategy.liveIntercept),
         realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
         radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
         fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
@@ -11407,14 +11428,17 @@ function hpDisplay(value) {
       liveAim: Boolean(aimSource.nativeAimResolved),
       liveDistance: aimSource.nativeAimResolved ? Math.round(distance) : null,
       aimStrategy: aimStrategy.strategy,
-      aimStrategyReason: 'intercept-fallback',
+      aimStrategyReason: aimStrategy.liveIntercept
+        ? (aimStrategy.reason || 'live-intercept')
+        : 'intercept-fallback',
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
+      liveInterceptAim: Boolean(aimStrategy.liveIntercept),
       realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
-	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
-	      interceptAim: false,
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      interceptAim: false,
 	      aimConfidence: Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, motionScale * 0.35)))),
 	      opponentProfile
 	    };

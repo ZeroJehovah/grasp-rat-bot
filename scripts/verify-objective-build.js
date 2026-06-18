@@ -778,9 +778,13 @@ function main() {
       assert(aimBody.includes('realBulletPressure: Boolean(options.realBulletPressure)'), 'combat aim does not pass real bullet pressure into dynamic strategy');
       assert(text.includes("reason = 'coordinate-divergence'"), 'combat aim does not switch on live/source coordinate divergence');
       assert(text.includes("reason = 'real-bullet-pressure'"), 'combat aim does not switch to live precision under real bullet pressure');
+      assert(text.includes("reason = 'real-bullet-pressure-intercept'"), 'combat aim does not keep intercept under real bullet pressure for lateral targets');
       assert(text.includes("reason = 'server-stall-live'"), 'combat aim does not switch to server-stall live precision');
+      assert(text.includes("reason = 'server-stall-live-intercept'"), 'combat aim does not keep intercept under server stall for lateral targets');
       assert(text.includes("reason = 'radial-motion'"), 'combat aim does not switch on target radial movement');
       assert(text.includes("reason = 'no-damage-fallback'"), 'combat aim fallback precision reason not found');
+      assert(aimBody.includes('liveInterceptAim: Boolean(aimStrategy.liveIntercept)'), 'combat logs do not expose live-intercept aim state');
+      assert(aimBody.includes('const interceptStrategyReason = aimStrategy.liveIntercept'), 'combat intercept aim does not preserve strategy reason');
       assert(aimBody.includes('mode: aimStrategy.mode'), 'combat aim does not use dynamic strategy mode');
       assert(aimBody.includes('precisionAim: Boolean(aimStrategy.precision)'), 'combat logs do not expose dynamic precision aim state');
       assert(aimBody.includes('liveAim: Boolean(aimSource.nativeAimResolved)'), 'combat logs do not expose live aim state');
@@ -993,7 +997,7 @@ function main() {
     assert(dailySummary.includes('function walk(dir)') && dailySummary.includes("item.name.endsWith('.jsonl')"), 'daily summary does not recursively read all JSONL files');
     assert(dailySummary.includes("item.type === 'important-log'") || dailySummary.includes("entry.type === 'important-log'"), 'daily summary does not filter important logs');
     assert(dailySummary.includes('importantEventsById'), 'daily summary does not dedupe important logs by id');
-    assert(dailySummary.includes('mergeSession(sessions.get(event.session.sessionId), event.session)'), 'daily summary does not merge session-start/end records');
+    assert(dailySummary.includes('sessions.set(sessionPayload.sessionId, mergeSession(sessions.get(sessionPayload.sessionId), sessionPayload))'), 'daily summary does not merge session-start/end records');
     assert(dailySummary.includes('staminaSpentMs === 123000'), 'daily summary self-test does not cover cross-file stamina merge');
     assert(dailySummary.includes("event.importantType === 'combat-summary'"), 'daily summary does not consume combat-summary events');
     assert(dailySummary.includes('## 登录统计') && dailySummary.includes('## 活跃玩家战斗统计'), 'daily summary does not print both required report dimensions');
@@ -1002,7 +1006,7 @@ function main() {
     assert(dailySummary.includes('activeKillCount === 1') && dailySummary.includes('afkKillCount === 1') && dailySummary.includes('activeUnconfirmedKillCount === 1') && dailySummary.includes('activeUnconfirmedDropCoins === 30'), 'daily summary self-test does not cover AFK/active confirmed and unconfirmed kill buckets');
     assert(dailySummary.includes('report.combats[0].staminaSpentMs === 2500'), 'daily summary self-test does not cover combat stamina');
     assert(dailySummary.includes('combatHasActualEngagement(combat)'), 'daily summary does not filter non-engaged combat summaries');
-    assert(dailySummary.includes('immediate login exit was incorrectly counted as combat'), 'daily summary self-test does not cover immediate login exits');
+    assert(dailySummary.includes('engaged enemy-leave-wait combat was incorrectly filtered out'), 'daily summary self-test does not cover engaged immediate exit combats');
     assert(dailySummary.includes('combatIsNonCombatSafetyClosure(combat)'), 'daily summary does not filter non-combat safety avoidance closures');
     assert(dailySummary.includes('safety avoidance was incorrectly counted as combat'), 'daily summary self-test does not cover safety avoidance filtering');
   });
@@ -1010,14 +1014,14 @@ function main() {
   check('combat-log daily summary exposes incomplete exits and no-self text', () => {
     const dailySummary = readText('combat-log-service/daily-summary.js');
     assert(dailySummary.includes('日志尚未收口：下一次登录在'), 'daily summary does not show next-login context for open sessions');
-    assert(dailySummary.includes('inferredExit') && dailySummary.includes('推断收口：${reasonText'), 'daily summary does not keep inferred exits visible');
+    assert(dailySummary.includes('inferredExit') && dailySummary.includes('推断收口：${verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence)}'), 'daily summary does not keep inferred exits visible');
     assert(dailySummary.includes('已登录但自身实体不可见，退出等待重连'), 'daily summary does not explain no-self exits');
     assert(dailySummary.includes('!item.inferredExit'), 'inferred exits still count as completed sessions');
     assert(dailySummary.includes('日期：${report.day') && dailySummary.includes('登录合计：明确退出'), 'daily summary top-level report text is not Chinese');
     assert(dailySummary.includes('互斥一级类别') && dailySummary.includes('胜利、失败、我方主动退出、敌方逃离、目标切换'), 'daily summary does not explain mutually exclusive top-level outcomes');
     assert(dailySummary.includes('combatReasonText') && dailySummary.includes('敌方逃离：目标脱离交火范围') && dailySummary.includes('敌方逃离：目标消失或脱离交火范围'), 'daily summary does not fold target loss into enemy flee text');
     assert(dailySummary.includes('HP-disadvantage exit result text is not exclusive') && dailySummary.includes('low-HP exit result text is not exclusive') && dailySummary.includes('critical-HP exit result text is not exclusive'), 'daily summary self-test does not cover exclusive self-exit labels');
-    assert(dailySummary.includes('recovery wait result text is not folded into enemy flee') && dailySummary.includes('post-combat timeout result text is not folded into enemy flee') && dailySummary.includes('target-switched combat result text is not exclusive') && dailySummary.includes('enemy leave wait result text is not explicit'), 'daily summary self-test does not cover exclusive combat result labels');
+    assert(dailySummary.includes('recovery wait result text is not folded into enemy flee') && dailySummary.includes('post-combat timeout result text is not folded into enemy flee') && dailySummary.includes('target-switched combat result text is not exclusive') && dailySummary.includes('enemy leave wait result text does not include concrete exit evidence'), 'daily summary self-test does not cover exclusive combat result labels');
     assert(dailySummary.includes('避开无敌目标属于安全移动，不计入本表'), 'daily summary does not explain safety avoidance exclusion');
     assert(!dailySummary.includes('恢复期遇到附近玩家'), 'daily summary still implies ordinary nearby-player recovery flee behavior');
     assert(!dailySummary.includes('恢复期安全撤开'), 'daily summary still exposes safety avoidance as a combat result label');
