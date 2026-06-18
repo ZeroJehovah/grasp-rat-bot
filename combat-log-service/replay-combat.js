@@ -10,9 +10,12 @@ const DEFAULTS = {
   bulletSpeedPerTick: 500,
   bulletTtlMs: 1500,
   combatAttackRange: 14500,
+  combatStationarySpeed: 5,
   combatAimNoDamageMs: 1000,
+  combatAimMovingScaleThreshold: 0.15,
   liveDivergencePrecisionCm: 1200,
   liveDivergencePrecisionRatio: 0.08,
+  combatAimRadialPrecisionLateralRatio: 0.35,
   fallbackPrecisionNoDamageMs: 25000,
   serverStallNoDamageLeaveMs: 25000,
   serverStallNoDamagePrecisionGraceMs: 10000,
@@ -404,8 +407,55 @@ function dynamicAimForShot(shot, options) {
   const live = frame.nearbyTarget;
   const divergence = liveDivergenceState(frame, options);
   const fallback = frame.noDamageMs >= options.fallbackPrecisionNoDamageMs;
+  const attackRange = Math.max(0, Number(options.combatAttackRange || 0));
+  const liveDistance = frame.self && live ? distance(frame.self, live) : null;
+  const withinAttackRange = !attackRange || (Number.isFinite(liveDistance) && liveDistance <= attackRange);
+  const motionScale = Math.max(
+    0,
+    Number(
+      frame.target?.motionScale
+      ?? frame.aim?.motionScale
+      ?? frame.entry?.combatState?.aim?.motionScale
+      ?? frame.entry?.decision?.combatState?.aim?.motionScale
+      ?? 0
+    ) || 0
+  );
+  const movement = combatMovementAimModeForFrame(frame, liveDistance, options);
+  const moving = Boolean(
+    movement
+    && (
+      Number(movement.targetSpeed || 0) >= Number(options.combatStationarySpeed || 0)
+      || motionScale >= Math.max(0, Number(options.combatAimMovingScaleThreshold || 0.15))
+    )
+  );
+  const radialMax = Math.max(0, Number(options.combatAimRadialPrecisionLateralRatio || 0));
+  const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+  const realBulletPrecision = Boolean(live && moving && incomingRealBullet(frame) && withinAttackRange);
+  const liveIntercept = Boolean(
+    live
+    && moving
+    && movement
+    && lateralRatio > radialMax
+    && (
+      realBulletPrecision
+      || (serverStalled(frame) && withinAttackRange)
+    )
+  );
   const stallLive = Boolean(live && serverStalled(frame));
-  if (live && (divergence.active || stallLive || fallback)) return live;
+  const radialPrecision = Boolean(
+    live
+    && moving
+    && radialMax > 0
+    && movement
+    && Number(movement.targetSpeed || 0) >= Number(options.combatStationarySpeed || 0)
+    && lateralRatio <= radialMax
+    && withinAttackRange
+  );
+  if (live && divergence.active) return live;
+  if (realBulletPrecision && liveIntercept) return liveInterceptAimForShot(shot, options);
+  if (realBulletPrecision) return live;
+  if (stallLive && liveIntercept) return liveInterceptAimForShot(shot, options);
+  if (stallLive || radialPrecision || fallback) return live;
   return frame.aim || frame.decisionTarget || live;
 }
 
@@ -413,6 +463,74 @@ function realBulletPrecisionAimForShot(shot) {
   const frame = shot.frame;
   if (incomingRealBullet(frame) && frame.nearbyTarget) return frame.nearbyTarget;
   return frame.aim || frame.decisionTarget || frame.nearbyTarget;
+}
+
+function liveInterceptAimForShot(shot, options) {
+  const frame = shot.frame;
+  const self = frame.self;
+  const live = frame.nearbyTarget;
+  if (!self || !live) return frame.aim || frame.decisionTarget || live;
+  const vx = numberOrNull(frame.target?.vx ?? frame.nearbyEntity?.vx);
+  const vy = numberOrNull(frame.target?.vy ?? frame.nearbyEntity?.vy);
+  if (vx === null || vy === null) return live;
+  const bulletSpeed = Math.max(1, Number(options.bulletSpeedPerTick || DEFAULTS.bulletSpeedPerTick));
+  const renderDelayTicks = Math.max(0, Number(options.combatRenderDelayTicks ?? 2));
+  const compensatedX = Number(live.x) + vx * renderDelayTicks;
+  const compensatedY = Number(live.y) + vy * renderDelayTicks;
+  const dx = compensatedX - Number(self.x);
+  const dy = compensatedY - Number(self.y);
+  const c = dx * dx + dy * dy;
+  if (!(c > 0)) return live;
+  const speedSq = vx * vx + vy * vy;
+  const a = speedSq - bulletSpeed * bulletSpeed;
+  const b = 2 * (dx * vx + dy * vy);
+  const eps = 1e-6;
+  const roots = [];
+  if (Math.abs(a) < eps) {
+    if (Math.abs(b) > eps) roots.push(-c / b);
+  } else {
+    const disc = b * b - 4 * a * c;
+    if (disc >= -eps) {
+      const sqrtDisc = Math.sqrt(Math.max(0, disc));
+      roots.push((-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a));
+    }
+  }
+  const t = roots.filter(value => Number.isFinite(value) && value > 0).sort((x, y) => x - y)[0];
+  if (!Number.isFinite(t)) return live;
+  return {
+    x: compensatedX + vx * t,
+    y: compensatedY + vy * t
+  };
+}
+
+function combatMovementAimModeForFrame(frame, distanceValue, options) {
+  const self = frame.self;
+  const target = frame.nearbyEntity || frame.target;
+  if (!self || !target) {
+    return { mode: '', lateralSpeed: 0, radialSpeed: 0, lateralRatio: 0, targetSpeed: 0 };
+  }
+  const vx = Number(target.vx) || 0;
+  const vy = Number(target.vy) || 0;
+  const targetSpeed = Math.hypot(vx, vy);
+  const dx = Number(target.x) - Number(self.x);
+  const dy = Number(target.y) - Number(self.y);
+  const d = Math.max(1, Number(distanceValue) || Math.hypot(dx, dy) || 1);
+  const ux = dx / d;
+  const uy = dy / d;
+  const radialSpeed = ux * vx + uy * vy;
+  const lateralSpeed = ux * vy - uy * vx;
+  const lateralRatio = targetSpeed > 0.01 ? Math.abs(lateralSpeed) / targetSpeed : 0;
+  let mode = 'drift';
+  if (lateralRatio >= 0.55) mode = 'lateral';
+  else if (radialSpeed <= -Number(options.combatStationarySpeed || 0)) mode = 'closing';
+  else if (radialSpeed >= Number(options.combatStationarySpeed || 0)) mode = 'retreating';
+  return {
+    mode,
+    lateralSpeed,
+    radialSpeed,
+    lateralRatio,
+    targetSpeed
+  };
 }
 
 function pressureAuthorityState(frame, options) {
@@ -575,6 +693,7 @@ function replay(options) {
     runAimScenario('exact decision.target vs live target', shots, shot => shot.frame.decisionTarget, targetSamples, options),
     runAimScenario('exact live target vs live target', shots, shot => shot.frame.nearbyTarget, targetSamples, options),
     runAimScenario('real-bullet live precision vs live target', shots, realBulletPrecisionAimForShot, targetSamples, options),
+    runAimScenario('live intercept vs live target', shots, shot => liveInterceptAimForShot(shot, options), targetSamples, options),
     runAimScenario('old effective logged aim before server-stall exit', shots, shot => shot.frame.aim, targetSamples, options, shot => !oldExitFrame || shot.frame.at < oldExitFrame.at),
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
@@ -707,6 +826,36 @@ function selfTest() {
       expectRealBulletPrecisionImproved: true
     },
     {
+      id: '2026-06-18-noah-z-server-stall-live-intercept',
+      file: path.join(__dirname, 'logs/2026-06-18/20260618010728-self-28886-vs-Noah_Z.jsonl'),
+      startLine: 1,
+      endLine: 380,
+      selfId: '28886',
+      targetId: '29062',
+      targetName: 'Noah_Z',
+      expectLiveInterceptImproved: true
+    },
+    {
+      id: '2026-06-18-lockcc-server-stall-live-intercept',
+      file: path.join(__dirname, 'logs/2026-06-18/20260618012203-self-28886-vs-lockcc.jsonl'),
+      startLine: 1,
+      endLine: 737,
+      selfId: '28886',
+      targetId: '29014',
+      targetName: 'lockcc',
+      expectLiveInterceptImproved: true
+    },
+    {
+      id: '2026-06-18-tyshine-long-live-intercept',
+      file: path.join(__dirname, 'logs/2026-06-18/20260618014942-self-28886-vs-tyshine.jsonl'),
+      startLine: 1,
+      endLine: 2539,
+      selfId: '28886',
+      targetId: '33302',
+      targetName: 'tyshine',
+      expectLiveInterceptImproved: true
+    },
+    {
       id: '2026-06-15-xmsthc-pressure-authority',
       file: path.join(__dirname, 'logs/2026-06-15/-_-_-_-.jsonl'),
       startLine: 9113,
@@ -753,6 +902,7 @@ function selfTest() {
     const result = replay({ ...DEFAULTS, ...item });
     const logged = result.scenarios.find(scenario => scenario.label === 'logged aimTarget vs live target');
     const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
+    const liveIntercept = result.scenarios.find(scenario => scenario.label === 'live intercept vs live target');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
@@ -766,6 +916,9 @@ function selfTest() {
     if (!(dynamicGrace.hits > 0)) throw new Error(`${item.id} dynamic replay has no hits before grace exit`);
     if (item.expectRealBulletPrecisionImproved && (!realBulletPrecision || !(realBulletPrecision.hits > logged.hits))) {
       throw new Error(`${item.id} real-bullet live precision did not improve hits: ${realBulletPrecision?.hits || 0} <= ${logged.hits}`);
+    }
+    if (item.expectLiveInterceptImproved && (!liveIntercept || !(liveIntercept.hits > logged.hits) || !(dynamic.hits > logged.hits))) {
+      throw new Error(`${item.id} live-intercept replay did not improve dynamic strategy over logged aim: liveIntercept=${liveIntercept?.hits || 0}, dynamic=${dynamic.hits}, logged=${logged.hits}`);
     }
     const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
     if (item.expectSuppressed && (!pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)) {
@@ -788,6 +941,7 @@ function selfTest() {
       id: item.id,
       loggedHits: logged.hits,
       realBulletPrecisionHits: realBulletPrecision?.hits || 0,
+      liveInterceptHits: liveIntercept?.hits || 0,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,
       pressureSuppressed: pressureAuthority?.suppressed || 0,
