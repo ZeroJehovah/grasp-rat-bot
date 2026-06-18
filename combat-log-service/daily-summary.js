@@ -109,11 +109,48 @@ function sessionScore(session) {
     + number(session.killRewardCoins);
 }
 
+function exitReasonPriority(reason, summary = '') {
+  const value = `${String(reason || '')} ${String(summary || '')}`.toLowerCase();
+  if (!value.trim()) return 0;
+  if (/combat|injury|pursuit|sustained/.test(value)) return 90;
+  if (/stamina|offline|websocket|reconnect|control-ws/.test(value)) return 80;
+  if (/leave-success|exit-confirmed/.test(value) && !/no-self|game session missing self/.test(value)) return 70;
+  if (/login-before-session-end/.test(value)) return 35;
+  if (/no-self|game session missing self|not-alive/.test(value)) return 20;
+  if (/[\u4e00-\u9fff]/.test(summary)) return 50;
+  return 40;
+}
+
+function betterExitDetails(previous, next) {
+  const candidates = [previous, next]
+    .filter(Boolean)
+    .map(item => ({
+      reason: item.exitReason || '',
+      summary: item.exitSummary || '',
+      exitAt: number(item.exitAt),
+      updatedAt: number(item.updatedAt)
+    }))
+    .filter(item => item.reason || item.summary);
+  candidates.sort((a, b) => {
+    const priority = exitReasonPriority(b.reason, b.summary) - exitReasonPriority(a.reason, a.summary);
+    if (priority) return priority;
+    const summaryLength = String(b.summary || '').length - String(a.summary || '').length;
+    if (summaryLength) return summaryLength;
+    return number(b.exitAt || b.updatedAt) - number(a.exitAt || a.updatedAt);
+  });
+  return candidates[0] || null;
+}
+
 function mergeSession(previous, next) {
   if (!previous) return { ...next };
   const base = sessionScore(next) >= sessionScore(previous) ? { ...previous, ...next } : { ...next, ...previous };
+  const exitDetails = betterExitDetails(previous, next);
   for (const key of ['exitReason', 'exitSummary', 'version', 'sourceHash']) {
     if (!base[key]) base[key] = previous[key] || next[key] || '';
+  }
+  if (exitDetails) {
+    base.exitReason = exitDetails.reason || base.exitReason || '';
+    base.exitSummary = exitDetails.summary || base.exitSummary || '';
   }
   if (!base.exitAt) base.exitAt = previous.exitAt || next.exitAt || 0;
   if (!base.loginAt) base.loginAt = previous.loginAt || next.loginAt || 0;
@@ -239,6 +276,8 @@ function normalizeCombat(combat) {
     enemyHpDelta: Number.isFinite(Number(combat.enemyHpDelta)) ? Number(combat.enemyHpDelta) : null,
     result: combat.result || '',
     resultReason: combat.resultReason || '',
+    exitReason: combat.exitReason || '',
+    exitSummary: combat.exitSummary || '',
     kill: combat.kill || null,
     startReason: combat.startReason || '',
     lastReason: combat.lastReason || '',
@@ -247,7 +286,8 @@ function normalizeCombat(combat) {
     sampleCount: Math.max(0, Math.round(number(combat.sampleCount))),
     version: combat.version || '',
     sourceHash: combat.sourceHash || '',
-    updatedAt: number(combat.updatedAt)
+    updatedAt: number(combat.updatedAt),
+    exitEvidence: combat.exitEvidence || null
   };
 }
 
@@ -255,9 +295,96 @@ function mergeCombat(previous, next) {
   const normalized = normalizeCombat(next);
   if (!normalized) return previous || null;
   if (!previous) return normalized;
-  return combatScore(normalized) >= combatScore(previous)
+  const merged = combatScore(normalized) >= combatScore(previous)
     ? { ...previous, ...normalized, enemy: { ...(previous.enemy || {}), ...(normalized.enemy || {}) } }
     : { ...normalized, ...previous, enemy: { ...(normalized.enemy || {}), ...(previous.enemy || {}) } };
+  const exitEvidence = betterExitEvidence(previous.exitEvidence, normalized.exitEvidence);
+  if (exitEvidence) merged.exitEvidence = exitEvidence;
+  return merged;
+}
+
+function combatKeyFromTarget(target) {
+  if (!target || typeof target !== 'object') return '';
+  const id = target.id ?? target.user_id ?? target.targetId;
+  const name = target.name ?? target.targetName;
+  if (id !== undefined && id !== null && id !== '') return `id:${id}`;
+  return name ? `name:${name}` : '';
+}
+
+function normalizeTradeEvidence(entry) {
+  const evidence = entry?.combat?.disadvantageObservation?.evidence || entry?.combat?.tradeEstimate || null;
+  if (!evidence || typeof evidence !== 'object') return null;
+  const rawTKillMs = evidence.tKillMs;
+  const rawTDeathMs = evidence.tDeathMs;
+  return {
+    sampleCount: Math.max(0, Math.round(number(evidence.sampleCount))),
+    elapsedMs: Math.max(0, Math.round(number(evidence.elapsedMs))),
+    selfDamage: Math.max(0, number(evidence.selfDamage)),
+    targetDamage: Math.max(0, number(evidence.targetDamage)),
+    myDps: number(evidence.myDps, NaN),
+    enemyDps: number(evidence.enemyDps, NaN),
+    tKillMs: rawTKillMs !== null && rawTKillMs !== undefined && Number.isFinite(Number(rawTKillMs)) ? Math.max(0, Math.round(Number(rawTKillMs))) : null,
+    tDeathMs: rawTDeathMs !== null && rawTDeathMs !== undefined && Number.isFinite(Number(rawTDeathMs)) ? Math.max(0, Math.round(Number(rawTDeathMs))) : null
+  };
+}
+
+function normalizeExitEvidence(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const combat = entry.combat && typeof entry.combat === 'object' ? entry.combat : {};
+  const target = entry.target && typeof entry.target === 'object' ? entry.target : {};
+  const self = entry.self && typeof entry.self === 'object' ? entry.self : {};
+  const injury = entry.injury && typeof entry.injury === 'object' ? entry.injury : null;
+  const reason = entry.reason || entry.exitReason || '';
+  const summary = entry.summary || entry.exitSummary || '';
+  const targetName = target.name || target.targetName || combat.target?.name || '';
+  const targetId = target.id ?? target.user_id ?? target.targetId ?? combat.target?.id ?? null;
+  const trade = normalizeTradeEvidence(entry);
+  return {
+    at: number(entry.__at || entry.at),
+    reason,
+    summary,
+    auditKind: entry.auditKind || '',
+    source: entry.source || entry.exitAuditSource || '',
+    target: {
+      id: targetId,
+      name: targetName,
+      key: combatKeyFromTarget(target),
+      hp: Number.isFinite(Number(target.hp ?? target.knownHp)) ? Number(target.hp ?? target.knownHp) : null
+    },
+    selfHp: Number.isFinite(Number(self.hp ?? combat.selfHp)) ? Number(self.hp ?? combat.selfHp) : null,
+    targetHp: Number.isFinite(Number(target.hp ?? target.knownHp ?? combat.targetHp)) ? Number(target.hp ?? target.knownHp ?? combat.targetHp) : null,
+    hpGap: Number.isFinite(Number(combat.hpGap)) ? Number(combat.hpGap) : null,
+    noDamageMs: Number.isFinite(Number(combat.serverStallNoDamage?.noDamageMs)) ? Math.max(0, Math.round(Number(combat.serverStallNoDamage.noDamageMs))) : null,
+    trade,
+    injury: injury ? {
+      selfHpBefore: Number.isFinite(Number(injury.selfHpBefore)) ? Number(injury.selfHpBefore) : null,
+      selfHpAfter: Number.isFinite(Number(injury.selfHpAfter)) ? Number(injury.selfHpAfter) : null,
+      sourceName: injury.nearestActive?.name || injury.nearestHuman?.name || injury.nearestAvoidance?.name || '',
+      sourceId: injury.nearestActive?.id ?? injury.nearestActive?.user_id ?? injury.nearestHuman?.id ?? injury.nearestHuman?.user_id ?? injury.nearestAvoidance?.id ?? injury.nearestAvoidance?.user_id ?? null
+    } : null
+  };
+}
+
+function exitEvidencePriority(evidence) {
+  if (!evidence) return 0;
+  const base = exitReasonPriority(evidence.reason, evidence.summary);
+  return base
+    + (evidence.auditKind === 'exit-confirmed' ? 4 : 0)
+    + (evidence.trade ? 3 : 0)
+    + (evidence.noDamageMs ? 2 : 0)
+    + (evidence.injury ? 2 : 0);
+}
+
+function betterExitEvidence(previous, next) {
+  const candidates = [previous, next].filter(Boolean);
+  candidates.sort((a, b) => {
+    const priority = exitEvidencePriority(b) - exitEvidencePriority(a);
+    if (priority) return priority;
+    const summaryLength = String(b.summary || '').length - String(a.summary || '').length;
+    if (summaryLength) return summaryLength;
+    return number(b.at) - number(a.at);
+  });
+  return candidates[0] || null;
 }
 
 function combatReasonIsExitOnly(reason) {
@@ -297,9 +424,14 @@ function legacyDurationText(text) {
   return value;
 }
 
+function detailJoin(parts) {
+  return parts.filter(Boolean).join('；');
+}
+
 function knownReasonText(reason) {
   const value = String(reason || '').toLowerCase();
   if (!value) return '';
+  if (/login-before-session-end/.test(value)) return '重新登录前上一局已经不可用，按下一次登录前收口；这表示日志没有记录到上一局真实退出动作，不等同于本局刚因自身不可见而退出';
   if (/session-interrupted-before-next-login/.test(value)) return '下一次登录时发现上一局已结束，按下一次登录时间收口';
   if (/no-self|game session missing self/.test(value)) return '已登录但自身实体不可见，退出等待重连';
   if (/stamina-budget/.test(value)) return '一小时体力预算不足，退出等待恢复';
@@ -314,39 +446,88 @@ function knownReasonText(reason) {
   return '';
 }
 
+function parsedTradeExitSummary(text, evidence = null) {
+  const value = stripReconnectSuffix(text);
+  const match = value.match(/^与(.+?)战斗，交换比劣势(?:，预计承伤倒计时([^，]+))?(?:，预计击杀需([^，]+))?，提前退出$/);
+  if (!match) return '';
+  const [, name, legacyDeath = '', legacyKill = ''] = match;
+  const trade = evidence?.trade || null;
+  const enemyName = evidence?.target?.name || name;
+  if (!trade) {
+    const estimates = detailJoin([
+      legacyDeath ? `预计继续承伤约${legacyDeath}` : '',
+      legacyKill ? `预计击杀还需${legacyKill}` : ''
+    ]);
+    return `与${enemyName}战斗，因近期换血不利而主动退出${estimates ? `；${estimates}` : ''}`;
+  }
+  const observed = trade.elapsedMs ? `最近${formatDuration(trade.elapsedMs)}` : '最近一段交战';
+  const selfDamage = Number.isFinite(Number(trade.selfDamage)) ? `我方掉血${formatHp(trade.selfDamage)}` : '';
+  const targetDamage = Number.isFinite(Number(trade.targetDamage)) ? `对方掉血${formatHp(trade.targetDamage)}` : '';
+  const deathText = trade.tDeathMs !== null && trade.tDeathMs !== undefined ? `按当前承伤速度预计我方约${formatDuration(trade.tDeathMs)}后会被击杀` : '';
+  const killText = trade.tKillMs !== null && trade.tKillMs !== undefined ? `预计击杀对方还需${formatDuration(trade.tKillMs)}` : '当前窗口未造成有效伤害，无法估算击杀时间';
+  return `与${enemyName}战斗，因近期换血不利而主动退出：${observed}${trade.sampleCount ? `、${trade.sampleCount}个样本` : ''}内${detailJoin([selfDamage, targetDamage])}；${detailJoin([deathText, killText])}`;
+}
+
 function parsedCombatExitSummary(text) {
   const value = stripReconnectSuffix(text);
   let match = value.match(/^与(.+?)战斗，近身弹压下血量([^，]+)，对方(?:HP|血量)\s*([^，]+)，差距([^，]+)(?:，距离([^，]+))?，提前劣势退出$/);
   if (match) {
     const [, name, selfHp, targetHp, gap, distance] = match;
-    return `与${name}战斗，近身弹压下血量${selfHp}，对方血量${targetHp}，差距${gap}${distance ? `，距离${distance}` : ''}，提前劣势退出`;
+    return `与${name}战斗，因近距离弹道压力下血量劣势而主动退出：退出时我方血量${selfHp}，对方血量${targetHp}，对方高${gap}${distance ? `，双方距离${distance}` : ''}`;
+  }
+  match = value.match(/^与(.+?)战斗，服务端位置停滞下血量([^，]+)，对方(?:HP|血量)\s*([^，]+)，差距([^，]+)(?:，(\d+)秒未造成伤害)?，劣势退出$/);
+  if (match) {
+    const [, name, selfHp, targetHp, gap, noDamageSeconds] = match;
+    const noDamageText = noDamageSeconds ? `，连续${noDamageSeconds}秒没有对目标造成伤害` : '';
+    return `与${name}战斗，因久攻未中且血量劣势而主动退出：服务端位置长时间没有推进${noDamageText}；退出时我方血量${selfHp}，对方血量${targetHp}，对方高${gap}`;
   }
   match = value.match(/^与(.+?)战斗，血量([^，]+)，对方(?:HP|血量)\s*([^，]+)，差距([^，]+)，劣势退出$/);
   if (match) {
     const [, name, selfHp, targetHp, gap] = match;
-    return `与${name}战斗，血量${selfHp}，对方血量${targetHp}，差距${gap}，劣势退出`;
+    return `与${name}战斗，因血量劣势而主动退出：退出时我方血量${selfHp}，对方血量${targetHp}，对方高${gap}`;
   }
   match = value.match(/^与(.+?)战斗，血量([^，]+)，对方(?:HP|血量)\s*([^，]+)(，\d+秒未造成伤害)?，低血久攻未中退出$/);
   if (match) {
     const [, name, selfHp, targetHp, noDamageText = ''] = match;
-    return `与${name}战斗，血量${selfHp}，对方血量${targetHp}${noDamageText}，低血久攻未中退出`;
+    return `与${name}战斗，因低血且久攻未中而主动退出：退出时我方血量${selfHp}，对方血量${targetHp}${noDamageText}`;
   }
   match = value.match(/^与(.+?)战斗，血量([^，]+)不足([^，]+)，对方(?:HP|血量)\s*([^，]+)(?:，距离([^，]+))?，低血近身风险退出$/);
   if (match) {
     const [, name, selfHp, threshold, targetHp, distance] = match;
-    return `与${name}战斗，血量${selfHp}不足${threshold}，对方血量${targetHp}${distance ? `，距离${distance}` : ''}，低血近身风险退出`;
+    return `与${name}战斗，因低血且近距离风险高而主动退出：我方血量${selfHp}低于阈值${threshold}，对方血量${targetHp}${distance ? `，双方距离${distance}` : ''}`;
   }
   match = value.match(/^与(.+?)战斗，血量([^，]+)不足([^，]+)，对方(?:HP|血量)\s*([^，]+)，劣势退出$/);
   if (match) {
     const [, name, selfHp, threshold, targetHp] = match;
-    return `与${name}战斗，血量${selfHp}不足${threshold}，对方血量${targetHp}，劣势退出`;
+    return `与${name}战斗，因低血劣势而主动退出：我方血量${selfHp}低于阈值${threshold}，对方血量${targetHp}`;
   }
   match = value.match(/^与(.+?)战斗，血量([^，]+)低于([^，]+)，紧急退出$/);
   if (match) {
     const [, name, selfHp, threshold] = match;
-    return `与${name}战斗，血量${selfHp}低于${threshold}，紧急退出`;
+    return `与${name}战斗，因血量过低而紧急退出：我方血量${selfHp}低于阈值${threshold}`;
   }
   return '';
+}
+
+function verboseExitText(reason, summary, evidence = null) {
+  const text = String(summary || reason || '');
+  const reasonValue = String(reason || '').toLowerCase();
+  if (!text) return '原因未记录';
+  if (/login-before-session-end/.test(reasonValue)) return knownReasonText(reason);
+  if (/session-interrupted-before-next-login/.test(reasonValue) || /上次登录未记录退出|下一次登录时发现上一局已结束/.test(text)) {
+    return '下一次登录时发现上一局已结束，按下一次登录时间收口';
+  }
+  const tradeText = parsedTradeExitSummary(text, evidence);
+  if (tradeText) return tradeText;
+  const parsed = parsedCombatExitSummary(text) || parsedStaminaExitSummary(text) || parsedNetworkExitSummary(text);
+  if (parsed) return parsed;
+  if (/game session missing self|no-self/i.test(text) || /game session missing self|no-self/i.test(reason || '')) {
+    return '已登录但自身实体不可见，退出等待重连';
+  }
+  if (/injury hp drop/.test(reasonValue) && text) return stripReconnectSuffix(text);
+  const fallback = stripReconnectSuffix(text);
+  if (/[\u4e00-\u9fff]/.test(fallback) && !/[A-Za-z][A-Za-z -]*:/.test(fallback)) return fallback;
+  return knownReasonText(reason) || knownReasonText(summary) || '原因未归类';
 }
 
 function parsedStaminaExitSummary(text) {
@@ -377,25 +558,13 @@ function parsedNetworkExitSummary(text) {
 }
 
 function reasonText(reason, summary) {
-  const text = String(summary || reason || '');
-  const reasonValue = String(reason || '').toLowerCase();
-  if (!text) return '原因未记录';
-  if (/session-interrupted-before-next-login/.test(reasonValue) || /上次登录未记录退出|下一次登录时发现上一局已结束/.test(text)) {
-    return '下一次登录时发现上一局已结束，按下一次登录时间收口';
-  }
-  if (/game session missing self|no-self/i.test(text) || /game session missing self|no-self/i.test(reason || '')) {
-    return '已登录但自身实体不可见，退出等待重连';
-  }
-  const parsed = parsedCombatExitSummary(text) || parsedStaminaExitSummary(text) || parsedNetworkExitSummary(text);
-  if (parsed) return parsed;
-  const fallback = stripReconnectSuffix(text);
-  if (/[\u4e00-\u9fff]/.test(fallback) && !/[A-Za-z][A-Za-z -]*:/.test(fallback)) return fallback;
-  return knownReasonText(reason) || knownReasonText(summary) || '原因未归类';
+  return verboseExitText(reason, summary, null);
 }
 
 function buildExitEvents(entries) {
   const groups = new Map();
   for (const entry of entries.filter(item => item.type === 'exit-audit')) {
+    const evidence = normalizeExitEvidence(entry);
     const id = entry.exitAuditId || `${entry.__file}:${entry.__line}`;
     const current = groups.get(id) || {
       id,
@@ -404,6 +573,7 @@ function buildExitEvents(entries) {
       confirmedAt: 0,
       reason: '',
       summary: '',
+      evidence: null,
       version: '',
       files: new Set()
     };
@@ -412,6 +582,7 @@ function buildExitEvents(entries) {
     current.confirmedAt = Math.max(current.confirmedAt, number(entry.confirmedAt));
     current.reason = entry.reason || current.reason;
     current.summary = entry.summary || current.summary;
+    current.evidence = betterExitEvidence(current.evidence, evidence);
     current.version = entry.version || current.version;
     current.files.add(entry.__file);
     groups.set(id, current);
@@ -419,20 +590,88 @@ function buildExitEvents(entries) {
   return Array.from(groups.values()).sort((a, b) => a.firstAt - b.firstAt);
 }
 
+function exitEventTime(event) {
+  return number(event?.confirmedAt) || number(event?.lastAt) || number(event?.firstAt);
+}
+
+function exitEventInSession(event, session, nextLoginAt = Infinity) {
+  const at = exitEventTime(event);
+  const loginAt = number(session?.loginAt);
+  const exitAt = number(session?.exitAt) || nextLoginAt;
+  return at && loginAt && at >= loginAt && at <= exitAt + 5000;
+}
+
+function targetMatchesExitEvidence(combat, evidence) {
+  if (!combat || !evidence) return false;
+  const combatKey = combat.enemy?.id !== null && combat.enemy?.id !== undefined && combat.enemy?.id !== ''
+    ? `id:${combat.enemy.id}`
+    : (combat.enemy?.name ? `name:${combat.enemy.name}` : '');
+  const evidenceKey = evidence.target?.key || (evidence.target?.id !== null && evidence.target?.id !== undefined && evidence.target?.id !== ''
+    ? `id:${evidence.target.id}`
+    : (evidence.target?.name ? `name:${evidence.target.name}` : ''));
+  if (combatKey && evidenceKey && combatKey === evidenceKey) return true;
+  const injuryKey = evidence.injury?.sourceId !== null && evidence.injury?.sourceId !== undefined && evidence.injury?.sourceId !== ''
+    ? `id:${evidence.injury.sourceId}`
+    : (evidence.injury?.sourceName ? `name:${evidence.injury.sourceName}` : '');
+  if (combatKey && injuryKey && combatKey === injuryKey) return true;
+  return Boolean(combat.enemy?.name && (
+    (evidence.target?.name && combat.enemy.name === evidence.target.name)
+    || (evidence.injury?.sourceName && combat.enemy.name === evidence.injury.sourceName)
+  ));
+}
+
+function attachExitEvidenceToSessions(sessionList, exitEvents) {
+  for (let i = 0; i < sessionList.length; i += 1) {
+    const session = sessionList[i];
+    const nextLoginAt = number(sessionList[i + 1]?.loginAt, Infinity);
+    const evidence = exitEvents
+      .filter(event => exitEventInSession(event, session, nextLoginAt))
+      .map(event => event.evidence)
+      .filter(Boolean)
+      .reduce((best, item) => betterExitEvidence(best, item), null);
+    if (evidence) session.exitEvidence = betterExitEvidence(session.exitEvidence, evidence);
+  }
+}
+
+function attachExitEvidenceToCombats(combatList, sessionList, exitEvents) {
+  for (const combat of combatList) {
+    const session = combat.sessionId ? sessionList.find(item => item.sessionId === combat.sessionId) : null;
+    const sessionIndex = session ? sessionList.indexOf(session) : -1;
+    const nextLoginAt = sessionIndex >= 0 ? number(sessionList[sessionIndex + 1]?.loginAt, Infinity) : Infinity;
+    const evidence = exitEvents
+      .filter(event => (!session || exitEventInSession(event, session, nextLoginAt))
+        && exitEventTime(event) >= number(combat.startedAt) - 5000
+        && exitEventTime(event) <= (number(combat.endedAt) || number(combat.startedAt)) + 5000
+        && targetMatchesExitEvidence(combat, event.evidence))
+      .map(event => event.evidence)
+      .filter(Boolean)
+      .reduce((best, item) => betterExitEvidence(best, item), null);
+    if (evidence) combat.exitEvidence = betterExitEvidence(combat.exitEvidence, evidence);
+  }
+}
+
 function buildReport(entries, options = {}) {
   const importantEventsById = new Map();
+  const sessionEndEvents = [];
   for (const entry of entries.filter(item => item.type === 'important-log')) {
+    if (entry.importantType === 'session-end') {
+      sessionEndEvents.push(entry);
+      continue;
+    }
     const id = entry.importantLogId || `${entry.__file}:${entry.__line}`;
     const previous = importantEventsById.get(id);
     if (!previous || number(entry.__at) >= number(previous.__at)) importantEventsById.set(id, entry);
   }
-  const importantEvents = Array.from(importantEventsById.values()).sort((a, b) => a.__at - b.__at);
+  const importantEvents = [...Array.from(importantEventsById.values()), ...sessionEndEvents].sort((a, b) => a.__at - b.__at);
   const sessions = new Map();
   const killEvents = new Map();
   const combats = new Map();
   for (const event of importantEvents) {
     if (event.session && event.session.sessionId) {
-      sessions.set(event.session.sessionId, mergeSession(sessions.get(event.session.sessionId), event.session));
+      const sessionPayload = { ...event.session };
+      if (event.exitReason && !sessionPayload.exitReason) sessionPayload.exitReason = event.exitReason;
+      if (event.exitSummary && !sessionPayload.exitSummary) sessionPayload.exitSummary = event.exitSummary;
+      sessions.set(sessionPayload.sessionId, mergeSession(sessions.get(sessionPayload.sessionId), sessionPayload));
     }
     if (event.importantType === 'kill' && event.sessionId && event.kill) {
       const list = killEvents.get(event.sessionId) || [];
@@ -500,6 +739,7 @@ function buildReport(entries, options = {}) {
         session.exitAt = exit.confirmedAt || exit.lastAt || exit.firstAt;
         session.exitReason = exit.reason;
         session.exitSummary = exit.summary;
+        session.exitEvidence = betterExitEvidence(session.exitEvidence, exit.evidence);
         session.loginDurationMs = Math.max(0, session.exitAt - number(session.loginAt));
       } else if (Number.isFinite(nextLoginAt)) {
         session.incomplete = true;
@@ -519,6 +759,8 @@ function buildReport(entries, options = {}) {
     });
     if (matched) combat.sessionId = matched.sessionId || '';
   }
+  attachExitEvidenceToSessions(sessionList, exitEvents);
+  attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
   const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
   const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
   const open = sessionList.filter(item => !number(item.exitAt));
@@ -612,6 +854,22 @@ function combatHpDisadvantageText(combat) {
   return `我方HP ${formatHp(selfHp)}，对方HP ${formatHp(enemyHp)}`;
 }
 
+function combatHpEvidenceText(combat) {
+  if (!combat) return '';
+  return detailJoin([
+    `本段战斗${formatDuration(combat.durationMs)}`,
+    `我方血量${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)}`,
+    `对方血量${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)}`
+  ]);
+}
+
+function combatExitEvidenceText(combat) {
+  const evidence = combat?.exitEvidence || null;
+  if (!evidence) return '';
+  const reasonTextValue = verboseExitText(evidence.reason, evidence.summary, evidence);
+  return detailJoin([reasonTextValue, combatHpEvidenceText(combat)]);
+}
+
 function formatEnemy(enemy) {
   const name = String(enemy?.name || '').trim();
   const id = enemy?.id === null || enemy?.id === undefined || enemy?.id === '' ? '' : String(enemy.id);
@@ -665,11 +923,13 @@ function resultText(result, reason, combat = null) {
   }
   if (reasonValue === 'post-combat-timeout') return '敌方逃离：目标消失或脱离交火范围';
   if (value === 'left') {
-    if (reasonValue === 'enemy-leave-wait') {
+    if (reasonValue === 'enemy-leave-wait' || reasonValue === 'exit-confirmed') {
+      const evidenceText = combatExitEvidenceText(combat);
+      if (evidenceText) return `我方主动退出：${evidenceText}；退出后等待安全重登`;
       const hpText = combatHpDisadvantageText(combat);
       return hpText
-        ? `我方主动退出：已离场等待安全重登（${hpText}）`
-        : '我方主动退出：已离场等待安全重登';
+        ? `我方主动退出：退出后等待安全重登；缺少具体退出原因，只记录到${hpText}`
+        : '我方主动退出：退出后等待安全重登；缺少具体退出原因';
     }
     return detail ? `我方主动退出：${detail}` : '我方主动退出';
   }
@@ -690,10 +950,10 @@ function printReport(report) {
   report.sessions.forEach((session, index) => {
     const exit = number(session.exitAt) ? formatTime(session.exitAt) : '未收口';
     const status = session.inferredExit
-      ? `推断收口：${reasonText(session.exitReason, session.exitSummary)}`
+      ? `推断收口：${verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence)}`
       : session.incomplete && !number(session.exitAt)
       ? (session.nextLoginAt ? `日志尚未收口：下一次登录在${formatDuration(session.nextLoginAt - number(session.loginAt))}后出现` : '日志尚未收口')
-      : reasonText(session.exitReason, session.exitSummary);
+      : verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence);
     console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins, session.afkUnconfirmedDropCoins, session.afkUnconfirmedKillCount)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins, session.activeUnconfirmedDropCoins, session.activeUnconfirmedKillCount)} | ${formatCoins(session.coinsGained)} | ${status} |`);
   });
   console.log('');
@@ -747,6 +1007,44 @@ function runSelfTest() {
       at: 10000,
       sessionId: s2,
       session: { sessionId: s2, loginAt: 10000, version: 'bootstrap-0.4.140', staminaSpentMs: 0, coinsGained: 0 }
+    },
+    {
+      type: 'important-log',
+      importantType: 'session-end',
+      importantLogId: `${s2}:end:combat`,
+      at: 15000,
+      sessionId: s2,
+      exitReason: 'leave-success:combat hp disadvantage',
+      exitSummary: '与login-threat战斗，交换比劣势，预计承伤倒计时20秒，提前退出',
+      session: {
+        sessionId: s2,
+        loginAt: 10000,
+        exitAt: 15000,
+        loginDurationMs: 5000,
+        staminaSpentMs: 1000,
+        pickedCoins: 0,
+        coinsGained: 0,
+        version: 'bootstrap-0.4.141'
+      }
+    },
+    {
+      type: 'important-log',
+      importantType: 'session-end',
+      importantLogId: `${s2}:end:no-self`,
+      at: 18000,
+      sessionId: s2,
+      exitReason: 'login-before-session-end:no-self',
+      exitSummary: '重新登录前上一局已不可用，按登录前收口',
+      session: {
+        sessionId: s2,
+        loginAt: 10000,
+        exitAt: 18000,
+        loginDurationMs: 8000,
+        staminaSpentMs: 2000,
+        pickedCoins: 0,
+        coinsGained: 0,
+        version: 'bootstrap-0.4.141'
+      }
     },
     {
       type: 'important-log',
@@ -832,29 +1130,54 @@ function runSelfTest() {
       type: 'important-log',
       importantType: 'combat-summary',
       importantLogId: `${s2}:immediate-exit:summary`,
-      at: 10600,
+      at: 13000,
       sessionId: s2,
       combat: {
         combatSummaryId: `${s2}:immediate-exit`,
         sessionId: s2,
-        startedAt: 10500,
-        endedAt: 10600,
-        durationMs: 100,
+        startedAt: 11000,
+        endedAt: 13000,
+        durationMs: 2000,
         staminaSpentMs: 0,
         enemy: { id: 9, name: 'login-threat', mode: 'Active' },
-        selfHpStart: 40,
-        selfHpEnd: 40,
-        selfHpDelta: 0,
+        selfHpStart: 90,
+        selfHpEnd: 70,
+        selfHpDelta: -20,
         enemyHpStart: 100,
-        enemyHpEnd: 100,
-        enemyHpDelta: 0,
+        enemyHpEnd: 96,
+        enemyHpDelta: -4,
         result: 'left',
-        resultReason: 'combat-hp-disadvantage-leave',
-        startReason: 'combat-hp-disadvantage-leave',
-        lastReason: 'combat-hp-disadvantage-leave',
-        startedWithExitOnly: true,
-        engagementObserved: false,
-        sampleCount: 1
+        resultReason: 'enemy-leave-wait',
+        startReason: 'combat-burst-fire',
+        lastReason: 'combat-leave-retry',
+        engagementObserved: true,
+        sampleCount: 5
+      }
+    },
+    {
+      type: 'exit-audit',
+      auditKind: 'exit-confirmed',
+      exitAuditId: `${s2}:exit`,
+      at: 15000,
+      confirmedAt: 15000,
+      reason: 'combat hp disadvantage',
+      summary: '与login-threat战斗，交换比劣势，预计承伤倒计时20秒，提前退出',
+      self: { hp: 70 },
+      target: { id: 9, name: 'login-threat', hp: 96 },
+      combat: {
+        selfHp: 70,
+        targetHp: 96,
+        tradeEstimate: {
+          active: true,
+          sampleCount: 4,
+          elapsedMs: 5000,
+          selfDamage: 20,
+          targetDamage: 4,
+          myDps: 0.8,
+          enemyDps: 4,
+          tKillMs: 120000,
+          tDeathMs: 20000
+        }
       }
     },
     {
@@ -896,11 +1219,15 @@ function runSelfTest() {
   assertSelfTest(report.sessions[0].activeUnconfirmedKillCount === 1, 'active unconfirmed kill count was not computed');
   assertSelfTest(report.sessions[0].activeUnconfirmedDropCoins === 30, 'active unconfirmed drop bucket was not computed');
   assertSelfTest(report.sessions[0].afkKillRewardCoins + report.sessions[0].activeKillRewardCoins <= report.sessions[0].coinsGained, 'confirmed kill rewards exceed total gained coins');
-  assertSelfTest(report.combats.length === 1, `expected 1 combat, got ${report.combats.length}`);
-  assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'immediate login exit was incorrectly counted as combat');
+  assertSelfTest(report.sessions[1].exitReason === 'leave-success:combat hp disadvantage', 'more specific combat exit reason was overwritten by later no-self closeout');
+  assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
+  assertSelfTest(report.combats.length === 2, `expected 2 combats, got ${report.combats.length}`);
+  assertSelfTest(report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'engaged enemy-leave-wait combat was incorrectly filtered out');
   assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:safety-avoid`), 'safety avoidance was incorrectly counted as combat');
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
+  const waitCombat = report.combats.find(item => item.combatSummaryId === `${s2}:immediate-exit`);
+  assertSelfTest(waitCombat?.exitEvidence?.trade?.selfDamage === 20, 'enemy-leave-wait combat did not attach exit trade evidence');
   assertSelfTest(resultText('left', 'combat-hp-disadvantage-leave') === '我方主动退出：HP劣势', 'HP-disadvantage exit result text is not exclusive');
   assertSelfTest(resultText('left', 'combat-low-hp-leave') === '我方主动退出：低血或近身风险', 'low-HP exit result text is not exclusive');
   assertSelfTest(resultText('left', 'combat-critical-hp-leave') === '我方主动退出：血量过低', 'critical-HP exit result text is not exclusive');
@@ -909,9 +1236,7 @@ function runSelfTest() {
   assertSelfTest(resultText('disengaged', 'target-switched') === '目标切换：改打其他目标，原目标记录结束', 'target-switched combat result text is not exclusive');
   assertSelfTest(resultText('disengaged', 'post-combat-timeout', { lastReason: 'combat-target-retreating' }) === '敌方逃离：目标脱离交火范围', 'retreating-target combat result text is not explicit');
   assertSelfTest(resultText('disengaged', 'post-combat-timeout') === '敌方逃离：目标消失或脱离交火范围', 'post-combat timeout result text is not folded into enemy flee');
-  assertSelfTest(resultText('left', 'enemy-leave-wait', { selfHpEnd: 38, enemyHpEnd: 44 }) === '我方主动退出：已离场等待安全重登（我方HP 38，对方HP 44）', 'enemy leave wait result text is not explicit');
-  assertSelfTest(report.sessions[1].incomplete === true, 'unclosed middle session was not marked incomplete');
-  assertSelfTest(report.sessions[1].nextLoginAt === 20000, 'next-login context missing for incomplete session');
+  assertSelfTest(resultText('left', 'enemy-leave-wait', waitCombat).includes('近期换血不利') && resultText('left', 'enemy-leave-wait', waitCombat).includes('退出后等待安全重登'), 'enemy leave wait result text does not include concrete exit evidence');
   fs.rmSync(root, { recursive: true, force: true });
   console.log('日报自检通过');
 }
