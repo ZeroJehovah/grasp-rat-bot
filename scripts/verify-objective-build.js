@@ -63,6 +63,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatDisadvantageConfirmMs', value: 2500 },
   { key: 'combatDisadvantageMinEngageMs', value: 3500 },
   { key: 'combatDisadvantageMinSamples', value: 4 },
+  { key: 'combatTradeEstimateNoDamageSafeSelfHp', value: 75 },
+  { key: 'combatTradeEstimateNoDamageUnsafeTDeathMs', value: 30000 },
   { key: 'combatSpacingEmergencyRange', value: 3000 },
   { key: 'combatSpacingLowHpThreshold', value: 70 },
   { key: 'combatPressureCloseMinHp', value: 60 },
@@ -1121,6 +1123,8 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'confirmed high hp combat gap leaves after observation'"), 'confirmed HP-gap exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat trade estimate observes losing exchange before exit'"), 'trade-estimate observation self-test not found');
     assert(nodeSelfTestSource.includes("name: 'confirmed combat trade estimate exits losing exchange'"), 'confirmed trade-estimate exit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat zero damage trade estimate stays in fight while hp remains safe'"), 'zero-damage safe trade-estimate self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat zero damage trade estimate still exits when danger horizon is near'"), 'zero-damage unsafe trade-estimate self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat close pressure hp disadvantage exits before low hp threshold'"), 'close-pressure HP disadvantage self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat server stall no-damage waits for precision aim grace'"), 'server-stall precision grace self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');

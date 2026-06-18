@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.181"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.182"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -158,6 +158,8 @@
     combatTradeEstimateMinSelfDamage: 6,
     combatTradeEstimateSafetyFactor: 1.15,
     combatTradeEstimateMinEnemyDps: 1.5,
+    combatTradeEstimateNoDamageSafeSelfHp: 75,
+    combatTradeEstimateNoDamageUnsafeTDeathMs: 30000,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
@@ -10375,11 +10377,18 @@ function hpDisplay(value) {
     const minSelfDamage = Math.max(0, Number(cfg.combatTradeEstimateMinSelfDamage || 6));
     const minEnemyDps = Math.max(0, Number(cfg.combatTradeEstimateMinEnemyDps || 1.5));
     const safetyFactor = Math.max(1, Number(cfg.combatTradeEstimateSafetyFactor || 1.15));
+    const noDamageSafeSelfHp = Math.max(0, Number(cfg.combatTradeEstimateNoDamageSafeSelfHp || 75));
+    const noDamageUnsafeTDeathMs = Math.max(1000, Number(cfg.combatTradeEstimateNoDamageUnsafeTDeathMs || 30000));
+    const zeroDamageWindow = targetDamage <= 0.01;
+    const noDamageUnsafe = !zeroDamageWindow
+      || selfHp <= noDamageSafeSelfHp
+      || tDeathMs <= noDamageUnsafeTDeathMs;
     const disadvantaged = Boolean(
       selfDamage >= minSelfDamage
       && enemyDps >= minEnemyDps
       && tDeathMs < tKillMs * safetyFactor
       && targetHp > 1
+      && noDamageUnsafe
     );
     return {
       active: disadvantaged,
@@ -10391,7 +10400,9 @@ function hpDisplay(value) {
       enemyDps,
       tKillMs,
       tDeathMs,
-      safetyFactor
+      safetyFactor,
+      zeroDamageWindow,
+      noDamageUnsafe
     };
   }
 

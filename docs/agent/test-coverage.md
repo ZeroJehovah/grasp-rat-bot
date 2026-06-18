@@ -1,9 +1,9 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `206`.
+- Latest bot self-test count: `208`.
 - Latest combat-log analyzer self-test count: `82`.
-- Latest combat replay self-test count: `12`.
+- Latest combat replay self-test count: `13`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
@@ -31,6 +31,7 @@
   - short-window opponent motion profiling identifies repeated lateral flips and feeds aim confidence;
   - low-confidence distant moving combat targets throttle fire to the configured point-fire cadence;
   - high-HP static HP-gap and losing exchange-rate samples first record a combat disadvantage observation, then trigger `combat-hp-disadvantage-leave` after the configured confirmation window;
+  - zero-damage `tradeEstimate` windows no longer trigger a high-HP exit by themselves when projected death is still far away, but they still trigger once the predicted death horizon is near;
   - precise incoming signed-lane direction overrides a stale opposite strafe lock;
   - pressure-close diagonal strafe keeps a target-closing axis while preserving dodge movement;
   - close target jitter and long no-damage aim widening stay capped at `0.14rad`;
@@ -38,7 +39,7 @@
   - very close combat still backs away, but 50m mid-range no longer backs away by default;
   - long no-damage combat target triggers `combat-pressure-close`;
   - combat aim uses live/native/render precision only and no longer exposes snapshot authority fields;
-  - real incoming bullet pressure can switch moving-target aim to live/native precision before intercept lead, while lateral live targets under real-bullet pressure or server stall can stay on live intercept instead of collapsing to live precision; replay self-tests include 2026-06-17 xmsthc (`0 -> 28` estimated hits) and Motor (`1 -> 25`) samples plus 2026-06-18 Noah_Z (`0 -> 5` dynamic, `7` pure live-intercept), lockcc (`1 -> 8` dynamic), and long tyshine (`14 -> 36` dynamic, `38` pure live-intercept);
+  - real incoming bullet pressure can switch moving-target aim to live/native precision before intercept lead, while lateral live targets under real-bullet pressure or server stall can stay on live intercept instead of collapsing to live precision; replay self-tests include 2026-06-17 xmsthc (`0 -> 28` estimated hits) and Motor (`1 -> 25`) samples plus 2026-06-18 Noah_Z (`0 -> 5` dynamic, `7` pure live-intercept), lockcc (`1 -> 8` dynamic), BeingS (`0 -> 7` dynamic/live-intercept in the old high-HP exit window), and long tyshine (`14 -> 36` dynamic, `38` pure live-intercept);
   - visible/native AFK Drop targets beat richer snapshot fallback targets, and visible native coins beat snapshot coins before any snapshot idle fallback;
   - snapshot-only coins remain valid only as a fallback when no visible/realtime profit exists;
   - retreating out-of-range combat targets disengage instead of chasing;
