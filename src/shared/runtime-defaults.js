@@ -91,6 +91,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatTradeEstimateMinSelfDamage: 6,
     combatTradeEstimateSafetyFactor: 1.15,
     combatTradeEstimateMinEnemyDps: 1.5,
+    combatTradeEstimateNoDamageSafeSelfHp: 75,
+    combatTradeEstimateNoDamageUnsafeTDeathMs: 30000,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,

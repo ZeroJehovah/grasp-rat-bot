@@ -856,6 +856,16 @@ function selfTest() {
       expectLiveInterceptImproved: true
     },
     {
+      id: '2026-06-18-beings-high-hp-zero-damage-window',
+      file: path.join(__dirname, 'logs/2026-06-18/20260617160308-self-28886-vs-BeingS.jsonl'),
+      startLine: 520,
+      endLine: 594,
+      selfId: '28886',
+      targetId: '4430',
+      targetName: 'BeingS',
+      expectLiveInterceptImproved: true
+    },
+    {
       id: '2026-06-15-xmsthc-pressure-authority',
       file: path.join(__dirname, 'logs/2026-06-15/-_-_-_-.jsonl'),
       startLine: 9113,

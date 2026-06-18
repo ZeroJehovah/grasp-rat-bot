@@ -92,6 +92,8 @@ function runSelfTest() {
     combatTradeEstimateMinSelfDamage: 6,
     combatTradeEstimateSafetyFactor: 1.15,
     combatTradeEstimateMinEnemyDps: 1.5,
+    combatTradeEstimateNoDamageSafeSelfHp: 75,
+    combatTradeEstimateNoDamageUnsafeTDeathMs: 30000,
     combatAimNoDamageMs: 1000,
     combatAimNoDamageStepMs: 800,
     combatAimNoDamageMaxRadians: 0.14,
@@ -731,11 +733,18 @@ function runSelfTest() {
     const minSelfDamage = Math.max(0, Number(cfg.combatTradeEstimateMinSelfDamage || 6));
     const minEnemyDps = Math.max(0, Number(cfg.combatTradeEstimateMinEnemyDps || 1.5));
     const safetyFactor = Math.max(1, Number(cfg.combatTradeEstimateSafetyFactor || 1.15));
+    const noDamageSafeSelfHp = Math.max(0, Number(cfg.combatTradeEstimateNoDamageSafeSelfHp || 75));
+    const noDamageUnsafeTDeathMs = Math.max(1000, Number(cfg.combatTradeEstimateNoDamageUnsafeTDeathMs || 30000));
+    const zeroDamageWindow = targetDamage <= 0.01;
+    const noDamageUnsafe = !zeroDamageWindow
+      || selfHp <= noDamageSafeSelfHp
+      || tDeathMs <= noDamageUnsafeTDeathMs;
     const disadvantaged = Boolean(
       selfDamage >= minSelfDamage
       && enemyDps >= minEnemyDps
       && tDeathMs < tKillMs * safetyFactor
       && targetHp > 1
+      && noDamageUnsafe
     );
     return {
       active: disadvantaged,
@@ -747,7 +756,9 @@ function runSelfTest() {
       enemyDps,
       tKillMs,
       tDeathMs,
-      safetyFactor
+      safetyFactor,
+      zeroDamageWindow,
+      noDamageUnsafe
     };
   }
   function combatLiveAimTarget(self, target) {
@@ -4921,6 +4932,54 @@ function runSelfTest() {
         return action.reason + ':' + Boolean(action.combatState?.tradeEstimate?.active) + ':' + action.combatState?.disadvantageObservation?.kind + ':' + Boolean(action.combatState?.disadvantageObservation?.ready);
       })(),
       want: 'combat-hp-disadvantage-leave:true:trade-estimate:true'
+    },
+    {
+      name: 'combat zero damage trade estimate stays in fight while hp remains safe',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 7,
+          at: t - 6200,
+          firstSeenAt: t - 20000,
+          lastDamageAt: t - 19000,
+          hp: 61,
+          motionSamples: [
+            { at: t - 6000, x: 10000, y: 0, vx: 35, vy: 0, hp: 61, selfHp: 94 },
+            { at: t - 3000, x: 10200, y: 0, vx: 35, vy: 0, hp: 61, selfHp: 90 }
+          ]
+        };
+        const estimate = combatTradeEstimate(
+          { user_id: 1, x: 0, y: 0, hp: 85, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+          { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 61, vx: 35, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return Boolean(estimate?.active) + ':' + Boolean(estimate?.zeroDamageWindow) + ':' + Math.round(estimate?.tDeathMs || 0);
+      })(),
+      want: 'false:true:56667'
+    },
+    {
+      name: 'combat zero damage trade estimate still exits when danger horizon is near',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 7,
+          at: t - 6200,
+          firstSeenAt: t - 20000,
+          lastDamageAt: t - 19000,
+          hp: 61,
+          motionSamples: [
+            { at: t - 6000, x: 10000, y: 0, vx: 35, vy: 0, hp: 61, selfHp: 96 },
+            { at: t - 3000, x: 10200, y: 0, vx: 35, vy: 0, hp: 61, selfHp: 88 }
+          ]
+        };
+        const estimate = combatTradeEstimate(
+          { user_id: 1, x: 0, y: 0, hp: 80, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+          { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 61, vx: 35, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return Boolean(estimate?.active) + ':' + Boolean(estimate?.zeroDamageWindow) + ':' + Math.round(estimate?.tDeathMs || 0);
+      })(),
+      want: 'true:true:30000'
     },
     {
       name: 'combat native tick interval tightens only during combat',

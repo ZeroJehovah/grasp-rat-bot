@@ -5920,11 +5920,18 @@ ${importantLogSource()}
     const minSelfDamage = Math.max(0, Number(cfg.combatTradeEstimateMinSelfDamage || 6));
     const minEnemyDps = Math.max(0, Number(cfg.combatTradeEstimateMinEnemyDps || 1.5));
     const safetyFactor = Math.max(1, Number(cfg.combatTradeEstimateSafetyFactor || 1.15));
+    const noDamageSafeSelfHp = Math.max(0, Number(cfg.combatTradeEstimateNoDamageSafeSelfHp || 75));
+    const noDamageUnsafeTDeathMs = Math.max(1000, Number(cfg.combatTradeEstimateNoDamageUnsafeTDeathMs || 30000));
+    const zeroDamageWindow = targetDamage <= 0.01;
+    const noDamageUnsafe = !zeroDamageWindow
+      || selfHp <= noDamageSafeSelfHp
+      || tDeathMs <= noDamageUnsafeTDeathMs;
     const disadvantaged = Boolean(
       selfDamage >= minSelfDamage
       && enemyDps >= minEnemyDps
       && tDeathMs < tKillMs * safetyFactor
       && targetHp > 1
+      && noDamageUnsafe
     );
     return {
       active: disadvantaged,
@@ -5936,7 +5943,9 @@ ${importantLogSource()}
       enemyDps,
       tKillMs,
       tDeathMs,
-      safetyFactor
+      safetyFactor,
+      zeroDamageWindow,
+      noDamageUnsafe
     };
   }
 
