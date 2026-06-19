@@ -66,6 +66,7 @@
   - combat HP disadvantage checks run as soon as the Active target enters combat selection, before waiting for a bullet/injury trigger, but high-HP static HP-gap and trade-estimate disadvantages now enter a short observation window instead of leaving on the first detection;
   - close combat backs away while shooting inside the shorter 45m spacing threshold;
   - combat logging analysis showed 105-145m fights had very poor hit yield versus 30-75m, so default combat spacing now favors 45-65m instead of 75-105m;
+  - when an active duel stays beyond 100m for at least 6s without target damage and self HP is not already meaningfully behind, the bot presses toward 75m first instead of treating the long-range exchange as a reason to retreat or spend extra dodge reserve on more shots;
   - if the same combat target has no HP damage for at least 8s and self HP is at least 60, the bot pressures closer toward 65m while preserving real-bullet dodge priority;
   - low HP plus long no-damage is not a standalone exit trigger; combat continues unless critical HP, low-HP disadvantage, close-pressure disadvantage, or confirmed high-HP/trade disadvantage thresholds fire;
   - new combat targets enter only inside `combatAttackRange`; an already engaged target remains a combat target until it exceeds `combatDisengageRange`, but while it is outside attack range the bot holds position/recovery instead of chasing with `combat-reengage`;
