@@ -123,6 +123,10 @@ function runSelfTest() {
     combatRetreatRadialSpeedMin: 5,
     combatRetreatDistanceDeltaMin: 600,
     combatRetreatIgnoreMs: 15000,
+    combatFinishPressureSelfHpMin: 90,
+    combatFinishPressureTargetHpMax: 55,
+    combatFinishPressureCloseRange: 6500,
+    combatFinishPressureShootEveryMs: 360,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -2326,6 +2330,41 @@ function runSelfTest() {
     };
   }
 
+  function combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatFinishPressureSelfHpMin || 0));
+    const maxTargetHp = Math.max(0, Number(cfg.combatFinishPressureTargetHpMax || 0));
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatFinishPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const inAttackRange = attackRange > 0 && distance <= attackRange;
+    const retreatingEdge = Boolean(retreatingTarget?.active && retreatingTarget?.reason === 'target-retreating-edge');
+    if (!retreatingEdge || !inAttackRange || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, selfHp: ownHp, targetHp: enemyHp };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || enemyHp > maxTargetHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, selfHp: ownHp, targetHp: enemyHp };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      minSelfHp,
+      maxTargetHp,
+      reason: 'low-hp-retreating-target',
+      retreatingTarget
+    };
+  }
+
   function combatExitSummary(reason, target, combatState = {}) {
     const selfHp = Number(combatState.selfHp ?? NaN);
     const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
@@ -2871,9 +2910,12 @@ function runSelfTest() {
       }
     }
     if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
-	    const pressureClose = retreatingTarget.active
-      ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
-      : combatPressureCloseVector(self, target, target.distance, selfHp);
+	    const finishPressure = combatFinishPressureState(self, target, target.distance, selfHp, targetHp, retreatingTarget);
+	    const pressureClose = finishPressure.active
+      ? finishPressure
+      : (retreatingTarget.active
+        ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
+        : combatPressureCloseVector(self, target, target.distance, selfHp));
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let threatField = null;
     let threatFieldBase = null;
@@ -2930,7 +2972,7 @@ function runSelfTest() {
 	      aimConfidence,
 	      motionScale: aimMotionScale
 	    });
-    if (retreatingTarget.suppressFire) {
+    if (retreatingTarget.suppressFire && !finishPressure.active) {
       shooting = {
         ...shooting,
         shoot: false,
@@ -2940,14 +2982,28 @@ function runSelfTest() {
         retreatingTarget
       };
     }
+    if (finishPressure.active && !shooting.suppressed) {
+      const finishEveryMs = Math.max(
+        Number(shooting.shootEveryMs || 0),
+        Number(cfg.combatFinishPressureShootEveryMs || cfg.combatShootConserveEveryMs || cfg.combatShootEveryMs || 0)
+      );
+      shooting = {
+        ...shooting,
+        shoot: true,
+        shootEveryMs: finishEveryMs || shooting.shootEveryMs,
+        reason: 'finish-pressure',
+        throttled: true,
+        finishPressure
+      };
+    }
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
-      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? 'combat-pressure-close' : 'combat-attack'));
+      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (finishPressure.active ? 'combat-finish-pressure' : 'combat-pressure-close') : 'combat-attack'));
     return {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (retreatingTarget.suppressFire ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason))),
+        : (retreatingTarget.suppressFire && !finishPressure.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled ? 'combat-burst-fire' : baseReason)))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,
@@ -4240,6 +4296,20 @@ function runSelfTest() {
         return action.kind + ':' + action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason;
       })(),
       want: 'attack:combat-target-retreating:false:target-retreating-edge'
+    },
+    {
+      name: 'low hp retreating edge target gets finish pressure',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 13000, hp: 43 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14000, y: 0, distance: 14000, current_join_mode: 'Active', hp: 43, vx: 50, recentlyMoved: true, motionObservedSpeed: 50, drop: 80 }
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + Boolean(action.shoot) + ':' + action.shootEveryMs + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.pressureClose?.reason + ':' + action.combatState?.shooting?.reason;
+      })(),
+      want: 'attack:combat-finish-pressure:true:520:1:0:low-hp-retreating-target:finish-pressure'
     },
     {
       name: 'retreat ignored target is not reselected without incoming bullet',

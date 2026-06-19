@@ -207,6 +207,7 @@ function statusPanelSource(helpers = {}) {
 	      'combat-stamina-conserve': '战斗：保留体力躲避，暂停开火',
 	      'combat-burst-fire': '战斗：保留体力，降频开火',
 	      'combat-pressure-close': '战斗：久攻未中，压近并节奏开火',
+	      'combat-finish-pressure': '战斗：残血目标退边，压近补枪',
 	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',

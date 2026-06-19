@@ -68,6 +68,7 @@
   - low HP plus long no-damage is not a standalone exit trigger; combat continues unless critical HP, low-HP disadvantage, close-pressure disadvantage, or confirmed high-HP/trade disadvantage thresholds fire;
   - new combat targets enter only inside `combatAttackRange`; an already engaged target remains a combat target until it exceeds `combatDisengageRange`, but while it is outside attack range the bot holds position/recovery instead of chasing with `combat-reengage`;
   - when a combat target is still inside range but receding at the outer edge (`combatRetreatEdgeRange` and beyond), the bot suppresses shooting with `target-retreating-edge` to avoid wasting stamina on extreme-range kiting;
+  - if that retreating edge target is already low HP while self is still high HP, the bot uses `combat-finish-pressure`: it moves closer toward the target inside the 145m attack range and allows low-frequency finish shots; once the target is outside attack range, the out-of-range hold rule still stops chasing and shooting.
   - when pressure-close is active, diagonal tangent dodge keeps at least one target-closing axis so long no-damage fights do not keep drifting away at 100m+;
   - incoming bullet pressure takes precedence over spacing and can reselect a retreat-ignored shooter for defense, but it does not bypass disengage-range exits or retreating-edge fire suppression;
   - tangent dodge uses signed bullet lane when available;
