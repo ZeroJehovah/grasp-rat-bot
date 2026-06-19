@@ -412,6 +412,21 @@ function main() {
       assert(body.includes('const moveCost = opportunityMoveStaminaCost(target?.distance, 0)'), 'enemy opportunity movement cost still stops at shooting range');
       assert(body.includes('estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500))'), 'enemy opportunity shooting cost missing');
     });
+    check(`${file} plans bounded native visible coin routes inside opportunity scoring`, () => {
+      const routeBody = functionBody(text, 'pickCoinRouteOpportunity');
+      const bestBody = functionBody(text, 'bestCoinOpportunityScore');
+      const pickBody = functionBody(text, 'pickBestOpportunity');
+      assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
+      assert(text.includes('function coinRouteLegClear'), 'coin route leg safety checker not found');
+      assert(text.includes('best-opportunity-coin-route'), 'coin route decision reason not found');
+      assert(routeBody.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'coin route planner can include snapshot-only coins');
+      assert(routeBody.includes('cfg.coinRoutePoolLimit'), 'coin route planner is not pool bounded');
+      assert(routeBody.includes('cfg.coinRouteAnchorLimit'), 'coin route planner is not anchor bounded');
+      assert(routeBody.includes('coinRouteLegClear(self, anchor, activeThreats)'), 'coin route planner does not safety-check first leg');
+      assert(bestBody.includes('pickCoinRouteOpportunity'), 'profitable combat comparison does not include coin route score');
+      assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
+      assert(pickBody.includes('coin.distance <= cfg.coinMaxDistance ?') && pickBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
+    });
     check(`${file} lets high-value combat drops interrupt recovery`, () => {
       const body = functionBody(text, 'pickPostAttackDropCoin');
       assert(body.includes('options.maxDistance ?? cfg.postAttackDropCoinMaxDistance'), 'post-attack drop picker does not accept maxDistance override');
@@ -1113,6 +1128,15 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'alive high drop target does not trigger post kill wait'"), 'alive-target no-wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'unshot high drop target disappearance does not trigger post kill wait'"), 'unshot-target no-wait self-test not found');
     assert(nodeSelfTestSource.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
+  });
+
+  check('run-self-test module covers native visible coin route self-tests', () => {
+    assert(nodeSelfTestSource.includes("name: 'visible coin route beats closer single coin by route roi'"), 'coin route ROI self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'visible afk drop still beats weaker coin route by stamina roi'"), 'AFK-vs-coin-route ROI self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'coin route leg threat block rejects path through active danger'"), 'coin route threat-block self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'coin route rejects unaffordable whole route'"), 'coin route stamina budget self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'near realtime coin remains first target before known field route'"), 'near realtime coin first-target route self-test not found');
+    assert(nodeSelfTestSource.includes('coinRoute?.legCount'), 'coin route metadata self-test assertion not found');
   });
 
   check('run-self-test module covers combat fire discipline self-tests', () => {

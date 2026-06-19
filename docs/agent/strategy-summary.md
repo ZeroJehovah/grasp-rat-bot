@@ -47,6 +47,8 @@
   - post-attack dropped coins are prioritized when appropriate;
   - realtime/native visible coins always win before any snapshot fallback;
   - visible/native AFK Drop targets also win before snapshot fallback, so ordinary profit flow uses visible收益 first and only touches snapshot targets when no visible/realtime profit exists;
+  - native/realtime visible coin groups can be planned as a bounded short route in the same opportunity pool as single coins and AFK/player Drop targets. The route is scored by total visible route reward over total estimated movement stamina, starts at the first coin to pick up, records route ids/value/stamina/leg count in the action, and only enters the pool when at least three safe visible coins form a beneficial route;
+  - coin routes are safety-checked leg by leg. Sampled route points inside active/invulnerable coin danger are rejected, so route planning cannot walk through a hostile danger band just because the final coin is safe;
   - known coin-field migration is scored in the same opportunity pool as visible coin routing, so it shares ROI comparison and switch hysteresis instead of competing as a separate fallback branch.
   - far low-value single snapshot coins are gated by distance/value during normal selection, but after 60s of continuous snapshot-coin waiting the bot chases a safe, fresh far snapshot coin instead of idling, even when ordinary long-window stamina ROI budget would otherwise keep it waiting.
   - visible/native coin opportunities use visible coin reasons, not snapshot navigation reasons.
