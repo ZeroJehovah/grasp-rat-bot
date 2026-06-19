@@ -260,6 +260,10 @@ function targetOverlaySource() {
 
   function renderTargetOverlay(decision = bot.lastDecision) {
     try {
+      if (bot?.paused || decision?.paused || String(decision?.reason || '') === 'paused') {
+        removeTargetOverlay();
+        return;
+      }
       if (targetOverlaySuppressedAfterExit(decision)) {
         removeTargetOverlay();
         return;

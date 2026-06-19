@@ -66,6 +66,10 @@ function runSelfTest() {
     combatFarNoDamageCloseRange: 7500,
     combatFarNoDamageCloseMinHp: 60,
     combatFarNoDamageCloseMaxHpGap: 10,
+    combatPassiveRunnerMinSelfHp: 80,
+    combatPassiveRunnerMinDrop: 1,
+    combatPassiveRunnerCloseRange: 7500,
+    combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
     combatShootRecoveryEveryMs: 700,
@@ -851,13 +855,20 @@ function runSelfTest() {
       && options.realBulletPressure
       && (!attackRange || Number(distance) <= attackRange));
     const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+    const passiveRunnerIntercept = Boolean(live
+      && moving
+      && movement
+      && options.passiveRunner
+      && (!attackRange || Number(distance) <= attackRange));
     const liveIntercept = Boolean(live
       && moving
       && movement
-      && lateralRatio > radialMax
       && (
-        realBulletPrecision
-        || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+        passiveRunnerIntercept
+        || (lateralRatio > radialMax && (
+          realBulletPrecision
+          || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+        ))
       ));
     const radialPrecision = Boolean(live
       && moving
@@ -871,11 +882,16 @@ function runSelfTest() {
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
+    let passiveRunnerAim = false;
     if (sourceDivergence.active) {
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
       precision = true;
+    } else if (passiveRunnerIntercept) {
+      strategy = 'live-intercept';
+      reason = 'passive-runner-intercept';
+      passiveRunnerAim = true;
     } else if (realBulletPrecision && liveIntercept) {
       strategy = 'live-intercept';
       reason = 'real-bullet-pressure-intercept';
@@ -921,6 +937,7 @@ function runSelfTest() {
       realBulletPrecision,
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
+      passiveRunner: Boolean(passiveRunnerAim),
       movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
     };
   }
@@ -2606,6 +2623,70 @@ function runSelfTest() {
     };
   }
 
+  function combatPassiveRunnerState(self, target, targetDistance, motionScale = 0, realBulletPressure = false) {
+    const selfHp = hpValue(self);
+    const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
+    const minDrop = Math.max(0, Number(cfg.combatPassiveRunnerMinDrop || 0));
+    const targetDrop = Math.max(0, Number(dropValue(target) || target?.drop || 0));
+    const moving = speed(target) >= cfg.combatStationarySpeed
+      || Number(motionScale || 0) >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+    const current = bot.combatTarget && combatTargetId(bot.combatTarget) === combatTargetId(target) ? bot.combatTarget : null;
+    const samples = Array.isArray(current?.motionSamples) ? current.motionSamples : [];
+    const firstSelfHp = samples.length ? Number(samples[0].selfHp) : null;
+    const lastSelfHp = samples.length ? Number(samples[samples.length - 1].selfHp) : null;
+    const recentSelfDamage = Number.isFinite(firstSelfHp) && Number.isFinite(lastSelfHp)
+      ? Math.max(0, firstSelfHp - lastSelfHp)
+      : 0;
+    const intent = String(target?.combatIntent || current?.intent || '');
+    const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
+    const rewarded = targetDrop >= minDrop || runnerIntent;
+    const active = Boolean(
+      isActive(target)
+      && moving
+      && runnerIntent
+      && rewarded
+      && !isFiringEntity(target)
+      && !isInvulnerable(target)
+      && !realBulletPressure
+      && Number.isFinite(selfHp)
+      && selfHp >= minSelfHp
+      && recentSelfDamage <= 0.01
+    );
+    return {
+      active,
+      selfHp,
+      minSelfHp,
+      targetDrop,
+      minDrop,
+      moving,
+      motionScale: Number.isFinite(Number(motionScale)) ? Number(Number(motionScale).toFixed(2)) : 0,
+      distance: Number.isFinite(Number(targetDistance)) ? Math.round(Number(targetDistance)) : null,
+      combatIntent: intent,
+      recentSelfDamage
+    };
+  }
+
+  function combatPassiveRunnerCloseVector(self, target, targetDistance, runnerState) {
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatPassiveRunnerCloseRange || 0)
+    );
+    if (!runnerState?.active || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, reason: 'passive-runner' };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs: 0,
+      reason: 'passive-runner'
+    };
+  }
+
   function combatExitSummary(reason, target, combatState = {}) {
     const selfHp = Number(combatState.selfHp ?? NaN);
     const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
@@ -3077,7 +3158,11 @@ function runSelfTest() {
 	      ? combatMovementAimMode(self, aimSource, aimDistance)
 	      : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
     const realBulletPressure = Boolean(targetBulletSeen || (targetThreat && !targetThreat.synthetic) || (anyThreat && !anyThreat.synthetic));
-    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, { noDamageMs }, aimMoving, aimDistance, aimMovement, steadyAim, { realBulletPressure });
+    let passiveRunner = combatPassiveRunnerState(self, target, target.distance, motionScale, realBulletPressure);
+    if (retreatingTarget.active && passiveRunner.active) {
+      passiveRunner = { ...passiveRunner, active: false, suppressedBy: retreatingTarget.reason || 'retreating-target' };
+    }
+    const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, { noDamageMs }, aimMoving, aimDistance, aimMovement, steadyAim, { realBulletPressure, passiveRunner: passiveRunner.active });
 	    const opponentProfile = combatOpponentProfile(self, aimSource, aimDistance);
 	    const intercept = aimMoving && !aimStrategy.bypassJitter
 	      ? combatInterceptSolution(self, aimSource, aimDistance, aimMotionScale)
@@ -3164,13 +3249,17 @@ function runSelfTest() {
     if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
 	    const finishPressure = combatFinishPressureState(self, target, target.distance, selfHp, targetHp, retreatingTarget);
 	    const farNoDamageClose = combatFarNoDamageCloseVector(self, target, target.distance, selfHp, targetHp);
-	    const pressureClose = finishPressure.active
+	    const basePressureClose = finishPressure.active
       ? finishPressure
       : (retreatingTarget.active
         ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
         : (farNoDamageClose.active
           ? farNoDamageClose
           : combatPressureCloseVector(self, target, target.distance, selfHp)));
+	    const passiveRunnerClose = !basePressureClose.active && !retreatingTarget.active
+      ? combatPassiveRunnerCloseVector(self, target, target.distance, passiveRunner)
+      : { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: Number(cfg.combatPassiveRunnerCloseRange || 0), noDamageMs, reason: 'passive-runner' };
+	    const pressureClose = passiveRunnerClose.active ? passiveRunnerClose : basePressureClose;
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let threatField = null;
     let threatFieldBase = null;
@@ -3255,7 +3344,7 @@ function runSelfTest() {
     }
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
-      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (finishPressure.active ? 'combat-finish-pressure' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')) : 'combat-attack'));
+      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : 'combat-attack'));
     return {
       kind: 'attack',
       reason: movementSuppressed
@@ -3287,6 +3376,7 @@ function runSelfTest() {
         realBulletPrecision: Boolean(aimStrategy.realBulletPrecision),
         radialPrecision: Boolean(aimStrategy.radialPrecision),
         fallbackPrecision: Boolean(aimStrategy.fallbackPrecision),
+        passiveRunner: Boolean(aimStrategy.passiveRunner),
 	        aimConfidence: Number(Number(aimConfidence).toFixed(2)),
 	        intercept: Boolean(intercept),
         interceptConfidence: intercept ? Number(Number(intercept.confidence || 0).toFixed(2)) : null,
@@ -3297,6 +3387,8 @@ function runSelfTest() {
         name: target.name,
         x: target.x,
         y: target.y,
+        vx: Number(target.vx) || 0,
+        vy: Number(target.vy) || 0,
         hp: combatHpValue(target),
         drop: target.drop,
         distance: Math.round(target.distance),
@@ -3325,6 +3417,7 @@ function runSelfTest() {
           closeRange: Math.round(pressureClose.closeRange),
           noDamageMs: Math.round(pressureClose.noDamageMs)
         } : null,
+        passiveRunner: passiveRunner.active ? passiveRunner : null,
         noDamageMs,
 	        steadyAim,
 	        opponentProfile,
@@ -5761,6 +5854,39 @@ function runSelfTest() {
         ]
       }).kind,
       want: 'attack'
+    },
+    {
+      name: 'passive runner combat closes and uses visible intercept',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = {
+          user_id: 4,
+          name: 'runner',
+          x: 12000,
+          y: 0,
+          vx: -35,
+          vy: 35,
+          current_join_mode: 'Active',
+          death_reward_preview: 20,
+          hp: 100,
+          distance: 12000,
+          drop: 20,
+          combatIntent: 'profit'
+        };
+        bot.combatTarget = null;
+        bot.testNativeEntities = [{ ...target }];
+        const action = chooseCombatAction(self, target, []);
+        bot.testNativeEntities = [];
+        return [
+          action.reason,
+          action.dx,
+          action.dy,
+          action.aimTarget?.strategyReason,
+          action.aimTarget?.passiveRunner,
+          Boolean(action.combatState?.passiveRunner)
+        ].join('|');
+      })(),
+      want: 'combat-passive-runner-close|1|0|passive-runner-intercept|true|true'
     },
     {
       name: 'return block prevents moving back toward nearby active',

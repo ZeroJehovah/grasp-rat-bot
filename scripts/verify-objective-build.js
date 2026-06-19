@@ -700,6 +700,8 @@ function main() {
 	        ? functionBody(targetOverlaySourceModule, 'targetOverlaySource')
 	        : functionBody(text, 'renderTargetOverlay');
 	      assert(overlayBody.includes('targetOverlaySuppressedAfterExit(decision)'), 'target overlay is not suppressed after exit');
+	      assert(overlayBody.includes("String(decision?.reason || '') === 'paused'"), 'target overlay is not suppressed while paused');
+	      assert(/setPaused\s*\([^)]*\)\s*\{[\s\S]{0,2500}removeTargetOverlay\(\)/.test(text), 'manual pause does not remove target overlay');
 	      const actionVelocityBody = functionBody(text, 'sendActionVelocity');
 	      assert(actionVelocityBody.includes('const lockRemainingMs = exitMotionStopLockRemainingMs()'), 'action velocity does not check exit motion lock');
 	      assert(actionVelocityBody.includes('action.exitMotionBlocked'), 'exit motion lock is not exposed on blocked actions');
@@ -802,7 +804,7 @@ function main() {
       assert(text.includes('function combatAimSteadyNoDamageState'), 'steady no-damage aim helper not found');
       assert(aimBody.includes('combatAimDynamicStrategyState(self, target, aimSource'), 'combat aim does not use dynamic strategy state');
       assert(text.includes('function combatAimTarget(self, target, options = {})'), 'combat aim target cannot receive pressure options');
-      assert(combatBody.includes('combatAimTarget(self, target, { realBulletPressure })'), 'combat action does not pass real bullet pressure into aim');
+	      assert(combatBody.includes('combatAimTarget(self, target, { realBulletPressure'), 'combat action does not pass real bullet pressure into aim');
       assert(text.includes('combatAimTarget(self, target, { realBulletPressure })'), 'leave cover does not pass real bullet pressure into aim');
       assert(aimBody.includes('realBulletPressure: Boolean(options.realBulletPressure)'), 'combat aim does not pass real bullet pressure into dynamic strategy');
       assert(text.includes("reason = 'coordinate-divergence'"), 'combat aim does not switch on live/source coordinate divergence');
@@ -813,7 +815,7 @@ function main() {
       assert(text.includes("reason = 'radial-motion'"), 'combat aim does not switch on target radial movement');
       assert(text.includes("reason = 'no-damage-fallback'"), 'combat aim fallback precision reason not found');
       assert(aimBody.includes('liveInterceptAim: Boolean(aimStrategy.liveIntercept)'), 'combat logs do not expose live-intercept aim state');
-      assert(aimBody.includes('const interceptStrategyReason = aimStrategy.liveIntercept'), 'combat intercept aim does not preserve strategy reason');
+	      assert(aimBody.includes('const interceptStrategyReason') && aimBody.includes('aimStrategy.liveIntercept'), 'combat intercept aim does not preserve strategy reason');
       assert(aimBody.includes('mode: aimStrategy.mode'), 'combat aim does not use dynamic strategy mode');
       assert(aimBody.includes('precisionAim: Boolean(aimStrategy.precision)'), 'combat logs do not expose dynamic precision aim state');
       assert(aimBody.includes('liveAim: Boolean(aimSource.nativeAimResolved)'), 'combat logs do not expose live aim state');

@@ -550,7 +550,10 @@ function controlLoginSource(helpers = {}) {
     if (paused !== bot.paused) {
       bot.paused = paused;
       bot.pauseChangedAt = Date.now();
-      if (paused && stopOnPause) stopMotionSafely('paused');
+      if (paused) {
+        if (stopOnPause) stopMotionSafely('paused');
+        removeTargetOverlay();
+      }
     }
     bot.pauseReason = paused ? (readPauseReason() || bot.pauseReason || 'manual') : '';
     return paused;

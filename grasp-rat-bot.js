@@ -634,6 +634,7 @@ function browserBotSource(config) {
 	      } catch (_) {}
 	      if (changed && next) {
 	        stopMotionSafely('paused');
+	        removeTargetOverlay();
 	      }
 	      if (next) {
 	        this.lastDecision = {
@@ -645,6 +646,7 @@ function browserBotSource(config) {
 	          paused: true,
 	          pauseReason: this.pauseReason || 'manual'
 	        };
+	        renderTargetOverlay(this.lastDecision);
 	      }
 	      return this.status();
 	    },
@@ -5797,6 +5799,77 @@ ${importantLogSource()}
     };
   }
 
+  function combatPassiveRunnerState(self, target, targetDistance, damageState = null, pressure = null, motionScale = 0) {
+    const selfHp = hpValue(self);
+    const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
+    const minDrop = Math.max(0, Number(cfg.combatPassiveRunnerMinDrop || 0));
+    const targetDrop = Math.max(0, Number(dropValue(target) || target?.drop || 0));
+    const active = isCurrentlyActive(target);
+    const moving = speed(target) >= cfg.combatStationarySpeed
+      || Number(motionScale || 0) >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
+    const realPressure = Boolean(pressure && !pressure.synthetic);
+    const recentlyInjured = bot.pendingInjuryLeave
+      && Date.now() - Number(bot.pendingInjuryLeave.at || 0) <= cfg.combatStrafeLockMs * 3;
+    const current = bot.combatTarget && combatTargetId(bot.combatTarget) === combatTargetId(target) ? bot.combatTarget : null;
+    const samples = Array.isArray(current?.motionSamples) ? current.motionSamples : [];
+    const firstSelfHp = samples.length ? Number(samples[0].selfHp) : null;
+    const lastSelfHp = samples.length ? Number(samples[samples.length - 1].selfHp) : null;
+    const recentSelfDamage = Number.isFinite(firstSelfHp) && Number.isFinite(lastSelfHp)
+      ? Math.max(0, firstSelfHp - lastSelfHp)
+      : 0;
+    const intent = String(target?.combatIntent || current?.intent || '');
+    const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
+    const rewarded = targetDrop >= minDrop || runnerIntent;
+    const eligible = Boolean(
+      active
+      && moving
+      && runnerIntent
+      && rewarded
+      && !isFiringEntity(target)
+      && !isInvulnerable(target)
+      && !realPressure
+      && !recentlyInjured
+      && Number.isFinite(selfHp)
+      && selfHp >= minSelfHp
+      && recentSelfDamage <= 0.01
+    );
+    return {
+      active: eligible,
+      selfHp,
+      minSelfHp,
+      targetDrop,
+      minDrop,
+      distance: Number.isFinite(Number(targetDistance)) ? Math.round(Number(targetDistance)) : null,
+      moving,
+      motionScale: Number.isFinite(Number(motionScale)) ? Number(Number(motionScale).toFixed(2)) : 0,
+      recentSelfDamage,
+      pressureReason: pressure?.reason || '',
+      combatIntent: intent,
+      noDamageMs: Math.max(0, Number(damageState?.noDamageMs || 0))
+    };
+  }
+
+  function combatPassiveRunnerCloseVector(self, target, targetDistance, runnerState) {
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatPassiveRunnerCloseRange || 0)
+    );
+    if (!runnerState?.active || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, reason: 'passive-runner' };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      noDamageMs: Math.max(0, Number(runnerState.noDamageMs || 0)),
+      reason: 'passive-runner'
+    };
+  }
+
   function mergeCombatMove(primary, spacing, allowSpacingMerge = true) {
     if (!spacing?.active || !allowSpacingMerge) return primary || { dx: 0, dy: 0 };
     const current = primary || { dx: 0, dy: 0 };
@@ -6815,13 +6888,20 @@ ${importantLogSource()}
       && options.realBulletPressure
       && (!attackRange || Number(distance) <= attackRange));
     const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+    const passiveRunnerIntercept = Boolean(live
+      && moving
+      && movement
+      && options.passiveRunner
+      && (!attackRange || Number(distance) <= attackRange));
     const liveIntercept = Boolean(live
       && moving
       && movement
-      && lateralRatio > radialMax
       && (
-        realBulletPrecision
-        || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+        passiveRunnerIntercept
+        || (lateralRatio > radialMax && (
+          realBulletPrecision
+          || (serverStall.stalled && (!attackRange || Number(distance) <= attackRange))
+        ))
       ));
     const radialPrecision = Boolean(live
       && moving
@@ -6835,11 +6915,16 @@ ${importantLogSource()}
     let reason = moving ? (movement?.mode || 'moving') : 'stationary';
     let precision = false;
     let steady = false;
+    let passiveRunnerAim = false;
     if (sourceDivergence.active) {
       mode = 'live-precision';
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
       precision = true;
+    } else if (passiveRunnerIntercept) {
+      strategy = 'live-intercept';
+      reason = 'passive-runner-intercept';
+      passiveRunnerAim = true;
     } else if (realBulletPrecision && liveIntercept) {
       strategy = 'live-intercept';
       reason = 'real-bullet-pressure-intercept';
@@ -6885,6 +6970,7 @@ ${importantLogSource()}
       realBulletPrecision,
       radialPrecision,
       fallbackPrecision: Boolean(fallbackPrecision.active),
+      passiveRunner: Boolean(passiveRunnerAim),
       movementMode: precision ? strategy : (steady ? 'steady' : (movement?.mode || ''))
     };
   }
@@ -6905,7 +6991,8 @@ ${importantLogSource()}
       ? combatMovementAimMode(self, aimSource, distance)
       : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
     const aimStrategy = combatAimDynamicStrategyState(self, target, aimSource, damage, moving, distance, movement, steadyAim, {
-      realBulletPressure: Boolean(options.realBulletPressure)
+      realBulletPressure: Boolean(options.realBulletPressure),
+      passiveRunner: Boolean(options.passiveRunner)
     });
     const exact = {
       x: Number(aimSource.x),
@@ -6930,7 +7017,8 @@ ${importantLogSource()}
       serverStallAim: Boolean(aimStrategy.serverStall),
       realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
-	      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
       aimConfidence: aimStrategy.bypassJitter ? 1 : null,
       opponentProfile,
     };
@@ -6952,13 +7040,17 @@ ${importantLogSource()}
     const lockCompatible = previousAim
       && String(previousAim.targetId || '') === targetId
       && String(previousAim.movementMode || '') === movement.mode
+      && String(previousAim.strategy || '') === String(aimStrategy.strategy || '')
+      && Boolean(previousAim.passiveRunner) === Boolean(aimStrategy.passiveRunner)
       && Number(previousAim.noDamageBucket || 0) === noDamageBucket
       && Number(previousAim.motionBucket ?? motionBucket) === motionBucket
       && now() < Number(previousAim.until || 0);
     if (intercept) {
-      const interceptStrategyReason = aimStrategy.liveIntercept
+      const interceptStrategyReason = aimStrategy.passiveRunner
+        ? (aimStrategy.reason || 'passive-runner-intercept')
+        : (aimStrategy.liveIntercept
         ? (aimStrategy.reason || 'live-intercept')
-        : 'quadratic-intercept';
+        : 'quadratic-intercept');
       const interceptConfidence = clamp(Number(intercept.confidence || 0) * Number(opponentProfile.aimConfidenceScale || 1), 0.1, 1);
       let spreadAngle = 0;
       const locked = lockCompatible && Number.isFinite(Number(previousAim.spreadAngle));
@@ -6967,7 +7059,9 @@ ${importantLogSource()}
         sign = Math.sign(Number(previousAim.sign || sign)) || sign;
       } else {
         const spreadScale = Math.max(0, Number(cfg.combatInterceptSpreadScale ?? 0.18))
-          * (aimStrategy.liveIntercept ? 0.35 : 1);
+          * (aimStrategy.passiveRunner
+            ? Math.max(0, Number(cfg.combatPassiveRunnerInterceptSpreadScale ?? 0))
+            : (aimStrategy.liveIntercept ? 0.35 : 1));
         const uncertainty = 1 - Math.max(0, Math.min(1, interceptConfidence));
         const randomLimit = jitterLimit * spreadScale * (0.35 + uncertainty) * (noDamageLevel ? 1.35 : 1);
         spreadAngle = (Math.random() * 2 - 1) * randomLimit;
@@ -6977,6 +7071,8 @@ ${importantLogSource()}
           spreadAngle,
           sign,
           movementMode: movement.mode,
+          strategy: aimStrategy.strategy,
+          passiveRunner: Boolean(aimStrategy.passiveRunner),
           noDamageBucket,
           motionBucket,
           intercept: true,
@@ -7020,6 +7116,7 @@ ${importantLogSource()}
         realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
         radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
         fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+        passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
         interceptAim: true,
         interceptFlightTicks: intercept.flightTicks,
         interceptFlightMs: intercept.flightMs,
@@ -7048,6 +7145,8 @@ ${importantLogSource()}
         angle,
         sign,
         movementMode: movement.mode,
+        strategy: aimStrategy.strategy,
+        passiveRunner: Boolean(aimStrategy.passiveRunner),
         noDamageBucket,
         motionBucket,
         intercept: false,
@@ -7078,7 +7177,7 @@ ${importantLogSource()}
       aimStrategy: aimStrategy.strategy,
       aimStrategyReason: aimStrategy.liveIntercept
         ? (aimStrategy.reason || 'live-intercept')
-        : 'intercept-fallback',
+        : (aimStrategy.passiveRunner ? (aimStrategy.reason || 'passive-runner-intercept') : 'intercept-fallback'),
       sourceDivergenceCm: aimStrategy.sourceDivergence.divergenceCm,
       sourceDivergenceThresholdCm: aimStrategy.sourceDivergence.thresholdCm,
       serverStallAim: Boolean(aimStrategy.serverStall),
@@ -7086,6 +7185,7 @@ ${importantLogSource()}
       realBulletPrecisionAim: Boolean(aimStrategy.realBulletPrecision),
       radialPrecisionAim: Boolean(aimStrategy.radialPrecision),
       fallbackPrecisionAim: Boolean(aimStrategy.fallbackPrecision),
+      passiveRunnerAim: Boolean(aimStrategy.passiveRunner),
       interceptAim: false,
 	      aimConfidence: Math.max(0.2, Math.min(0.7, Number(opponentProfile.aimConfidenceScale || 1) * (1 - Math.min(0.65, motionScale * 0.35)))),
 	      opponentProfile
@@ -7228,6 +7328,8 @@ ${importantLogSource()}
       name: target.name,
       x: target.x,
       y: target.y,
+      vx: Number(target.vx) || 0,
+      vy: Number(target.vy) || 0,
       hp: targetHp,
       knownHp: knownHpValue(target),
       drop: target.drop,
@@ -7261,11 +7363,16 @@ ${importantLogSource()}
         return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance));
       }
     }
-    const pressure = combatPressureThreat(self, target, bullets);
-    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
+    let pressure = combatPressureThreat(self, target, bullets);
     const spacing = combatSpacingVector(self, target, targetDistance);
     const damageState = combatAimDamageState(target);
+    let passiveRunner = combatPassiveRunnerState(self, target, targetDistance, damageState, pressure, targetMotionScale);
     const retreatingTarget = combatRetreatingTargetState(self, target, targetDistance, damageState);
+    if (retreatingTarget.active && passiveRunner.active) {
+      passiveRunner = { ...passiveRunner, active: false, suppressedBy: retreatingTarget.reason || 'retreating-target' };
+    }
+    if (passiveRunner.active && pressure?.synthetic && pressure.reason === 'target-pressure') pressure = null;
+    const realBulletPressure = Boolean(pressure && !pressure.synthetic);
     const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
@@ -7362,13 +7469,17 @@ ${importantLogSource()}
       selfHp,
       targetHp
     );
-    const pressureClose = finishPressure.active
+    const basePressureClose = finishPressure.active
       ? finishPressure
       : (retreatingTarget.active
         ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
         : (farNoDamageClose.active
           ? farNoDamageClose
           : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp)));
+    const passiveRunnerClose = !basePressureClose.active && !retreatingTarget.active
+      ? combatPassiveRunnerCloseVector(self, target, targetDistance, passiveRunner)
+      : { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: Number(cfg.combatPassiveRunnerCloseRange || 0), noDamageMs: damageState.noDamageMs, reason: 'passive-runner' };
+    const pressureClose = passiveRunnerClose.active ? passiveRunnerClose : basePressureClose;
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
     const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
@@ -7388,7 +7499,7 @@ ${importantLogSource()}
       : null;
     if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
     const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
-    const aim = combatAimTarget(self, target, { realBulletPressure });
+    const aim = combatAimTarget(self, target, { realBulletPressure, passiveRunner: passiveRunner.active });
     const pressureCloseActive = Boolean(pressureClose.active && (combatMove.dx || combatMove.dy));
     const trend = combatTrendState(self, {
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
@@ -7449,9 +7560,9 @@ ${importantLogSource()}
     }
     const baseReason = realBulletPressure
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
-      : (spacingActive
+        : (spacingActive
         ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-        : (pressureCloseActive ? (finishPressure.active ? 'combat-finish-pressure' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')) : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
+        : (pressureCloseActive ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
     return {
       kind: 'attack',
       reason: movementSuppressed
@@ -7488,6 +7599,7 @@ ${importantLogSource()}
         realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
         radialPrecision: Boolean(aim.radialPrecisionAim),
         fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+        passiveRunner: Boolean(aim.passiveRunnerAim),
 	        intercept: Boolean(aim.interceptAim),
 	        interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
 	        interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
@@ -7528,6 +7640,7 @@ ${importantLogSource()}
           realBulletPrecision: Boolean(aim.realBulletPrecisionAim),
           radialPrecision: Boolean(aim.radialPrecisionAim),
           fallbackPrecision: Boolean(aim.fallbackPrecisionAim),
+          passiveRunner: Boolean(aim.passiveRunnerAim),
         intercept: Boolean(aim.interceptAim),
         interceptFlightMs: Number.isFinite(Number(aim.interceptFlightMs)) ? Math.round(Number(aim.interceptFlightMs)) : null,
         interceptLeadDistance: Number.isFinite(Number(aim.interceptLeadDistance)) ? Math.round(Number(aim.interceptLeadDistance)) : null,
@@ -7577,6 +7690,7 @@ ${importantLogSource()}
           preferClosing: Boolean(pressureClose.active),
           merged: Boolean(!realBulletPressure)
         } : null,
+        passiveRunner: passiveRunner.active ? passiveRunner : null,
         movementSuppressed,
         shooting,
         disadvantageObservation,
