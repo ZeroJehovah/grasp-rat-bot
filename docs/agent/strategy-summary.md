@@ -66,10 +66,10 @@
   - combat logging analysis showed 105-145m fights had very poor hit yield versus 30-75m, so default combat spacing now favors 45-65m instead of 75-105m;
   - if the same combat target has no HP damage for at least 8s and self HP is at least 60, the bot pressures closer toward 65m while preserving real-bullet dodge priority;
   - low HP plus long no-damage is not a standalone exit trigger; combat continues unless critical HP, low-HP disadvantage, close-pressure disadvantage, or confirmed high-HP/trade disadvantage thresholds fire;
-  - when an engaged combat target is outside `combatAttackRange` and still receding, the bot clears that combat engagement, ignores the same target for 15s, and waits instead of chasing with `combat-reengage` or falling into a long no-damage exit;
+  - new combat targets enter only inside `combatAttackRange`; an already engaged target remains a combat target until it exceeds `combatDisengageRange`, but while it is outside attack range the bot holds position/recovery instead of chasing with `combat-reengage`;
   - when a combat target is still inside range but receding at the outer edge (`combatRetreatEdgeRange` and beyond), the bot suppresses shooting with `target-retreating-edge` to avoid wasting stamina on extreme-range kiting;
   - when pressure-close is active, diagonal tangent dodge keeps at least one target-closing axis so long no-damage fights do not keep drifting away at 100m+;
-  - incoming bullet pressure takes precedence over spacing and can reselect a retreat-ignored shooter for defense, but it does not bypass the retreating-target disengage/fire-suppression rules;
+  - incoming bullet pressure takes precedence over spacing and can reselect a retreat-ignored shooter for defense, but it does not bypass disengage-range exits or retreating-edge fire suppression;
   - tangent dodge uses signed bullet lane when available;
   - precise incoming signed-lane direction can override a stale opposite strafe lock; old logs showed conflicting locked strafe signs had worse self-damage/target-damage balance than aligned signs.
   - real incoming bullets are evaluated as a multi-bullet threat field over the 8 legal movement directions; the selected dodge remains integer `dx/dy` in `-1/0/1`, matching CDP validation that native `vel` does not accept continuous float movement vectors.
@@ -90,7 +90,7 @@
   - long no-damage aim widening is still capped at `0.14rad`, because old delayed-hit attribution showed higher buckets weakening sharply, but intercept aim uses that cap only to bound residual uncertainty/spread rather than to cap the physical lead itself;
   - combat shooting is stamina-aware: ordinary combat no longer force-bypasses `shootEveryMs`, normal combat cadence is 160ms, reserve-band fire is 360ms, and fire pauses below hard reserve or when 5s stamina should be saved for dodge.
   - short-term target motion now scales aim jitter/lead down when a target is not meaningfully evading;
-  - an already engaged target stays under combat action priority even while recovering/non-full HP, including grace-range reengage before full disengage, unless the target is clearly retreating; invulnerable targets are avoided as a global safety movement, not a recovery-only combat state, and non-invulnerable recovery threats can still use the safety/flee/recover path unless combat leave thresholds fire.
+  - an already engaged target stays under combat action priority even while recovering/non-full HP until it exceeds `combatDisengageRange`; outside attack range but inside that disengage range the bot waits in place to recover instead of pursuing. Invulnerable targets are avoided as a global safety movement, not a recovery-only combat state, and non-invulnerable recovery threats can still use the safety/flee/recover path unless combat leave thresholds fire.
   - pursuit leave thresholds remain 5 minutes normally, but shorten to 90 seconds when not full HP, 60 seconds for invulnerable chasers, and 45 seconds when both apply.
   - optional Tampermonkey combat logging records only self-involved, non-AFK combat to local JSONL via `combat-log-service`; offline/relogin/no-self states pause logging and do not flush every tick.
   - combat logging no longer starts from nearby third-party activity or AFK Drop attacks; AFK attack frames are also excluded from pre/post buffers.

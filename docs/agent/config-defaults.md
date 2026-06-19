@@ -36,6 +36,7 @@
 - `coinPickupAttemptSlowEveryMs = 2500`
 - `coinPickupAttemptSlowMaxCount = 3`
 - `combatAttackRange = 14500`
+- `combatDisengageRange = 17000`
 - `combatRetreatEdgeRange = 13800`
 - `combatRetreatRadialSpeedMin = 5`
 - `combatRetreatDistanceDeltaMin = 600`

@@ -55,6 +55,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'killAttributionMergeMs', value: 120000 },
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
+  { key: 'combatDisengageRange', value: 17000 },
   { key: 'combatRetreatEdgeRange', value: 13800 },
   { key: 'combatRetreatRadialSpeedMin', value: 5 },
   { key: 'combatRetreatDistanceDeltaMin', value: 600 },
@@ -723,18 +724,20 @@ function main() {
       assert(recordImportantBody.includes('importantCombatReasonIsPostCombatObservation(reason)'), 'important combat logging can still close immediately on recovery wait');
       assert(!body.includes('const recoveryLeave = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'old recovery-leave-only combat branch is still present');
       const classifyBody = functionBody(text, 'classify');
-      assert(classifyBody.includes('const combatCandidateRange = combatTargetCandidateRange(self)'), 'combat target classification does not use HP-aware candidate range');
-      assert(classifyBody.includes('e.distance <= combatCandidateRange'), 'combat targets are still limited to raw attack range only');
+      assert(classifyBody.includes('const combatCandidateRange = combatTargetCandidateRange(self)'), 'combat target classification does not use configured candidate range');
+      assert(classifyBody.includes('e.distance <= combatCandidateRange'), 'combat targets do not use the configured candidate range');
       const candidateBody = functionBody(text, 'combatTargetCandidateRange');
-      assert(candidateBody.includes('isFullHp(self)'), 'combat target candidate range is not HP-aware');
-      assert(candidateBody.includes('combatEngageGraceRange()'), 'non-full defensive targets cannot use reengage range');
+      assert(candidateBody.includes('Number(cfg.combatAttackRange || 0)'), 'new combat target candidate range is not limited to attack range');
+      assert(!candidateBody.includes('isFullHp(self)'), 'new combat target selection still expands outside attack range when damaged');
       assert(text.includes('const activeReengage = Boolean(reengageTarget'), 'engaged active reengage state is not computed');
       assert(text.includes('Math.max(graceMs, Number(cfg.combatEngageStickMs || 0))'), 'active reengage does not extend out-of-range grace to combat stick window');
       assert(text.includes('outOfRangeLimitMs'), 'engaged reengage does not expose/use the active out-of-range limit');
+      assert(text.includes("clearCombatEngagement('combat-disengage-range')"), 'engaged targets beyond disengage range do not clear combat state');
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes("if (action.kind === 'attack' && action.target)"), 'combat attack tracking still requires shoot=true');
       assert(tickBody.includes('if (action.shoot) {'), 'attack shooting is not separated from combat engagement tracking');
       assert(tickBody.includes('if (action.combat) rememberCombatEngagement(self, action.target, action)'), 'combat engagement is not remembered for non-shooting combat attack frames');
+      assert(tickBody.includes("action.kind === 'wait' && action.combat && action.target"), 'out-of-range combat hold does not refresh engagement tracking');
     });
     check(`${file} uses stamina-aware combat fire discipline`, () => {
       const shootingBody = functionBody(text, 'combatShootingPlan');
@@ -819,9 +822,11 @@ function main() {
       assert(combatBody.includes('const serverStallNoDamage = combatServerStallNoDamageLeaveState'), 'combat action does not evaluate server-stall no-damage disadvantage');
       assert(combatBody.includes('const retreatingTarget = combatRetreatingTargetState'), 'combat action does not evaluate retreating target state');
       assert(combatBody.includes('serverStallNoDamage && !retreatingTarget.disengage'), 'retreating out-of-range target can still trigger server-stall no-damage exit');
-      assert(combatBody.includes('if (retreatingTarget.disengage)'), 'combat action does not disengage retreating out-of-range targets');
-      assert(combatBody.includes('rememberCombatRetreatIgnore(target)'), 'retreating target disengage does not remember short ignore');
-      assert(combatBody.includes("reason: 'combat-target-retreating'"), 'retreating target action reason not found');
+      assert(combatBody.includes('if (retreatingTarget.disengage)'), 'combat action does not disengage targets beyond disengage range');
+      assert(combatBody.includes("reason: 'combat-disengage-range'"), 'disengage-range action reason not found');
+      assert(combatBody.includes("reason: 'combat-out-of-range-hold'"), 'out-of-range combat hold action reason not found');
+      assert(combatBody.includes('outOfRangeHold'), 'out-of-range combat hold evidence is not logged');
+      assert(!combatBody.includes('rememberCombatRetreatIgnore(target)'), 'disengage-range exit still installs retreat-ignore instead of allowing later re-entry');
       assert(combatBody.includes('summarizeServerPositionStall()'), 'server-stall no-damage exit does not read stall state');
       assert(combatBody.includes('serverStallNoDamage'), 'combat action does not log server-stall no-damage evidence');
       assert(combatBody.includes('!realBulletPressure || spacingOverride'), 'combat action does not merge spacing during emergency real-bullet pressure');
@@ -1105,7 +1110,7 @@ function main() {
   check('run-self-test module covers combat fire discipline self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
     assert(nodeSelfTestSource.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'non-full active edge target reengages instead of fleeing'"), 'non-full active edge reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'non-full active outside attack range does not enter combat'"), 'outside-range non-entry self-test not found');
     assert(nodeSelfTestSource.includes("name: 'non-full invulnerable active still flees'"), 'invulnerable active flee self-test not found');
     assert(nodeSelfTestSource.includes("name: 'full hp nearby invulnerable target still flees'"), 'full-HP invulnerable safety flee self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp no-damage combat keeps fighting without disadvantage'"), 'no-damage non-exit self-test not found');
@@ -1130,7 +1135,8 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'combat server stall long no-damage exits before broad hp disadvantage'"), 'server-stall no-damage exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'retreating out-of-range combat target disengages instead of chasing'"), 'retreating target disengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'engaged out-of-range combat target waits instead of chasing'"), 'out-of-range combat hold self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'engaged beyond disengage range exits combat state'"), 'disengage-range combat exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'retreating edge combat target suppresses fire'"), 'retreating edge fire suppression self-test not found');
     assert(nodeSelfTestSource.includes("name: 'retreat ignored target is not reselected without incoming bullet'"), 'retreat-ignore target selection self-test not found');
     assert(nodeSelfTestSource.includes("name: 'incoming bullet can reengage retreat ignored target'"), 'retreat-ignore incoming override self-test not found');
