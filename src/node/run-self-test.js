@@ -3166,10 +3166,10 @@ function runSelfTest() {
 	    const farNoDamageClose = combatFarNoDamageCloseVector(self, target, target.distance, selfHp, targetHp);
 	    const pressureClose = finishPressure.active
       ? finishPressure
-      : (farNoDamageClose.active
-        ? farNoDamageClose
-        : (retreatingTarget.active
-          ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
+      : (retreatingTarget.active
+        ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
+        : (farNoDamageClose.active
+          ? farNoDamageClose
           : combatPressureCloseVector(self, target, target.distance, selfHp)));
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let threatField = null;
@@ -5187,6 +5187,20 @@ function runSelfTest() {
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.shootEveryMs + ':' + action.combatState?.pressureClose?.reason + ':' + action.combatState?.pressureClose?.closeRange + ':' + action.combatState?.shooting?.trend?.stance;
       })(),
       want: 'combat-stamina-conserve:1:0:false:700:far-no-damage:7500:far-no-damage-close'
+    },
+    {
+      name: 'combat far no-damage retreating edge does not pressure chase',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 7000, lastDamageAt: Date.now() - 7000, lastInRangeAt: Date.now() - 7000, distance: 13000, hp: 88 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14000, y: 0, distance: 14000, current_join_mode: 'Active', hp: 88, vx: 50, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.combatState?.pressureClose) + ':' + action.combatState?.shooting?.reason + ':' + action.combatState?.retreatingTarget?.reason;
+      })(),
+      want: 'combat-target-retreating:0:0:false:target-retreating-edge:target-retreating-edge'
     },
     {
       name: 'combat far no-damage pressure waits when hp gap is already bad',

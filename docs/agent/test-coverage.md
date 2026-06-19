@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `216`.
+- Latest bot self-test count: `217`.
 - Latest combat-log analyzer self-test count: `82`.
 - Latest combat replay self-test count: `13`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -111,5 +111,5 @@
   - stationary full-stamina join-mode Active targets are not treated as AFK and beat coin pickup;
   - Active combat HP gap/low HP disadvantage exits fire before taking a bullet;
   - combat spacing and measured-dodge aim spread remain covered;
-  - far no-damage active duels now cover the new 100m+ close-in branch, including the bad-HP-gap guard and the rule that low-stamina far pressure saves reserve for movement/dodge instead of relaxing fire cadence.
+  - far no-damage active duels now cover the new 100m+ close-in branch, including the bad-HP-gap guard, the rule that low-stamina far pressure saves reserve for movement/dodge instead of relaxing fire cadence, and the retreating-edge guard that prevents far no-damage close-in from chasing an enemy that is already leaving.
 - `node scripts/verify-objective-build.js` now includes source/dist checks that movement and shooting prefer direct sends over the existing native page WebSocket, that movement repeats use the configured 50ms/220ms cadence, that default nonzero direct movement keeps local page key/prediction sync for combat safety, that optional server-marker probe mode is off by default, that stop cleanup cancels/repeats direct control safely, and that shared source modules are still inlined into the generated single-file runtime without runtime `require()` calls.
