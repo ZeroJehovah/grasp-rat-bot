@@ -21,6 +21,12 @@ const DEFAULTS = {
   combatFinishPressureSelfHpMin: 90,
   combatFinishPressureTargetHpMax: 55,
   combatFinishPressureShootEveryMs: 360,
+  combatFarNoDamageCloseMs: 6000,
+  combatFarNoDamageCloseStartRange: 10000,
+  combatFarNoDamageCloseRange: 7500,
+  combatFarNoDamageCloseMinHp: 60,
+  combatFarNoDamageCloseMaxHpGap: 10,
+  combatTargetDodgeSpeedPerTick: 50,
   combatAimLowConfidenceThreshold: 0.6,
   combatAimLowConfidenceMinDistance: 9000,
   combatAimLowConfidenceEveryMs: 520,
@@ -194,6 +200,74 @@ function samplesFromFramesBy(frames, pickPoint) {
       return point ? { at: frame.at, x: point.x, y: point.y } : null;
     })
     .filter(Boolean);
+}
+
+function farNoDamageCloseActive(frame, options, selfPoint = frame.self) {
+  if (!selfPoint || !frame.nearbyTarget) return false;
+  const thresholdMs = Math.max(0, Number(options.combatFarNoDamageCloseMs || 0));
+  const startRange = Math.max(0, Number(options.combatFarNoDamageCloseStartRange || 0));
+  const closeRange = Math.max(0, Number(options.combatFarNoDamageCloseRange || 0));
+  const minHp = Math.max(0, Number(options.combatFarNoDamageCloseMinHp || 0));
+  const maxHpGap = Math.max(0, Number(options.combatFarNoDamageCloseMaxHpGap || 0));
+  const d = distance(selfPoint, frame.nearbyTarget);
+  const hp = frame.selfHp;
+  const enemyHp = frame.targetHp;
+  const hpGap = Number.isFinite(hp) && Number.isFinite(enemyHp) ? enemyHp - hp : 0;
+  return Boolean(
+    thresholdMs
+    && startRange
+    && frame.noDamageMs >= thresholdMs
+    && d >= startRange
+    && d > closeRange
+    && (!Number.isFinite(hp) || hp >= minHp)
+    && (!Number.isFinite(hpGap) || hpGap <= maxHpGap)
+  );
+}
+
+function simulateFarNoDamageSelfSamples(frames, options) {
+  const speedPerMs = Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50)) / Number(options.tickMs || 50);
+  const closeRange = Math.max(0, Number(options.combatFarNoDamageCloseRange || 0));
+  const samples = [];
+  let simulated = null;
+  let lastAt = null;
+  let activeStarted = null;
+  let activeFrames = 0;
+  for (const frame of frames) {
+    if (!frame.self) continue;
+    if (!simulated) simulated = { ...frame.self };
+    if (lastAt !== null && farNoDamageCloseActive(frame, options, simulated)) {
+      if (!activeStarted) activeStarted = frame;
+      activeFrames += 1;
+      const target = frame.nearbyTarget;
+      if (target) {
+        const dt = Math.max(0, frame.at - lastAt);
+        const toTarget = sub(target, simulated);
+        const d = Math.hypot(toTarget.x, toTarget.y);
+        if (d > closeRange) {
+          const step = Math.min(Math.max(0, d - closeRange), speedPerMs * dt);
+          if (step > 0) {
+            const dir = unit(toTarget);
+            simulated = add(simulated, mul(dir, step));
+          }
+        }
+      }
+    }
+    samples.push({ at: frame.at, x: simulated.x, y: simulated.y });
+    lastAt = frame.at;
+  }
+  return { samples, activeStarted, activeFrames };
+}
+
+function cloneShotWithSimulatedSelf(shot, simulatedSelfSamples) {
+  const simulatedSelf = interpolate(simulatedSelfSamples, shot.frame.at);
+  if (!simulatedSelf) return shot;
+  return {
+    ...shot,
+    frame: {
+      ...shot.frame,
+      self: simulatedSelf
+    }
+  };
 }
 
 function loadFrames(options) {
@@ -704,6 +778,53 @@ function runPressureAuthorityScenario(shots, targetSamples, options, label = 'pr
   };
 }
 
+function runFarNoDamageCloseScenario(frames, shots, targetSamples, options) {
+  const simulation = simulateFarNoDamageSelfSamples(frames, options);
+  const filteredShots = shots.filter(shot => {
+    return simulation.activeStarted
+      && shot.frame.at >= simulation.activeStarted.at;
+  });
+  const simulatedShots = filteredShots.map(shot => cloneShotWithSimulatedSelf(shot, simulation.samples));
+  const scenario = runAimScenario(
+    'far no-damage close dynamic vs live target',
+    simulatedShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const baseline = runAimScenario(
+    'far no-damage old-position dynamic vs live target',
+    filteredShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const firstFrame = simulation.activeStarted || null;
+  const lastFrame = firstFrame ? frames.filter(frame => frame.at >= firstFrame.at).at(-1) : null;
+  const firstSim = firstFrame ? interpolate(simulation.samples, firstFrame.at) : null;
+  const lastSim = lastFrame ? interpolate(simulation.samples, lastFrame.at) : null;
+  const firstDistance = firstFrame?.self && firstFrame?.nearbyTarget ? distance(firstFrame.self, firstFrame.nearbyTarget) : null;
+  const lastOriginalDistance = lastFrame?.self && lastFrame?.nearbyTarget ? distance(lastFrame.self, lastFrame.nearbyTarget) : null;
+  const lastSimDistance = lastSim && lastFrame?.nearbyTarget ? distance(lastSim, lastFrame.nearbyTarget) : null;
+  return {
+    ...scenario,
+    baselineHits: baseline.hits,
+    baselineMinDistanceCm: baseline.minDistanceCm,
+    activeFrames: simulation.activeFrames,
+    activeStart: firstFrame ? {
+      line: firstFrame.lineNo,
+      time: formatTime(firstFrame.at),
+      noDamageMs: Math.round(firstFrame.noDamageMs),
+      distanceCm: Math.round(firstDistance)
+    } : null,
+    originalEndDistanceCm: Number.isFinite(lastOriginalDistance) ? Math.round(lastOriginalDistance) : null,
+    simulatedEndDistanceCm: Number.isFinite(lastSimDistance) ? Math.round(lastSimDistance) : null,
+    simulatedApproachCm: Number.isFinite(lastOriginalDistance) && Number.isFinite(lastSimDistance)
+      ? Math.round(lastOriginalDistance - lastSimDistance)
+      : null
+  };
+}
+
 function findExitFrame(frames, waitMs, options) {
   return frames.find(frame => {
     const hp = frame.selfHp;
@@ -762,6 +883,7 @@ function replay(options) {
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
     runAimScenario('finish-pressure hypothetical dynamic vs live target', finishPressureShots, shot => dynamicAimForShot(shot, options), targetSamples, options),
+    runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
     runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
     runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
@@ -838,7 +960,10 @@ function printReport(result) {
     const suppressed = Number.isFinite(Number(item.suppressed))
       ? ` suppressed=${item.suppressed} suppressedLoggedHits=${item.suppressedLoggedHits || 0} rejectedSnapshotOutliers=${item.rejectedSnapshotOutliers || 0}`
       : '';
-    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}`);
+    const close = item.activeStart
+      ? ` baseline=${item.baselineHits}/${item.considered} baselineMin=${item.baselineMinDistanceCm}cm activeStart=line ${item.activeStart.line} distance=${item.activeStart.distanceCm}cm simulatedEndDistance=${item.simulatedEndDistanceCm}cm approach=${item.simulatedApproachCm}cm`
+      : '';
+    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${close}`);
   }
 }
 

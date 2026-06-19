@@ -61,6 +61,11 @@ function runSelfTest() {
     combatShootPressureMinHp: 60,
     combatShootPressureRange: 8000,
     combatShootPressureMaxHpGap: 5,
+    combatFarNoDamageCloseMs: 6000,
+    combatFarNoDamageCloseStartRange: 10000,
+    combatFarNoDamageCloseRange: 7500,
+    combatFarNoDamageCloseMinHp: 60,
+    combatFarNoDamageCloseMaxHpGap: 10,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
     combatShootRecoveryEveryMs: 700,
@@ -2521,6 +2526,51 @@ function runSelfTest() {
     };
   }
 
+  function combatFarNoDamageCloseVector(self, target, targetDistance, selfHp, targetHp) {
+    const previous = bot.combatTarget || null;
+    const targetId = target?.user_id ?? target?.id;
+    const same = previous?.id !== null && previous?.id !== undefined
+      && targetId !== null && targetId !== undefined
+      && String(previous.id) === String(targetId);
+    const lastDamageAt = same ? Number(previous.lastDamageAt || previous.at || Date.now()) : Date.now();
+    const noDamageMs = Math.max(0, Date.now() - lastDamageAt);
+    const thresholdMs = Math.max(0, Number(cfg.combatFarNoDamageCloseMs || 0) || 0);
+    const startRange = Math.max(0, Number(cfg.combatFarNoDamageCloseStartRange || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatFarNoDamageCloseRange || cfg.combatPressureCloseRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatFarNoDamageCloseMinHp || cfg.combatPressureCloseMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatFarNoDamageCloseMaxHpGap || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = Number.isFinite(hp) && Number.isFinite(enemyHp) ? enemyHp - hp : 0;
+    if (!thresholdMs || !startRange || noDamageMs < thresholdMs || !(distance >= startRange) || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs };
+    }
+    if (Number.isFinite(hp) && hp < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs, selfHp: hp, targetHp: enemyHp, hpGap };
+    }
+    if (Number.isFinite(hpGap) && hpGap > maxHpGap) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs, selfHp: hp, targetHp: enemyHp, hpGap };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      startRange,
+      noDamageMs,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      reason: 'far-no-damage'
+    };
+  }
+
   function combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
@@ -2829,6 +2879,11 @@ function runSelfTest() {
     const noDamageDuelMaxHpGap = Math.max(0, Number(cfg.combatShootNoDamageDuelMaxHpGap || 0));
     const noDamageDuelNoDamageMs = Math.max(0, Number(cfg.combatShootNoDamageDuelNoDamageMs || 0));
     const noDamageDuelRange = Math.max(0, Number(cfg.combatShootNoDamageDuelRange || cfg.combatAttackRange || 0));
+    const farNoDamageCloseMinHp = Math.max(noDamageDuelMinHp, Number(cfg.combatFarNoDamageCloseMinHp || 0));
+    const farNoDamageCloseFireWindow = Boolean(options.farNoDamageClose)
+      && farNoDamageCloseMinHp > 0
+      && Number.isFinite(selfHp)
+      && selfHp >= farNoDamageCloseMinHp;
     const noDamageDuelFireWindow = Boolean(options.engagedCombat || options.targetActive || options.targetMoving)
       && noDamageDuelMinHp > 0
       && noDamageDuelNoDamageMs > 0
@@ -2844,6 +2899,7 @@ function runSelfTest() {
     if (closePressureFireWindow) stance = 'close-pressure';
     else if (steadyAimFireWindow) stance = 'steady-aim';
     else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
+    else if (farNoDamageCloseFireWindow) stance = 'far-no-damage-close';
     else if (highHpFireWindow) stance = 'high-hp-pressure';
     else if (Number.isFinite(hpGap) && hpGap > 0) stance = 'guarded';
     return {
@@ -2857,11 +2913,13 @@ function runSelfTest() {
       closePressureFireWindow,
       steadyAimFireWindow,
       noDamageDuelFireWindow,
+      farNoDamageCloseFireWindow,
       engagedCombat: Boolean(options.engagedCombat),
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
       realBulletPressure: Boolean(options.realBulletPressure),
-      steadyAim: Boolean(options.steadyAim)
+      steadyAim: Boolean(options.steadyAim),
+      farNoDamageClose: farNoDamageCloseFireWindow
     };
   }
 
@@ -2902,6 +2960,7 @@ function runSelfTest() {
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
 	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
 	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
+	    const farNoDamageCloseFireWindow = Boolean(trend.farNoDamageCloseFireWindow);
 	    const aimConfidence = Number.isFinite(Number(options.aimConfidence))
 	      ? Math.max(0, Math.min(1, Number(options.aimConfidence)))
 	      : null;
@@ -2943,6 +3002,7 @@ function runSelfTest() {
       closePressureFireWindow,
       steadyAimFireWindow,
 	      noDamageDuelFireWindow,
+	      farNoDamageCloseFireWindow,
 	      aimConfidence,
 	      lowConfidenceWindow,
 	      noDamageMs,
@@ -2955,7 +3015,8 @@ function runSelfTest() {
         targetActive: Boolean(trend.targetActive),
         targetMoving: Boolean(trend.targetMoving),
         realBulletPressure: Boolean(trend.realBulletPressure),
-        steadyAim: Boolean(trend.steadyAim)
+        steadyAim: Boolean(trend.steadyAim),
+        farNoDamageClose: Boolean(trend.farNoDamageCloseFireWindow)
       },
       suppressed: false,
       throttled: false
@@ -3102,11 +3163,14 @@ function runSelfTest() {
     }
     if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
 	    const finishPressure = combatFinishPressureState(self, target, target.distance, selfHp, targetHp, retreatingTarget);
+	    const farNoDamageClose = combatFarNoDamageCloseVector(self, target, target.distance, selfHp, targetHp);
 	    const pressureClose = finishPressure.active
       ? finishPressure
-      : (retreatingTarget.active
-        ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
-        : combatPressureCloseVector(self, target, target.distance, selfHp));
+      : (farNoDamageClose.active
+        ? farNoDamageClose
+        : (retreatingTarget.active
+          ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
+          : combatPressureCloseVector(self, target, target.distance, selfHp)));
     const spacingOverride = incoming && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let threatField = null;
     let threatFieldBase = null;
@@ -3146,7 +3210,8 @@ function runSelfTest() {
 	      targetMoving: moving,
 	      noDamageMs,
 	      aimConfidence,
-	      motionScale: aimMotionScale
+	      motionScale: aimMotionScale,
+	      farNoDamageClose: pressureClose.reason === 'far-no-damage'
 	    });
     let shooting = combatShootingPlan(self, {
       trend,
@@ -3161,7 +3226,8 @@ function runSelfTest() {
 	      targetMoving: moving,
 	      noDamageMs,
 	      aimConfidence,
-	      motionScale: aimMotionScale
+	      motionScale: aimMotionScale,
+	      farNoDamageClose: pressureClose.reason === 'far-no-damage'
 	    });
     if (retreatingTarget.suppressFire && !finishPressure.active) {
       shooting = {
@@ -3189,7 +3255,7 @@ function runSelfTest() {
     }
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
-      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (finishPressure.active ? 'combat-finish-pressure' : 'combat-pressure-close') : 'combat-attack'));
+      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (finishPressure.active ? 'combat-finish-pressure' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')) : 'combat-attack'));
     return {
       kind: 'attack',
       reason: movementSuppressed
@@ -5108,6 +5174,32 @@ function runSelfTest() {
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.pressureClose?.reason;
       })(),
       want: 'combat-pressure-close:1:0:long-no-damage'
+    },
+    {
+      name: 'combat far no-damage target is pressured into effective range',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 7000, lastDamageAt: Date.now() - 7000, hp: 88 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 2500 },
+          { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 88, vx: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.shootEveryMs + ':' + action.combatState?.pressureClose?.reason + ':' + action.combatState?.pressureClose?.closeRange + ':' + action.combatState?.shooting?.trend?.stance;
+      })(),
+      want: 'combat-stamina-conserve:1:0:false:700:far-no-damage:7500:far-no-damage-close'
+    },
+    {
+      name: 'combat far no-damage pressure waits when hp gap is already bad',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 7000, lastDamageAt: Date.now() - 7000, hp: 88 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 100 },
+          { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 88, vx: 50, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return action.reason + ':' + Boolean(action.combatState?.pressureClose);
+      })(),
+      want: 'combat-attack:false'
     },
     {
       name: 'combat short stamina exhaustion stops movement and fire',
