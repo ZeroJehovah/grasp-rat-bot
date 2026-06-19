@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.186"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.187"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -11842,10 +11842,10 @@ function hpDisplay(value) {
     );
     const pressureClose = finishPressure.active
       ? finishPressure
-      : (farNoDamageClose.active
-        ? farNoDamageClose
-        : (retreatingTarget.active
-          ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+      : (retreatingTarget.active
+        ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+        : (farNoDamageClose.active
+          ? farNoDamageClose
           : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp)));
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);

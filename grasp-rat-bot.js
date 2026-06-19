@@ -7364,10 +7364,10 @@ ${importantLogSource()}
     );
     const pressureClose = finishPressure.active
       ? finishPressure
-      : (farNoDamageClose.active
-        ? farNoDamageClose
-        : (retreatingTarget.active
-          ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+      : (retreatingTarget.active
+        ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+        : (farNoDamageClose.active
+          ? farNoDamageClose
           : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp)));
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
