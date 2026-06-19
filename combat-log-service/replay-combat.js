@@ -26,6 +26,10 @@ const DEFAULTS = {
   combatFarNoDamageCloseRange: 7500,
   combatFarNoDamageCloseMinHp: 60,
   combatFarNoDamageCloseMaxHpGap: 10,
+  combatPassiveRunnerMinSelfHp: 80,
+  combatPassiveRunnerMinDrop: 1,
+  combatPassiveRunnerCloseRange: 7500,
+  combatPassiveRunnerInterceptSpreadScale: 0,
   combatTargetDodgeSpeedPerTick: 50,
   combatAimLowConfidenceThreshold: 0.6,
   combatAimLowConfidenceMinDistance: 9000,
@@ -568,14 +572,23 @@ function dynamicAimForShot(shot, options) {
   const radialMax = Math.max(0, Number(options.combatAimRadialPrecisionLateralRatio || 0));
   const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
   const realBulletPrecision = Boolean(live && moving && incomingRealBullet(frame) && withinAttackRange);
+  const passiveRunnerIntercept = Boolean(
+    live
+    && moving
+    && movement
+    && passiveRunnerActive(frame, options)
+    && withinAttackRange
+  );
   const liveIntercept = Boolean(
     live
     && moving
     && movement
-    && lateralRatio > radialMax
     && (
-      realBulletPrecision
-      || (serverStalled(frame) && withinAttackRange)
+      passiveRunnerIntercept
+      || (lateralRatio > radialMax && (
+        realBulletPrecision
+        || (serverStalled(frame) && withinAttackRange)
+      ))
     )
   );
   const stallLive = Boolean(live && serverStalled(frame));
@@ -589,10 +602,12 @@ function dynamicAimForShot(shot, options) {
     && withinAttackRange
   );
   if (live && divergence.active) return live;
+  if (passiveRunnerIntercept) return liveInterceptAimForShot(shot, options);
   if (realBulletPrecision && liveIntercept) return liveInterceptAimForShot(shot, options);
   if (realBulletPrecision) return live;
   if (stallLive && liveIntercept) return liveInterceptAimForShot(shot, options);
-  if (stallLive || radialPrecision || fallback) return live;
+  if (stallLive || radialPrecision) return live;
+  if (fallback) return live;
   return frame.aim || frame.decisionTarget || live;
 }
 
@@ -667,6 +682,121 @@ function combatMovementAimModeForFrame(frame, distanceValue, options) {
     radialSpeed,
     lateralRatio,
     targetSpeed
+  };
+}
+
+function entitySpeed(entity) {
+  return Math.hypot(Number(entity?.vx) || 0, Number(entity?.vy) || 0);
+}
+
+function passiveRunnerActive(frame, options, allowMissingIntent = false) {
+  const target = frame.nearbyEntity || frame.target || null;
+  if (!frame.self || !target) return false;
+  const minSelfHp = Math.max(0, Number(options.combatPassiveRunnerMinSelfHp || 0));
+  const minDrop = Math.max(0, Number(options.combatPassiveRunnerMinDrop || 0));
+  const moving = entitySpeed(target) >= Number(options.combatStationarySpeed || 0);
+  const active = Boolean(target.active || target.current_join_mode === 'Active' || target.mode === 'Active');
+  const firing = Boolean(target.firing || target.attacking || target.is_attacking);
+  const invulnerable = Boolean(target.invulnerable || target.invulnerable_remaining_ticks > 0);
+  const drop = Math.max(0, Number(target.drop ?? frame.target?.drop ?? 0) || 0);
+  const intent = String(target.combatIntent || frame.target?.combatIntent || '');
+  const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
+  return Boolean(
+    active
+    && moving
+    && (runnerIntent || allowMissingIntent)
+    && !firing
+    && !invulnerable
+    && !incomingRealBullet(frame)
+    && Number(frame.selfHp) >= minSelfHp
+    && (drop >= minDrop || runnerIntent)
+  );
+}
+
+function passiveRunnerAimForShot(shot, options) {
+  return dynamicAimForShot(shot, options);
+}
+
+function simulatePassiveRunnerSelfSamples(frames, options) {
+  const samples = [];
+  let simulated = frames[0]?.self ? { ...frames[0].self } : null;
+  let previousAt = frames[0]?.at || 0;
+  let activeStarted = null;
+  let activeFrames = 0;
+  let runnerLocked = false;
+  const closeRange = Math.max(0, Number(options.combatPassiveRunnerCloseRange || 0));
+  const speedPerMs = Math.max(0, Number(options.combatTargetDodgeSpeedPerTick || 50)) / Math.max(1, Number(options.tickMs || 50));
+  for (const frame of frames) {
+    if (!simulated && frame.self) simulated = { ...frame.self };
+    if (!simulated) continue;
+    const dt = Math.max(0, Number(frame.at) - previousAt);
+    previousAt = Number(frame.at);
+    const active = passiveRunnerActive(frame, options, runnerLocked);
+    if (active && frame.nearbyTarget) {
+      runnerLocked = true;
+      activeFrames += 1;
+      if (!activeStarted) activeStarted = frame;
+      const currentDistance = distance(simulated, frame.nearbyTarget);
+      if (!closeRange || currentDistance > closeRange) {
+        const dir = unit(sub(frame.nearbyTarget, simulated));
+        if (dir) {
+          const step = Math.min(Math.max(0, currentDistance - closeRange), speedPerMs * dt);
+          simulated = add(simulated, mul(dir, step));
+        }
+      }
+    } else if (frame.self) {
+      runnerLocked = false;
+      simulated = { ...frame.self };
+    }
+    samples.push({ at: frame.at, x: simulated.x, y: simulated.y });
+  }
+  return { samples, activeStarted, activeFrames };
+}
+
+function runPassiveRunnerScenario(frames, shots, targetSamples, options) {
+  const simulation = simulatePassiveRunnerSelfSamples(frames, options);
+  const filteredShots = shots.filter(shot => {
+    return simulation.activeStarted
+      && shot.frame.at >= simulation.activeStarted.at
+      && passiveRunnerActive(shot.frame, options);
+  });
+  const simulatedShots = filteredShots.map(shot => cloneShotWithSimulatedSelf(shot, simulation.samples));
+  const scenario = runAimScenario(
+    'passive-runner close intercept vs live target',
+    simulatedShots,
+    shot => passiveRunnerAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const baseline = runAimScenario(
+    'passive-runner old-position dynamic vs live target',
+    filteredShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const firstFrame = simulation.activeStarted || null;
+  const lastFrame = firstFrame ? frames.filter(frame => frame.at >= firstFrame.at).at(-1) : null;
+  const firstDistance = firstFrame?.self && firstFrame?.nearbyTarget ? distance(firstFrame.self, firstFrame.nearbyTarget) : null;
+  const lastOriginalDistance = lastFrame?.self && lastFrame?.nearbyTarget ? distance(lastFrame.self, lastFrame.nearbyTarget) : null;
+  const lastSim = lastFrame ? interpolate(simulation.samples, lastFrame.at) : null;
+  const lastSimDistance = lastSim && lastFrame?.nearbyTarget ? distance(lastSim, lastFrame.nearbyTarget) : null;
+  return {
+    ...scenario,
+    baselineHits: baseline.hits,
+    baselineMinDistanceCm: baseline.minDistanceCm,
+    activeFrames: simulation.activeFrames,
+    activeStart: firstFrame ? {
+      line: firstFrame.lineNo,
+      time: formatTime(firstFrame.at),
+      noDamageMs: Math.round(firstFrame.noDamageMs),
+      distanceCm: Math.round(firstDistance)
+    } : null,
+    originalEndDistanceCm: Number.isFinite(lastOriginalDistance) ? Math.round(lastOriginalDistance) : null,
+    simulatedEndDistanceCm: Number.isFinite(lastSimDistance) ? Math.round(lastSimDistance) : null,
+    simulatedApproachCm: Number.isFinite(lastOriginalDistance) && Number.isFinite(lastSimDistance)
+      ? Math.round(lastOriginalDistance - lastSimDistance)
+      : null
   };
 }
 
@@ -884,6 +1014,7 @@ function replay(options) {
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
     runAimScenario('finish-pressure hypothetical dynamic vs live target', finishPressureShots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
+    runPassiveRunnerScenario(frames, shots, targetSamples, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
     runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
     runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
@@ -1097,6 +1228,25 @@ function selfTest() {
       targetName: 'BlueFeather',
       expectImprovedPressureAuthority: true,
       expectSnapshotOutlierRejected: true
+    },
+    {
+      id: '2026-06-20-mango-passive-runner-live-intercept',
+      file: path.join(__dirname, 'logs/2026-06-20/20260619180524-self-28886-vs-mango.jsonl'),
+      startLine: 1,
+      endLine: 1874,
+      selfId: '28886',
+      targetId: '31361',
+      targetName: 'mango'
+    },
+    {
+      id: '2026-06-20-mango-passive-runner-close',
+      file: path.join(__dirname, 'logs/2026-06-20/20260619180740-self-28886-vs-mango.jsonl'),
+      startLine: 1,
+      endLine: 1495,
+      selfId: '28886',
+      targetId: '31361',
+      targetName: 'mango',
+      expectPassiveRunnerImproved: true
     }
   ];
   const summaries = cases.map(item => {
@@ -1104,13 +1254,15 @@ function selfTest() {
     const logged = result.scenarios.find(scenario => scenario.label === 'logged aimTarget vs live target');
     const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
     const liveIntercept = result.scenarios.find(scenario => scenario.label === 'live intercept vs live target');
+    const passiveRunner = result.scenarios.find(scenario => scenario.label === 'passive-runner close intercept vs live target');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
     if (!(dynamic.hits > logged.hits)) {
       const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
       if ((!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)
-        && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))) {
+        && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))
+        && (!item.expectPassiveRunnerImproved || !passiveRunner || !(passiveRunner.hits > logged.hits))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }
     }
@@ -1138,11 +1290,16 @@ function selfTest() {
     if (item.expectSnapshotOutlierRejected && !(result.snapshotOutlierRejections > 0)) {
       throw new Error(`${item.id} did not reject any snapshot outlier`);
     }
+    if (item.expectPassiveRunnerImproved && (!passiveRunner || !(passiveRunner.hits > logged.hits) || !(passiveRunner.simulatedApproachCm > 0))) {
+      throw new Error(`${item.id} passive-runner replay did not improve hits/approach: passiveRunner=${passiveRunner?.hits || 0}, logged=${logged.hits}, approach=${passiveRunner?.simulatedApproachCm || 0}`);
+    }
     return {
       id: item.id,
       loggedHits: logged.hits,
       realBulletPrecisionHits: realBulletPrecision?.hits || 0,
       liveInterceptHits: liveIntercept?.hits || 0,
+      passiveRunnerHits: passiveRunner?.hits || 0,
+      passiveRunnerApproachCm: passiveRunner?.simulatedApproachCm || 0,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,
       pressureSuppressed: pressureAuthority?.suppressed || 0,
