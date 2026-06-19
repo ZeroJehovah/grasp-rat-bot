@@ -17,6 +17,13 @@ const DEFAULTS = {
   liveDivergencePrecisionRatio: 0.08,
   combatAimRadialPrecisionLateralRatio: 0.35,
   fallbackPrecisionNoDamageMs: 25000,
+  combatRetreatEdgeRange: 13800,
+  combatFinishPressureSelfHpMin: 90,
+  combatFinishPressureTargetHpMax: 55,
+  combatFinishPressureShootEveryMs: 360,
+  combatAimLowConfidenceThreshold: 0.6,
+  combatAimLowConfidenceMinDistance: 9000,
+  combatAimLowConfidenceEveryMs: 520,
   serverStallNoDamageLeaveMs: 25000,
   serverStallNoDamagePrecisionGraceMs: 10000,
   serverStallNoDamageHpGap: 5,
@@ -284,6 +291,62 @@ function collectShots(frames, selfId) {
     }
   }
   return shots.sort((a, b) => a.frame.at - b.frame.at);
+}
+
+function finishPressureCadenceMs(frame, options) {
+  const finishEvery = Math.max(1, Number(options.combatFinishPressureShootEveryMs || 0));
+  const lowConfidenceEvery = Math.max(finishEvery, Number(options.combatAimLowConfidenceEveryMs || finishEvery));
+  const threshold = Math.max(0, Math.min(1, Number(options.combatAimLowConfidenceThreshold || 0)));
+  const minDistance = Math.max(0, Number(options.combatAimLowConfidenceMinDistance || 0));
+  const liveDistance = frame.self && frame.nearbyTarget ? distance(frame.self, frame.nearbyTarget) : null;
+  const aimConfidence = numberOrNull(
+    frame.entry?.aimTarget?.aimConfidence
+      ?? frame.entry?.combatState?.aim?.aimConfidence
+      ?? frame.entry?.decision?.aimTarget?.aimConfidence
+  );
+  if (aimConfidence !== null
+    && threshold > 0
+    && aimConfidence < threshold
+    && liveDistance !== null
+    && liveDistance >= minDistance) {
+    return lowConfidenceEvery;
+  }
+  return finishEvery;
+}
+
+function collectFinishPressureShots(frames, options) {
+  const shots = [];
+  let lastShotAt = -Infinity;
+  for (const frame of frames) {
+    const decision = frame.entry?.decision || {};
+    const retreating = frame.entry?.combatState?.retreatingTarget || decision.combatState?.retreatingTarget || null;
+    const reason = String(decision.reason || frame.entry?.combatState?.shooting?.reason || '');
+    const liveDistance = frame.self && frame.nearbyTarget ? distance(frame.self, frame.nearbyTarget) : null;
+    const targetHpValue = frame.targetHp;
+    const selfHpValue = frame.selfHp;
+    const oldRetreatingSuppression = reason === 'combat-target-retreating'
+      || frame.entry?.combatState?.shooting?.reason === 'target-retreating-edge'
+      || retreating?.reason === 'target-retreating-edge';
+    const eligible = oldRetreatingSuppression
+      && liveDistance !== null
+      && liveDistance <= Number(options.combatAttackRange || DEFAULTS.combatAttackRange)
+      && liveDistance >= Number(options.combatRetreatEdgeRange || DEFAULTS.combatRetreatEdgeRange)
+      && Number.isFinite(selfHpValue)
+      && Number.isFinite(targetHpValue)
+      && selfHpValue >= Number(options.combatFinishPressureSelfHpMin || DEFAULTS.combatFinishPressureSelfHpMin)
+      && targetHpValue <= Number(options.combatFinishPressureTargetHpMax || DEFAULTS.combatFinishPressureTargetHpMax);
+    if (!eligible) continue;
+    const cadence = finishPressureCadenceMs(frame, options);
+    if (frame.at - lastShotAt < cadence) continue;
+    shots.push({
+      id: `finish:${frame.lineNo}`,
+      frame,
+      hypothetical: true,
+      cadenceMs: cadence
+    });
+    lastShotAt = frame.at;
+  }
+  return shots;
 }
 
 function minDistanceForShot(origin, aim, targetSamples, shotAt, options) {
@@ -675,6 +738,7 @@ function replay(options) {
     return frame.nearbyTarget || frame.decisionTarget;
   });
   const shots = collectShots(frames, loaded.selfId);
+  const finishPressureShots = collectFinishPressureShots(frames, options);
   const oldExitFrame = findExitFrame(frames, options.serverStallNoDamageLeaveMs, options);
   const graceWaitMs = Math.max(
     options.serverStallNoDamageLeaveMs,
@@ -697,6 +761,7 @@ function replay(options) {
     runAimScenario('old effective logged aim before server-stall exit', shots, shot => shot.frame.aim, targetSamples, options, shot => !oldExitFrame || shot.frame.at < oldExitFrame.at),
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
+    runAimScenario('finish-pressure hypothetical dynamic vs live target', finishPressureShots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
     runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
     runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
@@ -716,6 +781,7 @@ function replay(options) {
     targetName: loaded.targetName,
     frames: frames.length,
     shots: shots.length,
+    finishPressureShots: finishPressureShots.length,
     selfHp: [frames[0].selfHp, frames[frames.length - 1].selfHp],
     targetHpValues,
     coordinateDivergence: {
@@ -752,7 +818,7 @@ function replay(options) {
 
 function printReport(result) {
   console.log(`Replay ${path.relative(process.cwd(), result.file)} lines ${result.lineRange[0]}-${result.lineRange[1]}`);
-  console.log(`Target ${result.targetName || '-'} (${result.targetId || '-'}) ${result.timeRange[0]}-${result.timeRange[1]}, frames=${result.frames}, shots=${result.shots}`);
+  console.log(`Target ${result.targetName || '-'} (${result.targetId || '-'}) ${result.timeRange[0]}-${result.timeRange[1]}, frames=${result.frames}, shots=${result.shots}, finishPressureShots=${result.finishPressureShots}`);
   console.log(`HP self ${result.selfHp[0]} -> ${result.selfHp[1]}, target HP values ${result.targetHpValues.join(',') || '-'}`);
   console.log(`Coordinate divergence median=${result.coordinateDivergence.medianCm}cm max=${result.coordinateDivergence.maxCm}cm over10m=${result.coordinateDivergence.over10m}/${result.coordinateDivergence.samples}`);
   if (result.dynamicStart) {

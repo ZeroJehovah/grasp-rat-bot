@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.183"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.184"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -189,6 +189,10 @@
     combatRetreatRadialSpeedMin: 5,
     combatRetreatDistanceDeltaMin: 600,
     combatRetreatIgnoreMs: 15000,
+    combatFinishPressureSelfHpMin: 90,
+    combatFinishPressureTargetHpMax: 55,
+    combatFinishPressureCloseRange: 6500,
+    combatFinishPressureShootEveryMs: 360,
     combatBulletDetectRadius: 30000,
     combatBulletLaneRadius: 3000,
     combatBulletLookaheadDistance: 42000,
@@ -1750,6 +1754,7 @@ function hpDisplay(value) {
 	      'combat-stamina-conserve': '战斗：保留体力躲避，暂停开火',
 	      'combat-burst-fire': '战斗：保留体力，降频开火',
 	      'combat-pressure-close': '战斗：久攻未中，压近并节奏开火',
+	      'combat-finish-pressure': '战斗：残血目标退边，压近补枪',
 	      'combat-spacing': '战斗：保持安全间距并开火',
 	      'combat-spacing-dodge': '战斗：规避贴近并开火',
 	      'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
@@ -10181,6 +10186,41 @@ function hpDisplay(value) {
     };
   }
 
+  function combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatFinishPressureSelfHpMin || 0));
+    const maxTargetHp = Math.max(0, Number(cfg.combatFinishPressureTargetHpMax || 0));
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingMinRange || 0),
+      Number(cfg.combatFinishPressureCloseRange || cfg.combatSpacingPreferredRange || 0)
+    );
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const inAttackRange = attackRange > 0 && distance <= attackRange;
+    const retreatingEdge = Boolean(retreatingTarget?.active && retreatingTarget?.reason === 'target-retreating-edge');
+    if (!retreatingEdge || !inAttackRange || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, selfHp: ownHp, targetHp: enemyHp };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || enemyHp > maxTargetHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, selfHp: ownHp, targetHp: enemyHp };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      minSelfHp,
+      maxTargetHp,
+      reason: 'low-hp-retreating-target',
+      retreatingTarget
+    };
+  }
+
   function mergeCombatMove(primary, spacing, allowSpacingMerge = true) {
     if (!spacing?.active || !allowSpacingMerge) return primary || { dx: 0, dy: 0 };
     const current = primary || { dx: 0, dy: 0 };
@@ -11726,9 +11766,12 @@ function hpDisplay(value) {
         }
       };
     }
-    const pressureClose = retreatingTarget.active
-      ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
-      : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp);
+    const finishPressure = combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget);
+    const pressureClose = finishPressure.active
+      ? finishPressure
+      : (retreatingTarget.active
+        ? { active: false, dx: 0, dy: 0, distance: targetDistance, closeRange: cfg.combatPressureCloseRange, noDamageMs: damageState.noDamageMs, retreatingTarget }
+        : combatPressureCloseVector(self, target, targetDistance, damageState.noDamageMs, selfHp));
     const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: pressureClose.active });
     const dodging = Boolean(pressure || strafe.active);
     const spacingOverride = realBulletPressure && combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
@@ -11781,7 +11824,7 @@ function hpDisplay(value) {
 	      aimConfidence: aim.aimConfidence,
 	      motionScale: aim.motionScale
 	    });
-    if (retreatingTarget.suppressFire) {
+    if (retreatingTarget.suppressFire && !finishPressure.active) {
       shooting = {
         ...shooting,
         shoot: false,
@@ -11791,16 +11834,30 @@ function hpDisplay(value) {
         retreatingTarget
       };
     }
+    if (finishPressure.active && !shooting.suppressed) {
+      const finishEveryMs = Math.max(
+        Number(shooting.shootEveryMs || 0),
+        Number(cfg.combatFinishPressureShootEveryMs || cfg.combatShootConserveEveryMs || cfg.combatShootEveryMs || 0)
+      );
+      shooting = {
+        ...shooting,
+        shoot: true,
+        shootEveryMs: finishEveryMs || shooting.shootEveryMs,
+        reason: 'finish-pressure',
+        throttled: true,
+        finishPressure
+      };
+    }
     const baseReason = realBulletPressure
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
       : (spacingActive
         ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-        : (pressureCloseActive ? 'combat-pressure-close' : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
+        : (pressureCloseActive ? (finishPressure.active ? 'combat-finish-pressure' : 'combat-pressure-close') : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
     return {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (retreatingTarget.suppressFire ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.throttled ? 'combat-burst-fire' : baseReason))),
+        : (retreatingTarget.suppressFire && !finishPressure.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled ? 'combat-burst-fire' : baseReason)))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,
