@@ -41,6 +41,7 @@ function runSelfTest() {
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
+    combatDisengageRange: 17000,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatLowHpCloseRiskMargin: 5,
@@ -134,7 +135,7 @@ function runSelfTest() {
     combatStrafeCarryMs: 1600,
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
-    combatEngageGraceRange: 22000,
+    combatEngageGraceRange: 17000,
     combatSpacingMinRange: 4500,
     combatSpacingPreferredRange: 6500,
     combatSpacingEmergencyRange: 3000,
@@ -1909,7 +1910,10 @@ function runSelfTest() {
       .find(e => String(e.user_id ?? e.id ?? '') === String(engaged.id));
     if (!target || isWhitelistedTarget(target) || isInvulnerable(target)) return null;
     const distance = dist(self, target);
-    if (distance > Math.max(cfg.combatAttackRange, cfg.combatEngageGraceRange)) return null;
+    if (distance > Math.max(cfg.combatAttackRange, cfg.combatDisengageRange, cfg.combatEngageGraceRange)) {
+      bot.combatTarget = null;
+      return null;
+    }
     return {
       ...target,
       distance,
@@ -1981,9 +1985,7 @@ function runSelfTest() {
       || combatHpGapDisadvantaged(self, target);
   }
   function pickCombatTarget(self, entities, bullets = [], options = {}) {
-    const candidateRange = options.mode === 'profit' || isFullHp(self)
-      ? Number(cfg.combatAttackRange || 0)
-      : Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatEngageGraceRange || 0));
+    const candidateRange = Number(cfg.combatAttackRange || 0);
     const candidates = entities
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
@@ -2482,6 +2484,7 @@ function runSelfTest() {
 
   function combatRetreatingTargetState(self, target, targetDistance, damageState = null) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const disengageRange = Math.max(attackRange, Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || attackRange || 0));
     const edgeRange = Math.min(
       attackRange || Infinity,
       Math.max(0, Number(cfg.combatRetreatEdgeRange || 0) || attackRange * 0.95)
@@ -2504,15 +2507,17 @@ function runSelfTest() {
       || (minDistanceDelta > 0 && distanceDelta >= minDistanceDelta)
     );
     const outOfRange = attackRange > 0 && distance > attackRange;
+    const beyondDisengage = disengageRange > 0 && distance > disengageRange;
     const edge = edgeRange > 0 && distance >= edgeRange;
     const active = Boolean(receding && (outOfRange || edge));
     return {
       active,
-      disengage: Boolean(active && outOfRange),
+      disengage: Boolean(beyondDisengage),
       suppressFire: Boolean(active && edge),
-      reason: outOfRange ? 'target-retreating-out-of-range' : 'target-retreating-edge',
+      reason: beyondDisengage ? 'target-beyond-disengage-range' : (outOfRange ? 'target-out-of-attack-range' : 'target-retreating-edge'),
       distance: Number.isFinite(distance) ? Math.round(distance) : null,
       attackRange: Math.round(attackRange),
+      disengageRange: Math.round(disengageRange),
       edgeRange: Math.round(edgeRange),
       radialSpeed: Number.isFinite(radialSpeed) ? Math.round(radialSpeed) : 0,
       distanceDelta: Number.isFinite(distanceDelta) ? Math.round(distanceDelta) : 0,
@@ -2800,18 +2805,41 @@ function runSelfTest() {
       }, bullets);
     }
     if (retreatingTarget.disengage) {
-      rememberCombatRetreatIgnore(target);
-      clearCombatDisadvantageObservation('target-retreating');
+      clearCombatDisadvantageObservation('combat-disengage-range');
       bot.combatTarget = null;
       return {
         kind: 'wait',
-        reason: 'combat-target-retreating',
+        reason: 'combat-disengage-range',
         combat: false,
         shoot: false,
         forceShoot: false,
         dx: 0,
         dy: 0,
         combatDisengage: retreatingTarget
+      };
+    }
+    if (Number(target.distance || 0) > Number(cfg.combatAttackRange || 0)) {
+      return {
+        kind: 'wait',
+        reason: 'combat-out-of-range-hold',
+        combat: true,
+        shoot: false,
+        forceShoot: false,
+        dx: 0,
+        dy: 0,
+        target: {
+          id: target.user_id,
+          distance: Math.round(Number(target.distance || 0))
+        },
+        combatState: {
+          selfHp,
+          targetHp,
+          outOfRangeHold: {
+            distance: Math.round(Number(target.distance || 0)),
+            attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
+            disengageRange: Math.round(Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || 0)))
+          }
+        }
       };
     }
     const spacing = combatSpacingVector(self, target, target.distance);
@@ -4084,7 +4112,7 @@ function runSelfTest() {
       want: 'attack:true:7'
     },
     {
-      name: 'recovering keeps grace-range combat target before flee mode',
+      name: 'recovering holds engaged combat target inside disengage range',
       got: (() => {
         bot.combatTarget = {
           id: 7,
@@ -4094,12 +4122,12 @@ function runSelfTest() {
         };
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 7, x: 18000, y: 0, current_join_mode: 'Active', hp: 94, vx: -50 }]
+          local: [{ user_id: 7, x: 16000, y: 0, current_join_mode: 'Active', hp: 94, vx: -50 }]
         });
         bot.combatTarget = null;
         return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
       })(),
-      want: 'attack:true:7'
+      want: 'wait:true:7'
     },
     {
       name: 'real incoming bullet shooter overrides engaged combat target',
@@ -4159,18 +4187,18 @@ function runSelfTest() {
       want: 'wait'
     },
     {
-      name: 'non-full active edge target reengages instead of fleeing',
+      name: 'non-full active outside attack range does not enter combat',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
           local: [{ user_id: 4, x: 16000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }]
         });
-        return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
+        return action.kind + ':' + Boolean(action.combat) + ':' + (action.target?.id || '');
       })(),
-      want: 'attack:true:4'
+      want: 'recover:false:'
     },
     {
-      name: 'retreating out-of-range combat target disengages instead of chasing',
+      name: 'engaged out-of-range combat target waits instead of chasing',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 14000, hp: 100 };
         const action = chooseCombatAction(
@@ -4180,9 +4208,24 @@ function runSelfTest() {
         const ignored = combatRetreatIgnoreActive({ id: 7 });
         bot.combatTarget = null;
         bot.combatRetreatIgnore.clear();
-        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + action.combatDisengage?.reason + ':' + ignored;
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + action.dx + ':' + action.dy + ':' + ignored;
       })(),
-      want: 'wait:combat-target-retreating:false:target-retreating-out-of-range:true'
+      want: 'wait:combat-out-of-range-hold:true:false:0:0:false'
+    },
+    {
+      name: 'engaged beyond disengage range exits combat state',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 16000, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 17100, y: 0, distance: 17100, current_join_mode: 'Active', hp: 95, vx: 0, recentlyMoved: true, motionObservedSpeed: 0, drop: 20 }
+        );
+        const hasCombatTarget = Boolean(bot.combatTarget);
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + action.combatDisengage?.reason + ':' + hasCombatTarget;
+      })(),
+      want: 'wait:combat-disengage-range:false:target-beyond-disengage-range:false'
     },
     {
       name: 'retreating edge combat target suppresses fire',

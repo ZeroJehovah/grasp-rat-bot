@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.182"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.183"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -107,6 +107,7 @@
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
+    combatDisengageRange: 17000,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatLowHpCloseRiskMargin: 5,
@@ -200,7 +201,7 @@
     combatStrafeCarryMs: 1600,
     combatEngageStickMs: 30000,
     combatEngageGraceMs: 5000,
-    combatEngageGraceRange: 22000,
+    combatEngageGraceRange: 17000,
     combatSpacingMinRange: 4500,
     combatSpacingPreferredRange: 6500,
     combatSpacingEmergencyRange: 3000,
@@ -9543,13 +9544,15 @@ function hpDisplay(value) {
   }
 
   function combatEngageGraceRange() {
-    return Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatEngageGraceRange || 0));
+    return Math.max(
+      Number(cfg.combatAttackRange || 0),
+      Number(cfg.combatDisengageRange || 0),
+      Number(cfg.combatEngageGraceRange || 0)
+    );
   }
 
   function combatTargetCandidateRange(self) {
-    return isFullHp(self)
-      ? Number(cfg.combatAttackRange || 0)
-      : combatEngageGraceRange();
+    return Number(cfg.combatAttackRange || 0);
   }
 
   function combatEngagedCandidate(self, raw) {
@@ -9607,7 +9610,11 @@ function hpDisplay(value) {
       clearCombatEngagement('range-grace-expired');
       return null;
     }
-    if (!reengageTarget || reengageTarget.distance > graceRange) return null;
+    if (reengageTarget && reengageTarget.distance > graceRange) {
+      clearCombatEngagement('combat-disengage-range');
+      return null;
+    }
+    if (!reengageTarget) return null;
     if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(reengageTarget)) {
       clearCombatEngagement('afk-profit-target');
       return null;
@@ -10696,6 +10703,7 @@ function hpDisplay(value) {
 
   function combatRetreatingTargetState(self, target, targetDistance, damageState = null) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const disengageRange = Math.max(attackRange, Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || attackRange || 0));
     const edgeRange = Math.min(
       attackRange || Infinity,
       Math.max(0, Number(cfg.combatRetreatEdgeRange || 0) || attackRange * 0.95)
@@ -10718,15 +10726,17 @@ function hpDisplay(value) {
       || (minDistanceDelta > 0 && distanceDelta >= minDistanceDelta)
     );
     const outOfRange = attackRange > 0 && distance > attackRange;
+    const beyondDisengage = disengageRange > 0 && distance > disengageRange;
     const edge = edgeRange > 0 && distance >= edgeRange;
     const active = Boolean(receding && (outOfRange || edge));
     return {
       active,
-      disengage: Boolean(active && outOfRange),
+      disengage: Boolean(beyondDisengage),
       suppressFire: Boolean(active && edge),
-      reason: outOfRange ? 'target-retreating-out-of-range' : 'target-retreating-edge',
+      reason: beyondDisengage ? 'target-beyond-disengage-range' : (outOfRange ? 'target-out-of-attack-range' : 'target-retreating-edge'),
       distance: Number.isFinite(distance) ? Math.round(distance) : null,
       attackRange: Math.round(attackRange),
+      disengageRange: Math.round(disengageRange),
       edgeRange: Math.round(edgeRange),
       radialSpeed: Number.isFinite(radialSpeed) ? Math.round(radialSpeed) : 0,
       distanceDelta: Number.isFinite(distanceDelta) ? Math.round(distanceDelta) : 0,
@@ -11678,12 +11688,11 @@ function hpDisplay(value) {
       }, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
     if (retreatingTarget.disengage) {
-      rememberCombatRetreatIgnore(target);
-      clearCombatDisadvantageObservation('target-retreating');
-      clearCombatEngagement('target-retreating');
+      clearCombatDisadvantageObservation('combat-disengage-range');
+      clearCombatEngagement('combat-disengage-range');
       return {
         kind: 'wait',
-        reason: 'combat-target-retreating',
+        reason: 'combat-disengage-range',
         combat: false,
         ignoreReturnBlock: true,
         shoot: false,
@@ -11694,36 +11703,26 @@ function hpDisplay(value) {
       };
     }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
-      const dir = directionTo(self, target);
-      const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
-        ? {
-          reason: 'stamina-5s-exhausted',
-          stamina5s: staminaRemaining(self, '5s'),
-          thresholdMs: staminaExhaustedThreshold(),
-          requestedDx: dir.dx,
-          requestedDy: dir.dy
-        }
-        : null;
       return {
-        kind: 'seek-enemy',
-        reason: movementSuppressed ? 'combat-stamina-hold' : 'combat-reengage',
+        kind: 'wait',
+        reason: 'combat-out-of-range-hold',
         combat: true,
         ignoreReturnBlock: true,
         shoot: false,
         forceShoot: false,
-        dx: movementSuppressed ? 0 : dir.dx,
-        dy: movementSuppressed ? 0 : dir.dy,
+        dx: 0,
+        dy: 0,
         target: baseTarget,
         combatState: {
           selfHp,
           targetHp,
-          reengage: {
+          outOfRangeHold: {
             distance: Math.round(targetDistance),
             attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
+            disengageRange: Math.round(Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || 0))),
             outOfRangeMs: target.combatEngagement?.outOfRangeMs || 0,
             graceRemainingMs: target.combatEngagement?.graceRemainingMs || 0
-          },
-          movementSuppressed
+          }
         }
       };
     }
@@ -14081,6 +14080,9 @@ function hpDisplay(value) {
         }
         setLastTarget('enemy', action.target.id);
         if (action.combat) rememberCombatEngagement(self, action.target, action);
+      } else if (action.kind === 'wait' && action.combat && action.target) {
+        setLastTarget('enemy', action.target.id);
+        rememberCombatEngagement(self, action.target, action);
       } else if ((action.kind === 'coin' || action.kind === 'seek-coin') && action.target) {
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {

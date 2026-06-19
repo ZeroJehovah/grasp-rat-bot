@@ -5086,13 +5086,15 @@ ${importantLogSource()}
   }
 
   function combatEngageGraceRange() {
-    return Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatEngageGraceRange || 0));
+    return Math.max(
+      Number(cfg.combatAttackRange || 0),
+      Number(cfg.combatDisengageRange || 0),
+      Number(cfg.combatEngageGraceRange || 0)
+    );
   }
 
   function combatTargetCandidateRange(self) {
-    return isFullHp(self)
-      ? Number(cfg.combatAttackRange || 0)
-      : combatEngageGraceRange();
+    return Number(cfg.combatAttackRange || 0);
   }
 
   function combatEngagedCandidate(self, raw) {
@@ -5150,7 +5152,11 @@ ${importantLogSource()}
       clearCombatEngagement('range-grace-expired');
       return null;
     }
-    if (!reengageTarget || reengageTarget.distance > graceRange) return null;
+    if (reengageTarget && reengageTarget.distance > graceRange) {
+      clearCombatEngagement('combat-disengage-range');
+      return null;
+    }
+    if (!reengageTarget) return null;
     if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(reengageTarget)) {
       clearCombatEngagement('afk-profit-target');
       return null;
@@ -6239,6 +6245,7 @@ ${importantLogSource()}
 
   function combatRetreatingTargetState(self, target, targetDistance, damageState = null) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const disengageRange = Math.max(attackRange, Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || attackRange || 0));
     const edgeRange = Math.min(
       attackRange || Infinity,
       Math.max(0, Number(cfg.combatRetreatEdgeRange || 0) || attackRange * 0.95)
@@ -6261,15 +6268,17 @@ ${importantLogSource()}
       || (minDistanceDelta > 0 && distanceDelta >= minDistanceDelta)
     );
     const outOfRange = attackRange > 0 && distance > attackRange;
+    const beyondDisengage = disengageRange > 0 && distance > disengageRange;
     const edge = edgeRange > 0 && distance >= edgeRange;
     const active = Boolean(receding && (outOfRange || edge));
     return {
       active,
-      disengage: Boolean(active && outOfRange),
+      disengage: Boolean(beyondDisengage),
       suppressFire: Boolean(active && edge),
-      reason: outOfRange ? 'target-retreating-out-of-range' : 'target-retreating-edge',
+      reason: beyondDisengage ? 'target-beyond-disengage-range' : (outOfRange ? 'target-out-of-attack-range' : 'target-retreating-edge'),
       distance: Number.isFinite(distance) ? Math.round(distance) : null,
       attackRange: Math.round(attackRange),
+      disengageRange: Math.round(disengageRange),
       edgeRange: Math.round(edgeRange),
       radialSpeed: Number.isFinite(radialSpeed) ? Math.round(radialSpeed) : 0,
       distanceDelta: Number.isFinite(distanceDelta) ? Math.round(distanceDelta) : 0,
@@ -7221,12 +7230,11 @@ ${importantLogSource()}
       }, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
     if (retreatingTarget.disengage) {
-      rememberCombatRetreatIgnore(target);
-      clearCombatDisadvantageObservation('target-retreating');
-      clearCombatEngagement('target-retreating');
+      clearCombatDisadvantageObservation('combat-disengage-range');
+      clearCombatEngagement('combat-disengage-range');
       return {
         kind: 'wait',
-        reason: 'combat-target-retreating',
+        reason: 'combat-disengage-range',
         combat: false,
         ignoreReturnBlock: true,
         shoot: false,
@@ -7237,36 +7245,26 @@ ${importantLogSource()}
       };
     }
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
-      const dir = directionTo(self, target);
-      const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(dir.dx || dir.dy)
-        ? {
-          reason: 'stamina-5s-exhausted',
-          stamina5s: staminaRemaining(self, '5s'),
-          thresholdMs: staminaExhaustedThreshold(),
-          requestedDx: dir.dx,
-          requestedDy: dir.dy
-        }
-        : null;
       return {
-        kind: 'seek-enemy',
-        reason: movementSuppressed ? 'combat-stamina-hold' : 'combat-reengage',
+        kind: 'wait',
+        reason: 'combat-out-of-range-hold',
         combat: true,
         ignoreReturnBlock: true,
         shoot: false,
         forceShoot: false,
-        dx: movementSuppressed ? 0 : dir.dx,
-        dy: movementSuppressed ? 0 : dir.dy,
+        dx: 0,
+        dy: 0,
         target: baseTarget,
         combatState: {
           selfHp,
           targetHp,
-          reengage: {
+          outOfRangeHold: {
             distance: Math.round(targetDistance),
             attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
+            disengageRange: Math.round(Math.max(Number(cfg.combatAttackRange || 0), Number(cfg.combatDisengageRange || cfg.combatEngageGraceRange || 0))),
             outOfRangeMs: target.combatEngagement?.outOfRangeMs || 0,
             graceRemainingMs: target.combatEngagement?.graceRemainingMs || 0
-          },
-          movementSuppressed
+          }
         }
       };
     }
@@ -9624,6 +9622,9 @@ ${importantLogSource()}
         }
         setLastTarget('enemy', action.target.id);
         if (action.combat) rememberCombatEngagement(self, action.target, action);
+      } else if (action.kind === 'wait' && action.combat && action.target) {
+        setLastTarget('enemy', action.target.id);
+        rememberCombatEngagement(self, action.target, action);
       } else if ((action.kind === 'coin' || action.kind === 'seek-coin') && action.target) {
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {
