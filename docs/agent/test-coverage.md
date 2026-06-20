@@ -46,9 +46,11 @@
   - visible coin route metadata is exposed on actions, near realtime coins remain the first route target when a route continues toward a farther field, route legs through active danger are rejected, and whole routes are skipped when the 1h/1d stamina budget cannot afford the full route;
   - snapshot-only coins remain valid only as a fallback when no visible/realtime profit exists;
   - already engaged out-of-range combat targets hold position instead of chasing until `combatDisengageRange`;
+  - recently damaged low-HP out-of-range finish targets within 160m reengage without firing out of range;
   - targets beyond `combatDisengageRange` clear combat state without installing a retreat-ignore cooldown, so they can re-enter if they later come back inside `combatAttackRange`;
   - retreating edge-range combat targets suppress fire with `target-retreating-edge`;
   - low-HP retreating edge targets with high self HP use `combat-finish-pressure`, keeping the ordinary retreating-edge suppression for healthy targets and preserving out-of-range hold outside `combatAttackRange`;
+  - retreating edge targets that are still applying real target-owned bullet pressure can use the guarded far no-damage `retreating-fighter-close` path without disabling ordinary pure-escape suppression;
   - retreat-ignored targets are not reselected without incoming bullets, while real incoming bullets can still re-engage the shooter for defense;
   - retreat-ignored Active threats inside `combatAttackRange` produce `combat-active-threat-wait` instead of allowing foot-coin pickup in the same danger window;
   - recovering state keeps already engaged stationary, active, and non-retreating targets inside `combatDisengageRange` under combat priority;

@@ -67,6 +67,13 @@ function runSelfTest() {
     combatFarNoDamageCloseRange: 7500,
     combatFarNoDamageCloseMinHp: 60,
     combatFarNoDamageCloseMaxHpGap: 10,
+    combatRetreatingFighterCloseMinHp: 60,
+    combatRetreatingFighterCloseMaxHpGap: 10,
+    combatOutOfRangeFinishPressureRange: 16000,
+    combatOutOfRangeFinishPressureSelfHpMin: 55,
+    combatOutOfRangeFinishPressureTargetHpMax: 55,
+    combatOutOfRangeFinishPressureMaxHpGap: 0,
+    combatOutOfRangeFinishPressureRecentDamageMs: 10000,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
     combatPassiveRunnerCloseRange: 7500,
@@ -2589,6 +2596,49 @@ function runSelfTest() {
     };
   }
 
+  function combatRetreatingFighterCloseVector(self, target, targetDistance, noDamageMs, selfHp, targetHp, retreatingTarget = null, targetRealBulletPressure = false) {
+    const thresholdMs = Math.max(0, Number(cfg.combatFarNoDamageCloseMs || 0) || 0);
+    const startRange = Math.max(0, Number(cfg.combatFarNoDamageCloseStartRange || 0) || 0);
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const closeRange = Math.max(
+      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatFarNoDamageCloseRange || cfg.combatPressureCloseRange || 0)
+    );
+    const minHp = Math.max(0, Number(cfg.combatRetreatingFighterCloseMinHp || cfg.combatFarNoDamageCloseMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatRetreatingFighterCloseMaxHpGap || cfg.combatFarNoDamageCloseMaxHpGap || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = Number.isFinite(hp) && Number.isFinite(enemyHp) ? enemyHp - hp : 0;
+    const activeRetreating = Boolean(retreatingTarget?.active && !retreatingTarget?.disengage);
+    if (!activeRetreating || !targetRealBulletPressure || !thresholdMs || !startRange || elapsed < thresholdMs || !(distance >= startRange) || !(distance > closeRange)) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, retreatingTarget };
+    }
+    if (Number.isFinite(hp) && hp < minHp) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, selfHp: hp, targetHp: enemyHp, hpGap, retreatingTarget };
+    }
+    if (Number.isFinite(hpGap) && hpGap > maxHpGap) {
+      return { active: false, dx: 0, dy: 0, distance, closeRange, noDamageMs: elapsed, selfHp: hp, targetHp: enemyHp, hpGap, retreatingTarget };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      closeRange,
+      startRange,
+      noDamageMs: elapsed,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      targetRealBulletPressure: true,
+      farNoDamageClose: true,
+      reason: 'retreating-fighter-close',
+      retreatingTarget
+    };
+  }
+
   function combatFinishPressureState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
@@ -2620,6 +2670,47 @@ function runSelfTest() {
       minSelfHp,
       maxTargetHp,
       reason: 'low-hp-retreating-target',
+      retreatingTarget
+    };
+  }
+
+  function combatOutOfRangeFinishPressureState(self, target, targetDistance, selfHp, targetHp, noDamageMs, retreatingTarget = null) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const maxRange = Math.max(attackRange, Number(cfg.combatOutOfRangeFinishPressureRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeFinishPressureSelfHpMin || 0));
+    const maxTargetHp = Math.max(0, Number(cfg.combatOutOfRangeFinishPressureTargetHpMax || 0));
+    const maxHpGap = Number.isFinite(Number(cfg.combatOutOfRangeFinishPressureMaxHpGap))
+      ? Number(cfg.combatOutOfRangeFinishPressureMaxHpGap)
+      : 0;
+    const recentDamageMs = Math.max(0, Number(cfg.combatOutOfRangeFinishPressureRecentDamageMs || 0));
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - ownHp;
+    if (!attackRange || !maxRange || !(distance > attackRange) || !(distance <= maxRange) || retreatingTarget?.disengage) {
+      return { active: false, dx: 0, dy: 0, distance, attackRange, maxRange, selfHp: ownHp, targetHp: enemyHp, noDamageMs: elapsed };
+    }
+    if (!recentDamageMs || elapsed > recentDamageMs) {
+      return { active: false, dx: 0, dy: 0, distance, attackRange, maxRange, selfHp: ownHp, targetHp: enemyHp, noDamageMs: elapsed };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || enemyHp > maxTargetHp || hpGap > maxHpGap) {
+      return { active: false, dx: 0, dy: 0, distance, attackRange, maxRange, selfHp: ownHp, targetHp: enemyHp, hpGap, noDamageMs: elapsed };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      attackRange,
+      maxRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      hpGap,
+      noDamageMs: elapsed,
+      recentDamageMs,
+      reason: 'out-of-range-low-hp-finish',
       retreatingTarget
     };
   }
@@ -3158,7 +3249,8 @@ function runSelfTest() {
 	    const aimMovement = aimMoving
 	      ? combatMovementAimMode(self, aimSource, aimDistance)
 	      : { mode: '', targetSpeed: 0, lateralRatio: 0, lateralSpeed: 0, radialSpeed: 0 };
-    const realBulletPressure = Boolean(targetBulletSeen || (targetThreat && !targetThreat.synthetic) || (anyThreat && !anyThreat.synthetic));
+    const targetRealBulletPressure = Boolean(targetThreat && !targetThreat.synthetic);
+    const realBulletPressure = Boolean(targetBulletSeen || targetRealBulletPressure || (anyThreat && !anyThreat.synthetic));
     let passiveRunner = combatPassiveRunnerState(self, target, target.distance, motionScale, realBulletPressure);
     if (retreatingTarget.active && passiveRunner.active) {
       passiveRunner = { ...passiveRunner, active: false, suppressedBy: retreatingTarget.reason || 'retreating-target' };
@@ -3195,7 +3287,37 @@ function runSelfTest() {
         combatDisengage: retreatingTarget
       };
     }
+    const outOfRangeFinishPressure = combatOutOfRangeFinishPressureState(
+      self,
+      target,
+      target.distance,
+      selfHp,
+      targetHp,
+      noDamageMs,
+      retreatingTarget
+    );
     if (Number(target.distance || 0) > Number(cfg.combatAttackRange || 0)) {
+      if (outOfRangeFinishPressure.active) {
+        return {
+          kind: 'attack',
+          reason: 'combat-finish-reengage',
+          combat: true,
+          shoot: false,
+          forceShoot: false,
+          dx: outOfRangeFinishPressure.dx,
+          dy: outOfRangeFinishPressure.dy,
+          target: {
+            id: target.user_id,
+            distance: Math.round(Number(target.distance || 0))
+          },
+          combatState: {
+            selfHp,
+            targetHp,
+            outOfRangeFinishPressure,
+            retreatingTarget: retreatingTarget.active ? retreatingTarget : null
+          }
+        };
+      }
       return {
         kind: 'wait',
         reason: 'combat-out-of-range-hold',
@@ -3250,13 +3372,26 @@ function runSelfTest() {
     if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
 	    const finishPressure = combatFinishPressureState(self, target, target.distance, selfHp, targetHp, retreatingTarget);
 	    const farNoDamageClose = combatFarNoDamageCloseVector(self, target, target.distance, selfHp, targetHp);
+	    const retreatingFighterClose = combatRetreatingFighterCloseVector(
+      self,
+      target,
+      target.distance,
+      noDamageMs,
+      selfHp,
+      targetHp,
+      retreatingTarget,
+      targetRealBulletPressure
+    );
+    const retreatingBlocksClose = retreatingTarget.active && !retreatingFighterClose.active;
 	    const basePressureClose = finishPressure.active
       ? finishPressure
-      : (retreatingTarget.active
+      : (retreatingFighterClose.active
+        ? retreatingFighterClose
+        : (retreatingBlocksClose
         ? { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: cfg.combatPressureCloseRange, noDamageMs, retreatingTarget }
         : (farNoDamageClose.active
           ? farNoDamageClose
-          : combatPressureCloseVector(self, target, target.distance, selfHp)));
+          : combatPressureCloseVector(self, target, target.distance, selfHp))));
 	    const passiveRunnerClose = !basePressureClose.active && !retreatingTarget.active
       ? combatPassiveRunnerCloseVector(self, target, target.distance, passiveRunner)
       : { active: false, dx: 0, dy: 0, distance: target.distance, closeRange: Number(cfg.combatPassiveRunnerCloseRange || 0), noDamageMs, reason: 'passive-runner' };
@@ -3288,6 +3423,7 @@ function runSelfTest() {
       : null;
     const dx = movementSuppressed ? 0 : requestedDx;
     const dy = movementSuppressed ? 0 : requestedDy;
+    const farNoDamageCloseForTrend = Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage');
     const trend = combatTrendState(self, {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
@@ -3301,7 +3437,7 @@ function runSelfTest() {
 	      noDamageMs,
 	      aimConfidence,
 	      motionScale: aimMotionScale,
-	      farNoDamageClose: pressureClose.reason === 'far-no-damage'
+	      farNoDamageClose: farNoDamageCloseForTrend
 	    });
     let shooting = combatShootingPlan(self, {
       trend,
@@ -3317,9 +3453,9 @@ function runSelfTest() {
 	      noDamageMs,
 	      aimConfidence,
 	      motionScale: aimMotionScale,
-	      farNoDamageClose: pressureClose.reason === 'far-no-damage'
+	      farNoDamageClose: farNoDamageCloseForTrend
 	    });
-    if (retreatingTarget.suppressFire && !finishPressure.active) {
+    if (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active) {
       shooting = {
         ...shooting,
         shoot: false,
@@ -3345,12 +3481,12 @@ function runSelfTest() {
     }
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
-      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : 'combat-attack'));
+      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')))) : 'combat-attack'));
     return {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (retreatingTarget.suppressFire && !finishPressure.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled ? 'combat-burst-fire' : baseReason)))),
+        : (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled ? 'combat-burst-fire' : baseReason)))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,
@@ -3416,7 +3552,8 @@ function runSelfTest() {
           reason: pressureClose.reason,
           distance: Math.round(pressureClose.distance),
           closeRange: Math.round(pressureClose.closeRange),
-          noDamageMs: Math.round(pressureClose.noDamageMs)
+          noDamageMs: Math.round(pressureClose.noDamageMs),
+          farNoDamageClose: Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage')
         } : null,
         passiveRunner: passiveRunner.active ? passiveRunner : null,
         noDamageMs,
@@ -4672,6 +4809,20 @@ function runSelfTest() {
       want: 'wait:combat-out-of-range-hold:true:false:0:0:false'
     },
     {
+      name: 'low hp out-of-range finish target reengages without shooting',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 7000, lastDamageAt: Date.now() - 5000, lastInRangeAt: Date.now() - 1000, distance: 14000, hp: 49 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 55, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 15500, y: 0, distance: 15500, current_join_mode: 'Active', hp: 49, vx: 50, recentlyMoved: true, motionObservedSpeed: 50, drop: 80 }
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.outOfRangeFinishPressure?.reason + ':' + action.combatState?.retreatingTarget?.reason;
+      })(),
+      want: 'attack:combat-finish-reengage:true:false:1:0:out-of-range-low-hp-finish:target-out-of-attack-range'
+    },
+    {
       name: 'engaged beyond disengage range exits combat state',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 16000, hp: 100 };
@@ -5295,6 +5446,21 @@ function runSelfTest() {
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.combatState?.pressureClose) + ':' + action.combatState?.shooting?.reason + ':' + action.combatState?.retreatingTarget?.reason;
       })(),
       want: 'combat-target-retreating:0:0:false:target-retreating-edge:target-retreating-edge'
+    },
+    {
+      name: 'combat far no-damage retreating fighter pressure closes under real bullet',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 7000, lastDamageAt: Date.now() - 7000, lastInRangeAt: Date.now() - 7000, distance: 13000, hp: 76 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 82, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14000, y: 0, distance: 14000, current_join_mode: 'Active', hp: 76, vx: 50, recentlyMoved: true, motionObservedSpeed: 50, drop: 20 },
+          [{ id: 'target-shot', ownerId: 7, x: 10000, y: 0, vx: -500, vy: 0 }]
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.pressureClose?.reason + ':' + action.combatState?.pressureClose?.farNoDamageClose + ':' + (action.combatState?.shooting?.reason === 'target-retreating-edge') + ':' + action.combatState?.retreatingTarget?.reason;
+      })(),
+      want: '1:0:true:retreating-fighter-close:true:false:target-retreating-edge'
     },
     {
       name: 'combat far no-damage pressure waits when hp gap is already bad',
