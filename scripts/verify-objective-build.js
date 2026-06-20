@@ -720,10 +720,12 @@ function main() {
 	      assert(tickBody.includes('postExitDecisionWithoutTarget({'), 'main tick does not publish a targetless post-exit wait decision');
 	      assert(defaultConfigSource.includes('exitMotionStopLockMs: 8000'), 'exit motion stop lock duration not configured');
 	    });
-	    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
-	      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
-	      assert(localBody.includes('tokenCleared && chatLeftUser && ownEntity.disappeared'), 'token/chat/self-missing exit confirmation is not enforced');
+    check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
+      const localBody = functionBody(text, 'pendingExitLocalConfirmationState');
+      assert(localBody.includes('tokenCleared && chatLeftUser && ownEntity.disappeared && !sessionMismatch'), 'token/chat/self-missing exit confirmation does not reject active session mismatch');
+      assert(localBody.includes('controlHasAuthoritativeSessionMismatch(control)'), 'local exit confirmation does not inspect authoritative session mismatch');
       assert(text.includes("'token-chat-left-user-self-missing'"), 'local exit confirmation source not logged');
+      assert(text.includes("'local-exit-session-mismatch'"), 'local exit session-mismatch source not logged');
       const chatBody = functionBody(text, 'chatLeftUserMessageSeen');
       assert(/left\\{2,4}s\+user/.test(chatBody), 'left user chat message matcher not found');
       const ownBody = functionBody(text, 'ownEntityDisappearedState');
@@ -977,15 +979,22 @@ function main() {
       assert(text.includes('loginSnapshotGate: snapshotLoginGateStatus()'), 'status/logs do not expose login snapshot gate');
     });
     check(`${file} leaves broken no-self game sessions`, () => {
+      const mismatchBody = functionBody(text, 'controlHasAuthoritativeSessionMismatch');
+      assert(mismatchBody.includes('controlHasNativeGameSession(control)'), 'authoritative session mismatch helper does not use native session evidence');
+      assert(mismatchBody.includes('Boolean(control.hasToken)'), 'authoritative session mismatch helper does not check cleared token state');
       const noSelfBody = functionBody(text, 'noSelfGameSessionExitState');
       assert(noSelfBody.includes('controlHasNativeGameSession(control)'), 'no-self session detection does not use native session evidence');
       assert(noSelfBody.includes('control?.nativeReconnectChurn'), 'no-self session detection does not detect reconnect churn');
       assert(noSelfBody.includes('cfg.gameSessionNoSelfLeaveMs'), 'no-self session detection does not use timeout');
+      assert(noSelfBody.includes('sessionMismatch'), 'no-self session detection does not track session mismatch');
+      assert(noSelfBody.includes('mismatchTimedOut'), 'no-self session detection does not produce mismatch timeout');
       assert(noSelfBody.includes('shouldLeave'), 'no-self helper does not return leave decision');
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
       assert(tickBody.includes("stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session')"), 'no-self session exit does not stop motion with explicit reason');
       assert(tickBody.includes('await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety)'), 'no-self session exit does not issue offline leave');
+      assert(tickBody.includes("await maybeStartAutoLogin('session-mismatch-recovery'"), 'session mismatch recovery does not trigger immediate relogin attempt');
+      assert(text.includes("'session-mismatch-recovery'"), 'session mismatch recovery reason is not exposed');
       assert(text.includes("control-ws-no-self-game-session"), 'no-self session exit reason is not exposed');
     });
     check(`${file} logs combat target mode and safety fields`, () => {

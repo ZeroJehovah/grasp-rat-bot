@@ -995,7 +995,7 @@ function combatLogSource(helpers = {}) {
 	      function combatLogSuspendReason(decision) {
 	        const reason = String(decision?.reason || '');
 	        if (!reason) return '';
-		        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
+        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-recovery|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
 		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
