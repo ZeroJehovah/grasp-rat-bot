@@ -30,6 +30,10 @@ const DEFAULTS = {
   combatPassiveRunnerMinDrop: 1,
   combatPassiveRunnerCloseRange: 7500,
   combatPassiveRunnerInterceptSpreadScale: 0,
+  combatOutOfRangeReengageRange: 15000,
+  combatOutOfRangeReengageMinHp: 60,
+  combatOutOfRangeReengageMaxHpGap: 10,
+  combatOutOfRangeReengageRecentInRangeMs: 2500,
   combatTargetDodgeSpeedPerTick: 50,
   combatAimLowConfidenceThreshold: 0.6,
   combatAimLowConfidenceMinDistance: 9000,
@@ -753,6 +757,163 @@ function simulatePassiveRunnerSelfSamples(frames, options) {
   return { samples, activeStarted, activeFrames };
 }
 
+function outOfRangeReengageActive(frame, options, simulatedSelf = frame.self) {
+  const selfPoint = simulatedSelf || frame.self;
+  const targetPoint = frame.nearbyTarget;
+  const target = frame.nearbyEntity || frame.target || null;
+  if (!selfPoint || !targetPoint || !target) return false;
+  const attackRange = Math.max(0, Number(options.combatAttackRange || 0));
+  const maxRange = Math.max(attackRange, Number(options.combatOutOfRangeReengageRange || 0));
+  const minSelfHp = Math.max(0, Number(options.combatOutOfRangeReengageMinHp || 0));
+  const maxHpGap = Math.max(0, Number(options.combatOutOfRangeReengageMaxHpGap || 0));
+  const recentInRangeMs = Math.max(0, Number(options.combatOutOfRangeReengageRecentInRangeMs || 0));
+  const distanceCm = distance(selfPoint, targetPoint);
+  const hp = frame.selfHp;
+  const enemyHp = frame.targetHp;
+  const hpGap = Number(enemyHp) - Number(hp);
+  const outOfRangeMs = numberOrNull(
+    frame.entry?.combatState?.outOfRangeHold?.outOfRangeMs
+      ?? frame.entry?.safety?.engagedCombat?.outOfRangeMs
+  ) || 0;
+  const targetId = String(target.id ?? target.user_id ?? '');
+  const incoming = frame.entry?.incomingBullet || frame.entry?.decision?.incomingBullet || null;
+  const incomingOwnerId = incoming?.ownerId ?? incoming?.owner_id ?? incoming?.source_user_id ?? incoming?.user_id;
+  const targetRealBulletPressure = Boolean(incomingRealBullet(frame) && targetId && String(incomingOwnerId ?? '') === targetId);
+  const intent = String(target.combatIntent || frame.entry?.safety?.engagedCombat?.intent || '');
+  const engagedIntent = /^(engaged|reengage)$/.test(intent);
+  const stationaryFreshContact = Boolean(
+    recentInRangeMs
+    && outOfRangeMs <= recentInRangeMs
+    && entitySpeed(target) < Number(options.combatStationarySpeed || 0)
+  );
+  return Boolean(
+    frame.entry?.decision?.reason === 'combat-out-of-range-hold'
+    && engagedIntent
+    && distanceCm > attackRange
+    && distanceCm <= maxRange
+    && Number.isFinite(hp)
+    && Number.isFinite(enemyHp)
+    && hp >= minSelfHp
+    && hpGap <= maxHpGap
+    && (targetRealBulletPressure || stationaryFreshContact)
+  );
+}
+
+function simulateOutOfRangeReengageSelfSamples(frames, options) {
+  const speedPerMs = Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50)) / Number(options.tickMs || 50);
+  const attackRange = Math.max(0, Number(options.combatAttackRange || 0));
+  const samples = [];
+  const activeLineNos = new Set();
+  let simulated = null;
+  let lastAt = null;
+  let activeStarted = null;
+  let activeFrames = 0;
+  let enteredRangeFrame = null;
+  for (const frame of frames) {
+    if (!frame.self) continue;
+    if (!simulated) simulated = { ...frame.self };
+    const originalActive = lastAt !== null && outOfRangeReengageActive(frame, options, frame.self);
+    if (originalActive) {
+      activeLineNos.add(frame.lineNo);
+    }
+    if (originalActive) {
+      if (!activeStarted) activeStarted = frame;
+      activeFrames += 1;
+      const target = frame.nearbyTarget;
+      if (target) {
+        const dt = Math.max(0, frame.at - lastAt);
+        const toTarget = sub(target, simulated);
+        const d = Math.hypot(toTarget.x, toTarget.y);
+        if (d > attackRange) {
+          const step = Math.min(Math.max(0, d - attackRange), speedPerMs * dt);
+          if (step > 0) {
+            const dir = unit(toTarget);
+            simulated = add(simulated, mul(dir, step));
+          }
+        }
+      }
+    }
+    const simulatedDistance = simulated && frame.nearbyTarget ? distance(simulated, frame.nearbyTarget) : null;
+    if (!enteredRangeFrame
+      && activeStarted
+      && activeLineNos.has(frame.lineNo)
+      && simulatedDistance !== null
+      && simulatedDistance <= attackRange) {
+      enteredRangeFrame = frame;
+    }
+    samples.push({ at: frame.at, x: simulated.x, y: simulated.y });
+    lastAt = frame.at;
+  }
+  return { samples, activeStarted, activeFrames, enteredRangeFrame, activeLineNos };
+}
+
+function collectOutOfRangeReengageShots(frames, simulation, options) {
+  const cadenceMs = Math.max(
+    Number(options.combatShootConserveEveryMs || 0),
+    Number(options.combatShootEveryMs || 0),
+    1
+  );
+  const shots = [];
+  let lastShotAt = -Infinity;
+  for (const frame of frames) {
+    if (!simulation.activeStarted || frame.at < simulation.activeStarted.at) continue;
+    const simulatedSelf = interpolate(simulation.samples, frame.at);
+    if (!simulatedSelf || !simulation.activeLineNos?.has(frame.lineNo) || !frame.nearbyTarget) continue;
+    const simulatedDistance = distance(simulatedSelf, frame.nearbyTarget);
+    if (simulatedDistance > Number(options.combatAttackRange || 0)) continue;
+    if (frame.at - lastShotAt < cadenceMs) continue;
+    shots.push({
+      id: `out-of-range-reengage:${frame.lineNo}`,
+      frame: {
+        ...frame,
+        self: simulatedSelf
+      },
+      hypothetical: true
+    });
+    lastShotAt = frame.at;
+  }
+  return shots;
+}
+
+function runOutOfRangeReengageScenario(frames, targetSamples, options) {
+  const simulation = simulateOutOfRangeReengageSelfSamples(frames, options);
+  const shots = collectOutOfRangeReengageShots(frames, simulation, options);
+  const scenario = runAimScenario(
+    'out-of-range reengage dynamic vs live target',
+    shots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const firstFrame = simulation.activeStarted || null;
+  const lastFrame = firstFrame ? frames.filter(frame => frame.at >= firstFrame.at).at(-1) : null;
+  const firstDistance = firstFrame?.self && firstFrame?.nearbyTarget ? distance(firstFrame.self, firstFrame.nearbyTarget) : null;
+  const lastOriginalDistance = lastFrame?.self && lastFrame?.nearbyTarget ? distance(lastFrame.self, lastFrame.nearbyTarget) : null;
+  const lastSim = lastFrame ? interpolate(simulation.samples, lastFrame.at) : null;
+  const lastSimDistance = lastSim && lastFrame?.nearbyTarget ? distance(lastSim, lastFrame.nearbyTarget) : null;
+  return {
+    ...scenario,
+    baselineHits: 0,
+    baselineMinDistanceCm: null,
+    activeFrames: simulation.activeFrames,
+    activeStart: firstFrame ? {
+      line: firstFrame.lineNo,
+      time: formatTime(firstFrame.at),
+      noDamageMs: Math.round(firstFrame.noDamageMs),
+      distanceCm: Math.round(firstDistance)
+    } : null,
+    enteredRange: simulation.enteredRangeFrame ? {
+      line: simulation.enteredRangeFrame.lineNo,
+      time: formatTime(simulation.enteredRangeFrame.at)
+    } : null,
+    originalEndDistanceCm: Number.isFinite(lastOriginalDistance) ? Math.round(lastOriginalDistance) : null,
+    simulatedEndDistanceCm: Number.isFinite(lastSimDistance) ? Math.round(lastSimDistance) : null,
+    simulatedApproachCm: Number.isFinite(lastOriginalDistance) && Number.isFinite(lastSimDistance)
+      ? Math.round(lastOriginalDistance - lastSimDistance)
+      : null
+  };
+}
+
 function runPassiveRunnerScenario(frames, shots, targetSamples, options) {
   const simulation = simulatePassiveRunnerSelfSamples(frames, options);
   const filteredShots = shots.filter(shot => {
@@ -1013,6 +1174,7 @@ function replay(options) {
     runAimScenario('dynamic strategy vs live target', shots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runAimScenario('dynamic strategy before grace exit', shots, shot => dynamicAimForShot(shot, options), targetSamples, options, shot => !graceExitFrame || shot.frame.at < graceExitFrame.at),
     runAimScenario('finish-pressure hypothetical dynamic vs live target', finishPressureShots, shot => dynamicAimForShot(shot, options), targetSamples, options),
+    runOutOfRangeReengageScenario(frames, targetSamples, options),
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
     runPassiveRunnerScenario(frames, shots, targetSamples, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
@@ -1247,6 +1409,16 @@ function selfTest() {
       targetId: '31361',
       targetName: 'mango',
       expectPassiveRunnerImproved: true
+    },
+    {
+      id: '2026-06-20-hamster-out-of-range-reengage',
+      file: path.join(__dirname, 'logs/2026-06-20/20260620083709-self-28886-vs-81992.jsonl'),
+      startLine: 1,
+      endLine: 263,
+      selfId: '28886',
+      targetId: '33545',
+      targetName: '蕉灼の仓鼠',
+      expectOutOfRangeReengageImproved: true
     }
   ];
   const summaries = cases.map(item => {
@@ -1255,6 +1427,7 @@ function selfTest() {
     const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
     const liveIntercept = result.scenarios.find(scenario => scenario.label === 'live intercept vs live target');
     const passiveRunner = result.scenarios.find(scenario => scenario.label === 'passive-runner close intercept vs live target');
+    const outOfRangeReengage = result.scenarios.find(scenario => scenario.label === 'out-of-range reengage dynamic vs live target');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
@@ -1293,6 +1466,13 @@ function selfTest() {
     if (item.expectPassiveRunnerImproved && (!passiveRunner || !(passiveRunner.hits > logged.hits) || !(passiveRunner.simulatedApproachCm > 0))) {
       throw new Error(`${item.id} passive-runner replay did not improve hits/approach: passiveRunner=${passiveRunner?.hits || 0}, logged=${logged.hits}, approach=${passiveRunner?.simulatedApproachCm || 0}`);
     }
+    if (item.expectOutOfRangeReengageImproved && (!outOfRangeReengage
+      || !(outOfRangeReengage.considered > 0)
+      || !(outOfRangeReengage.hits > 0)
+      || !(outOfRangeReengage.simulatedApproachCm > 0)
+      || !outOfRangeReengage.enteredRange)) {
+      throw new Error(`${item.id} out-of-range reengage replay did not enter range and create hits: considered=${outOfRangeReengage?.considered || 0}, hits=${outOfRangeReengage?.hits || 0}, approach=${outOfRangeReengage?.simulatedApproachCm || 0}`);
+    }
     return {
       id: item.id,
       loggedHits: logged.hits,
@@ -1300,6 +1480,8 @@ function selfTest() {
       liveInterceptHits: liveIntercept?.hits || 0,
       passiveRunnerHits: passiveRunner?.hits || 0,
       passiveRunnerApproachCm: passiveRunner?.simulatedApproachCm || 0,
+      outOfRangeReengageHits: outOfRangeReengage?.hits || 0,
+      outOfRangeReengageApproachCm: outOfRangeReengage?.simulatedApproachCm || 0,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,
       pressureSuppressed: pressureAuthority?.suppressed || 0,
