@@ -196,8 +196,14 @@ function importantLogSource() {
     const rawRewardCoins = Number.isFinite(Number(rewardRaw)) ? Math.max(0, Math.round(Number(rewardRaw))) : 0;
     const targetDrop = Number.isFinite(Number(item.targetDrop ?? item.drop ?? item.rewardCoins)) ? Math.max(0, Math.round(Number(item.targetDrop ?? item.drop ?? item.rewardCoins))) : null;
     const rewardConfirmed = Boolean(item.rewardConfirmed || item.dropMatched);
+    const killConfirmed = Boolean(item.killConfirmed || item.chatConfirmed || item.dropMatched || item.rewardConfirmed);
     const rewardCoins = rewardConfirmed ? rawRewardCoins : 0;
     const playerCategory = importantKillPlayerCategory(item);
+    const battleStartedAt = Number(item.battleStartedAt ?? item.startedAt ?? 0) || 0;
+    const battleEndedAt = Number(item.battleEndedAt ?? item.endedAt ?? item.at ?? 0) || 0;
+    const battleDurationMs = Number.isFinite(Number(item.battleDurationMs))
+      ? Math.max(0, Math.round(Number(item.battleDurationMs)))
+      : (battleStartedAt && battleEndedAt ? Math.max(0, Math.round(battleEndedAt - battleStartedAt)) : 0);
     const coin = item.coin && typeof item.coin === 'object' ? {
       id: item.coin.id ?? item.coin.drop_id ?? item.coin.coin_id ?? null,
       amount: Number.isFinite(Number(item.coin.amount)) ? Math.max(0, Math.round(Number(item.coin.amount))) : null,
@@ -224,9 +230,16 @@ function importantLogSource() {
       chatConfirmed: Boolean(item.chatConfirmed),
       dropMatched: Boolean(item.dropMatched),
       rewardConfirmed,
+      killConfirmed,
       targetDrop,
       unconfirmedDropCoins: rewardConfirmed ? 0 : Math.max(0, Number(targetDrop || rawRewardCoins) || 0),
-      coin
+      coin,
+      battleStartedAt,
+      battleEndedAt,
+      battleDurationMs,
+      battleStaminaSpentStartMs: item.battleStaminaSpentStartMs !== null && item.battleStaminaSpentStartMs !== undefined && item.battleStaminaSpentStartMs !== '' && Number.isFinite(Number(item.battleStaminaSpentStartMs)) ? Math.max(0, Math.round(Number(item.battleStaminaSpentStartMs))) : null,
+      battleStaminaSpentEndMs: item.battleStaminaSpentEndMs !== null && item.battleStaminaSpentEndMs !== undefined && item.battleStaminaSpentEndMs !== '' && Number.isFinite(Number(item.battleStaminaSpentEndMs)) ? Math.max(0, Math.round(Number(item.battleStaminaSpentEndMs))) : null,
+      battleStaminaSpentMs: item.battleStaminaSpentMs !== null && item.battleStaminaSpentMs !== undefined && item.battleStaminaSpentMs !== '' && Number.isFinite(Number(item.battleStaminaSpentMs)) ? Math.max(0, Math.round(Number(item.battleStaminaSpentMs))) : null
     };
   }
 
