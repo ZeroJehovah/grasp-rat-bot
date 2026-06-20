@@ -3350,15 +3350,28 @@ ${importantLogSource()}
 
   function rememberAttack(self, target, actionKind, action = {}) {
     if (!target) return;
+    const t = Date.now();
+    const targetId = target.id ?? target.user_id;
+    const targetName = target.name || '';
     const playerCategory = attackPlayerCategory(target, action);
     const currentlyActive = isCurrentlyActive(target);
     const moving = isMovingThreat(target);
     const firing = isFiringEntity(target);
+    const currentStaminaSpentMs = importantSessionStaminaSpentMs(bot.session);
+    const previousAttack = bot.attackHistory
+      .slice()
+      .reverse()
+      .find(item => t - Number(item?.at || 0) <= Math.max(1000, Number(cfg.killAttributionMergeMs || 120000))
+        && attackIdentityMatches(item, targetName, targetId));
+    const battleStartedAt = Number(previousAttack?.battleStartedAt || previousAttack?.at || t) || t;
+    const battleStaminaSpentStartMs = Number.isFinite(Number(previousAttack?.battleStaminaSpentStartMs))
+      ? Number(previousAttack.battleStaminaSpentStartMs)
+      : (Number.isFinite(Number(previousAttack?.staminaSpentMs)) ? Number(previousAttack.staminaSpentMs) : currentStaminaSpentMs);
     pushBounded(bot.attackHistory, {
-      at: Date.now(),
+      at: t,
       action: actionKind,
-      id: target.id ?? target.user_id,
-      name: target.name || '',
+      id: targetId,
+      name: targetName,
       x: Math.round(Number(target.x) || 0),
       y: Math.round(Number(target.y) || 0),
       drop: Number(target.drop || 0),
@@ -3372,6 +3385,9 @@ ${importantLogSource()}
       moving,
       firing,
       distance: Number(target.distance || 0),
+      staminaSpentMs: currentStaminaSpentMs,
+      battleStartedAt,
+      battleStaminaSpentStartMs,
       self: summarizeSelf(self)
     }, 80);
   }
@@ -3449,9 +3465,56 @@ ${importantLogSource()}
     return -1;
   }
 
+  function attackIdentityMatches(item, victim, id) {
+    if (!item) return false;
+    const victimName = String(victim || '').trim();
+    const itemName = String(item.name || item.victim || '').trim();
+    const idText = id === undefined || id === null ? '' : String(id);
+    const itemId = item.id === undefined || item.id === null ? '' : String(item.id);
+    if (idText && itemId && idText === itemId) return true;
+    return Boolean(victimName && itemName && victimName === itemName);
+  }
+
+  function recentAttackBattleSummary(victim, id, t = Date.now(), windowMs = cfg.killAttributionMergeMs) {
+    const maxAge = Math.max(1000, Number(windowMs || cfg.killAttributionMergeMs || 120000));
+    const attacks = bot.attackHistory
+      .filter(item => t - Number(item?.at || 0) <= maxAge)
+      .filter(item => attackIdentityMatches(item, victim, id))
+      .sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
+    if (!attacks.length) return null;
+    const first = attacks[0];
+    const last = attacks[attacks.length - 1];
+    const startedAt = Number(first.battleStartedAt || first.at || t) || t;
+    const endedAt = t;
+    const startStamina = Number(first.battleStaminaSpentStartMs ?? first.staminaSpentMs);
+    const endStamina = Number.isFinite(Number(last.staminaSpentMs))
+      ? Number(last.staminaSpentMs)
+      : importantSessionStaminaSpentMs(bot.session);
+    return {
+      battleStartedAt: startedAt,
+      battleEndedAt: endedAt,
+      battleDurationMs: Math.max(0, Math.round(endedAt - startedAt)),
+      battleStaminaSpentStartMs: Number.isFinite(startStamina) ? Math.max(0, Math.round(startStamina)) : null,
+      battleStaminaSpentEndMs: Number.isFinite(endStamina) ? Math.max(0, Math.round(endStamina)) : null,
+      battleStaminaSpentMs: Number.isFinite(startStamina) && Number.isFinite(endStamina) ? Math.max(0, Math.round(endStamina - startStamina)) : null
+    };
+  }
+
   function recordKillHistoryItem(kill, seenKey = '') {
     if (!kill || typeof kill !== 'object') return null;
     const t = Number(kill.at || Date.now()) || Date.now();
+    const battle = recentAttackBattleSummary(kill.victim || kill.name || '', kill.id, t);
+    if (battle) {
+      kill = {
+        ...kill,
+        battleStartedAt: kill.battleStartedAt || battle.battleStartedAt,
+        battleEndedAt: kill.battleEndedAt || battle.battleEndedAt,
+        battleDurationMs: kill.battleDurationMs || battle.battleDurationMs,
+        battleStaminaSpentStartMs: kill.battleStaminaSpentStartMs !== null && kill.battleStaminaSpentStartMs !== undefined && kill.battleStaminaSpentStartMs !== '' && Number.isFinite(Number(kill.battleStaminaSpentStartMs)) ? kill.battleStaminaSpentStartMs : battle.battleStaminaSpentStartMs,
+        battleStaminaSpentEndMs: kill.battleStaminaSpentEndMs !== null && kill.battleStaminaSpentEndMs !== undefined && kill.battleStaminaSpentEndMs !== '' && Number.isFinite(Number(kill.battleStaminaSpentEndMs)) ? kill.battleStaminaSpentEndMs : battle.battleStaminaSpentEndMs,
+        battleStaminaSpentMs: kill.battleStaminaSpentMs !== null && kill.battleStaminaSpentMs !== undefined && kill.battleStaminaSpentMs !== '' && Number.isFinite(Number(kill.battleStaminaSpentMs)) ? kill.battleStaminaSpentMs : battle.battleStaminaSpentMs
+      };
+    }
     const index = recentKillHistoryIndex(kill.victim || kill.name || '', kill.id, t);
     let stored = kill;
     if (index >= 0) {
@@ -3461,6 +3524,22 @@ ${importantLogSource()}
       const rewardConfirmed = Boolean(previous.rewardConfirmed || kill.rewardConfirmed || previousDropMatched || nextDropMatched);
       const previousReward = Math.max(0, Number(previous.rewardCoins || 0) || 0);
       const nextReward = Math.max(0, Number(kill.rewardCoins || 0) || 0);
+      const previousBattleStart = Number(previous.battleStartedAt || 0) || 0;
+      const nextBattleStart = Number(kill.battleStartedAt || 0) || 0;
+      const previousBattleEnd = Number(previous.battleEndedAt || previous.at || 0) || 0;
+      const nextBattleEnd = Number(kill.battleEndedAt || kill.at || 0) || 0;
+      const battleStartedAt = previousBattleStart && nextBattleStart ? Math.min(previousBattleStart, nextBattleStart) : (previousBattleStart || nextBattleStart || 0);
+      const battleEndedAt = Math.max(previousBattleEnd, nextBattleEnd, t);
+      const previousBattleStaminaStart = previous.battleStaminaSpentStartMs !== null && previous.battleStaminaSpentStartMs !== undefined && previous.battleStaminaSpentStartMs !== '' ? Number(previous.battleStaminaSpentStartMs) : NaN;
+      const nextBattleStaminaStart = kill.battleStaminaSpentStartMs !== null && kill.battleStaminaSpentStartMs !== undefined && kill.battleStaminaSpentStartMs !== '' ? Number(kill.battleStaminaSpentStartMs) : NaN;
+      const previousBattleStaminaEnd = previous.battleStaminaSpentEndMs !== null && previous.battleStaminaSpentEndMs !== undefined && previous.battleStaminaSpentEndMs !== '' ? Number(previous.battleStaminaSpentEndMs) : NaN;
+      const nextBattleStaminaEnd = kill.battleStaminaSpentEndMs !== null && kill.battleStaminaSpentEndMs !== undefined && kill.battleStaminaSpentEndMs !== '' ? Number(kill.battleStaminaSpentEndMs) : NaN;
+      const battleStaminaSpentStartMs = Number.isFinite(previousBattleStaminaStart) && Number.isFinite(nextBattleStaminaStart)
+        ? Math.min(previousBattleStaminaStart, nextBattleStaminaStart)
+        : (Number.isFinite(previousBattleStaminaStart) ? previousBattleStaminaStart : (Number.isFinite(nextBattleStaminaStart) ? nextBattleStaminaStart : null));
+      const battleStaminaSpentEndMs = Number.isFinite(previousBattleStaminaEnd) && Number.isFinite(nextBattleStaminaEnd)
+        ? Math.max(previousBattleStaminaEnd, nextBattleStaminaEnd)
+        : (Number.isFinite(nextBattleStaminaEnd) ? nextBattleStaminaEnd : (Number.isFinite(previousBattleStaminaEnd) ? previousBattleStaminaEnd : null));
       const targetDrop = Math.max(
         0,
         Number(kill.targetDrop ?? kill.drop ?? kill.reportedRewardCoins ?? 0) || 0,
@@ -3483,6 +3562,12 @@ ${importantLogSource()}
         matchedAttack: Boolean(previous.matchedAttack || kill.matchedAttack),
         chatConfirmed: Boolean(previous.chatConfirmed || kill.chatConfirmed),
         dropMatched: Boolean(previousDropMatched || nextDropMatched),
+        battleStartedAt,
+        battleEndedAt,
+        battleDurationMs: battleStartedAt && battleEndedAt ? Math.max(0, Math.round(battleEndedAt - battleStartedAt)) : 0,
+        battleStaminaSpentStartMs,
+        battleStaminaSpentEndMs,
+        battleStaminaSpentMs: Number.isFinite(battleStaminaSpentStartMs) && Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs - battleStaminaSpentStartMs)) : null,
         source: previous.source && kill.source && previous.source !== kill.source
           ? previous.source + '+' + kill.source
           : (kill.source || previous.source || '')
@@ -3597,6 +3682,12 @@ ${importantLogSource()}
     const seenKey = 'drop-coin-match|' + targetKey + '|' + coinKey + '|' + reward;
     if (bot.seenKillKeys.has(seenKey)) return null;
     const t = Date.now();
+    const battleStartedAt = Number(postAttackTarget.battleStartedAt || 0) || 0;
+    const rawBattleStaminaStart = postAttackTarget.battleStaminaSpentStartMs;
+    const battleStaminaSpentStartMs = rawBattleStaminaStart !== null && rawBattleStaminaStart !== undefined && rawBattleStaminaStart !== ''
+      ? Number(rawBattleStaminaStart)
+      : NaN;
+    const battleStaminaSpentEndMs = importantSessionStaminaSpentMs(bot.session);
     return recordKillHistoryItem({
       at: t,
       time: '',
@@ -3621,6 +3712,12 @@ ${importantLogSource()}
       source: 'drop-coin-match',
       targetDrop,
       attackDistance: Number.isFinite(Number(postAttackTarget.distance)) ? Math.round(Number(postAttackTarget.distance)) : null,
+      battleStartedAt,
+      battleEndedAt: t,
+      battleDurationMs: battleStartedAt ? Math.max(0, Math.round(t - battleStartedAt)) : 0,
+      battleStaminaSpentStartMs: Number.isFinite(battleStaminaSpentStartMs) ? Math.max(0, Math.round(battleStaminaSpentStartMs)) : null,
+      battleStaminaSpentEndMs: Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs)) : null,
+      battleStaminaSpentMs: Number.isFinite(battleStaminaSpentStartMs) && Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs - battleStaminaSpentStartMs)) : null,
       sessionId: bot.session?.importantSessionId || '',
       coin: {
         id: target.id ?? target.drop_id ?? target.coin_id ?? null,
@@ -8462,7 +8559,19 @@ ${importantLogSource()}
           distance: Number.isFinite(Number(attack.distance)) ? Math.round(Number(attack.distance)) : null,
           coinDistance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
           coinDistanceToTarget: Math.round(dist(coin, attack)),
-          ageMs: Math.max(0, Math.round(t - Number(attack.at || t)))
+          ageMs: Math.max(0, Math.round(t - Number(attack.at || t))),
+          playerCategory: attack.playerCategory || (attack.afk === false ? 'active' : 'afk'),
+          afk: attack.afk !== false,
+          active: attack.active === true || attack.playerCategory === 'active',
+          combat: Boolean(attack.combat),
+          combatIntent: attack.combatIntent || '',
+          mode: attack.mode || '',
+          currentlyActive: Boolean(attack.currentlyActive),
+          moving: Boolean(attack.moving),
+          firing: Boolean(attack.firing),
+          battleStartedAt: attack.battleStartedAt || attack.at || 0,
+          battleStaminaSpentStartMs: Number.isFinite(Number(attack.battleStaminaSpentStartMs)) ? Math.max(0, Math.round(Number(attack.battleStaminaSpentStartMs))) : null,
+          staminaSpentMs: Number.isFinite(Number(attack.staminaSpentMs)) ? Math.max(0, Math.round(Number(attack.staminaSpentMs))) : null
         }
       };
       recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), 'post-attack-drop-visible');
@@ -8528,7 +8637,13 @@ ${importantLogSource()}
         mode: target.mode || '',
         distance: Math.round(dir.distance),
         ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now()))),
-        resolvedAgeMs: Math.max(0, Math.round(Date.now() - Number(target.postAttackDropResolvedAt || Date.now())))
+        resolvedAgeMs: Math.max(0, Math.round(Date.now() - Number(target.postAttackDropResolvedAt || Date.now()))),
+        currentlyActive: Boolean(target.currentlyActive),
+        moving: Boolean(target.moving),
+        firing: Boolean(target.firing),
+        battleStartedAt: target.battleStartedAt || target.at || 0,
+        battleStaminaSpentStartMs: Number.isFinite(Number(target.battleStaminaSpentStartMs)) ? Math.max(0, Math.round(Number(target.battleStaminaSpentStartMs))) : null,
+        staminaSpentMs: Number.isFinite(Number(target.staminaSpentMs)) ? Math.max(0, Math.round(Number(target.staminaSpentMs))) : null
       },
       ...coinMotionMeta(dir)
     };

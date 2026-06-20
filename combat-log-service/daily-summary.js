@@ -110,6 +110,12 @@ function nonNegativeInteger(value) {
   return Math.max(0, Math.round(number(value)));
 }
 
+function optionalNonNegativeInteger(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+}
+
 function sessionBalanceDelta(session) {
   if (!hasOwnFiniteNumber(session, 'baseCoins') || !hasOwnFiniteNumber(session, 'currentCoins')) return null;
   return Math.max(0, Math.round(Number(session.currentCoins) - Number(session.baseCoins)));
@@ -187,14 +193,12 @@ function mergeSession(previous, next) {
 }
 
 function killKey(kill) {
+  const id = kill.id ?? kill.userId;
+  const identity = id !== null && id !== undefined && id !== '' ? `id:${id}` : `name:${kill.name || kill.victim || ''}`;
   return [
     number(kill.at),
-    kill.id ?? '',
-    kill.name || kill.victim || '',
-    number(kill.rewardCoins),
-    number(kill.targetDropCoins),
-    kill.source || '',
-    kill.dropMatched ? 'drop' : ''
+    identity,
+    number(kill.targetDropCoins)
   ].join('|');
 }
 
@@ -202,9 +206,13 @@ function normalizeKill(kill) {
   if (!kill || typeof kill !== 'object') return null;
   const playerCategory = normalizePlayerCategory(kill);
   const rawRewardCoins = Number.isFinite(Number(kill.rewardCoins ?? kill.drop)) ? Math.max(0, Math.round(Number(kill.rewardCoins ?? kill.drop))) : 0;
-  const targetDropCoins = Number.isFinite(Number(kill.targetDrop ?? kill.drop ?? kill.rewardCoins)) ? Math.max(0, Math.round(Number(kill.targetDrop ?? kill.drop ?? kill.rewardCoins))) : 0;
+  const targetDropCoins = Number.isFinite(Number(kill.targetDropCoins ?? kill.targetDrop ?? kill.drop ?? kill.rewardCoins)) ? Math.max(0, Math.round(Number(kill.targetDropCoins ?? kill.targetDrop ?? kill.drop ?? kill.rewardCoins))) : 0;
   const rewardConfirmed = Boolean(kill.rewardConfirmed || kill.dropMatched);
+  const killConfirmed = Boolean(kill.killConfirmed || kill.chatConfirmed || kill.dropMatched || kill.rewardConfirmed);
   const rewardCoins = rewardConfirmed ? rawRewardCoins : 0;
+  const battleStartedAt = number(kill.battleStartedAt ?? kill.startedAt);
+  const battleEndedAt = number(kill.battleEndedAt ?? kill.endedAt ?? kill.at);
+  const battleDurationMs = number(kill.battleDurationMs, battleStartedAt && battleEndedAt ? battleEndedAt - battleStartedAt : 0);
   return {
     at: number(kill.at),
     time: kill.time || '',
@@ -215,6 +223,8 @@ function normalizeKill(kill) {
     targetDropCoins,
     unconfirmedDropCoins: rewardConfirmed ? 0 : Math.max(targetDropCoins, rawRewardCoins),
     rewardConfirmed,
+    killConfirmed,
+    pickupConfirmed: rewardConfirmed,
     playerCategory,
     afk: playerCategory === 'afk',
     active: playerCategory === 'active',
@@ -225,7 +235,13 @@ function normalizeKill(kill) {
     dropMatched: Boolean(kill.dropMatched),
     chatConfirmed: Boolean(kill.chatConfirmed),
     source: kill.source || '',
-    attackDistance: Number.isFinite(Number(kill.attackDistance)) ? Math.round(Number(kill.attackDistance)) : null
+    attackDistance: Number.isFinite(Number(kill.attackDistance)) ? Math.round(Number(kill.attackDistance)) : null,
+    battleStartedAt,
+    battleEndedAt,
+    battleDurationMs,
+    battleStaminaSpentStartMs: optionalNonNegativeInteger(kill.battleStaminaSpentStartMs),
+    battleStaminaSpentEndMs: optionalNonNegativeInteger(kill.battleStaminaSpentEndMs),
+    battleStaminaSpentMs: optionalNonNegativeInteger(kill.battleStaminaSpentMs)
   };
 }
 
@@ -259,12 +275,69 @@ function killBucketSummary(kills) {
   return summary;
 }
 
+function mergeKill(previous, next) {
+  const a = normalizeKill(previous);
+  const b = normalizeKill(next);
+  if (!a) return b;
+  if (!b) return a;
+  const category = a.playerCategory === 'active' || b.playerCategory === 'active'
+    ? 'active'
+    : (a.playerCategory === 'afk' || b.playerCategory === 'afk' ? 'afk' : 'unknown');
+  const rewardConfirmed = Boolean(a.rewardConfirmed || b.rewardConfirmed || a.dropMatched || b.dropMatched);
+  const rawRewardCoins = Math.max(number(a.reportedRewardCoins), number(b.reportedRewardCoins), number(a.rewardCoins), number(b.rewardCoins));
+  const targetDropCoins = Math.max(number(a.targetDropCoins), number(b.targetDropCoins));
+  const battleStartedAt = [a.battleStartedAt, b.battleStartedAt].map(number).filter(Boolean).sort((x, y) => x - y)[0] || 0;
+  const battleEndedAt = Math.max(number(a.battleEndedAt), number(b.battleEndedAt), number(a.at), number(b.at));
+  const staminaStarts = [a.battleStaminaSpentStartMs, b.battleStaminaSpentStartMs]
+    .filter(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)))
+    .map(Number);
+  const staminaEnds = [a.battleStaminaSpentEndMs, b.battleStaminaSpentEndMs]
+    .filter(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)))
+    .map(Number);
+  const battleStaminaSpentStartMs = staminaStarts.length ? Math.max(0, Math.round(Math.min(...staminaStarts))) : null;
+  const battleStaminaSpentEndMs = staminaEnds.length ? Math.max(0, Math.round(Math.max(...staminaEnds))) : null;
+  return {
+    ...a,
+    ...b,
+    at: number(b.at) || number(a.at),
+    time: b.time || a.time || '',
+    name: b.name || a.name || '',
+    id: b.id ?? a.id ?? null,
+    rewardCoins: rewardConfirmed ? rawRewardCoins : 0,
+    reportedRewardCoins: rawRewardCoins,
+    targetDropCoins,
+    unconfirmedDropCoins: rewardConfirmed ? 0 : Math.max(targetDropCoins, rawRewardCoins),
+    rewardConfirmed,
+    killConfirmed: Boolean(a.killConfirmed || b.killConfirmed || a.chatConfirmed || b.chatConfirmed || rewardConfirmed),
+    pickupConfirmed: rewardConfirmed,
+    playerCategory: category,
+    afk: category === 'afk',
+    active: category === 'active',
+    combat: Boolean(a.combat || b.combat),
+    combatIntent: b.combatIntent || a.combatIntent || '',
+    mode: b.mode || a.mode || '',
+    matchedAttack: Boolean(a.matchedAttack || b.matchedAttack),
+    dropMatched: Boolean(a.dropMatched || b.dropMatched),
+    chatConfirmed: Boolean(a.chatConfirmed || b.chatConfirmed),
+    source: a.source && b.source && a.source !== b.source ? `${a.source}+${b.source}` : (b.source || a.source || ''),
+    attackDistance: Number.isFinite(Number(b.attackDistance)) ? b.attackDistance : a.attackDistance,
+    battleStartedAt,
+    battleEndedAt,
+    battleDurationMs: battleStartedAt && battleEndedAt ? Math.max(0, Math.round(battleEndedAt - battleStartedAt)) : Math.max(number(a.battleDurationMs), number(b.battleDurationMs)),
+    battleStaminaSpentStartMs,
+    battleStaminaSpentEndMs,
+    battleStaminaSpentMs: battleStaminaSpentStartMs !== null && battleStaminaSpentEndMs !== null
+      ? Math.max(0, Math.round(battleStaminaSpentEndMs - battleStaminaSpentStartMs))
+      : (b.battleStaminaSpentMs !== null && b.battleStaminaSpentMs !== undefined ? b.battleStaminaSpentMs : a.battleStaminaSpentMs)
+  };
+}
+
 function mergeKillLists(sessionKills, eventKills) {
   const map = new Map();
   for (const kill of [...(sessionKills || []), ...(eventKills || [])].map(normalizeKill).filter(Boolean)) {
     const key = killKey(kill);
     const previous = map.get(key);
-    map.set(key, previous ? { ...previous, ...kill } : kill);
+    map.set(key, previous ? mergeKill(previous, kill) : kill);
   }
   return Array.from(map.values()).sort((a, b) => number(a.at) - number(b.at));
 }
@@ -789,6 +862,8 @@ function buildReport(entries, options = {}) {
   }
   attachExitEvidenceToSessions(sessionList, exitEvents);
   attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
+  const battleOutcomes = buildBattleOutcomes(sessionList, combatList);
+  const battleTotals = battleOutcomeTotals(battleOutcomes);
   const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
   const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
   const open = sessionList.filter(item => !number(item.exitAt));
@@ -798,6 +873,7 @@ function buildReport(entries, options = {}) {
     files: Array.from(new Set(entries.map(item => item.__file))).sort(),
     sessions: sessionList,
     combats: combatList,
+    battleOutcomes,
     totals: {
       sessions: sessionList.length,
       completed: completed.length,
@@ -821,7 +897,14 @@ function buildReport(entries, options = {}) {
       activeUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedDropCoins), 0),
       combats: combatList.length,
       combatDurationMs: combatList.reduce((sum, item) => sum + number(item.durationMs), 0),
-      combatStaminaSpentMs: combatList.reduce((sum, item) => sum + number(item.staminaSpentMs), 0)
+      combatStaminaSpentMs: combatList.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
+      battleOutcomes: battleTotals.count,
+      battleOutcomeKills: battleTotals.kills,
+      battleOutcomeFailures: battleTotals.failures,
+      battleOutcomeRewardCoins: battleTotals.rewardCoins,
+      battleOutcomeMissedDropCoins: battleTotals.missedDropCoins,
+      battleOutcomeFailedDropCoins: battleTotals.failedDropCoins,
+      battleOutcomeStaminaSpentMs: battleTotals.staminaSpentMs
     }
   };
 }
@@ -905,6 +988,35 @@ function formatEnemy(enemy) {
   return name || id || '-';
 }
 
+function formatOutcomeEnemy(enemy) {
+  const name = String(enemy?.name || '').trim();
+  const id = enemy?.id === null || enemy?.id === undefined || enemy?.id === '' ? '' : String(enemy.id);
+  if (name && id) return `${name}(#${id})`;
+  if (id) return `#${id}`;
+  return name || '-';
+}
+
+function formatOutcomeTimeRange(startedAt, endedAt) {
+  const start = formatTime(startedAt);
+  const end = formatTime(endedAt || startedAt);
+  return `${start}-${end}`;
+}
+
+function formatOutcomeStamina(value) {
+  return value === null || value === undefined || !Number.isFinite(Number(value)) ? '-' : formatStaminaSpent(value);
+}
+
+function formatOutcomeDrop(value) {
+  return value === null || value === undefined || !Number.isFinite(Number(value)) ? '-' : String(number(value));
+}
+
+function playerCategoryText(category) {
+  const value = String(category || '').toLowerCase();
+  if (value === 'active') return '活跃';
+  if (value === 'afk') return '挂机';
+  return '未知';
+}
+
 function combatReasonText(reason) {
   const value = String(reason || '').toLowerCase();
   if (!value) return '';
@@ -967,6 +1079,203 @@ function resultText(result, reason, combat = null) {
   return detail ? `状态未归类：${detail}` : '状态未归类';
 }
 
+function killOutcomeKey(kill) {
+  const normalized = normalizeKill(kill);
+  if (!normalized) return '';
+  const identity = normalized.id !== null && normalized.id !== undefined && normalized.id !== '' ? `id:${normalized.id}` : `name:${normalized.name || ''}`;
+  return [
+    number(normalized.at),
+    identity,
+    number(normalized.targetDropCoins)
+  ].join('|');
+}
+
+function killMatchesCombat(kill, combat) {
+  if (!kill || !combat) return false;
+  const id = kill.id ?? kill.userId;
+  const enemyId = combat.enemy?.id;
+  if (id !== null && id !== undefined && id !== '' && enemyId !== null && enemyId !== undefined && enemyId !== '' && String(id) === String(enemyId)) return true;
+  const name = String(kill.name || kill.victim || '').trim();
+  const enemyName = String(combat.enemy?.name || '').trim();
+  return Boolean(name && enemyName && name === enemyName);
+}
+
+function findSessionForCombat(combat, sessions) {
+  if (!combat) return null;
+  if (combat.sessionId) {
+    const byId = sessions.find(item => item.sessionId === combat.sessionId);
+    if (byId) return byId;
+  }
+  return sessions.find(session => {
+    const loginAt = number(session.loginAt);
+    const exitAt = number(session.exitAt) || Infinity;
+    const startedAt = number(combat.startedAt);
+    return loginAt && startedAt >= loginAt && startedAt <= exitAt;
+  }) || null;
+}
+
+function findKillForCombat(combat, sessions) {
+  const session = findSessionForCombat(combat, sessions);
+  const kills = Array.isArray(session?.kills) ? session.kills.map(normalizeKill).filter(Boolean) : [];
+  const endedAt = number(combat?.endedAt) || number(combat?.updatedAt) || number(combat?.startedAt);
+  const candidates = kills
+    .filter(kill => killMatchesCombat(kill, combat))
+    .map(kill => ({ kill, age: Math.abs(number(kill.at) - endedAt) }))
+    .filter(item => !endedAt || item.age <= 120000);
+  candidates.sort((a, b) => a.age - b.age || number(b.kill.rewardCoins) - number(a.kill.rewardCoins));
+  return candidates[0]?.kill || null;
+}
+
+function combineCombatKill(combat, sessionKill) {
+  const combatKill = normalizeKill(combat?.kill);
+  const merged = { ...(combatKill || {}), ...(sessionKill || {}) };
+  if (!combatKill && !sessionKill) {
+    return {
+      at: number(combat?.endedAt) || number(combat?.startedAt),
+      name: combat?.enemy?.name || '',
+      id: combat?.enemy?.id ?? null,
+      rewardCoins: 0,
+      reportedRewardCoins: number(combat?.enemy?.drop),
+      targetDropCoins: number(combat?.enemy?.drop),
+      rewardConfirmed: false,
+      killConfirmed: false,
+      playerCategory: normalizePlayerCategory({ mode: combat?.enemy?.mode }),
+      afk: false,
+      active: false
+    };
+  }
+  const targetDropCoins = Math.max(number(combat?.enemy?.drop), number(combatKill?.targetDropCoins), number(sessionKill?.targetDropCoins));
+  const rewardConfirmed = Boolean(combatKill?.rewardConfirmed || sessionKill?.rewardConfirmed || combatKill?.dropMatched || sessionKill?.dropMatched);
+  const killConfirmed = Boolean(rewardConfirmed || combatKill?.killConfirmed || sessionKill?.killConfirmed || combat?.result === 'won');
+  const rawRewardCoins = Math.max(number(combatKill?.reportedRewardCoins), number(sessionKill?.reportedRewardCoins), targetDropCoins);
+  let playerCategory = normalizePlayerCategory(sessionKill || combatKill || {});
+  if (String(combat?.enemy?.mode || '').toLowerCase() === 'active') playerCategory = 'active';
+  return {
+    ...merged,
+    at: number(merged.at) || number(combat?.endedAt) || number(combat?.startedAt),
+    name: merged.name || combat?.enemy?.name || '',
+    id: merged.id ?? combat?.enemy?.id ?? null,
+    targetDropCoins,
+    reportedRewardCoins: rawRewardCoins,
+    rewardConfirmed,
+    killConfirmed,
+    rewardCoins: rewardConfirmed ? Math.max(number(combatKill?.rewardCoins), number(sessionKill?.rewardCoins), rawRewardCoins) : 0,
+    playerCategory,
+    afk: playerCategory === 'afk',
+    active: playerCategory === 'active'
+  };
+}
+
+function combatIsBattleFailure(combat) {
+  if (!combat) return false;
+  const result = String(combat.result || '').toLowerCase();
+  if (result === 'lost') return true;
+  if (result !== 'left') return false;
+  const text = [
+    combat.resultReason,
+    combat.lastReason,
+    combat.startReason,
+    combat.exitReason,
+    combat.exitSummary,
+    combat.exitEvidence?.reason,
+    combat.exitEvidence?.summary
+  ].join(' ').toLowerCase();
+  return /combat[-\s_]*(hp|low|critical|trade)|hp disadvantage|low hp|critical hp|disadvantage|injury|pursuit|劣势|低血|久攻未中|交换比/.test(text);
+}
+
+function outcomePlayerCategory(combat, kill) {
+  if (String(combat?.enemy?.mode || '').toLowerCase() === 'active') return 'active';
+  const fromKill = normalizePlayerCategory(kill);
+  if (fromKill !== 'unknown') return fromKill;
+  const mode = String(combat?.enemy?.mode || kill?.mode || '').toLowerCase();
+  if (mode === 'active') return 'active';
+  if (mode === 'passive') return 'afk';
+  return 'unknown';
+}
+
+function buildBattleOutcomes(sessions, combats) {
+  const outcomes = [];
+  const usedKills = new Set();
+  for (const combat of combats || []) {
+    const sessionKill = findKillForCombat(combat, sessions || []);
+    const kill = combineCombatKill(combat, sessionKill);
+    if (sessionKill) usedKills.add(killOutcomeKey(sessionKill));
+    if (combat.result === 'won' || kill.killConfirmed) {
+      const playerCategory = outcomePlayerCategory(combat, kill);
+      outcomes.push({
+        type: 'kill',
+        startedAt: number(combat.startedAt),
+        endedAt: number(combat.endedAt) || number(kill.at),
+        durationMs: number(combat.durationMs),
+        staminaSpentMs: Number.isFinite(Number(combat.staminaSpentMs)) ? Math.max(0, Math.round(Number(combat.staminaSpentMs))) : null,
+        enemy: { id: kill.id ?? combat.enemy?.id ?? null, name: kill.name || combat.enemy?.name || '' },
+        playerCategory,
+        drop: Math.max(number(combat.enemy?.drop), number(kill.targetDropCoins), number(kill.reportedRewardCoins)),
+        status: '确认击杀',
+        rewardCoins: number(kill.rewardCoins),
+        rewardStatus: number(kill.rewardCoins) > 0 ? '已拾取' : '未拾取',
+        combatSummaryId: combat.combatSummaryId || '',
+        sessionId: combat.sessionId || '',
+        source: 'combat-summary'
+      });
+    } else if (combatIsBattleFailure(combat)) {
+      outcomes.push({
+        type: 'failure',
+        startedAt: number(combat.startedAt),
+        endedAt: number(combat.endedAt),
+        durationMs: number(combat.durationMs),
+        staminaSpentMs: Number.isFinite(Number(combat.staminaSpentMs)) ? Math.max(0, Math.round(Number(combat.staminaSpentMs))) : null,
+        enemy: { id: combat.enemy?.id ?? null, name: combat.enemy?.name || '' },
+        playerCategory: outcomePlayerCategory(combat, null),
+        drop: number(combat.enemy?.drop),
+        status: combat.result === 'lost' ? '失败' : '劣势离场',
+        rewardCoins: 0,
+        rewardStatus: '未击杀',
+        combatSummaryId: combat.combatSummaryId || '',
+        sessionId: combat.sessionId || '',
+        source: 'combat-summary'
+      });
+    }
+  }
+  for (const session of sessions || []) {
+    for (const kill of (Array.isArray(session.kills) ? session.kills.map(normalizeKill).filter(Boolean) : [])) {
+      const key = killOutcomeKey(kill);
+      if (!kill.killConfirmed || usedKills.has(key)) continue;
+      outcomes.push({
+        type: 'kill',
+        startedAt: number(kill.battleStartedAt) || number(kill.at),
+        endedAt: number(kill.battleEndedAt) || number(kill.at),
+        durationMs: number(kill.battleDurationMs),
+        staminaSpentMs: kill.battleStaminaSpentMs,
+        enemy: { id: kill.id ?? null, name: kill.name || '' },
+        playerCategory: normalizePlayerCategory(kill),
+        drop: Math.max(number(kill.targetDropCoins), number(kill.reportedRewardCoins)),
+        status: '确认击杀',
+        rewardCoins: number(kill.rewardCoins),
+        rewardStatus: number(kill.rewardCoins) > 0 ? '已拾取' : '未拾取',
+        combatSummaryId: '',
+        sessionId: session.sessionId || '',
+        source: 'kill'
+      });
+      usedKills.add(key);
+    }
+  }
+  return outcomes.sort((a, b) => number(a.startedAt) - number(b.startedAt) || number(a.endedAt) - number(b.endedAt));
+}
+
+function battleOutcomeTotals(outcomes) {
+  const list = outcomes || [];
+  return {
+    count: list.length,
+    kills: list.filter(item => item.type === 'kill').length,
+    failures: list.filter(item => item.type === 'failure').length,
+    rewardCoins: list.reduce((sum, item) => sum + number(item.rewardCoins), 0),
+    missedDropCoins: list.filter(item => item.type === 'kill' && number(item.rewardCoins) <= 0).reduce((sum, item) => sum + number(item.drop), 0),
+    failedDropCoins: list.filter(item => item.type === 'failure').reduce((sum, item) => sum + number(item.drop), 0),
+    staminaSpentMs: list.reduce((sum, item) => sum + number(item.staminaSpentMs), 0)
+  };
+}
+
 function printReport(report) {
   console.log(`日期：${report.day || '-'}；日志文件：${report.files.length}；记录数：${report.entries}`);
   console.log('');
@@ -986,6 +1295,19 @@ function printReport(report) {
   });
   console.log('');
   console.log(`登录合计：明确退出${report.totals.completed}/${report.totals.sessions}，推断收口${report.totals.inferred}，尚未收口${report.totals.incomplete}，总耗时${formatDuration(report.totals.loginDurationMs)}，消耗体力${formatStaminaSpent(report.totals.staminaSpentMs)}，拾取刷新金币${report.totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(report.totals.afkKillCount, report.totals.afkKillRewardCoins, report.totals.afkUnconfirmedDropCoins, report.totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(report.totals.activeKillCount, report.totals.activeKillRewardCoins, report.totals.activeUnconfirmedDropCoins, report.totals.activeUnconfirmedKillCount)}，总收益${report.totals.coinsGained}币`);
+  console.log('');
+  console.log('## 实际战斗收益统计');
+  console.log('说明：只统计确认击杀和失败/劣势离场；敌方逃离、目标切换、未交战安全避让不计入。收益只按已拾取的掉落金币计算，确认击杀但未拾取显示收益+0（未拾取）。');
+  console.log('');
+  if (!report.battleOutcomes.length) {
+    console.log('无记录');
+  } else {
+    for (const outcome of report.battleOutcomes) {
+      console.log(`- ${formatOutcomeTimeRange(outcome.startedAt, outcome.endedAt)} 体力${formatOutcomeStamina(outcome.staminaSpentMs)} ${formatOutcomeEnemy(outcome.enemy)} ${playerCategoryText(outcome.playerCategory)} Drop${formatOutcomeDrop(outcome.drop)} ${outcome.status} 收益+${number(outcome.rewardCoins)}(${outcome.rewardStatus})`);
+    }
+    console.log('');
+    console.log(`实际战斗收益合计：记录${report.totals.battleOutcomes}，确认击杀${report.totals.battleOutcomeKills}，失败/劣势离场${report.totals.battleOutcomeFailures}，已拾取收益${report.totals.battleOutcomeRewardCoins}币，确认击杀未拾取Drop${report.totals.battleOutcomeMissedDropCoins}币，失败未获Drop${report.totals.battleOutcomeFailedDropCoins}币，消耗体力${formatStaminaSpent(report.totals.battleOutcomeStaminaSpentMs)}`);
+  }
   console.log('');
   console.log('## 活跃玩家战斗统计');
   console.log('说明：战斗结果先按互斥一级类别归类：胜利、失败、我方主动退出、敌方逃离、目标切换；冒号后是该类别下的触发原因或证据。敌方逃离包括目标脱离范围、突然消失、退出或传送；避开无敌目标属于安全移动，不计入本表。');
@@ -1119,7 +1441,10 @@ function runSelfTest() {
         coinsGained: 20,
         pureRefreshCoins: 7,
         killRewardCoins: 13,
-        version: 'bootstrap-0.4.141'
+        version: 'bootstrap-0.4.141',
+        kills: [
+          { at: 3500, name: 'active-target', id: 8, rewardCoins: 4, targetDrop: 4, playerCategory: 'afk', matchedAttack: true, dropMatched: true, source: 'drop-coin-match' }
+        ]
       }
     },
     {
@@ -1128,7 +1453,7 @@ function runSelfTest() {
       importantLogId: `${s1}:kill-afk`,
       at: 3000,
       sessionId: s1,
-      kill: { at: 3000, name: 'afk-target', id: 7, rewardCoins: 9, targetDrop: 9, playerCategory: 'afk', matchedAttack: true, dropMatched: true }
+      kill: { at: 3000, name: 'afk-target', id: 7, rewardCoins: 9, targetDrop: 9, playerCategory: 'afk', matchedAttack: true, dropMatched: true, battleStartedAt: 1800, battleEndedAt: 3000, battleDurationMs: 1200, battleStaminaSpentMs: 1500 }
     },
     {
       type: 'important-log',
@@ -1144,7 +1469,7 @@ function runSelfTest() {
       importantLogId: `${s1}:kill-active-unconfirmed`,
       at: 3700,
       sessionId: s1,
-      kill: { at: 3700, name: 'unpicked-active-target', id: 10, rewardCoins: 30, targetDrop: 30, playerCategory: 'active', combat: true, chatConfirmed: true, dropMatched: false }
+      kill: { at: 3700, name: 'unpicked-active-target', id: 10, rewardCoins: 30, targetDrop: 30, playerCategory: 'active', combat: true, chatConfirmed: true, dropMatched: false, battleStartedAt: 3200, battleEndedAt: 3700, battleDurationMs: 500, battleStaminaSpentMs: 600 }
     },
     {
       type: 'important-log',
@@ -1184,7 +1509,7 @@ function runSelfTest() {
         endedAt: 13000,
         durationMs: 2000,
         staminaSpentMs: 0,
-        enemy: { id: 9, name: 'login-threat', mode: 'Active' },
+        enemy: { id: 9, name: 'login-threat', mode: 'Active', drop: 11 },
         selfHpStart: 90,
         selfHpEnd: 70,
         selfHpDelta: -20,
@@ -1284,6 +1609,8 @@ function runSelfTest() {
   assertSelfTest(report.sessions[0].pureRefreshCoins === 7, 'pure refreshed coin total was not preserved');
   assertSelfTest(report.sessions[0].afkKillCount === 1 && report.sessions[0].afkKillRewardCoins === 9, 'AFK kill bucket was not computed');
   assertSelfTest(report.sessions[0].activeKillCount === 1 && report.sessions[0].activeKillRewardCoins === 4, 'active kill confirmed reward bucket was not computed');
+  const mergedActiveKill = report.sessions[0].kills.find(kill => kill.name === 'active-target');
+  assertSelfTest(mergedActiveKill?.playerCategory === 'active' && mergedActiveKill.chatConfirmed === false && mergedActiveKill.dropMatched === true, 'duplicate kill merge did not preserve the stronger active classification');
   assertSelfTest(report.sessions[0].activeUnconfirmedKillCount === 1, 'active unconfirmed kill count was not computed');
   assertSelfTest(report.sessions[0].activeUnconfirmedDropCoins === 30, 'active unconfirmed drop bucket was not computed');
   assertSelfTest(report.sessions[0].afkKillRewardCoins + report.sessions[0].activeKillRewardCoins <= report.sessions[0].coinsGained, 'confirmed kill rewards exceed total gained coins');
@@ -1298,6 +1625,16 @@ function runSelfTest() {
   assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:safety-avoid`), 'safety avoidance was incorrectly counted as combat');
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
+  assertSelfTest(report.battleOutcomes.length === 4, `expected 4 battle outcomes, got ${report.battleOutcomes.length}`);
+  assertSelfTest(report.totals.battleOutcomeKills === 3 && report.totals.battleOutcomeFailures === 1, 'battle outcome kill/failure totals are wrong');
+  assertSelfTest(report.totals.battleOutcomeRewardCoins === 13, `expected 13 picked battle reward coins, got ${report.totals.battleOutcomeRewardCoins}`);
+  assertSelfTest(report.totals.battleOutcomeMissedDropCoins === 30, 'unpicked confirmed kill drop was not tracked');
+  assertSelfTest(report.totals.battleOutcomeFailedDropCoins === 11, 'failed battle drop exposure was not tracked');
+  const unpickedOutcome = report.battleOutcomes.find(item => item.enemy.name === 'unpicked-active-target');
+  assertSelfTest(unpickedOutcome?.status === '确认击杀' && unpickedOutcome.rewardCoins === 0 && unpickedOutcome.rewardStatus === '未拾取', 'chat-confirmed unpicked kill was not rendered as confirmed zero-profit kill');
+  assertSelfTest(unpickedOutcome?.staminaSpentMs === 600, 'standalone kill battle stamina was not preserved');
+  const failedOutcome = report.battleOutcomes.find(item => item.enemy.name === 'login-threat');
+  assertSelfTest(failedOutcome?.status === '劣势离场' && failedOutcome.rewardStatus === '未击杀', 'combat disadvantage exit was not rendered as failed battle outcome');
   const waitCombat = report.combats.find(item => item.combatSummaryId === `${s2}:immediate-exit`);
   assertSelfTest(waitCombat?.exitEvidence?.trade?.selfDamage === 20, 'enemy-leave-wait combat did not attach exit trade evidence');
   assertSelfTest(resultText('left', 'combat-hp-disadvantage-leave') === '我方主动退出：HP劣势', 'HP-disadvantage exit result text is not exclusive');
