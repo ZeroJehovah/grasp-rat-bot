@@ -101,6 +101,7 @@
 - `combatServerStallNoDamagePrecisionGraceMs = 10000`
 - `combatStrafePreciseLaneMin = 1`
 - `staminaExhaustedThresholdMs = 1000`
+- `staminaExhaustionPostLoginGraceMs = 15000`
 - `staminaBudgetReloginDelayMs = 1800000`
 - `unsafeExitReloginMinDelayMs = 60000`
 - `leaveRetryMinMs = 10000`

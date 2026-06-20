@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `218`.
+- Latest bot self-test count: `220`.
 - Latest combat-log analyzer self-test count: `82`.
 - Latest combat replay self-test count: `15`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -17,6 +17,7 @@
   - low 1h stamina exits before the 60s snapshot idle fallback;
   - 1h budget below a foot coin exits instead of bypassing long-window budget;
   - low long-window stamina still reports `wait-for-stamina-budget` for target-only budget blocks;
+  - stale daily stamina holds are contradicted by preserved session stamina evidence, while zero remaining 1d evidence does not clear the hold;
   - 150m coin beats richer 200m coin by nearby opportunity priority;
   - same-value 150m coin beats a sticky older 213m coin target;
   - similar same-tier ROI targets choose immediately instead of waiting;

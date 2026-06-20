@@ -4,12 +4,13 @@
 - Survival has priority over ROI:
   - low HP recovery/flee paths remain first-class;
   - combat critical HP and HP disadvantage can trigger leave;
-  - 1d long-window stamina exhaustion triggers leave/relogin hold until reset; 1h exhaustion uses a fixed 5 minute relogin delay because 1h stamina appears to recover continuously rather than at hourly reset.
+  - 1d long-window stamina exhaustion triggers leave/relogin hold until reset; 1h exhaustion uses a fixed 30 minute relogin delay because 1h stamina appears to recover continuously rather than at hourly reset.
+  - after login, an all-zero 5s/1h/1d stamina placeholder is treated as an unsettled sample for a short grace window instead of immediately triggering a 1d reset hold.
   - hostile leave/relogin messages now include the enemy summary and the actual wait time when available.
   - repeated successful exits from the same identified enemy back off to at least 30 minutes on the second consecutive leave and 1 hour on the third or later.
   - enemy/offline leave reason, target/player context, and remaining relogin wait are persisted in localStorage across page reloads.
   - enemy/offline relogin hold waits are display-only; they stop movement and show the persisted reason/countdown, but do not keep sending leave requests.
-  - stale enemy/offline relogin holds are cleared once the page has recovered to an alive self entity with an online native WebSocket, so manual or external successful relogin cannot leave the bot stopped in an old wait state.
+  - stale enemy/offline relogin holds are cleared once the page has recovered to an alive self entity with an online native WebSocket, so manual or external successful relogin cannot leave the bot stopped in an old wait state. Stale stamina offline holds are also cleared when preserved session/self evidence contradicts the recorded long-window exhaustion.
   - attempted combat/injury/pursuit/offline leave requests establish pending exit even when the transport reports a timeout/HTML error, so HP-based relogin hold can start after conservative exit confirmation.
   - stamina-budget leave requests prime a non-offline login suppress immediately after an attempted leave command, so a page/context refresh before exit confirmation does not cause immediate auto-login.
   - attempted unsafe exits from injury, combat disadvantage, pursuit, reconnect churn, server-position stall, or unsafe offline conditions prime a pending local login suppress for at least `unsafeExitReloginMinDelayMs` without setting confirmed enemy/offline hold state, so page reloads cannot instantly relogin but pending cover/retry behavior continues while still alive.

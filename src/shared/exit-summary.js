@@ -1,6 +1,10 @@
 'use strict';
 
 function staminaExhaustedWindowLabel(staminaState) {
+  return staminaExhaustedLongWindows(staminaState).join('/');
+}
+
+function staminaExhaustedLongWindows(staminaState) {
   const raw = Array.isArray(staminaState?.longExhausted)
     ? staminaState.longExhausted
     : (Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : []);
@@ -9,7 +13,34 @@ function staminaExhaustedWindowLabel(staminaState) {
     const key = String(item || '').toLowerCase();
     if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
   }
-  return windows.join('/');
+  return windows;
+}
+
+function staminaEvidenceRemaining(evidence, windowName) {
+  const key = String(windowName || '').toLowerCase();
+  if (key !== '1h' && key !== '1d') return null;
+  const suffix = key === '1h' ? '1h' : '1d';
+  const candidates = [
+    evidence?.stamina?.['stamina' + suffix],
+    evidence?.['stamina' + suffix],
+    evidence?.['stamina_' + suffix + '_remaining_milli'],
+    key === '1d' ? evidence?.stamina1dLastRemaining : undefined
+  ];
+  for (const value of candidates) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function staminaHoldContradictedByStaminaEvidence(staminaState, evidence, thresholdMs = 1000) {
+  const windows = staminaExhaustedLongWindows(staminaState);
+  if (!windows.length || !evidence || typeof evidence !== 'object') return false;
+  const threshold = Math.max(0, Number(thresholdMs) || 0);
+  return windows.some(windowName => {
+    const remaining = staminaEvidenceRemaining(evidence, windowName);
+    return remaining !== null && remaining >= threshold;
+  });
 }
 
 function offlineLeaveSummaryText(reason, offlineSafety) {
@@ -69,7 +100,10 @@ function combatLogExitSummaryFromDecision(decision) {
 }
 
 module.exports = {
+  staminaExhaustedLongWindows,
   staminaExhaustedWindowLabel,
+  staminaEvidenceRemaining,
+  staminaHoldContradictedByStaminaEvidence,
   offlineLeaveSummaryText,
   combatLogExitSummaryFromDecision
 };
