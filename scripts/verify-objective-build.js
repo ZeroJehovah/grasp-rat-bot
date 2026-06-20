@@ -86,6 +86,10 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatOutOfRangeFinishPressureTargetHpMax', value: 55 },
   { key: 'combatOutOfRangeFinishPressureMaxHpGap', value: 0 },
   { key: 'combatOutOfRangeFinishPressureRecentDamageMs', value: 10000 },
+  { key: 'combatOutOfRangeReengageRange', value: 15000 },
+  { key: 'combatOutOfRangeReengageMinHp', value: 60 },
+  { key: 'combatOutOfRangeReengageMaxHpGap', value: 10 },
+  { key: 'combatOutOfRangeReengageRecentInRangeMs', value: 2500 },
   { key: 'combatShootEveryMs', value: 160 },
   { key: 'combatShootReserveMs', value: 5600 },
   { key: 'combatShootDodgeReserveMs', value: 3800 },
@@ -1204,6 +1208,8 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged out-of-range combat target waits instead of chasing'"), 'out-of-range combat hold self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'engaged slight out-of-range bullet pressure reengages instead of holding'"), 'out-of-range pressured reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'retreating slight out-of-range target still holds without pressure'"), 'out-of-range retreat-only hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp out-of-range finish target reengages without shooting'"), 'out-of-range finish reengage self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged beyond disengage range exits combat state'"), 'disengage-range combat exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'retreating edge combat target suppresses fire'"), 'retreating edge fire suppression self-test not found');

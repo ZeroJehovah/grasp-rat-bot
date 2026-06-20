@@ -5942,6 +5942,129 @@ ${importantLogSource()}
     };
   }
 
+  function combatOutOfRangeReengageState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null, targetRealBulletPressure = false) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const maxRange = Math.max(attackRange, Number(cfg.combatOutOfRangeReengageRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeReengageMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatOutOfRangeReengageMaxHpGap || 0));
+    const recentInRangeMs = Math.max(0, Number(cfg.combatOutOfRangeReengageRecentInRangeMs || 0));
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - ownHp;
+    const outOfRangeMs = Math.max(0, Number(target?.combatEngagement?.outOfRangeMs || 0));
+    const graceRemainingMs = Math.max(0, Number(target?.combatEngagement?.graceRemainingMs || 0));
+    const engagedIntent = /^(engaged|reengage)$/.test(String(target?.combatIntent || ''))
+      || Boolean(target?.combatEngagement);
+    const freshInRangeContact = Boolean(
+      recentInRangeMs
+      && outOfRangeMs <= recentInRangeMs
+      && !retreatingTarget?.active
+    );
+    if (!attackRange || !maxRange || !(distance > attackRange) || !(distance <= maxRange) || retreatingTarget?.disengage) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs
+      };
+    }
+    if (!engagedIntent) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs
+      };
+    }
+    if (retreatingTarget?.active && !targetRealBulletPressure) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs,
+        retreatingTarget
+      };
+    }
+    if (!targetRealBulletPressure && !freshInRangeContact) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        graceRemainingMs,
+        retreatingTarget
+      };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > maxHpGap || combatMovementBlockedByStamina(self)) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        minSelfHp,
+        maxHpGap,
+        outOfRangeMs,
+        graceRemainingMs,
+        targetRealBulletPressure: Boolean(targetRealBulletPressure),
+        freshInRangeContact,
+        retreatingTarget
+      };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      attackRange,
+      maxRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      hpGap,
+      minSelfHp,
+      maxHpGap,
+      outOfRangeMs,
+      graceRemainingMs,
+      targetRealBulletPressure: Boolean(targetRealBulletPressure),
+      freshInRangeContact,
+      reason: targetRealBulletPressure ? 'target-real-bullet-pressure' : 'fresh-in-range-contact',
+      retreatingTarget
+    };
+  }
+
   function combatPassiveRunnerState(self, target, targetDistance, damageState = null, pressure = null, motionScale = 0) {
     const selfHp = hpValue(self);
     const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
@@ -7596,6 +7719,15 @@ ${importantLogSource()}
       damageState,
       retreatingTarget
     );
+    const outOfRangeReengage = combatOutOfRangeReengageState(
+      self,
+      target,
+      targetDistance,
+      selfHp,
+      targetHp,
+      retreatingTarget,
+      targetRealBulletPressure
+    );
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
       if (outOfRangeFinishPressure.active) {
         return {
@@ -7612,6 +7744,25 @@ ${importantLogSource()}
             selfHp,
             targetHp,
             outOfRangeFinishPressure,
+            retreatingTarget: retreatingTarget.active ? retreatingTarget : null
+          }
+        };
+      }
+      if (outOfRangeReengage.active) {
+        return {
+          kind: 'attack',
+          reason: 'combat-out-of-range-reengage',
+          combat: true,
+          ignoreReturnBlock: true,
+          shoot: false,
+          forceShoot: false,
+          dx: outOfRangeReengage.dx,
+          dy: outOfRangeReengage.dy,
+          target: baseTarget,
+          combatState: {
+            selfHp,
+            targetHp,
+            outOfRangeReengage,
             retreatingTarget: retreatingTarget.active ? retreatingTarget : null
           }
         };

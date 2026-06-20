@@ -74,6 +74,10 @@ function runSelfTest() {
     combatOutOfRangeFinishPressureTargetHpMax: 55,
     combatOutOfRangeFinishPressureMaxHpGap: 0,
     combatOutOfRangeFinishPressureRecentDamageMs: 10000,
+    combatOutOfRangeReengageRange: 15000,
+    combatOutOfRangeReengageMinHp: 60,
+    combatOutOfRangeReengageMaxHpGap: 10,
+    combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
     combatPassiveRunnerCloseRange: 7500,
@@ -2752,6 +2756,124 @@ function runSelfTest() {
     };
   }
 
+  function combatOutOfRangeReengageState(self, target, targetDistance, selfHp, targetHp, retreatingTarget = null, targetRealBulletPressure = false) {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const maxRange = Math.max(attackRange, Number(cfg.combatOutOfRangeReengageRange || 0));
+    const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
+    const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeReengageMinHp || 0));
+    const maxHpGap = Math.max(0, Number(cfg.combatOutOfRangeReengageMaxHpGap || 0));
+    const recentInRangeMs = Math.max(0, Number(cfg.combatOutOfRangeReengageRecentInRangeMs || 0));
+    const ownHp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const hpGap = enemyHp - ownHp;
+    const previous = bot.combatTarget || null;
+    const same = previous && String(previous.id ?? '') === String(target?.user_id ?? target?.id ?? '');
+    const outOfRangeMs = Math.max(0, Date.now() - Number((same ? previous?.lastInRangeAt : Date.now()) || Date.now()));
+    const engagedIntent = /^(engaged|reengage)$/.test(String(target?.combatIntent || previous?.intent || ''))
+      || same;
+    const freshInRangeContact = Boolean(
+      recentInRangeMs
+      && outOfRangeMs <= recentInRangeMs
+      && !retreatingTarget?.active
+    );
+    if (!attackRange || !maxRange || !(distance > attackRange) || !(distance <= maxRange) || retreatingTarget?.disengage) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs
+      };
+    }
+    if (!engagedIntent) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs
+      };
+    }
+    if (retreatingTarget?.active && !targetRealBulletPressure) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        retreatingTarget
+      };
+    }
+    if (!targetRealBulletPressure && !freshInRangeContact) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        outOfRangeMs,
+        retreatingTarget
+      };
+    }
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > maxHpGap || combatMovementBlockedByStamina(self)) {
+      return {
+        active: false,
+        dx: 0,
+        dy: 0,
+        distance,
+        attackRange,
+        maxRange,
+        selfHp: ownHp,
+        targetHp: enemyHp,
+        hpGap,
+        minSelfHp,
+        maxHpGap,
+        outOfRangeMs,
+        targetRealBulletPressure: Boolean(targetRealBulletPressure),
+        freshInRangeContact,
+        retreatingTarget
+      };
+    }
+    const dir = directionTo(self, target);
+    return {
+      active: Boolean(dir.dx || dir.dy),
+      dx: dir.dx,
+      dy: dir.dy,
+      distance,
+      attackRange,
+      maxRange,
+      selfHp: ownHp,
+      targetHp: enemyHp,
+      hpGap,
+      minSelfHp,
+      maxHpGap,
+      outOfRangeMs,
+      targetRealBulletPressure: Boolean(targetRealBulletPressure),
+      freshInRangeContact,
+      reason: targetRealBulletPressure ? 'target-real-bullet-pressure' : 'fresh-in-range-contact',
+      retreatingTarget
+    };
+  }
+
   function combatPassiveRunnerState(self, target, targetDistance, motionScale = 0, realBulletPressure = false) {
     const selfHp = hpValue(self);
     const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
@@ -3333,6 +3455,15 @@ function runSelfTest() {
       noDamageMs,
       retreatingTarget
     );
+    const outOfRangeReengage = combatOutOfRangeReengageState(
+      self,
+      target,
+      target.distance,
+      selfHp,
+      targetHp,
+      retreatingTarget,
+      targetRealBulletPressure
+    );
     if (Number(target.distance || 0) > Number(cfg.combatAttackRange || 0)) {
       if (outOfRangeFinishPressure.active) {
         return {
@@ -3351,6 +3482,27 @@ function runSelfTest() {
             selfHp,
             targetHp,
             outOfRangeFinishPressure,
+            retreatingTarget: retreatingTarget.active ? retreatingTarget : null
+          }
+        };
+      }
+      if (outOfRangeReengage.active) {
+        return {
+          kind: 'attack',
+          reason: 'combat-out-of-range-reengage',
+          combat: true,
+          shoot: false,
+          forceShoot: false,
+          dx: outOfRangeReengage.dx,
+          dy: outOfRangeReengage.dy,
+          target: {
+            id: target.user_id,
+            distance: Math.round(Number(target.distance || 0))
+          },
+          combatState: {
+            selfHp,
+            targetHp,
+            outOfRangeReengage,
             retreatingTarget: retreatingTarget.active ? retreatingTarget : null
           }
         };
@@ -4846,6 +4998,35 @@ function runSelfTest() {
       want: 'wait:combat-out-of-range-hold:true:false:0:0:false'
     },
     {
+      name: 'engaged slight out-of-range bullet pressure reengages instead of holding',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 72, intent: 'engaged' };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 91, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14700, y: 0, distance: 14700, current_join_mode: 'Active', hp: 72, vx: 0, vy: 0, recentlyMoved: false, motionObservedSpeed: 0, drop: 47, combatIntent: 'reengage' },
+          [{ id: 'target-shot', ownerId: 7, x: 11000, y: 0, vx: -500, vy: 0 }]
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.outOfRangeReengage?.reason;
+      })(),
+      want: 'attack:combat-out-of-range-reengage:true:false:1:0:target-real-bullet-pressure'
+    },
+    {
+      name: 'retreating slight out-of-range target still holds without pressure',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 14500, hp: 90, intent: 'engaged' };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14700, y: 0, distance: 14700, current_join_mode: 'Active', hp: 90, vx: 50, vy: 0, recentlyMoved: true, motionObservedSpeed: 50, drop: 20, combatIntent: 'reengage' }
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + action.dx + ':' + action.dy;
+      })(),
+      want: 'wait:combat-out-of-range-hold:0:0'
+    },
+    {
       name: 'low hp out-of-range finish target reengages without shooting',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 7000, lastDamageAt: Date.now() - 5000, lastInRangeAt: Date.now() - 1000, distance: 14000, hp: 49 };
@@ -5733,6 +5914,7 @@ function runSelfTest() {
       name: 'combat zero damage trade estimate stays in fight while hp remains safe',
       got: (() => {
         const t = Date.now();
+        const originalNow = Date.now;
         bot.combatTarget = {
           id: 7,
           at: t - 6200,
@@ -5744,12 +5926,17 @@ function runSelfTest() {
             { at: t - 3000, x: 10200, y: 0, vx: 35, vy: 0, hp: 61, selfHp: 90 }
           ]
         };
-        const estimate = combatTradeEstimate(
-          { user_id: 1, x: 0, y: 0, hp: 85, max_hp: 100, stamina_5s_remaining_milli: 7000 },
-          { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 61, vx: 35, drop: 20 }
-        );
-        bot.combatTarget = null;
-        return Boolean(estimate?.active) + ':' + Boolean(estimate?.zeroDamageWindow) + ':' + Math.round(estimate?.tDeathMs || 0);
+        Date.now = () => t;
+        try {
+          const estimate = combatTradeEstimate(
+            { user_id: 1, x: 0, y: 0, hp: 85, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+            { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 61, vx: 35, drop: 20 }
+          );
+          return Boolean(estimate?.active) + ':' + Boolean(estimate?.zeroDamageWindow) + ':' + Math.round(estimate?.tDeathMs || 0);
+        } finally {
+          Date.now = originalNow;
+          bot.combatTarget = null;
+        }
       })(),
       want: 'false:true:56667'
     },
@@ -5757,6 +5944,7 @@ function runSelfTest() {
       name: 'combat zero damage trade estimate still exits when danger horizon is near',
       got: (() => {
         const t = Date.now();
+        const originalNow = Date.now;
         bot.combatTarget = {
           id: 7,
           at: t - 6200,
@@ -5768,12 +5956,17 @@ function runSelfTest() {
             { at: t - 3000, x: 10200, y: 0, vx: 35, vy: 0, hp: 61, selfHp: 88 }
           ]
         };
-        const estimate = combatTradeEstimate(
-          { user_id: 1, x: 0, y: 0, hp: 80, max_hp: 100, stamina_5s_remaining_milli: 7000 },
-          { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 61, vx: 35, drop: 20 }
-        );
-        bot.combatTarget = null;
-        return Boolean(estimate?.active) + ':' + Boolean(estimate?.zeroDamageWindow) + ':' + Math.round(estimate?.tDeathMs || 0);
+        Date.now = () => t;
+        try {
+          const estimate = combatTradeEstimate(
+            { user_id: 1, x: 0, y: 0, hp: 80, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+            { user_id: 7, x: 10500, y: 0, distance: 10500, current_join_mode: 'Active', hp: 61, vx: 35, drop: 20 }
+          );
+          return Boolean(estimate?.active) + ':' + Boolean(estimate?.zeroDamageWindow) + ':' + Math.round(estimate?.tDeathMs || 0);
+        } finally {
+          Date.now = originalNow;
+          bot.combatTarget = null;
+        }
       })(),
       want: 'true:true:30000'
     },
