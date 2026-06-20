@@ -147,57 +147,76 @@ function controlLoginSource(helpers = {}) {
     return Boolean(userId && native?.ws && (native.wsOpen || isWsConnectingOrOpen(native.wsReadyState)));
   }
 
-	  function controlHasNativeGameSession(control) {
-	    return Boolean(control?.currentUserId && (
-	      control.rawWsOpen
-	      || control.nativeWsOpen
-	      || control.connecting
+  function controlHasNativeGameSession(control) {
+    return Boolean(control?.currentUserId && (
+      control.rawWsOpen
+      || control.nativeWsOpen
+      || control.connecting
       || isWsConnectingOrOpen(control.nativeWsReadyState)
-	      || isWsConnectingOrOpen(control.wsReadyState)
-	    ));
-	  }
+      || isWsConnectingOrOpen(control.wsReadyState)
+    ));
+  }
 
-	  function noSelfGameSessionExitState(control, noSelfAgeMs = 0) {
-	    const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
-	    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
-	    const hasSessionEvidence = Boolean(userId && !loginRequired && (
+  function controlHasAuthoritativeSessionMismatch(control) {
+    if (!control) return false;
+    if (Boolean(control.hasToken)) return false;
+    if (Boolean(hasLoginRequiredText() || findLoginControl())) return false;
+    return controlHasNativeGameSession(control);
+  }
+
+  function noSelfGameSessionExitState(control, noSelfAgeMs = 0) {
+    const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
+    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+    const hasSessionEvidence = Boolean(userId && !loginRequired && (
 	      control?.hasToken
 	      || controlHasNativeGameSession(control)
 	      || control?.transport === 'native-page'
-	      || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState))
-	      || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))
-	    ));
-	    const reconnectChurn = Boolean(control?.nativeReconnectChurn);
-	    const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
-	    const leaveMs = Math.max(0, Number(cfg.gameSessionNoSelfLeaveMs || 0) || 0);
-	    const timedOut = Boolean(leaveMs && ageMs >= leaveMs);
-	    const wsOfflineish = Boolean(
-	      !control?.wsOpen && (
+      || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState))
+      || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))
+    ));
+    const reconnectChurn = Boolean(control?.nativeReconnectChurn);
+    const sessionMismatch = controlHasAuthoritativeSessionMismatch(control);
+    const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
+    const leaveMs = Math.max(0, Number(cfg.gameSessionNoSelfLeaveMs || 0) || 0);
+    const timedOut = Boolean(leaveMs && ageMs >= leaveMs);
+    const wsOfflineish = Boolean(
+      !control?.wsOpen && (
 	        control?.connecting
 	        || isOfflineishWsReadyState(control?.nativeWsReadyState)
 	        || isOfflineishWsReadyState(control?.wsReadyState)
-	        || control?.rawWsOpen === false
-	      )
-	    );
-	    const shouldLeave = Boolean(hasSessionEvidence && (reconnectChurn || timedOut));
-	    const reason = reconnectChurn
-	      ? 'websocket reconnect churn missing self'
-	      : 'game session missing self';
-	    return {
-	      active: hasSessionEvidence,
-	      shouldLeave,
-	      reason,
-	      displayReason: reconnectChurn
-	        ? '已登录但自身实体不可见，网络连接反复重连，正在退出'
-	        : '已登录但自身实体长期不可见，正在退出',
-	      userId: userId || null,
-	      ageMs,
-	      leaveMs,
-	      timedOut,
-	      reconnectChurn: reconnectChurn ? {
-	        count: Number(control?.nativeReconnectEventCount || 0),
-	        windowMs: Number(control?.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
-	      } : null,
+        || control?.rawWsOpen === false
+      )
+    );
+    const mismatchLeaveMs = Math.max(
+      5000,
+      Math.min(
+        leaveMs || 30000,
+        Math.max(5000, Number(cfg.loginCooldownMs || 5000))
+      )
+    );
+    const mismatchTimedOut = Boolean(sessionMismatch && ageMs >= mismatchLeaveMs);
+    const shouldLeave = Boolean(hasSessionEvidence && (reconnectChurn || timedOut || mismatchTimedOut));
+    const reason = reconnectChurn
+      ? 'websocket reconnect churn missing self'
+      : (mismatchTimedOut ? 'game session auth mismatch missing self' : 'game session missing self');
+    return {
+      active: hasSessionEvidence,
+      shouldLeave,
+      reason,
+      displayReason: reconnectChurn
+        ? '已登录但自身实体不可见，网络连接反复重连，正在退出'
+        : (mismatchTimedOut ? '界面显示未登录但原生会话仍在线，自身实体不可见，正在重置会话' : '已登录但自身实体长期不可见，正在退出'),
+      userId: userId || null,
+      ageMs,
+      leaveMs,
+      timedOut,
+      sessionMismatch,
+      mismatchLeaveMs,
+      mismatchTimedOut,
+      reconnectChurn: reconnectChurn ? {
+        count: Number(control?.nativeReconnectEventCount || 0),
+        windowMs: Number(control?.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
+      } : null,
 	      wsOfflineish,
 	      loginRequired,
 	      control: control ? {
@@ -438,10 +457,15 @@ function controlLoginSource(helpers = {}) {
 	    return snapshotLoginGateStatus(t);
 	  }
 
-	  async function ensureLoginSnapshotGate(reason = 'login') {
-	    let status = snapshotLoginGateStatus();
-	    if (status.satisfied) return status;
-	    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
+  async function ensureLoginSnapshotGate(reason = 'login') {
+    let status = snapshotLoginGateStatus();
+    if (status.satisfied) return status;
+    if (String(reason || '') === 'session-mismatch-recovery') {
+      status.blockReason = String(reason || 'login');
+      status.recoveryBypass = true;
+      return status;
+    }
+    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
 	      try {

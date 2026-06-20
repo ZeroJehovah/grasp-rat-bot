@@ -19,10 +19,12 @@
   - repeated native WebSocket reconnect churn triggers offline leave immediately instead of resetting the continuous offline timer on every brief reconnect.
   - leave retries have a 10s floor and async completion handling; an unconfirmed exit remains pending, but if self is still alive/in-scene the bot continues ordinary combat/flee control instead of stopping in place.
   - confirmed exit cooldown is entered after completed leave success, leave HTTP 403, or conservative local evidence from all three signals: token cleared, left chat showing `left user <currentUserId>`, and own entity absent from native/local/fresh snapshot state. Login-required/auth pages alone are weak evidence after leave errors.
+  - that conservative local evidence is now explicitly rejected when authoritative native session signals still show an active game session while the page token/login UI has already dropped, preventing fake-exit confirmation during a live session mismatch.
   - completed leave success/HTTP 403 and pending-exit confirmation stop native motion immediately before exit audit/log bookkeeping, so stale `keys`/`currentVel`/`lastVel` cannot keep the map moving after self disappears.
   - leave HTTP 403 is treated as exit confirmation plus a risk-control relogin hold of at least 1 hour.
   - WebSocket reconnect churn is treated as an offline exit condition as soon as the rolling reconnect window reaches the threshold, even if the page has just re-opened the socket.
   - logged-in/no-self reconnect traps are treated as offline exits: reconnect churn exits immediately, and a 30s no-self timeout exits even without churn.
+  - if self stays missing while the page looks logged out but the native websocket/session is still authoritatively online, the bot now enters a dedicated `session-mismatch-recovery` path and forces immediate relogin/rejoin after a short timeout, instead of waiting through the ordinary no-self/login-gate path while the character may still be online in-scene.
   - every relogin attempt must pass `loginSnapshotGate` after the exit reset; existing cooldown/suppress waits and the 3 consecutive successful `/snapshot` gate must both be satisfied before login clicks.
 - Control transport:
   - the page/native WebSocket remains the only game WebSocket; the bot does not create or reconnect a second socket;

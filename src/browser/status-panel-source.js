@@ -229,13 +229,14 @@ function statusPanelSource(helpers = {}) {
 	      'pursuit-leave': '被同一玩家持续追击，退出等待',
 	      'pursuit-leave-retry': '追击退出失败，等待补发退出',
 	      'pursuit-leave-wait': '追击退出后等待重新登录',
-		      'auto-login': '自动触发登录/加入',
-		      'login-cooldown': '登录已触发，等待页面跳转',
-		      'login-snapshot-gate': '等待snapshot连续成功',
-		      'login-control-missing': '等待登录控件出现',
-	      'game-session-connecting': '已登录，等待游戏连接/自身实体',
-	      'no-self': '未读到自身实体',
-	      'not-alive': '不在存活状态',
+      'auto-login': '自动触发登录/加入',
+      'login-cooldown': '登录已触发，等待页面跳转',
+      'login-snapshot-gate': '等待snapshot连续成功',
+      'login-control-missing': '等待登录控件出现',
+      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，立即恢复接管',
+      'game-session-connecting': '已登录，等待游戏连接/自身实体',
+      'no-self': '未读到自身实体',
+      'not-alive': '不在存活状态',
 	      'bot-error': '脚本异常'
 	    };
 	    return map[reason] || reason || '-';

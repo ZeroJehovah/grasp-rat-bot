@@ -2018,17 +2018,23 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     const tokenCleared = !getSessionToken();
     const chatLeftUser = chatLeftUserMessageSeen(userId);
     const ownEntity = ownEntityDisappearedState(self, userId);
-    const confirmed = Boolean(tokenCleared && chatLeftUser && ownEntity.disappeared);
+    const control = summarizeControl();
+    const sessionMismatch = controlHasAuthoritativeSessionMismatch(control);
+    const confirmed = Boolean(tokenCleared && chatLeftUser && ownEntity.disappeared && !sessionMismatch);
     return {
       known: confirmed,
       alive: false,
-      source: confirmed ? 'token-chat-left-user-self-missing' : 'local-exit-evidence-incomplete',
+      source: confirmed
+        ? 'token-chat-left-user-self-missing'
+        : (sessionMismatch ? 'local-exit-session-mismatch' : 'local-exit-evidence-incomplete'),
       self: null,
       localExitConfirmation: true,
       confirmed,
       tokenCleared,
       chatLeftUser,
       ownEntity,
+      control,
+      sessionMismatch,
       previousState: state || null
     };
   }
@@ -9815,9 +9821,9 @@ ${importantLogSource()}
 		        stopMotionSafely('no-self');
 		        if (!bot.waitSince) bot.waitSince = Date.now();
 	        const control = summarizeControl();
-	        const noSelfAgeMs = Math.max(0, Date.now() - Number(bot.waitSince || Date.now()));
-	        const noSelfExit = !self ? noSelfGameSessionExitState(control, noSelfAgeMs) : null;
-	        if (!cfg.dryRun && noSelfExit?.shouldLeave) {
+        const noSelfAgeMs = Math.max(0, Date.now() - Number(bot.waitSince || Date.now()));
+        const noSelfExit = !self ? noSelfGameSessionExitState(control, noSelfAgeMs) : null;
+        if (!cfg.dryRun && noSelfExit?.shouldLeave) {
 	          if (!bot.offlineSince) bot.offlineSince = Date.now();
 	          const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
 	          const offlineSafety = {
@@ -9858,30 +9864,64 @@ ${importantLogSource()}
 	          if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
 	            requestReload('game session missing self too long');
 	          }
-	          if (cfg.once) bot.stop('once');
-	          return;
-	        }
-	        const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
-	        const gameSessionPending = !self && controlHasNativeGameSession(control);
-		        const waitReason = login?.attempted
-		          ? 'auto-login'
-		          : (login?.needed
-		            ? (login?.reason === 'snapshot-gate'
-		              ? 'login-snapshot-gate'
-		              : (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : (login?.reason === 'important-log-flush-pending' ? 'important-log-flush-pending' : 'login-cooldown')))))
-		            : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self')));
-		        const loginDisplayReason = waitReason === 'game-session-connecting'
-		          ? '已登录，等待游戏连接/自身实体'
-		          : (waitReason === 'exit-log-flush-pending'
-		            ? '等待退出日志发送完成，暂不刷新或重新登录'
-		          : (waitReason === 'important-log-flush-pending'
-		            ? '等待会话结束日志发送完成，暂不刷新或重新登录'
-		          : (waitReason === 'login-snapshot-gate'
-		            ? loginSnapshotGateDisplayReason(login?.snapshotGate)
-		          : (waitReason === 'login-suppressed'
-		            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
-		              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
-		            : ''))));
+          if (cfg.once) bot.stop('once');
+          return;
+        }
+        if (!cfg.dryRun && !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut) {
+          const login = await maybeStartAutoLogin('session-mismatch-recovery', {
+            force: true,
+            ignoreSuppress: true,
+            ignoreLoginCooldown: true
+          });
+          refreshGlobalState(false).catch(err => {
+            bot.globalState.error = err.message || String(err);
+          });
+          bot.lastDecision = {
+            kind: 'wait',
+            reason: login?.attempted ? 'auto-login' : 'session-mismatch-recovery',
+            dx: 0,
+            dy: 0,
+            currentUserId: getCurrentUserId(),
+            control,
+            visibleEntities: arrayCount(bot.globalState.entities),
+            self: null,
+            noSelfAgeMs,
+            noSelfGameSession: noSelfExit,
+            login,
+            displayReason: login?.attempted
+              ? '界面显示未登录但原生会话仍在线，立即重登接管'
+              : '界面显示未登录但原生会话仍在线，等待立即重登'
+          };
+          updateBotPanel(bot.lastDecision);
+          if (!login?.attempted && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
+            requestReload('session mismatch recovery stalled');
+          }
+          if (cfg.once) bot.stop('once');
+          return;
+        }
+        const login = await maybeStartAutoLogin(self ? 'not-alive' : 'no-self');
+        const gameSessionPending = !self && controlHasNativeGameSession(control);
+        const waitReason = login?.attempted
+          ? 'auto-login'
+          : (login?.needed
+            ? (login?.reason === 'snapshot-gate'
+              ? 'login-snapshot-gate'
+              : (login?.error ? 'login-control-missing' : (login?.reason === 'suppressed' ? 'login-suppressed' : (login?.reason === 'exit-log-flush-pending' ? 'exit-log-flush-pending' : (login?.reason === 'important-log-flush-pending' ? 'important-log-flush-pending' : (login?.reason === 'session-mismatch-recovery' ? 'session-mismatch-recovery' : 'login-cooldown'))))))
+            : (noSelfExit?.sessionMismatch ? 'session-mismatch-recovery' : (gameSessionPending ? 'game-session-connecting' : (self ? 'not-alive' : 'no-self'))));
+        const loginDisplayReason = waitReason === 'game-session-connecting'
+          ? '已登录，等待游戏连接/自身实体'
+          : (waitReason === 'session-mismatch-recovery'
+            ? '界面显示未登录但原生会话仍在线，等待立即重登'
+          : (waitReason === 'exit-log-flush-pending'
+            ? '等待退出日志发送完成，暂不刷新或重新登录'
+          : (waitReason === 'important-log-flush-pending'
+            ? '等待会话结束日志发送完成，暂不刷新或重新登录'
+          : (waitReason === 'login-snapshot-gate'
+            ? loginSnapshotGateDisplayReason(login?.snapshotGate)
+          : (waitReason === 'login-suppressed'
+            ? '等待重连：' + (login?.suppressReason || 'login suppressed')
+              + (Number(login?.cooldownRemainingMs || 0) > 0 ? '，剩余' + formatDurationMs(login.cooldownRemainingMs) : '')
+            : '')))));
 		        refreshGlobalState(false).catch(err => {
 		          bot.globalState.error = err.message || String(err);
 		        });

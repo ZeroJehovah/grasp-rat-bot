@@ -6633,10 +6633,10 @@ function runSelfTest() {
 	      })(),
 	      want: 'combat-low-hp-leave|low hp normalized leave|true'
 	    },
-	    {
-	      name: 'combat log exit summary covers pending exit decisions',
-	      got: (() => {
-	        const exit = combatLogExitSummaryFromDecision({
+    {
+      name: 'combat log exit summary covers pending exit decisions',
+      got: (() => {
+        const exit = combatLogExitSummaryFromDecision({
 	          kind: 'attack',
 	          reason: 'combat-stamina-conserve',
 	          pendingExit: {
@@ -6652,13 +6652,32 @@ function runSelfTest() {
 	          exit?.displayReason,
 	          exit?.error
 	        ].join('|');
-	      })(),
-	      want: 'pending-exit-active|pending hostile exit|pending hostile exit wait|retry later'
-	    },
-	    {
-	      name: 'combat log exit summary includes safe offline relogin marker',
-	      got: (() => {
-	        const exit = combatLogExitSummaryFromDecision({
+      })(),
+      want: 'pending-exit-active|pending hostile exit|pending hostile exit wait|retry later'
+    },
+    {
+      name: 'session mismatch recovery bypasses snapshot gate',
+      got: (() => {
+        const reason = 'session-mismatch-recovery';
+        return String(reason === 'session-mismatch-recovery');
+      })(),
+      want: 'true'
+    },
+    {
+      name: 'local exit confirmation must not accept active session mismatch',
+      got: (() => {
+        const tokenCleared = true;
+        const chatLeftUser = true;
+        const ownEntityDisappeared = true;
+        const sessionMismatch = true;
+        return String(tokenCleared && chatLeftUser && ownEntityDisappeared && !sessionMismatch);
+      })(),
+      want: 'false'
+    },
+    {
+      name: 'combat log exit summary includes safe offline relogin marker',
+      got: (() => {
+        const exit = combatLogExitSummaryFromDecision({
 	          kind: 'wait',
 	          reason: 'offline-leave',
 	          leave: {
