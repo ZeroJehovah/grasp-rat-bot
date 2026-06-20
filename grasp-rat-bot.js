@@ -4,7 +4,10 @@
 const http = require('http');
 const fs = require('fs');
 const {
+  staminaExhaustedLongWindows,
   staminaExhaustedWindowLabel,
+  staminaEvidenceRemaining,
+  staminaHoldContradictedByStaminaEvidence,
   offlineLeaveSummaryText,
   combatLogExitSummaryFromDecision
 } = require('./src/shared/exit-summary');
@@ -259,6 +262,12 @@ function browserBotSource(config) {
 		  ${buildBrowserPreservedState.toString()}
 
 		  ${buildRuntimeDefaults.toString()}
+
+		  ${staminaExhaustedLongWindows.toString()}
+
+		  ${staminaEvidenceRemaining.toString()}
+
+		  ${staminaHoldContradictedByStaminaEvidence.toString()}
 
 		  const previousBot = window[BOT_KEY] || null;
 	  const preserved = buildBrowserPreservedState(previousBot);
@@ -999,6 +1008,42 @@ function browserBotSource(config) {
       exhausted
     };
   }
+  function longStaminaHoldContradictedByKnownStamina(staminaState) {
+    const thresholdMs = staminaExhaustedThreshold();
+    const sources = [
+      bot.lastSelf,
+      bot.lastDecision?.self,
+      bot.session
+    ];
+    return sources.some(source => staminaHoldContradictedByStaminaEvidence(staminaState, source, thresholdMs));
+  }
+  function startupStaminaSampleLooksUnsettled(staminaState, t = Date.now()) {
+    const windows = staminaExhaustedLongWindows(staminaState);
+    if (!windows.length) return false;
+    const allZero = ['5s', '1h', '1d'].every(key => Number(staminaState?.['stamina' + key] ?? NaN) === 0);
+    if (!allZero) return false;
+    const graceMs = Math.max(0, Number(cfg.staminaExhaustionPostLoginGraceMs ?? 15000));
+    if (!graceMs) return false;
+    const sessionAgeMs = bot.session?.startedAt ? t - Number(bot.session.startedAt || t) : Infinity;
+    const loginAgeMs = bot.lastLoginAt ? t - Number(bot.lastLoginAt || t) : Infinity;
+    return sessionAgeMs <= graceMs || loginAgeMs <= graceMs;
+  }
+  function deferredStaminaExhaustionLeave(staminaState, t = Date.now()) {
+    if (!staminaState?.mustLeave) return null;
+    if (startupStaminaSampleLooksUnsettled(staminaState, t)) {
+      return {
+        reason: 'startup-zero-stamina-sample',
+        graceMs: Math.max(0, Number(cfg.staminaExhaustionPostLoginGraceMs ?? 15000)),
+        sessionAgeMs: bot.session?.startedAt ? Math.max(0, Math.round(t - Number(bot.session.startedAt || t))) : null,
+        loginAgeMs: bot.lastLoginAt ? Math.max(0, Math.round(t - Number(bot.lastLoginAt || t))) : null
+      };
+    }
+    return null;
+  }
+  function staleOfflineStaminaHoldContradicted(detail) {
+    const staminaState = detail?.offlineSafety?.staminaExhausted;
+    return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
+  }
   const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
@@ -1612,6 +1657,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       bot.offlineReloginUntil = until;
       bot.lastOfflineLeaveResult = persistent;
     }
+    if (until > Date.now() && staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+      clearOfflineReloginHold('stale stamina hold contradicted by known stamina');
+      return 0;
+    }
     try {
       const suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
       const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
@@ -1620,6 +1669,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
         bot.offlineReloginUntil = suppressUntil;
       }
     } catch (_) {}
+    if (until > Date.now() && staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+      clearOfflineReloginHold('stale offline suppress contradicted by known stamina');
+      return 0;
+    }
     const remaining = Math.max(0, until - Date.now());
     if (!remaining && bot.offlineReloginUntil) {
       bot.offlineReloginUntil = 0;
@@ -9702,10 +9755,28 @@ ${importantLogSource()}
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
 	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
+      const staminaState = currentSummary.stamina || summarizeStamina(self);
+      const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
+      if (deferredStaminaLeave) {
+        stopMotionSafely('stamina-sample-wait');
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: 'game-session-connecting',
+          dx: 0,
+          dy: 0,
+          control: summarizeControl(),
+          self: currentSummary,
+          stamina: staminaState,
+          staminaExhaustionDeferred: deferredStaminaLeave,
+          displayReason: '已登录，等待有效体力数据'
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
       schedulePostLoginZoomOut(currentSummary);
       updateSessionStats(currentSummary);
 		      const currentHp = Number(currentSummary.hp ?? NaN);
-      const staminaState = currentSummary.stamina || summarizeStamina(self);
       if (staminaState.mustLeave && !bot.pendingExit) {
         bot.pursuit = null;
         bot.lastSelf = currentSummary;

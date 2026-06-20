@@ -2,6 +2,7 @@
 
 const {
   offlineLeaveSummaryText,
+  staminaHoldContradictedByStaminaEvidence,
   combatLogExitSummaryFromDecision
 } = require('../shared/exit-summary');
 const {
@@ -6321,6 +6322,24 @@ function runSelfTest() {
 	      got: offlineLeaveSummaryText('stamina exhausted', { staminaExhausted: { exhausted: ['5s', '1h', '1d'] } }),
 		      want: '一小时和一天体力到达限制，退出等待重连'
 		    },
+	    {
+	      name: 'stale daily stamina hold is contradicted by preserved session stamina',
+	      got: String(staminaHoldContradictedByStaminaEvidence(
+	        { longExhausted: ['1h', '1d'] },
+	        { stamina1dLastRemaining: 12658427, stamina1dLastLimit: 20000000 },
+	        1000
+	      )),
+	      want: 'true'
+	    },
+	    {
+	      name: 'daily stamina hold is not contradicted without remaining stamina evidence',
+	      got: String(staminaHoldContradictedByStaminaEvidence(
+	        { longExhausted: ['1d'] },
+	        { stamina1dLastRemaining: 0, stamina1dLastLimit: 20000000 },
+	        1000
+	      )),
+	      want: 'false'
+	    },
 	    {
 	      name: 'offline reconnect churn summary is explicit',
 	      got: offlineLeaveSummaryText('websocket reconnect churn', { reconnectChurn: { count: 3, windowMs: 10000 } }),
