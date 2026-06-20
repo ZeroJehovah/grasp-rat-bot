@@ -99,6 +99,7 @@
   - combat-log analyzer `npm test` covers exit safety delay summaries for safe exits, unsafe exits meeting the minimum, and unsafe exits below the minimum;
   - combat-log analyzer `npm test` covers reason-specific required-delay auditing for `stamina-budget-coin-leave`, including `exit-delay-below-required`;
   - combat-log analyzer `npm test` covers manifest source-hash match, missing-hash, and mismatch evidence issues;
+  - daily-summary self-test covers explicit `pickedCoins=0` placeholder sessions not falling back to raw `coinsGained`, preventing fake `1000币` refresh/total收益 rows in the daily report;
   - combat replay self-tests still cover historical 2026-06-14/15/16 combat windows for analyzer continuity, including the old authority-divergence and stale-snapshot cases. The replay loader streams selected JSONL ranges instead of reading entire large log files into one string, and replay reports now include hypothetical finish-pressure shots for old low-HP retreating-edge windows. Current live combat behavior is covered by bot/static checks that require native/realtime/render aim only and no snapshot-authority fields.
   - local combat-log collector sourceHash propagation smoke test passed for payload-level sourceHash on session events;
   - combat-log analyzer now streams JSONL in chunks, so `node scripts/objective-status.js` can audit very large historical log directories without hitting Node's single-string size limit;

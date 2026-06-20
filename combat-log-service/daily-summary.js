@@ -100,6 +100,35 @@ function number(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function hasOwnFiniteNumber(object, key) {
+  return Boolean(object
+    && Object.prototype.hasOwnProperty.call(object, key)
+    && Number.isFinite(Number(object[key])));
+}
+
+function nonNegativeInteger(value) {
+  return Math.max(0, Math.round(number(value)));
+}
+
+function sessionBalanceDelta(session) {
+  if (!hasOwnFiniteNumber(session, 'baseCoins') || !hasOwnFiniteNumber(session, 'currentCoins')) return null;
+  return Math.max(0, Math.round(Number(session.currentCoins) - Number(session.baseCoins)));
+}
+
+function sessionCollectedCoins(session) {
+  if (!session || typeof session !== 'object') return 0;
+  const pickedCoins = hasOwnFiniteNumber(session, 'pickedCoins') ? nonNegativeInteger(session.pickedCoins) : null;
+  const coinsGained = hasOwnFiniteNumber(session, 'coinsGained') ? nonNegativeInteger(session.coinsGained) : 0;
+  const balanceDelta = sessionBalanceDelta(session);
+  if (pickedCoins !== null) {
+    if (pickedCoins > 0) return pickedCoins;
+    if (balanceDelta !== null) return balanceDelta;
+    return 0;
+  }
+  if (balanceDelta !== null) return Math.max(coinsGained, balanceDelta);
+  return coinsGained;
+}
+
 function sessionScore(session) {
   return (number(session.exitAt) ? 10 ** 15 : 0)
     + number(session.updatedAt)
@@ -725,11 +754,10 @@ function buildReport(entries, options = {}) {
       session.unknownKillRewardCoins = number(session.unknownKillRewardCoins);
       session.unknownUnconfirmedKillCount = number(session.unknownUnconfirmedKillCount);
       session.unknownUnconfirmedDropCoins = number(session.unknownUnconfirmedDropCoins);
-      if (!Number.isFinite(Number(session.pureRefreshCoins))) {
-        const pickedCoins = number(session.pickedCoins) || number(session.coinsGained);
-        session.pureRefreshCoins = Math.max(0, pickedCoins - number(session.attributedKillRewardCoins || session.killRewardCoins));
-      }
     }
+    const collectedCoins = sessionCollectedCoins(session);
+    session.coinsGained = collectedCoins;
+    session.pureRefreshCoins = Math.max(0, collectedCoins - number(session.attributedKillRewardCoins || session.killRewardCoins));
     session.dropMatchedKillCount = kills.filter(kill => kill.dropMatched).length;
     session.chatConfirmedKillCount = kills.filter(kill => kill.chatConfirmed).length;
     if (!number(session.exitAt)) {
@@ -991,6 +1019,7 @@ function runSelfTest() {
   const dayDir = path.join(root, day);
   const s1 = 'session-a';
   const s2 = 'session-b';
+  const s3 = 'session-d';
   writeJsonl(path.join(dayDir, 'important.jsonl'), [
     {
       type: 'important-log',
@@ -1053,6 +1082,22 @@ function runSelfTest() {
       at: 20000,
       sessionId: 'session-c',
       session: { sessionId: 'session-c', loginAt: 20000, version: 'bootstrap-0.4.140', staminaSpentMs: 0, coinsGained: 0 }
+    },
+    {
+      type: 'important-log',
+      importantType: 'session-start',
+      importantLogId: `${s3}:start`,
+      at: 30000,
+      sessionId: s3,
+      session: {
+        sessionId: s3,
+        loginAt: 30000,
+        version: 'bootstrap-0.4.140',
+        staminaSpentMs: 0,
+        coinsGained: 0,
+        baseCoins: 0,
+        currentCoins: 0
+      }
     }
   ]);
   writeJsonl(path.join(dayDir, 'combat.jsonl'), [
@@ -1207,10 +1252,33 @@ function runSelfTest() {
         engagementObserved: true,
         sampleCount: 3
       }
+    },
+    {
+      type: 'important-log',
+      importantType: 'session-end',
+      importantLogId: `${s3}:end`,
+      at: 30600,
+      sessionId: s3,
+      exitReason: 'leave-success:stamina exhausted',
+      exitSummary: '一小时和一天体力到达限制，退出等待重连',
+      session: {
+        sessionId: s3,
+        loginAt: 30000,
+        exitAt: 30600,
+        loginDurationMs: 600,
+        staminaSpentMs: 0,
+        pickedCoins: 0,
+        coinsGained: 1000,
+        pureRefreshCoins: 1000,
+        killRewardCoins: 0,
+        baseCoins: 0,
+        currentCoins: 0,
+        version: 'bootstrap-0.4.141'
+      }
     }
   ]);
   const report = buildReport(readEntries(dayDir), { day });
-  assertSelfTest(report.sessions.length === 3, `expected 3 sessions, got ${report.sessions.length}`);
+  assertSelfTest(report.sessions.length === 4, `expected 4 sessions, got ${report.sessions.length}`);
   assertSelfTest(report.sessions[0].exitAt === 5000, 'cross-file session-end was not merged');
   assertSelfTest(report.sessions[0].staminaSpentMs === 123000, 'cross-file stamina was not preserved');
   assertSelfTest(report.sessions[0].pureRefreshCoins === 7, 'pure refreshed coin total was not preserved');
@@ -1220,6 +1288,10 @@ function runSelfTest() {
   assertSelfTest(report.sessions[0].activeUnconfirmedDropCoins === 30, 'active unconfirmed drop bucket was not computed');
   assertSelfTest(report.sessions[0].afkKillRewardCoins + report.sessions[0].activeKillRewardCoins <= report.sessions[0].coinsGained, 'confirmed kill rewards exceed total gained coins');
   assertSelfTest(report.sessions[1].exitReason === 'leave-success:combat hp disadvantage', 'more specific combat exit reason was overwritten by later no-self closeout');
+  const placeholderSession = report.sessions.find(item => item.sessionId === s3);
+  assertSelfTest(placeholderSession?.coinsGained === 0, 'explicit zero pickedCoins incorrectly fell back to raw coinsGained');
+  assertSelfTest(placeholderSession?.pureRefreshCoins === 0, 'explicit zero pickedCoins incorrectly produced refresh coins');
+  assertSelfTest(report.totals.coinsGained === 20, `expected normalized total coins to stay at 20, got ${report.totals.coinsGained}`);
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
   assertSelfTest(report.combats.length === 2, `expected 2 combats, got ${report.combats.length}`);
   assertSelfTest(report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'engaged enemy-leave-wait combat was incorrectly filtered out');
