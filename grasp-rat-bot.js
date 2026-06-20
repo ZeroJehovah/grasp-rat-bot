@@ -8239,19 +8239,33 @@ ${importantLogSource()}
     };
   }
 
-  function recentAttackTargetStillAttackable(attack, entities) {
+  function attackEntityMatches(entity, attack) {
     const id = String(attack?.id ?? '');
     const name = String(attack?.name || '');
-    const target = (entities || []).find(entity => {
-      if (!entityFreshEnoughForOffense(entity)) return false;
-      if (id && String(entity.user_id ?? entity.id ?? '') === id) return true;
-      return name && String(entity.name || '') === name;
-    });
+    if (id && String(entity?.user_id ?? entity?.id ?? '') === id) return true;
+    return Boolean(name && String(entity?.name || '') === name);
+  }
+
+  function recentAttackTargetStillAttackable(attack, entities) {
+    const target = (entities || []).find(entity => entityFreshEnoughForOffense(entity) && attackEntityMatches(entity, attack));
     if (!target || !isAlive(target)) return false;
+    const hp = knownHpValue(target);
+    if (hp !== null && hp <= 0) return false;
     if (isWhitelistedTarget(target)) return false;
     if (isCurrentlyActive(target)) return false;
     if (isInvulnerable(target)) return false;
     return dropValue(target) > 0;
+  }
+
+  function postAttackDropResolvedAt(attack, entities, t = Date.now()) {
+    if (!attack || recentAttackTargetStillAttackable(attack, entities)) {
+      if (attack) attack.postAttackDropResolvedAt = 0;
+      return 0;
+    }
+    const existing = Number(attack.postAttackDropResolvedAt || 0);
+    if (existing > 0) return existing;
+    attack.postAttackDropResolvedAt = t;
+    return t;
   }
 
   function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
@@ -8262,7 +8276,7 @@ ${importantLogSource()}
       .filter(item => t - Number(item.at || 0) <= cfg.postAttackDropCoinPriorityMs
         && Number.isFinite(Number(item.x))
         && Number.isFinite(Number(item.y)));
-    const resolvedAttacks = recentAttacks.filter(attack => !recentAttackTargetStillAttackable(attack, entities));
+    const resolvedAttacks = recentAttacks.filter(attack => postAttackDropResolvedAt(attack, entities, t));
     if (!resolvedAttacks.length) return null;
     const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
     const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
@@ -8312,17 +8326,23 @@ ${importantLogSource()}
     const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
     if (!waitMs) return null;
     const minDrop = Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0);
+    const resolveMaxMs = Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs);
     const maxDistance = Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0));
     const stopDistance = Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0));
     return bot.attackHistory
       .slice()
       .reverse()
-      .filter(item => t - Number(item.at || 0) <= waitMs)
+      .filter(item => t - Number(item.at || 0) <= resolveMaxMs)
       .filter(item => Number(item.drop || 0) >= minDrop)
       .filter(item => Number.isFinite(Number(item.x)) && Number.isFinite(Number(item.y)))
       .filter(item => item.afk !== false)
       .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
-      .filter(item => !recentAttackTargetStillAttackable(item, entities))
+      .map(item => {
+        const resolvedAt = postAttackDropResolvedAt(item, entities, t);
+        return resolvedAt ? { ...item, postAttackDropResolvedAt: resolvedAt } : null;
+      })
+      .filter(Boolean)
+      .filter(item => t - Number(item.postAttackDropResolvedAt || 0) <= waitMs)
       .filter(item => !postAttackVisibleCoinExists(coins, item))
       .map(item => ({ ...item, distance: dist(self, item) }))
       .filter(item => item.distance > stopDistance && item.distance <= maxDistance)
@@ -8350,7 +8370,8 @@ ${importantLogSource()}
         combatIntent: target.combatIntent || '',
         mode: target.mode || '',
         distance: Math.round(dir.distance),
-        ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now())))
+        ageMs: Math.max(0, Math.round(Date.now() - Number(target.at || Date.now()))),
+        resolvedAgeMs: Math.max(0, Math.round(Date.now() - Number(target.postAttackDropResolvedAt || Date.now())))
       },
       ...coinMotionMeta(dir)
     };

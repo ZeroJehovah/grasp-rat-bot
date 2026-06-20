@@ -47,6 +47,7 @@
 - Coin routing:
   - nearby and foot coins are prioritized before broader opportunities;
   - post-attack dropped coins are prioritized when appropriate;
+  - after an actual `attack`/`opportunistic-shot` against a high-Drop AFK target resolves before the dropped coin is visible, the bot moves toward that target's last coordinates for 1s from the resolution moment, without selecting a coin/player target, then resumes normal profit selection;
   - realtime/native visible coins always win before any snapshot fallback;
   - visible/native AFK Drop targets also win before snapshot fallback, so ordinary profit flow uses visible收益 first and only touches snapshot targets when no visible/realtime profit exists;
   - native/realtime visible coin groups can be planned as a bounded short route in the same opportunity pool as single coins and AFK/player Drop targets. The route is scored by total visible route reward over total estimated movement stamina, starts at the first coin to pick up, records route ids/value/stamina/leg count in the action, and only enters the pool when at least three safe visible coins form a beneficial route;

@@ -47,7 +47,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'globalCoinMaxDistance', value: 50000 },
   { key: 'postAttackRecoveryDropMaxDistance', value: 50000 },
   { key: 'postAttackRecoveryDropMinScore', value: 60000 },
-  { key: 'postAttackDropWaitMs', value: 2500 },
+  { key: 'postAttackDropWaitMs', value: 1000 },
+  { key: 'postAttackDropResolveMaxMs', value: 5000 },
   { key: 'postAttackDropWaitMinDrop', value: 8 },
   { key: 'postAttackDropWaitMaxDistance', value: 50000 },
   { key: 'postAttackDropWaitStopDistance', value: 900 },
@@ -458,10 +459,12 @@ function main() {
     check(`${file} waits at killed high-drop target position before drop refresh`, () => {
       const body = functionBody(text, 'pickPostAttackDropWaitTarget');
       assert(body.includes('cfg.postAttackDropWaitMs'), 'post-attack wait window not used');
+      assert(body.includes('cfg.postAttackDropResolveMaxMs'), 'post-attack wait resolve window not used');
       assert(body.includes('cfg.postAttackDropWaitMinDrop'), 'post-attack wait minimum drop not used');
+      assert(body.includes('postAttackDropResolvedAt'), 'post-attack wait is not anchored to target resolution');
       assert(body.includes('postAttackVisibleCoinExists'), 'post-attack wait does not skip already-visible drops');
       assert(body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"), 'post-attack wait can trigger without a recent shot/attack');
-      assert(body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target disappearance');
+      assert(body.includes('postAttackDropResolvedAt') || body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target resolution');
       assert(text.includes("reason: 'post-attack-drop-wait-position'"), 'post-attack wait action reason not found');
       const actionBody = functionBody(text, 'buildPostAttackDropWaitAction');
       assert(!actionBody.includes('\n      target: {'), 'post-attack wait should move without selecting a decision target');
@@ -1146,6 +1149,9 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
     assert(nodeSelfTestSource.includes("name: 'high drop kill waits at last target position before coin refresh'"), 'post-kill drop wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'delayed high drop kill waits after target resolution'"), 'delayed post-kill drop wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'zero reward residual high drop target still triggers post kill wait'"), 'residual target post-kill wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'expired high drop post kill wait resumes normal profit'"), 'expired post-kill wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'alive high drop target does not trigger post kill wait'"), 'alive-target no-wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'unshot high drop target disappearance does not trigger post kill wait'"), 'unshot-target no-wait self-test not found');
     assert(nodeSelfTestSource.includes("want: 'seek-enemy:approach-afk-drop-target'"), 'visible AFK-vs-coin expected action not found');
