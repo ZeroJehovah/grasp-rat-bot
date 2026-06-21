@@ -21,6 +21,17 @@ const DEFAULTS = {
   combatFinishPressureSelfHpMin: 90,
   combatFinishPressureTargetHpMax: 55,
   combatFinishPressureShootEveryMs: 360,
+  combatShootEveryMs: 160,
+  combatShootReserveMs: 5600,
+  combatShootConserveEveryMs: 360,
+  combatShootPressureDodgeReserveMs: 2600,
+  combatShootPressureMinHp: 60,
+  combatShootPressureRange: 14500,
+  combatShootPressureMaxHpGap: 10,
+  combatPressureNoDamageExitMs: 10000,
+  combatPressureNoDamageExitHpThreshold: 70,
+  combatPressureNoDamageExitHpGap: 10,
+  combatPressureNoDamageExitRange: 14500,
   combatShootFinishLowThreatDodgeReserveMs: 1800,
   combatShootFinishLowThreatMinHp: 90,
   combatShootFinishLowThreatTargetHpMax: 55,
@@ -162,6 +173,34 @@ function selfHp(frame) {
 function incomingRealBullet(frame) {
   const incoming = frame.entry?.incomingBullet || frame.entry?.decision?.incomingBullet || null;
   return Boolean(incoming && !incoming.synthetic);
+}
+
+function incomingBulletOwnerId(frame) {
+  const incoming = frame.entry?.incomingBullet || frame.entry?.decision?.incomingBullet || null;
+  return incoming?.ownerId ?? incoming?.owner_id ?? incoming?.source_user_id ?? incoming?.user_id ?? null;
+}
+
+function frameTargetId(frame) {
+  return frame.target?.id ?? frame.target?.user_id ?? frame.nearbyEntity?.id ?? frame.nearbyEntity?.user_id ?? null;
+}
+
+function targetRealBulletPressure(frame) {
+  const targetId = frameTargetId(frame);
+  const ownerId = incomingBulletOwnerId(frame);
+  return Boolean(incomingRealBullet(frame) && targetId !== null && targetId !== undefined && String(ownerId ?? '') === String(targetId));
+}
+
+function stamina5s(frame) {
+  const self = frame.entry?.self || frame.entry?.decision?.self || null;
+  return numberOrNull(self?.stamina_5s_remaining_milli ?? self?.stamina5s);
+}
+
+function shootingReason(frame) {
+  return String(
+    frame.entry?.combatState?.shooting?.reason
+      ?? frame.entry?.decision?.combatState?.shooting?.reason
+      ?? ''
+  );
 }
 
 function serverStalled(frame) {
@@ -512,6 +551,135 @@ function runFinishLowThreatScenario(frames, shots, targetSamples, options) {
       noDamageMs: Math.round(firstFrame.noDamageMs),
       distanceCm: firstFrame.self && firstFrame.nearbyTarget ? Math.round(distance(firstFrame.self, firstFrame.nearbyTarget)) : null
     } : null
+  };
+}
+
+function pressureFireCadenceMs(frame, options) {
+  const normalEveryMs = Math.max(1, Number(options.combatShootEveryMs || 0));
+  const conserveEveryMs = Math.max(normalEveryMs, Number(options.combatShootConserveEveryMs || normalEveryMs));
+  const reserveMs = Math.max(0, Number(options.combatShootReserveMs || 0));
+  const stamina = stamina5s(frame);
+  return stamina !== null && reserveMs > 0 && stamina < reserveMs ? conserveEveryMs : normalEveryMs;
+}
+
+function pressureFireActive(frame, options) {
+  if (shootingReason(frame) !== 'reserve-for-dodge') return false;
+  if (!targetRealBulletPressure(frame)) return false;
+  const selfHpValue = Number(frame.selfHp);
+  const targetHpValue = Number(frame.targetHp);
+  const hpGap = targetHpValue - selfHpValue;
+  const liveDistance = frame.self && frame.nearbyTarget ? distance(frame.self, frame.nearbyTarget) : null;
+  const stamina = stamina5s(frame);
+  const minSelfHp = Math.max(0, Number(options.combatShootPressureMinHp || 0));
+  const maxHpGap = Math.max(0, Number(options.combatShootPressureMaxHpGap || 0));
+  const range = Math.max(0, Number(options.combatShootPressureRange || 0));
+  const reserveMs = Math.max(0, Number(options.combatShootPressureDodgeReserveMs || 0));
+  return Boolean(
+    Number.isFinite(selfHpValue)
+    && Number.isFinite(targetHpValue)
+    && Number.isFinite(liveDistance)
+    && stamina !== null
+    && selfHpValue >= minSelfHp
+    && hpGap <= maxHpGap
+    && liveDistance <= range
+    && stamina >= reserveMs
+  );
+}
+
+function collectPressureFireShots(frames, actualShots, options) {
+  const shots = [];
+  const sortedActualShots = (actualShots || []).slice().sort((a, b) => a.frame.at - b.frame.at);
+  let actualIndex = 0;
+  let lastShotAt = -Infinity;
+  for (const frame of frames) {
+    while (actualIndex < sortedActualShots.length && sortedActualShots[actualIndex].frame.at <= frame.at) {
+      lastShotAt = Math.max(lastShotAt, sortedActualShots[actualIndex].frame.at);
+      actualIndex += 1;
+    }
+    if (!pressureFireActive(frame, options)) continue;
+    const cadenceMs = pressureFireCadenceMs(frame, options);
+    if (frame.at - lastShotAt < cadenceMs) continue;
+    shots.push({
+      id: `pressure-fire:${frame.lineNo}`,
+      frame,
+      hypothetical: true,
+      cadenceMs
+    });
+    lastShotAt = frame.at;
+  }
+  return shots;
+}
+
+function runPressureFireScenario(frames, shots, targetSamples, options) {
+  const hypotheticalShots = collectPressureFireShots(frames, shots, options);
+  const combinedShots = [...shots, ...hypotheticalShots]
+    .sort((a, b) => a.frame.at - b.frame.at || String(a.id).localeCompare(String(b.id)));
+  const scenario = runAimScenario(
+    'real-bullet pressure fire vs live target',
+    combinedShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const firstFrame = frames.find(frame => pressureFireActive(frame, options)) || null;
+  return {
+    ...scenario,
+    extraShots: hypotheticalShots.length,
+    activeStart: firstFrame ? {
+      line: firstFrame.lineNo,
+      time: formatTime(firstFrame.at),
+      noDamageMs: Math.round(firstFrame.noDamageMs),
+      distanceCm: firstFrame.self && firstFrame.nearbyTarget ? Math.round(distance(firstFrame.self, firstFrame.nearbyTarget)) : null,
+      stamina5s: stamina5s(firstFrame),
+      hpGap: Number(firstFrame.targetHp) - Number(firstFrame.selfHp)
+    } : null
+  };
+}
+
+function sustainedPressureExitState(frame, options) {
+  if (!targetRealBulletPressure(frame)) return null;
+  const waitMs = Math.max(0, Number(options.combatPressureNoDamageExitMs || 0));
+  const threshold = Math.max(0, Number(options.combatPressureNoDamageExitHpThreshold || 0));
+  const minGap = Math.max(0, Number(options.combatPressureNoDamageExitHpGap || 0));
+  const range = Math.max(0, Number(options.combatPressureNoDamageExitRange || options.combatShootPressureRange || options.combatAttackRange || 0));
+  const hp = Number(frame.selfHp);
+  const enemyHp = Number(frame.targetHp);
+  const elapsed = noDamageMs(frame);
+  const liveDistance = frame.self && frame.nearbyTarget ? distance(frame.self, frame.nearbyTarget) : null;
+  const hpGap = enemyHp - hp;
+  if (!waitMs || !threshold || !minGap || !range) return null;
+  if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(liveDistance)) return null;
+  if (!(hp <= threshold) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(liveDistance <= range)) return null;
+  return {
+    active: true,
+    line: frame.lineNo,
+    time: formatTime(frame.at),
+    selfHp: hp,
+    targetHp: enemyHp,
+    hpGap,
+    noDamageMs: Math.round(elapsed),
+    distanceCm: Math.round(liveDistance)
+  };
+}
+
+function runSustainedPressureExitScenario(frames, options) {
+  const exitFrame = frames.find(frame => sustainedPressureExitState(frame, options)) || null;
+  const exitState = exitFrame ? sustainedPressureExitState(exitFrame, options) : null;
+  const lastFrame = frames.at(-1) || null;
+  return {
+    label: 'sustained pressure no-damage exit',
+    considered: frames.length,
+    hits: exitState ? 1 : 0,
+    minDistanceCm: exitState?.distanceCm ?? null,
+    activeStart: exitState ? {
+      line: exitState.line,
+      time: exitState.time,
+      noDamageMs: exitState.noDamageMs,
+      distanceCm: exitState.distanceCm
+    } : null,
+    exitFrame: exitState,
+    savedFrames: exitState && lastFrame ? Math.max(0, lastFrame.lineNo - exitState.line) : 0,
+    savedMs: exitState && lastFrame ? Math.max(0, Math.round(lastFrame.at - exitFrame.at)) : 0
   };
 }
 
@@ -1262,6 +1430,8 @@ function replay(options) {
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
     runPassiveRunnerScenario(frames, shots, targetSamples, options),
     runFinishLowThreatScenario(frames, shots, targetSamples, options),
+    runPressureFireScenario(frames, shots, targetSamples, options),
+    runSustainedPressureExitScenario(frames, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
     runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
     runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
@@ -1338,10 +1508,20 @@ function printReport(result) {
     const suppressed = Number.isFinite(Number(item.suppressed))
       ? ` suppressed=${item.suppressed} suppressedLoggedHits=${item.suppressedLoggedHits || 0} rejectedSnapshotOutliers=${item.rejectedSnapshotOutliers || 0}`
       : '';
-    const close = item.activeStart
-      ? ` baseline=${item.baselineHits}/${item.considered} baselineMin=${item.baselineMinDistanceCm}cm activeStart=line ${item.activeStart.line} distance=${item.activeStart.distanceCm}cm simulatedEndDistance=${item.simulatedEndDistanceCm}cm approach=${item.simulatedApproachCm}cm`
+    const extra = Number.isFinite(Number(item.extraShots)) ? ` extraShots=${item.extraShots}` : '';
+    const baseline = Number.isFinite(Number(item.baselineHits))
+      ? ` baseline=${item.baselineHits}/${item.considered} baselineMin=${item.baselineMinDistanceCm}cm`
       : '';
-    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${close}`);
+    const active = item.activeStart
+      ? ` activeStart=line ${item.activeStart.line} distance=${item.activeStart.distanceCm}cm`
+      : '';
+    const approach = Number.isFinite(Number(item.simulatedApproachCm))
+      ? ` simulatedEndDistance=${item.simulatedEndDistanceCm}cm approach=${item.simulatedApproachCm}cm`
+      : '';
+    const exit = item.exitFrame
+      ? ` exit=line ${item.exitFrame.line} savedMs=${item.savedMs || 0} hp=${item.exitFrame.selfHp}/${item.exitFrame.targetHp} noDamageMs=${item.exitFrame.noDamageMs}`
+      : '';
+    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${extra}${baseline}${active}${approach}${exit}`);
   }
 }
 

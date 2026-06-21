@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `232`.
+- Latest bot self-test count: `233`.
 - Latest combat-log analyzer self-test count: `82`.
 - Latest combat replay self-test count: `18`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -120,5 +120,6 @@
   - passive coin-runner combat is covered by a bot self-test that verifies close-in movement plus visible live intercept aim, and by replay self-tests for the two 2026-06-20 mango windows. The first replay improves dynamic estimated hits from logged `29/112` to `35/112`; the second verifies the passive-runner close/intercept scenario improves from logged `18/93` to `21/93` with simulated approach.
   - slightly out-of-range engaged targets now have bot self-test coverage for the pressured `combat-out-of-range-reengage` branch plus the retreat-only hold guard, and replay self-test coverage for the 2026-06-20 `蕉灼の仓鼠` window where the new reengage scenario improves the logged `4/38` dynamic baseline to `44/45` while stepping from `14565cm` back inside range without firing out of range first.
   - low-threat finishing pressure now has bot self-test coverage for keeping burst fire while bullet risk is absent, starting at low target HP, and staying bounded above that HP band. Replay self-test coverage includes the 2026-06-21 `mango` 09:13 window improving estimated hits from logged `178/456` to `334/774` with `318` extra simulated shots, plus the 06:43 high-stamina kill improving from `95/486` to `164/612` with `126` extra simulated shots.
+  - target-owned real-bullet pressure fire has bot self-test coverage for the mid-HP pressure window, and sustained pressure no-damage stop-loss has bot self-test coverage for exiting a losing target-owned pressure trade after 10s without target damage. Replay coverage for 2026-06-21 pressure samples shows 07:56 biliee improving from logged `3/56` to `11/72`, 09:21 biliee from `5/112` to `38/192`, ahy6a from `9/76` to `13/90`, and the 10:15 biliee stop-loss sample exiting about 13s before the logged end at `67/79` after `11596ms` no-damage.
 - Static objective build verifier checks that manual pause removes the target overlay and that overlay rendering suppresses paused decisions.
 - `node scripts/verify-objective-build.js` now includes source/dist checks that movement and shooting prefer direct sends over the existing native page WebSocket, that movement repeats use the configured 50ms/220ms cadence, that default nonzero direct movement keeps local page key/prediction sync for combat safety, that optional server-marker probe mode is off by default, that stop cleanup cancels/repeats direct control safely, and that shared source modules are still inlined into the generated single-file runtime without runtime `require()` calls.
