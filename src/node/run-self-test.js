@@ -58,6 +58,11 @@ function runSelfTest() {
     combatShootDodgeReserveMs: 3800,
     combatShootHighHpDodgeReserveMs: 3000,
     combatShootHighHpMinHp: 90,
+    combatShootFinishLowThreatDodgeReserveMs: 1800,
+    combatShootFinishLowThreatMinHp: 90,
+    combatShootFinishLowThreatTargetHpMax: 10,
+    combatShootFinishLowThreatMaxHpGap: 0,
+    combatShootFinishLowThreatRange: 8500,
     combatShootPressureDodgeReserveMs: 2600,
     combatShootPressureMinHp: 60,
     combatShootPressureRange: 8000,
@@ -3185,6 +3190,20 @@ function runSelfTest() {
       && Number.isFinite(selfHp)
       && selfHp >= highHpMin
       && (!Number.isFinite(targetHp) || selfHp >= targetHp);
+    const finishLowThreatMinHp = Math.max(0, Number(cfg.combatShootFinishLowThreatMinHp || 0));
+    const finishLowThreatTargetHpMax = Math.max(0, Number(cfg.combatShootFinishLowThreatTargetHpMax || 0));
+    const finishLowThreatMaxHpGap = Math.max(0, Number(cfg.combatShootFinishLowThreatMaxHpGap || 0));
+    const finishLowThreatRange = Math.max(0, Number(cfg.combatShootFinishLowThreatRange || 0));
+    const finishLowThreatFireWindow = !Boolean(options.realBulletPressure)
+      && finishLowThreatMinHp > 0
+      && finishLowThreatRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= finishLowThreatMinHp
+      && targetHp <= finishLowThreatTargetHpMax
+      && hpGap <= finishLowThreatMaxHpGap
+      && targetDistance <= finishLowThreatRange;
     const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
     const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
     const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
@@ -3229,6 +3248,7 @@ function runSelfTest() {
       && targetDistance <= noDamageDuelRange;
     let stance = 'normal';
     if (closePressureFireWindow) stance = 'close-pressure';
+    else if (finishLowThreatFireWindow) stance = 'finish-low-threat';
     else if (steadyAimFireWindow) stance = 'steady-aim';
     else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
     else if (farNoDamageCloseFireWindow) stance = 'far-no-damage-close';
@@ -3242,6 +3262,7 @@ function runSelfTest() {
       targetDistance,
       noDamageMs,
       highHpFireWindow,
+      finishLowThreatFireWindow,
       closePressureFireWindow,
       steadyAimFireWindow,
       noDamageDuelFireWindow,
@@ -3280,6 +3301,7 @@ function runSelfTest() {
     const hardReserveMs = Math.max(staminaExhaustedThreshold(), Number(cfg.combatShootHardReserveMs || staminaExhaustedThreshold()));
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
+    const finishLowThreatDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootFinishLowThreatDodgeReserveMs || hardReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
     const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
     const noDamageDuelDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootNoDamageDuelDodgeReserveMs || highHpDodgeReserveMs));
@@ -3289,6 +3311,7 @@ function runSelfTest() {
       : combatTrendState(self, options);
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
+    const finishLowThreatFireWindow = Boolean(trend.finishLowThreatFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
 	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
 	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
@@ -3311,6 +3334,7 @@ function runSelfTest() {
 	    );
 	    let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+    if (finishLowThreatFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, finishLowThreatDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
     if (noDamageDuelFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, noDamageDuelDodgeReserveMs);
@@ -3325,12 +3349,14 @@ function runSelfTest() {
       dodgeReserveMs: effectiveDodgeReserveMs,
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
+      finishLowThreatDodgeReserveMs,
       pressureDodgeReserveMs,
       steadyAimDodgeReserveMs,
       noDamageDuelDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
+      finishLowThreatFireWindow,
       closePressureFireWindow,
       steadyAimFireWindow,
 	      noDamageDuelFireWindow,
@@ -5773,6 +5799,17 @@ function runSelfTest() {
         return action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.highHpFireWindow);
       })(),
       want: 'combat-burst-fire:1:1:true:burst-fire:true'
+    },
+    {
+      name: 'combat low threat finish window keeps burst pressure without bullet risk',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 2800 },
+          { user_id: 7, x: 8200, y: 0, distance: 8200, current_join_mode: 'Active', hp: 7, vx: 35, drop: 20 }
+        );
+        return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.finishLowThreatFireWindow);
+      })(),
+      want: 'combat-burst-fire:true:burst-fire:true'
     },
     {
       name: 'combat mid HP reserve band still preserves dodge stamina',

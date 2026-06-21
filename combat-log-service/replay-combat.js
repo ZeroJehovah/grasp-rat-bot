@@ -21,6 +21,11 @@ const DEFAULTS = {
   combatFinishPressureSelfHpMin: 90,
   combatFinishPressureTargetHpMax: 55,
   combatFinishPressureShootEveryMs: 360,
+  combatShootFinishLowThreatDodgeReserveMs: 1800,
+  combatShootFinishLowThreatMinHp: 90,
+  combatShootFinishLowThreatTargetHpMax: 10,
+  combatShootFinishLowThreatMaxHpGap: 0,
+  combatShootFinishLowThreatRange: 8500,
   combatFarNoDamageCloseMs: 6000,
   combatFarNoDamageCloseStartRange: 10000,
   combatFarNoDamageCloseRange: 7500,
@@ -429,6 +434,85 @@ function collectFinishPressureShots(frames, options) {
     lastShotAt = frame.at;
   }
   return shots;
+}
+
+function finishLowThreatActive(frame, options) {
+  const shootingReason = String(
+    frame.entry?.combatState?.shooting?.reason
+      ?? frame.entry?.decision?.combatState?.shooting?.reason
+      ?? ''
+  );
+  if (shootingReason !== 'reserve-for-dodge') return false;
+  if (incomingRealBullet(frame)) return false;
+  const selfHpValue = Number(frame.selfHp);
+  const targetHpValue = Number(frame.targetHp);
+  const hpGap = targetHpValue - selfHpValue;
+  const minSelfHp = Math.max(0, Number(options.combatShootFinishLowThreatMinHp || 0));
+  const targetHpMax = Math.max(0, Number(options.combatShootFinishLowThreatTargetHpMax || 0));
+  const maxHpGap = Math.max(0, Number(options.combatShootFinishLowThreatMaxHpGap || 0));
+  const range = Math.max(0, Number(options.combatShootFinishLowThreatRange || 0));
+  const liveDistance = frame.self && frame.nearbyTarget ? distance(frame.self, frame.nearbyTarget) : null;
+  return Boolean(
+    Number.isFinite(selfHpValue)
+    && Number.isFinite(targetHpValue)
+    && Number.isFinite(liveDistance)
+    && selfHpValue >= minSelfHp
+    && targetHpValue <= targetHpMax
+    && hpGap <= maxHpGap
+    && liveDistance <= range
+  );
+}
+
+function collectFinishLowThreatShots(frames, actualShots, options) {
+  const cadenceMs = Math.max(
+    Number(options.combatShootConserveEveryMs || 0),
+    Number(options.combatShootEveryMs || 0),
+    1
+  );
+  const shots = [];
+  const sortedActualShots = (actualShots || []).slice().sort((a, b) => a.frame.at - b.frame.at);
+  let actualIndex = 0;
+  let lastShotAt = -Infinity;
+  for (const frame of frames) {
+    while (actualIndex < sortedActualShots.length && sortedActualShots[actualIndex].frame.at <= frame.at) {
+      lastShotAt = Math.max(lastShotAt, sortedActualShots[actualIndex].frame.at);
+      actualIndex += 1;
+    }
+    if (!finishLowThreatActive(frame, options)) continue;
+    if (frame.at - lastShotAt < cadenceMs) continue;
+    shots.push({
+      id: `finish-low-threat:${frame.lineNo}`,
+      frame,
+      hypothetical: true,
+      cadenceMs
+    });
+    lastShotAt = frame.at;
+  }
+  return shots;
+}
+
+function runFinishLowThreatScenario(frames, shots, targetSamples, options) {
+  const hypotheticalShots = collectFinishLowThreatShots(frames, shots, options);
+  const combinedShots = [...shots, ...hypotheticalShots]
+    .sort((a, b) => a.frame.at - b.frame.at || String(a.id).localeCompare(String(b.id)));
+  const scenario = runAimScenario(
+    'finish-low-threat burst vs live target',
+    combinedShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const firstFrame = frames.find(frame => finishLowThreatActive(frame, options)) || null;
+  return {
+    ...scenario,
+    extraShots: hypotheticalShots.length,
+    activeStart: firstFrame ? {
+      line: firstFrame.lineNo,
+      time: formatTime(firstFrame.at),
+      noDamageMs: Math.round(firstFrame.noDamageMs),
+      distanceCm: firstFrame.self && firstFrame.nearbyTarget ? Math.round(distance(firstFrame.self, firstFrame.nearbyTarget)) : null
+    } : null
+  };
 }
 
 function minDistanceForShot(origin, aim, targetSamples, shotAt, options) {
@@ -1177,6 +1261,7 @@ function replay(options) {
     runOutOfRangeReengageScenario(frames, targetSamples, options),
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
     runPassiveRunnerScenario(frames, shots, targetSamples, options),
+    runFinishLowThreatScenario(frames, shots, targetSamples, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
     runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
     runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
@@ -1419,6 +1504,16 @@ function selfTest() {
       targetId: '33545',
       targetName: '蕉灼の仓鼠',
       expectOutOfRangeReengageImproved: true
+    },
+    {
+      id: '2026-06-21-mango-low-threat-finish',
+      file: path.join(__dirname, 'logs/2026-06-21/20260621011341-self-28886-vs-mango.jsonl'),
+      startLine: 1,
+      endLine: 3057,
+      selfId: '28886',
+      targetId: '31361',
+      targetName: 'mango',
+      expectFinishLowThreatImproved: true
     }
   ];
   const summaries = cases.map(item => {
@@ -1427,6 +1522,7 @@ function selfTest() {
     const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
     const liveIntercept = result.scenarios.find(scenario => scenario.label === 'live intercept vs live target');
     const passiveRunner = result.scenarios.find(scenario => scenario.label === 'passive-runner close intercept vs live target');
+    const finishLowThreat = result.scenarios.find(scenario => scenario.label === 'finish-low-threat burst vs live target');
     const outOfRangeReengage = result.scenarios.find(scenario => scenario.label === 'out-of-range reengage dynamic vs live target');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
@@ -1435,7 +1531,8 @@ function selfTest() {
       const pressureAuthority = result.scenarios.find(scenario => scenario.label === 'pressure snapshot authority vs live target');
       if ((!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)
         && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))
-        && (!item.expectPassiveRunnerImproved || !passiveRunner || !(passiveRunner.hits > logged.hits))) {
+        && (!item.expectPassiveRunnerImproved || !passiveRunner || !(passiveRunner.hits > logged.hits))
+        && (!item.expectFinishLowThreatImproved || !finishLowThreat || !(finishLowThreat.hits > logged.hits))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }
     }
@@ -1466,6 +1563,9 @@ function selfTest() {
     if (item.expectPassiveRunnerImproved && (!passiveRunner || !(passiveRunner.hits > logged.hits) || !(passiveRunner.simulatedApproachCm > 0))) {
       throw new Error(`${item.id} passive-runner replay did not improve hits/approach: passiveRunner=${passiveRunner?.hits || 0}, logged=${logged.hits}, approach=${passiveRunner?.simulatedApproachCm || 0}`);
     }
+    if (item.expectFinishLowThreatImproved && (!finishLowThreat || !(finishLowThreat.hits > logged.hits) || !(finishLowThreat.extraShots > 0))) {
+      throw new Error(`${item.id} finish-low-threat replay did not improve hits: finishLowThreat=${finishLowThreat?.hits || 0}, logged=${logged.hits}, extraShots=${finishLowThreat?.extraShots || 0}`);
+    }
     if (item.expectOutOfRangeReengageImproved && (!outOfRangeReengage
       || !(outOfRangeReengage.considered > 0)
       || !(outOfRangeReengage.hits > 0)
@@ -1480,6 +1580,8 @@ function selfTest() {
       liveInterceptHits: liveIntercept?.hits || 0,
       passiveRunnerHits: passiveRunner?.hits || 0,
       passiveRunnerApproachCm: passiveRunner?.simulatedApproachCm || 0,
+      finishLowThreatHits: finishLowThreat?.hits || 0,
+      finishLowThreatExtraShots: finishLowThreat?.extraShots || 0,
       outOfRangeReengageHits: outOfRangeReengage?.hits || 0,
       outOfRangeReengageApproachCm: outOfRangeReengage?.simulatedApproachCm || 0,
       dynamicHits: dynamic.hits,

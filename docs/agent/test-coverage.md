@@ -1,9 +1,9 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `229`.
+- Latest bot self-test count: `230`.
 - Latest combat-log analyzer self-test count: `82`.
-- Latest combat replay self-test count: `16`.
+- Latest combat replay self-test count: `17`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
@@ -119,5 +119,6 @@
   - far no-damage active duels now cover the new 100m+ close-in branch, including the bad-HP-gap guard, the rule that low-stamina far pressure saves reserve for movement/dodge instead of relaxing fire cadence, and the retreating-edge guard that prevents far no-damage close-in from chasing an enemy that is already leaving.
   - passive coin-runner combat is covered by a bot self-test that verifies close-in movement plus visible live intercept aim, and by replay self-tests for the two 2026-06-20 mango windows. The first replay improves dynamic estimated hits from logged `29/112` to `35/112`; the second verifies the passive-runner close/intercept scenario improves from logged `18/93` to `21/93` with simulated approach.
   - slightly out-of-range engaged targets now have bot self-test coverage for the pressured `combat-out-of-range-reengage` branch plus the retreat-only hold guard, and replay self-test coverage for the 2026-06-20 `蕉灼の仓鼠` window where the new reengage scenario improves the logged `4/38` dynamic baseline to `44/45` while stepping from `14565cm` back inside range without firing out of range first.
+  - low-threat finishing pressure now has bot self-test coverage for keeping burst fire while bullet risk is absent, and replay self-test coverage for the 2026-06-21 `mango` window where the new finish-low-threat scenario improves estimated hits from logged `178/456` to `192/498` with `42` extra simulated shots.
 - Static objective build verifier checks that manual pause removes the target overlay and that overlay rendering suppresses paused decisions.
 - `node scripts/verify-objective-build.js` now includes source/dist checks that movement and shooting prefer direct sends over the existing native page WebSocket, that movement repeats use the configured 50ms/220ms cadence, that default nonzero direct movement keeps local page key/prediction sync for combat safety, that optional server-marker probe mode is off by default, that stop cleanup cancels/repeats direct control safely, and that shared source modules are still inlined into the generated single-file runtime without runtime `require()` calls.
