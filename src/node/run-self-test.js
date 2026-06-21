@@ -65,8 +65,8 @@ function runSelfTest() {
     combatShootFinishLowThreatRange: 8500,
     combatShootPressureDodgeReserveMs: 2600,
     combatShootPressureMinHp: 60,
-    combatShootPressureRange: 8000,
-    combatShootPressureMaxHpGap: 5,
+    combatShootPressureRange: 14500,
+    combatShootPressureMaxHpGap: 10,
     combatFarNoDamageCloseMs: 6000,
     combatFarNoDamageCloseStartRange: 10000,
     combatFarNoDamageCloseRange: 7500,
@@ -175,6 +175,10 @@ function runSelfTest() {
     combatPressureCloseMinHp: 60,
     combatPressureExitHpThreshold: 60,
     combatPressureExitHpGap: 5,
+    combatPressureNoDamageExitMs: 10000,
+    combatPressureNoDamageExitHpThreshold: 70,
+    combatPressureNoDamageExitHpGap: 10,
+    combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
@@ -2567,6 +2571,33 @@ function runSelfTest() {
     };
   }
 
+  function combatSustainedPressureDisadvantageState(selfHp, targetHp, targetDistance, noDamageMs, targetRealBulletPressure = false) {
+    const waitMs = Math.max(0, Number(cfg.combatPressureNoDamageExitMs || 0));
+    const threshold = Math.max(0, Number(cfg.combatPressureNoDamageExitHpThreshold || 0));
+    const minGap = Math.max(0, Number(cfg.combatPressureNoDamageExitHpGap || 0));
+    const range = Math.max(0, Number(cfg.combatPressureNoDamageExitRange || cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const distance = Number(targetDistance);
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const hpGap = enemyHp - hp;
+    if (!waitMs || !threshold || !minGap || !range || !targetRealBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
+    if (!(hp <= threshold) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      threshold,
+      minGap,
+      noDamageMs: Math.round(elapsed),
+      waitMs,
+      distance: Math.round(distance),
+      targetRealBulletPressure: true
+    };
+  }
+
   function combatPressureCloseVector(self, target, targetDistance, selfHp) {
     const previous = bot.combatTarget || null;
     const targetId = target?.user_id ?? target?.id;
@@ -2962,9 +2993,19 @@ function runSelfTest() {
         const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance))
           ? '，距离' + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + '米'
           : '';
-	        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
-	      }
-	      if (combatState?.tradeEstimate) {
+		        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
+		      }
+		      if (combatState?.sustainedPressureDisadvantage) {
+		        const pressure = combatState.sustainedPressureDisadvantage;
+		        const noDamageText = Number.isFinite(Number(pressure.noDamageMs))
+		          ? '，' + Math.round(Number(pressure.noDamageMs) / 1000) + '秒未造成伤害'
+		          : '';
+		        const distanceText = Number.isFinite(Number(pressure.distance))
+		          ? '，距离' + Math.round(Number(pressure.distance) / 100) + '米'
+		          : '';
+		        return '与' + actorLabel(target) + '战斗，持续弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + noDamageText + distanceText + '，提前劣势退出';
+		      }
+		      if (combatState?.tradeEstimate) {
 	        const estimate = combatState.tradeEstimate;
 	        const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? '，预计承伤倒计时' + Math.round(Number(estimate.tDeathMs) / 1000) + '秒' : '';
 	        const killText = Number.isFinite(Number(estimate.tKillMs)) ? '，预计击杀需' + Math.round(Number(estimate.tKillMs) / 1000) + '秒' : '';
@@ -3007,10 +3048,10 @@ function runSelfTest() {
       }
       : null;
     const shooting = combatShootingPlan(self, {
-      needsMovement: Boolean(requestedDx || requestedDy),
-      dodging: incoming,
-      realBulletPressure: incoming,
-      targetDistance: target.distance,
+	      needsMovement: Boolean(requestedDx || requestedDy),
+	      dodging: incoming,
+	      realBulletPressure: incoming,
+	      targetDistance: target.distance,
       targetHp
     });
     return {
@@ -3204,10 +3245,13 @@ function runSelfTest() {
       && targetHp <= finishLowThreatTargetHpMax
       && hpGap <= finishLowThreatMaxHpGap
       && targetDistance <= finishLowThreatRange;
+    const targetPressureFire = options.targetRealBulletPressure !== undefined
+      ? Boolean(options.targetRealBulletPressure)
+      : Boolean(options.realBulletPressure);
     const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
     const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
     const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
-    const closePressureFireWindow = Boolean(options.realBulletPressure)
+    const closePressureFireWindow = targetPressureFire
       && pressureMinHp > 0
       && pressureRange > 0
       && Number.isFinite(selfHp)
@@ -3271,6 +3315,7 @@ function runSelfTest() {
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
       realBulletPressure: Boolean(options.realBulletPressure),
+      targetRealBulletPressure: targetPressureFire,
       steadyAim: Boolean(options.steadyAim),
       farNoDamageClose: farNoDamageCloseFireWindow
     };
@@ -3561,14 +3606,27 @@ function runSelfTest() {
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', self, target, { closeRisk }, bullets);
     }
-    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, target.distance, incoming);
-	    if (pressureDisadvantage) {
+	    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, target.distance, incoming);
+		    if (pressureDisadvantage) {
+		      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
+		        hpGap: pressureDisadvantage.hpGap,
+		        pressureDisadvantage
+		      }, bullets);
+		    }
+	    const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState(
+	      selfHp,
+	      targetHp,
+	      target.distance,
+	      noDamageMs,
+	      targetRealBulletPressure
+	    );
+	    if (sustainedPressureDisadvantage) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', self, target, {
-	        hpGap: pressureDisadvantage.hpGap,
-	        pressureDisadvantage
+	        hpGap: sustainedPressureDisadvantage.hpGap,
+	        sustainedPressureDisadvantage
 	      }, bullets);
 	    }
-    const tradeEstimate = combatTradeEstimate(self, target);
+	    const tradeEstimate = combatTradeEstimate(self, target);
     if (!disadvantageObservation && tradeEstimate?.active) {
       disadvantageObservation = combatDisadvantageObservationState(target, 'trade-estimate', {
         selfHp,
@@ -3643,6 +3701,7 @@ function runSelfTest() {
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
       realBulletPressure: incoming,
+      targetRealBulletPressure,
       targetDistance: target.distance,
       targetHp,
       steadyAim: steadyAim.active,
@@ -3658,8 +3717,9 @@ function runSelfTest() {
       trend,
       needsMovement: Boolean(requestedDx || requestedDy),
       dodging: incoming,
-      realBulletPressure: incoming,
-      targetDistance: target.distance,
+	      realBulletPressure: incoming,
+	      targetRealBulletPressure,
+	      targetDistance: target.distance,
       targetHp,
       steadyAim: steadyAim.active,
       engagedCombat: target.combatIntent === 'engaged',
@@ -5844,21 +5904,36 @@ function runSelfTest() {
       })(),
       want: 'combat-stamina-conserve:1:1:false:reserve-for-dodge:false'
     },
-    {
-      name: 'combat close pressure fire window keeps mid hp shooting',
-      got: (() => {
-        const action = chooseCombatAction(
-          { user_id: 1, x: 0, y: 0, hp: 67, max_hp: 100, stamina_5s_remaining_milli: 3198 },
-          { user_id: 7, x: 6300, y: 0, distance: 6300, current_join_mode: 'Active', hp: 61, vx: 50, drop: 20 },
-          [{ ownerId: 7 }]
-        );
+	    {
+	      name: 'combat close pressure fire window keeps mid hp shooting',
+	      got: (() => {
+	        const action = chooseCombatAction(
+	          { user_id: 1, x: 0, y: 0, hp: 67, max_hp: 100, stamina_5s_remaining_milli: 3198 },
+	          { user_id: 7, x: 6300, y: 0, distance: 6300, current_join_mode: 'Active', hp: 61, vx: 50, drop: 20 },
+	          [{ id: 'target-shot', ownerId: 7, x: 5000, y: 0, vx: -500, vy: 0 }]
+	        );
         return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.dodgeReserveMs + ':' + Boolean(action.combatState?.shooting?.closePressureFireWindow);
-      })(),
-      want: 'combat-burst-fire:true:2600:true'
-    },
-    {
-      name: 'combat long no-damage active duel resumes reserve-band fire',
-      got: (() => {
+	      })(),
+	      want: 'combat-burst-fire:true:2600:true'
+	    },
+	    {
+	      name: 'combat sustained target pressure exits losing no-damage fight',
+	      got: (() => {
+	        const t = Date.now();
+	        bot.combatTarget = { id: 7, at: t - 13000, lastDamageAt: t - 13000, hp: 82 };
+	        const action = chooseCombatAction(
+	          { user_id: 1, x: 0, y: 0, hp: 68, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+	          { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 82, vx: 35, drop: 20 },
+	          [{ id: 'target-shot', ownerId: 7, x: 10000, y: 0, vx: -500, vy: 0 }]
+	        );
+	        bot.combatTarget = null;
+	        return action.reason + ':' + Boolean(action.combatState?.sustainedPressureDisadvantage) + ':' + action.combatState?.sustainedPressureDisadvantage?.noDamageMs;
+	      })(),
+	      want: 'combat-hp-disadvantage-leave:true:13000'
+	    },
+	    {
+	      name: 'combat long no-damage active duel resumes reserve-band fire',
+	      got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 32000, lastDamageAt: Date.now() - 32000, hp: 82 };
         const action = chooseCombatAction(
           { user_id: 1, x: 0, y: 0, hp: 85, max_hp: 100, stamina_5s_remaining_milli: 3139 },

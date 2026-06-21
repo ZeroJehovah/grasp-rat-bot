@@ -1301,6 +1301,16 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
           : '';
 	        return '与' + actorLabel(target) + '战斗，近身弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + distanceText + '，提前劣势退出';
 	      }
+	      if (combatState?.sustainedPressureDisadvantage) {
+	        const pressure = combatState.sustainedPressureDisadvantage;
+	        const noDamageText = Number.isFinite(Number(pressure.noDamageMs))
+	          ? '，' + Math.round(Number(pressure.noDamageMs) / 1000) + '秒未造成伤害'
+	          : '';
+	        const distanceText = Number.isFinite(Number(pressure.distance))
+	          ? '，距离' + Math.round(Number(pressure.distance) / 100) + '米'
+	          : '';
+	        return '与' + actorLabel(target) + '战斗，持续弹压下血量' + hpDisplay(selfHp) + '，对方血量' + hpDisplay(targetHp) + '，差距' + hpDisplay(hpGap) + noDamageText + distanceText + '，提前劣势退出';
+	      }
 	      if (combatState?.tradeEstimate) {
 	        const estimate = combatState.tradeEstimate;
 	        const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? '，预计承伤倒计时' + formatDurationMs(estimate.tDeathMs) : '';
@@ -5857,6 +5867,33 @@ ${importantLogSource()}
     };
   }
 
+  function combatSustainedPressureDisadvantageState(selfHp, targetHp, targetDistance, noDamageMs, targetRealBulletPressure = false) {
+    const waitMs = Math.max(0, Number(cfg.combatPressureNoDamageExitMs || 0));
+    const threshold = Math.max(0, Number(cfg.combatPressureNoDamageExitHpThreshold || 0));
+    const minGap = Math.max(0, Number(cfg.combatPressureNoDamageExitHpGap || 0));
+    const range = Math.max(0, Number(cfg.combatPressureNoDamageExitRange || cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
+    const hp = Number(selfHp);
+    const enemyHp = Number(targetHp);
+    const distance = Number(targetDistance);
+    const elapsed = Math.max(0, Number(noDamageMs || 0));
+    const hpGap = enemyHp - hp;
+    if (!waitMs || !threshold || !minGap || !range || !targetRealBulletPressure) return null;
+    if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
+    if (!(hp <= threshold) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
+    return {
+      active: true,
+      selfHp: hp,
+      targetHp: enemyHp,
+      hpGap,
+      threshold,
+      minGap,
+      noDamageMs: Math.round(elapsed),
+      waitMs,
+      distance: Math.round(distance),
+      targetRealBulletPressure: true
+    };
+  }
+
   function combatPressureCloseVector(self, target, targetDistance, noDamageMs, selfHp) {
     const thresholdMs = Math.max(0, Number(cfg.combatPressureCloseNoDamageMs || 0) || 0);
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
@@ -6858,10 +6895,13 @@ ${importantLogSource()}
       && targetHp <= finishLowThreatTargetHpMax
       && hpGap <= finishLowThreatMaxHpGap
       && targetDistance <= finishLowThreatRange;
+    const targetPressureFire = options.targetRealBulletPressure !== undefined
+      ? Boolean(options.targetRealBulletPressure)
+      : Boolean(options.realBulletPressure);
     const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
     const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
     const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
-    const closePressureFireWindow = Boolean(options.realBulletPressure)
+    const closePressureFireWindow = targetPressureFire
       && pressureMinHp > 0
       && pressureRange > 0
       && Number.isFinite(selfHp)
@@ -6925,6 +6965,7 @@ ${importantLogSource()}
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
       realBulletPressure: Boolean(options.realBulletPressure),
+      targetRealBulletPressure: targetPressureFire,
       steadyAim: Boolean(options.steadyAim),
       farNoDamageClose: farNoDamageCloseFireWindow
     };
@@ -7769,16 +7810,31 @@ ${importantLogSource()}
     if (closeRisk) {
       return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
     }
-    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
-	    if (pressureDisadvantage) {
+	    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
+		    if (pressureDisadvantage) {
+		      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+		        selfHp,
+		        targetHp,
+		        hpGap: pressureDisadvantage.hpGap,
+		        pressureDisadvantage
+		      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+		    }
+	    const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState(
+	      selfHp,
+	      targetHp,
+	      targetDistance,
+	      damageState.noDamageMs,
+	      targetRealBulletPressure
+	    );
+	    if (sustainedPressureDisadvantage) {
 	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
 	        selfHp,
 	        targetHp,
-	        hpGap: pressureDisadvantage.hpGap,
-	        pressureDisadvantage
+	        hpGap: sustainedPressureDisadvantage.hpGap,
+	        sustainedPressureDisadvantage
 	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
 	    }
-    const tradeEstimate = combatTradeEstimate(self, target);
+	    const tradeEstimate = combatTradeEstimate(self, target);
     if (!disadvantageObservation && tradeEstimate?.active) {
       disadvantageObservation = combatDisadvantageObservationState(target, 'trade-estimate', {
         selfHp,
@@ -7967,6 +8023,7 @@ ${importantLogSource()}
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
       realBulletPressure,
+      targetRealBulletPressure,
       pressureClose: pressureClose.active,
       targetDistance,
       targetHp,
@@ -7984,6 +8041,7 @@ ${importantLogSource()}
       needsMovement: Boolean(requestedMove.dx || requestedMove.dy),
       dodging,
       realBulletPressure,
+      targetRealBulletPressure,
       pressureClose: pressureClose.active,
       targetDistance: targetDistance,
       targetHp,
