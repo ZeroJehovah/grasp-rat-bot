@@ -15,6 +15,6 @@ Read only what is needed for the current task:
 ## Maintenance Rules
 
 - Keep `AGENTS.md` version-independent. Do not move release history, current-version notes, or bulky handoff context back into it.
-- When a task changes the remote bot version, manifest hash, latest pushed commit, release behavior, strategy behavior, config defaults, logging behavior, validation coverage, or live-validation target, update the corresponding file in this directory in the same task.
-- For every remote bot release, update [current-state.md](current-state.md) with the new version, manifest hash, latest pushed commit, release note, and live-validation target.
+- When a task changes the remote bot version, manifest hash, latest release commit, release behavior, strategy behavior, config defaults, logging behavior, validation coverage, or live-validation target, update the corresponding file in this directory in the same task.
+- For every remote bot release, update [current-state.md](current-state.md) with the new version, manifest hash, latest release commit, release note, and live-validation target.
 - Commit and push these tracked docs with the related code/build changes by default.
