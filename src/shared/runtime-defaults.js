@@ -58,7 +58,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatShootHighHpMinHp: 90,
     combatShootFinishLowThreatDodgeReserveMs: 1800,
     combatShootFinishLowThreatMinHp: 90,
-    combatShootFinishLowThreatTargetHpMax: 10,
+    combatShootFinishLowThreatTargetHpMax: 55,
     combatShootFinishLowThreatMaxHpGap: 0,
     combatShootFinishLowThreatRange: 8500,
     combatShootPressureDodgeReserveMs: 2600,

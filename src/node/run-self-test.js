@@ -60,7 +60,7 @@ function runSelfTest() {
     combatShootHighHpMinHp: 90,
     combatShootFinishLowThreatDodgeReserveMs: 1800,
     combatShootFinishLowThreatMinHp: 90,
-    combatShootFinishLowThreatTargetHpMax: 10,
+    combatShootFinishLowThreatTargetHpMax: 55,
     combatShootFinishLowThreatMaxHpGap: 0,
     combatShootFinishLowThreatRange: 8500,
     combatShootPressureDodgeReserveMs: 2600,
@@ -5810,6 +5810,28 @@ function runSelfTest() {
         return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.finishLowThreatFireWindow);
       })(),
       want: 'combat-burst-fire:true:burst-fire:true'
+    },
+    {
+      name: 'combat low threat finish window starts at low target HP',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 2800 },
+          { user_id: 7, x: 8200, y: 0, distance: 8200, current_join_mode: 'Active', hp: 55, vx: 35, drop: 20 }
+        );
+        return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.finishLowThreatFireWindow);
+      })(),
+      want: 'combat-burst-fire:true:burst-fire:true'
+    },
+    {
+      name: 'combat low threat finish window stays bounded above low HP',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 2800 },
+          { user_id: 7, x: 8200, y: 0, distance: 8200, current_join_mode: 'Active', hp: 56, vx: 35, drop: 20 }
+        );
+        return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.finishLowThreatFireWindow);
+      })(),
+      want: 'combat-burst-fire:true:burst-fire:false'
     },
     {
       name: 'combat mid HP reserve band still preserves dodge stamina',
