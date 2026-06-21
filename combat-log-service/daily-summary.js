@@ -1010,6 +1010,11 @@ function formatOutcomeDrop(value) {
   return value === null || value === undefined || !Number.isFinite(Number(value)) ? '-' : String(number(value));
 }
 
+function formatOutcomeReward(outcome) {
+  if (!outcome) return '0币';
+  return `${formatCoins(number(outcome.rewardCoins))}（${String(outcome.rewardStatus || '')}）`;
+}
+
 function playerCategoryText(category) {
   const value = String(category || '').toLowerCase();
   if (value === 'active') return '活跃';
@@ -1302,9 +1307,11 @@ function printReport(report) {
   if (!report.battleOutcomes.length) {
     console.log('无记录');
   } else {
-    for (const outcome of report.battleOutcomes) {
-      console.log(`- ${formatOutcomeTimeRange(outcome.startedAt, outcome.endedAt)} 体力${formatOutcomeStamina(outcome.staminaSpentMs)} ${formatOutcomeEnemy(outcome.enemy)} ${playerCategoryText(outcome.playerCategory)} Drop${formatOutcomeDrop(outcome.drop)} ${outcome.status} 收益+${number(outcome.rewardCoins)}(${outcome.rewardStatus})`);
-    }
+    console.log('| # | 开始时间 | 结束时间 | 耗时 | 消耗体力 | 战斗对象 | 类别 | Drop | 结果 | 实际收益 |');
+    console.log('|---:|---|---|---:|---:|---|---|---:|---|---|');
+    report.battleOutcomes.forEach((outcome, index) => {
+      console.log(`| ${index + 1} | ${formatTime(outcome.startedAt)} | ${formatTime(outcome.endedAt || outcome.startedAt)} | ${formatDuration(outcome.durationMs)} | ${formatOutcomeStamina(outcome.staminaSpentMs)} | ${formatOutcomeEnemy(outcome.enemy)} | ${playerCategoryText(outcome.playerCategory)} | ${formatOutcomeDrop(outcome.drop)} | ${outcome.status} | ${formatOutcomeReward(outcome)} |`);
+    });
     console.log('');
     console.log(`实际战斗收益合计：记录${report.totals.battleOutcomes}，确认击杀${report.totals.battleOutcomeKills}，失败/劣势离场${report.totals.battleOutcomeFailures}，已拾取收益${report.totals.battleOutcomeRewardCoins}币，确认击杀未拾取Drop${report.totals.battleOutcomeMissedDropCoins}币，失败未获Drop${report.totals.battleOutcomeFailedDropCoins}币，消耗体力${formatStaminaSpent(report.totals.battleOutcomeStaminaSpentMs)}`);
   }
@@ -1646,6 +1653,17 @@ function runSelfTest() {
   assertSelfTest(resultText('disengaged', 'post-combat-timeout', { lastReason: 'combat-target-retreating' }) === '敌方逃离：目标脱离交火范围', 'retreating-target combat result text is not explicit');
   assertSelfTest(resultText('disengaged', 'post-combat-timeout') === '敌方逃离：目标消失或脱离交火范围', 'post-combat timeout result text is not folded into enemy flee');
   assertSelfTest(resultText('left', 'enemy-leave-wait', waitCombat).includes('近期换血不利') && resultText('left', 'enemy-leave-wait', waitCombat).includes('退出后等待安全重登'), 'enemy leave wait result text does not include concrete exit evidence');
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    printReport(report);
+  } finally {
+    console.log = originalLog;
+  }
+  assertSelfTest(lines.includes('| # | 开始时间 | 结束时间 | 耗时 | 消耗体力 | 战斗对象 | 类别 | Drop | 结果 | 实际收益 |'), 'actual battle outcome section did not render a table header');
+  assertSelfTest(lines.some(line => /\| 1 \| .* \| .* \| .* \| .* \| .* \| .* \| \d+ \| .* \| .*币（/.test(line)), 'actual battle outcome section did not render table rows');
+  assertSelfTest(!lines.some(line => /^- \d{2}:\d{2}:\d{2}-/.test(line)), 'actual battle outcome section still renders bullet rows');
   fs.rmSync(root, { recursive: true, force: true });
   console.log('日报自检通过');
 }
