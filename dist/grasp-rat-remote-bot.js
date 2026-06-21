@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.195"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.196"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -125,7 +125,7 @@
     combatShootHighHpMinHp: 90,
     combatShootFinishLowThreatDodgeReserveMs: 1800,
     combatShootFinishLowThreatMinHp: 90,
-    combatShootFinishLowThreatTargetHpMax: 10,
+    combatShootFinishLowThreatTargetHpMax: 55,
     combatShootFinishLowThreatMaxHpGap: 0,
     combatShootFinishLowThreatRange: 8500,
     combatShootPressureDodgeReserveMs: 2600,
