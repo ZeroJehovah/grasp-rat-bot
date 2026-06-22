@@ -90,6 +90,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatOutOfRangeReengageMinHp', value: 60 },
   { key: 'combatOutOfRangeReengageMaxHpGap', value: 10 },
   { key: 'combatOutOfRangeReengageRecentInRangeMs', value: 2500 },
+  { key: 'combatPassiveRunnerCloseRange', value: 4500 },
   { key: 'combatShootEveryMs', value: 160 },
   { key: 'combatShootReserveMs', value: 5600 },
   { key: 'combatShootDodgeReserveMs', value: 3800 },
@@ -116,6 +117,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatAimLiveDivergencePrecisionRatio', value: 0.08 },
   { key: 'combatAimRadialPrecisionLateralRatio', value: 0.35 },
   { key: 'combatServerStallNoDamagePrecisionGraceMs', value: 10000 },
+  { key: 'combatPressureNoDamageExitHpThreshold', value: 80 },
   { key: 'combatAimSteadyNoDamageMs', value: 6000 },
   { key: 'combatAimSteadySpeedMax', value: 5 }
 ];
@@ -863,13 +865,16 @@ function main() {
       assert(text.includes('function combatOutOfRangeFinishPressureState'), 'out-of-range finish reengage helper not found');
       assert(text.includes('function combatRetreatIgnoreActive'), 'retreat-ignore helper not found');
       assert(text.includes('function rememberCombatRetreatIgnore'), 'retreat-ignore writer not found');
+      assert(text.includes('function combatSustainedPressureDisadvantageState'), 'sustained pressure stop-loss helper not found');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageLeaveMs', 25000), 'server-stall no-damage exit wait is not configured');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamagePrecisionGraceMs', 10000), 'server-stall no-damage exit does not allow precision aim grace');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageHpGap', 5), 'server-stall no-damage HP gap is not configured');
+      assert(expectObjectNumber(defaultConfigSource, 'combatPressureNoDamageExitHpThreshold', 80), 'sustained pressure stop-loss HP threshold is not configured at 80');
       assert(functionBody(text, 'combatServerStallNoDamageLeaveState').includes('effectiveWaitMs'), 'server-stall no-damage exit does not use an effective precision-grace wait');
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
       assert(combatBody.includes("combatLeaveAction('combat-hp-disadvantage-leave', baseTarget"), 'combat action does not leave on close-pressure HP disadvantage');
+      assert(combatBody.includes('const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState'), 'combat action does not evaluate sustained pressure stop-loss');
       assert(combatBody.includes('const serverStallNoDamage = combatServerStallNoDamageLeaveState'), 'combat action does not evaluate server-stall no-damage disadvantage');
       assert(combatBody.includes('const retreatingTarget = combatRetreatingTargetState'), 'combat action does not evaluate retreating target state');
       assert(combatBody.includes('const finishPressure = combatFinishPressureState'), 'combat action does not evaluate low-HP retreating finish pressure');
@@ -921,6 +926,10 @@ function main() {
       assert(incomingBranchIndex >= 0 && pickBody.indexOf('combatRetreatIgnoreActive(') > incomingBranchIndex, 'incoming bullet shooter no longer bypasses retreat-ignore filtering');
       assert(pickBody.includes('!combatRetreatIgnoreActive(target)') || pickBody.includes('!combatRetreatIgnoreActive(e)'), 'ordinary combat target selection does not filter retreat-ignored targets');
       assert(text.includes("clearCombatEngagement('target-retreating-ignore')"), 'engaged retreat-ignored target is not cleared');
+      const passiveRunnerCloseBody = functionBody(text, 'combatPassiveRunnerCloseVector');
+      assert(expectObjectNumber(defaultConfigSource, 'combatPassiveRunnerCloseRange', 4500), 'passive runner close range is not configured at 45m');
+      assert(passiveRunnerCloseBody.includes('Number(cfg.combatSpacingMinRange || 0)'), 'passive runner close range is still bounded by preferred spacing instead of minimum spacing');
+      assert(!passiveRunnerCloseBody.includes('Number(cfg.combatSpacingPreferredRange || 0)'), 'passive runner close range still uses preferred combat spacing');
       const pursuitBody = functionBody(text, 'updatePursuitTracking');
       assert(text.includes('function pursuitLeaveSuppressedByCombatAction'), 'same-target combat pursuit suppression helper not found');
       assert(pursuitBody.includes('pursuitLeaveSuppressedByCombatAction(picked, action)'), 'pursuit tracking does not check same-target combat suppression');
