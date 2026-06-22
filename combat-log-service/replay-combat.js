@@ -29,7 +29,7 @@ const DEFAULTS = {
   combatShootPressureRange: 14500,
   combatShootPressureMaxHpGap: 10,
   combatPressureNoDamageExitMs: 10000,
-  combatPressureNoDamageExitHpThreshold: 80,
+  combatPressureNoDamageExitHpThreshold: 70,
   combatPressureNoDamageExitHpGap: 10,
   combatPressureNoDamageExitRange: 14500,
   combatShootFinishLowThreatDodgeReserveMs: 1800,
@@ -49,6 +49,7 @@ const DEFAULTS = {
   combatOutOfRangeReengageRange: 15000,
   combatOutOfRangeReengageMinHp: 60,
   combatOutOfRangeReengageMaxHpGap: 10,
+  combatOutOfRangePressureReengageMaxHpGap: 20,
   combatOutOfRangeReengageRecentInRangeMs: 2500,
   combatTargetDodgeSpeedPerTick: 50,
   combatAimLowConfidenceThreshold: 0.6,
@@ -1018,6 +1019,7 @@ function outOfRangeReengageActive(frame, options, simulatedSelf = frame.self) {
   const maxRange = Math.max(attackRange, Number(options.combatOutOfRangeReengageRange || 0));
   const minSelfHp = Math.max(0, Number(options.combatOutOfRangeReengageMinHp || 0));
   const maxHpGap = Math.max(0, Number(options.combatOutOfRangeReengageMaxHpGap || 0));
+  const pressureMaxHpGap = Math.max(maxHpGap, Number(options.combatOutOfRangePressureReengageMaxHpGap || maxHpGap));
   const recentInRangeMs = Math.max(0, Number(options.combatOutOfRangeReengageRecentInRangeMs || 0));
   const distanceCm = distance(selfPoint, targetPoint);
   const hp = frame.selfHp;
@@ -1046,7 +1048,7 @@ function outOfRangeReengageActive(frame, options, simulatedSelf = frame.self) {
     && Number.isFinite(hp)
     && Number.isFinite(enemyHp)
     && hp >= minSelfHp
-    && hpGap <= maxHpGap
+    && hpGap <= (targetRealBulletPressure ? pressureMaxHpGap : maxHpGap)
     && (targetRealBulletPressure || stationaryFreshContact)
   );
 }
@@ -1716,14 +1718,14 @@ function selfTest() {
       expectPassiveRunnerImproved: true
     },
     {
-      id: '2026-06-22-biliee-sustained-pressure-stop-loss',
+      id: '2026-06-22-biliee-pressure-reengage',
       file: path.join(__dirname, 'logs/2026-06-22/20260622022724-self-28886-vs-biliee.jsonl'),
       startLine: 1,
       endLine: 610,
       selfId: '28886',
       targetId: '33607',
       targetName: 'biliee',
-      expectSustainedPressureExit: true
+      expectOutOfRangeReengageImproved: true
     }
   ];
   const summaries = cases.map(item => {
@@ -1744,6 +1746,7 @@ function selfTest() {
         && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))
         && (!item.expectPassiveRunnerImproved || !passiveRunner || !(passiveRunner.hits > logged.hits))
         && (!item.expectFinishLowThreatImproved || !finishLowThreat || !(finishLowThreat.hits > logged.hits))
+        && (!item.expectOutOfRangeReengageImproved || !outOfRangeReengage || !(outOfRangeReengage.hits > 0))
         && (!item.expectSustainedPressureExit || !sustainedPressureExit || !(sustainedPressureExit.hits > 0))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }

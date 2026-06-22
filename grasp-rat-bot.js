@@ -6082,6 +6082,8 @@ ${importantLogSource()}
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeReengageMinHp || 0));
     const maxHpGap = Math.max(0, Number(cfg.combatOutOfRangeReengageMaxHpGap || 0));
+    const pressureMaxHpGap = Math.max(maxHpGap, Number(cfg.combatOutOfRangePressureReengageMaxHpGap || maxHpGap));
+    const effectiveMaxHpGap = targetRealBulletPressure ? pressureMaxHpGap : maxHpGap;
     const recentInRangeMs = Math.max(0, Number(cfg.combatOutOfRangeReengageRecentInRangeMs || 0));
     const ownHp = Number(selfHp);
     const enemyHp = Number(targetHp);
@@ -6157,7 +6159,7 @@ ${importantLogSource()}
         retreatingTarget
       };
     }
-    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > maxHpGap || combatMovementBlockedByStamina(self)) {
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > effectiveMaxHpGap || combatMovementBlockedByStamina(self)) {
       return {
         active: false,
         dx: 0,
@@ -6169,7 +6171,9 @@ ${importantLogSource()}
         targetHp: enemyHp,
         hpGap,
         minSelfHp,
-        maxHpGap,
+        maxHpGap: effectiveMaxHpGap,
+        baseMaxHpGap: maxHpGap,
+        pressureMaxHpGap,
         outOfRangeMs,
         graceRemainingMs,
         targetRealBulletPressure: Boolean(targetRealBulletPressure),
@@ -6189,7 +6193,9 @@ ${importantLogSource()}
       targetHp: enemyHp,
       hpGap,
       minSelfHp,
-      maxHpGap,
+      maxHpGap: effectiveMaxHpGap,
+      baseMaxHpGap: maxHpGap,
+      pressureMaxHpGap,
       outOfRangeMs,
       graceRemainingMs,
       targetRealBulletPressure: Boolean(targetRealBulletPressure),
