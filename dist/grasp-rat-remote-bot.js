@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.198"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.199"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -147,6 +147,7 @@
     combatOutOfRangeReengageRange: 15000,
     combatOutOfRangeReengageMinHp: 60,
     combatOutOfRangeReengageMaxHpGap: 10,
+    combatOutOfRangePressureReengageMaxHpGap: 20,
     combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
@@ -241,7 +242,7 @@
     combatPressureExitHpThreshold: 60,
     combatPressureExitHpGap: 5,
     combatPressureNoDamageExitMs: 10000,
-    combatPressureNoDamageExitHpThreshold: 80,
+    combatPressureNoDamageExitHpThreshold: 70,
     combatPressureNoDamageExitHpGap: 10,
     combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
@@ -10653,6 +10654,8 @@ function hpDisplay(value) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeReengageMinHp || 0));
     const maxHpGap = Math.max(0, Number(cfg.combatOutOfRangeReengageMaxHpGap || 0));
+    const pressureMaxHpGap = Math.max(maxHpGap, Number(cfg.combatOutOfRangePressureReengageMaxHpGap || maxHpGap));
+    const effectiveMaxHpGap = targetRealBulletPressure ? pressureMaxHpGap : maxHpGap;
     const recentInRangeMs = Math.max(0, Number(cfg.combatOutOfRangeReengageRecentInRangeMs || 0));
     const ownHp = Number(selfHp);
     const enemyHp = Number(targetHp);
@@ -10728,7 +10731,7 @@ function hpDisplay(value) {
         retreatingTarget
       };
     }
-    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > maxHpGap || combatMovementBlockedByStamina(self)) {
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > effectiveMaxHpGap || combatMovementBlockedByStamina(self)) {
       return {
         active: false,
         dx: 0,
@@ -10740,7 +10743,9 @@ function hpDisplay(value) {
         targetHp: enemyHp,
         hpGap,
         minSelfHp,
-        maxHpGap,
+        maxHpGap: effectiveMaxHpGap,
+        baseMaxHpGap: maxHpGap,
+        pressureMaxHpGap,
         outOfRangeMs,
         graceRemainingMs,
         targetRealBulletPressure: Boolean(targetRealBulletPressure),
@@ -10760,7 +10765,9 @@ function hpDisplay(value) {
       targetHp: enemyHp,
       hpGap,
       minSelfHp,
-      maxHpGap,
+      maxHpGap: effectiveMaxHpGap,
+      baseMaxHpGap: maxHpGap,
+      pressureMaxHpGap,
       outOfRangeMs,
       graceRemainingMs,
       targetRealBulletPressure: Boolean(targetRealBulletPressure),

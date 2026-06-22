@@ -89,6 +89,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatOutOfRangeReengageRange', value: 15000 },
   { key: 'combatOutOfRangeReengageMinHp', value: 60 },
   { key: 'combatOutOfRangeReengageMaxHpGap', value: 10 },
+  { key: 'combatOutOfRangePressureReengageMaxHpGap', value: 20 },
   { key: 'combatOutOfRangeReengageRecentInRangeMs', value: 2500 },
   { key: 'combatPassiveRunnerCloseRange', value: 4500 },
   { key: 'combatShootEveryMs', value: 160 },
@@ -117,7 +118,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatAimLiveDivergencePrecisionRatio', value: 0.08 },
   { key: 'combatAimRadialPrecisionLateralRatio', value: 0.35 },
   { key: 'combatServerStallNoDamagePrecisionGraceMs', value: 10000 },
-  { key: 'combatPressureNoDamageExitHpThreshold', value: 80 },
+  { key: 'combatPressureNoDamageExitHpThreshold', value: 70 },
   { key: 'combatAimSteadyNoDamageMs', value: 6000 },
   { key: 'combatAimSteadySpeedMax', value: 5 }
 ];
@@ -869,7 +870,8 @@ function main() {
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageLeaveMs', 25000), 'server-stall no-damage exit wait is not configured');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamagePrecisionGraceMs', 10000), 'server-stall no-damage exit does not allow precision aim grace');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageHpGap', 5), 'server-stall no-damage HP gap is not configured');
-      assert(expectObjectNumber(defaultConfigSource, 'combatPressureNoDamageExitHpThreshold', 80), 'sustained pressure stop-loss HP threshold is not configured at 80');
+      assert(expectObjectNumber(defaultConfigSource, 'combatPressureNoDamageExitHpThreshold', 70), 'sustained pressure stop-loss HP threshold is not configured at 70');
+      assert(expectObjectNumber(defaultConfigSource, 'combatOutOfRangePressureReengageMaxHpGap', 20), 'target-owned pressure out-of-range reengage HP gap is not configured at 20');
       assert(functionBody(text, 'combatServerStallNoDamageLeaveState').includes('effectiveWaitMs'), 'server-stall no-damage exit does not use an effective precision-grace wait');
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
@@ -1226,6 +1228,8 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged out-of-range combat target waits instead of chasing'"), 'out-of-range combat hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged slight out-of-range bullet pressure reengages instead of holding'"), 'out-of-range pressured reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'target-owned out-of-range pressure reengages with recoverable hp gap'"), 'target-owned pressure HP-gap reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'non-pressure out-of-range reengage keeps base hp gap guard'"), 'non-pressure reengage HP-gap guard self-test not found');
     assert(nodeSelfTestSource.includes("name: 'retreating slight out-of-range target still holds without pressure'"), 'out-of-range retreat-only hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp out-of-range finish target reengages without shooting'"), 'out-of-range finish reengage self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged beyond disengage range exits combat state'"), 'disengage-range combat exit self-test not found');

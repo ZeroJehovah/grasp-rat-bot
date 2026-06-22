@@ -82,6 +82,7 @@ function runSelfTest() {
     combatOutOfRangeReengageRange: 15000,
     combatOutOfRangeReengageMinHp: 60,
     combatOutOfRangeReengageMaxHpGap: 10,
+    combatOutOfRangePressureReengageMaxHpGap: 20,
     combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
@@ -176,7 +177,7 @@ function runSelfTest() {
     combatPressureExitHpThreshold: 60,
     combatPressureExitHpGap: 5,
     combatPressureNoDamageExitMs: 10000,
-    combatPressureNoDamageExitHpThreshold: 80,
+    combatPressureNoDamageExitHpThreshold: 70,
     combatPressureNoDamageExitHpGap: 10,
     combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
@@ -2798,6 +2799,8 @@ function runSelfTest() {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const minSelfHp = Math.max(0, Number(cfg.combatOutOfRangeReengageMinHp || 0));
     const maxHpGap = Math.max(0, Number(cfg.combatOutOfRangeReengageMaxHpGap || 0));
+    const pressureMaxHpGap = Math.max(maxHpGap, Number(cfg.combatOutOfRangePressureReengageMaxHpGap || maxHpGap));
+    const effectiveMaxHpGap = targetRealBulletPressure ? pressureMaxHpGap : maxHpGap;
     const recentInRangeMs = Math.max(0, Number(cfg.combatOutOfRangeReengageRecentInRangeMs || 0));
     const ownHp = Number(selfHp);
     const enemyHp = Number(targetHp);
@@ -2870,7 +2873,7 @@ function runSelfTest() {
         retreatingTarget
       };
     }
-    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > maxHpGap || combatMovementBlockedByStamina(self)) {
+    if (!Number.isFinite(ownHp) || !Number.isFinite(enemyHp) || ownHp < minSelfHp || hpGap > effectiveMaxHpGap || combatMovementBlockedByStamina(self)) {
       return {
         active: false,
         dx: 0,
@@ -2882,7 +2885,9 @@ function runSelfTest() {
         targetHp: enemyHp,
         hpGap,
         minSelfHp,
-        maxHpGap,
+        maxHpGap: effectiveMaxHpGap,
+        baseMaxHpGap: maxHpGap,
+        pressureMaxHpGap,
         outOfRangeMs,
         targetRealBulletPressure: Boolean(targetRealBulletPressure),
         freshInRangeContact,
@@ -2901,7 +2906,9 @@ function runSelfTest() {
       targetHp: enemyHp,
       hpGap,
       minSelfHp,
-      maxHpGap,
+      maxHpGap: effectiveMaxHpGap,
+      baseMaxHpGap: maxHpGap,
+      pressureMaxHpGap,
       outOfRangeMs,
       targetRealBulletPressure: Boolean(targetRealBulletPressure),
       freshInRangeContact,
@@ -5101,6 +5108,42 @@ function runSelfTest() {
       want: 'attack:combat-out-of-range-reengage:true:false:1:0:target-real-bullet-pressure'
     },
     {
+      name: 'target-owned out-of-range pressure reengages with recoverable hp gap',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 91, intent: 'engaged' };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 73, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14700, y: 0, distance: 14700, current_join_mode: 'Active', hp: 91, vx: 0, vy: 0, recentlyMoved: false, motionObservedSpeed: 0, drop: 107, combatIntent: 'reengage' },
+          [{ id: 'target-shot', ownerId: 7, x: 11000, y: 0, vx: -500, vy: 0 }]
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return [
+          action.kind,
+          action.reason,
+          action.combatState?.outOfRangeReengage?.hpGap,
+          action.combatState?.outOfRangeReengage?.maxHpGap,
+          action.combatState?.outOfRangeReengage?.baseMaxHpGap
+        ].join(':');
+      })(),
+      want: 'attack:combat-out-of-range-reengage:18:20:10'
+    },
+    {
+      name: 'non-pressure out-of-range reengage keeps base hp gap guard',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 91, intent: 'engaged' };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 73, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14700, y: 0, distance: 14700, current_join_mode: 'Active', hp: 91, vx: 0, vy: 0, recentlyMoved: false, motionObservedSpeed: 0, drop: 107, combatIntent: 'reengage' },
+          []
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason + ':' + action.dx + ':' + action.dy;
+      })(),
+      want: 'wait:combat-out-of-range-hold:0:0'
+    },
+    {
       name: 'retreating slight out-of-range target still holds without pressure',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 14500, hp: 90, intent: 'engaged' };
@@ -6132,13 +6175,21 @@ function runSelfTest() {
       want: 'combat-hp-disadvantage-leave:6:6300'
     },
     {
-      name: 'combat sustained pressure no-damage exits before deeper hp loss',
+      name: 'combat sustained pressure no-damage waits above stop-loss hp',
+      got: (() => {
+        const state = combatSustainedPressureDisadvantageState(79, 91, 12000, 12000, true);
+        return state === null ? 'wait' : state.threshold + ':' + state.hpGap;
+      })(),
+      want: 'wait'
+    },
+    {
+      name: 'combat sustained pressure no-damage exits at stop-loss hp',
       got: (() => {
         const t = Date.now();
         bot.combatTarget = { id: 7, at: t - 30000, lastDamageAt: t - 12000, hp: 91 };
         try {
           const action = chooseCombatAction(
-            { user_id: 1, x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 6500 },
+            { user_id: 1, x: 0, y: 0, hp: 69, max_hp: 100, stamina_5s_remaining_milli: 6500 },
             { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 91, vx: 50, drop: 20 },
             [{ id: 'target-shot', ownerId: 7, x: 9000, y: 0, vx: -500, vy: 0 }]
           );
@@ -6152,7 +6203,7 @@ function runSelfTest() {
           bot.combatTarget = null;
         }
       })(),
-      want: 'combat-hp-disadvantage-leave:80:true:12'
+      want: 'combat-hp-disadvantage-leave:70:true:22'
     },
     {
       name: 'combat server stall no-damage waits for precision aim grace',
