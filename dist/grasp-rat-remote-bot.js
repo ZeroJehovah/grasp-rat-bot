@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.197"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.198"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -150,7 +150,7 @@
     combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
-    combatPassiveRunnerCloseRange: 7500,
+    combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
@@ -241,7 +241,7 @@
     combatPressureExitHpThreshold: 60,
     combatPressureExitHpGap: 5,
     combatPressureNoDamageExitMs: 10000,
-    combatPressureNoDamageExitHpThreshold: 70,
+    combatPressureNoDamageExitHpThreshold: 80,
     combatPressureNoDamageExitHpGap: 10,
     combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
@@ -10823,7 +10823,7 @@ function hpDisplay(value) {
   function combatPassiveRunnerCloseVector(self, target, targetDistance, runnerState) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const closeRange = Math.max(
-      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatSpacingMinRange || 0),
       Number(cfg.combatPassiveRunnerCloseRange || 0)
     );
     if (!runnerState?.active || !(distance > closeRange)) {
@@ -12651,9 +12651,11 @@ function hpDisplay(value) {
     }
     const baseReason = realBulletPressure
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
+        : (pressureCloseActive && pressureClose.reason === 'passive-runner'
+        ? 'combat-passive-runner-close'
         : (spacingActive
         ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-        : (pressureCloseActive ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')))) : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
+        : (pressureCloseActive ? (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))));
     return {
       kind: 'attack',
       reason: movementSuppressed

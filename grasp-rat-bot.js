@@ -6252,7 +6252,7 @@ ${importantLogSource()}
   function combatPassiveRunnerCloseVector(self, target, targetDistance, runnerState) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const closeRange = Math.max(
-      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatSpacingMinRange || 0),
       Number(cfg.combatPassiveRunnerCloseRange || 0)
     );
     if (!runnerState?.active || !(distance > closeRange)) {
@@ -8080,9 +8080,11 @@ ${importantLogSource()}
     }
     const baseReason = realBulletPressure
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
+        : (pressureCloseActive && pressureClose.reason === 'passive-runner'
+        ? 'combat-passive-runner-close'
         : (spacingActive
         ? (dodging ? 'combat-spacing-dodge' : 'combat-spacing')
-        : (pressureCloseActive ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')))) : (dodging ? 'combat-tangent-dodge' : 'combat-attack')));
+        : (pressureCloseActive ? (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : (dodging ? 'combat-tangent-dodge' : 'combat-attack'))));
     return {
       kind: 'attack',
       reason: movementSuppressed

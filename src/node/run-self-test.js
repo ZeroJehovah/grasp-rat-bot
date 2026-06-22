@@ -85,7 +85,7 @@ function runSelfTest() {
     combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
-    combatPassiveRunnerCloseRange: 7500,
+    combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
     combatShootConserveEveryMs: 360,
@@ -176,7 +176,7 @@ function runSelfTest() {
     combatPressureExitHpThreshold: 60,
     combatPressureExitHpGap: 5,
     combatPressureNoDamageExitMs: 10000,
-    combatPressureNoDamageExitHpThreshold: 70,
+    combatPressureNoDamageExitHpThreshold: 80,
     combatPressureNoDamageExitHpGap: 10,
     combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
@@ -2956,7 +2956,7 @@ function runSelfTest() {
   function combatPassiveRunnerCloseVector(self, target, targetDistance, runnerState) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const closeRange = Math.max(
-      Number(cfg.combatSpacingPreferredRange || 0),
+      Number(cfg.combatSpacingMinRange || 0),
       Number(cfg.combatPassiveRunnerCloseRange || 0)
     );
     if (!runnerState?.active || !(distance > closeRange)) {
@@ -3756,7 +3756,9 @@ function runSelfTest() {
     }
     const baseReason = incoming
       ? (spacingOverride ? 'combat-spacing-dodge' : 'combat-tangent-dodge')
-      : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (pressureClose.reason === 'passive-runner' ? 'combat-passive-runner-close' : (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close')))) : 'combat-attack'));
+      : (pressureClose.active && pressureClose.reason === 'passive-runner'
+        ? 'combat-passive-runner-close'
+        : (spacing.active ? 'combat-spacing' : (pressureClose.active ? (finishPressure.active ? 'combat-finish-pressure' : (retreatingFighterClose.active ? 'combat-retreating-fighter-close' : (farNoDamageClose.active ? 'combat-far-pressure-close' : 'combat-pressure-close'))) : 'combat-attack')));
     return {
       kind: 'attack',
       reason: movementSuppressed
@@ -6130,6 +6132,29 @@ function runSelfTest() {
       want: 'combat-hp-disadvantage-leave:6:6300'
     },
     {
+      name: 'combat sustained pressure no-damage exits before deeper hp loss',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t - 30000, lastDamageAt: t - 12000, hp: 91 };
+        try {
+          const action = chooseCombatAction(
+            { user_id: 1, x: 0, y: 0, hp: 79, max_hp: 100, stamina_5s_remaining_milli: 6500 },
+            { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 91, vx: 50, drop: 20 },
+            [{ id: 'target-shot', ownerId: 7, x: 9000, y: 0, vx: -500, vy: 0 }]
+          );
+          return [
+            action.reason,
+            action.combatState?.sustainedPressureDisadvantage?.threshold,
+            action.combatState?.sustainedPressureDisadvantage?.noDamageMs >= 10000,
+            action.combatState?.sustainedPressureDisadvantage?.hpGap
+          ].join(':');
+        } finally {
+          bot.combatTarget = null;
+        }
+      })(),
+      want: 'combat-hp-disadvantage-leave:80:true:12'
+    },
+    {
       name: 'combat server stall no-damage waits for precision aim grace',
       got: (() => {
         const t = Date.now();
@@ -6455,6 +6480,36 @@ function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-passive-runner-close|1|0|passive-runner-intercept|true|true'
+    },
+    {
+      name: 'passive runner closes inside normal preferred spacing',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = {
+          user_id: 4,
+          name: 'runner',
+          x: 5200,
+          y: 0,
+          vx: -35,
+          vy: 35,
+          current_join_mode: 'Active',
+          hp: 100,
+          distance: 5200,
+          drop: 20,
+          combatIntent: 'profit'
+        };
+        bot.combatTarget = null;
+        bot.testNativeEntities = [{ ...target }];
+        const action = chooseCombatAction(self, target, []);
+        bot.testNativeEntities = [];
+        return [
+          action.reason,
+          action.dx,
+          action.combatState?.pressureClose?.closeRange,
+          action.combatState?.passiveRunner?.active
+        ].join('|');
+      })(),
+      want: 'combat-passive-runner-close|1|4500|true'
     },
     {
       name: 'return block prevents moving back toward nearby active',

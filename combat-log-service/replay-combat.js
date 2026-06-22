@@ -29,7 +29,7 @@ const DEFAULTS = {
   combatShootPressureRange: 14500,
   combatShootPressureMaxHpGap: 10,
   combatPressureNoDamageExitMs: 10000,
-  combatPressureNoDamageExitHpThreshold: 70,
+  combatPressureNoDamageExitHpThreshold: 80,
   combatPressureNoDamageExitHpGap: 10,
   combatPressureNoDamageExitRange: 14500,
   combatShootFinishLowThreatDodgeReserveMs: 1800,
@@ -44,7 +44,7 @@ const DEFAULTS = {
   combatFarNoDamageCloseMaxHpGap: 10,
   combatPassiveRunnerMinSelfHp: 80,
   combatPassiveRunnerMinDrop: 1,
-  combatPassiveRunnerCloseRange: 7500,
+  combatPassiveRunnerCloseRange: 4500,
   combatPassiveRunnerInterceptSpreadScale: 0,
   combatOutOfRangeReengageRange: 15000,
   combatOutOfRangeReengageMinHp: 60,
@@ -1704,6 +1704,26 @@ function selfTest() {
       targetId: '31361',
       targetName: 'mango',
       expectFinishLowThreatImproved: true
+    },
+    {
+      id: '2026-06-22-mango-passive-runner-close-range',
+      file: path.join(__dirname, 'logs/2026-06-22/20260621201149-self-28886-vs-mango.jsonl'),
+      startLine: 1,
+      endLine: 3407,
+      selfId: '28886',
+      targetId: '31361',
+      targetName: 'mango',
+      expectPassiveRunnerImproved: true
+    },
+    {
+      id: '2026-06-22-biliee-sustained-pressure-stop-loss',
+      file: path.join(__dirname, 'logs/2026-06-22/20260622022724-self-28886-vs-biliee.jsonl'),
+      startLine: 1,
+      endLine: 610,
+      selfId: '28886',
+      targetId: '33607',
+      targetName: 'biliee',
+      expectSustainedPressureExit: true
     }
   ];
   const summaries = cases.map(item => {
@@ -1714,6 +1734,7 @@ function selfTest() {
     const passiveRunner = result.scenarios.find(scenario => scenario.label === 'passive-runner close intercept vs live target');
     const finishLowThreat = result.scenarios.find(scenario => scenario.label === 'finish-low-threat burst vs live target');
     const outOfRangeReengage = result.scenarios.find(scenario => scenario.label === 'out-of-range reengage dynamic vs live target');
+    const sustainedPressureExit = result.scenarios.find(scenario => scenario.label === 'sustained pressure no-damage exit');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
     if (!logged || !dynamic || !dynamicGrace) throw new Error(`missing replay scenarios for ${item.id}`);
@@ -1722,7 +1743,8 @@ function selfTest() {
       if ((!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)
         && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))
         && (!item.expectPassiveRunnerImproved || !passiveRunner || !(passiveRunner.hits > logged.hits))
-        && (!item.expectFinishLowThreatImproved || !finishLowThreat || !(finishLowThreat.hits > logged.hits))) {
+        && (!item.expectFinishLowThreatImproved || !finishLowThreat || !(finishLowThreat.hits > logged.hits))
+        && (!item.expectSustainedPressureExit || !sustainedPressureExit || !(sustainedPressureExit.hits > 0))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }
     }
@@ -1763,6 +1785,9 @@ function selfTest() {
       || !outOfRangeReengage.enteredRange)) {
       throw new Error(`${item.id} out-of-range reengage replay did not enter range and create hits: considered=${outOfRangeReengage?.considered || 0}, hits=${outOfRangeReengage?.hits || 0}, approach=${outOfRangeReengage?.simulatedApproachCm || 0}`);
     }
+    if (item.expectSustainedPressureExit && (!sustainedPressureExit || !(sustainedPressureExit.hits > 0) || !sustainedPressureExit.exitFrame)) {
+      throw new Error(`${item.id} sustained pressure stop-loss did not trigger`);
+    }
     return {
       id: item.id,
       loggedHits: logged.hits,
@@ -1774,6 +1799,7 @@ function selfTest() {
       finishLowThreatExtraShots: finishLowThreat?.extraShots || 0,
       outOfRangeReengageHits: outOfRangeReengage?.hits || 0,
       outOfRangeReengageApproachCm: outOfRangeReengage?.simulatedApproachCm || 0,
+      sustainedPressureExitLine: sustainedPressureExit?.exitFrame?.line || 0,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,
       pressureSuppressed: pressureAuthority?.suppressed || 0,
