@@ -5871,6 +5871,7 @@ ${importantLogSource()}
     const waitMs = Math.max(0, Number(cfg.combatPressureNoDamageExitMs || 0));
     const threshold = Math.max(0, Number(cfg.combatPressureNoDamageExitHpThreshold || 0));
     const minGap = Math.max(0, Number(cfg.combatPressureNoDamageExitHpGap || 0));
+    const targetHpMin = Math.max(0, Number(cfg.combatPressureNoDamageExitTargetHpMin || 0));
     const range = Math.max(0, Number(cfg.combatPressureNoDamageExitRange || cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
     const hp = Number(selfHp);
     const enemyHp = Number(targetHp);
@@ -5879,7 +5880,7 @@ ${importantLogSource()}
     const hpGap = enemyHp - hp;
     if (!waitMs || !threshold || !minGap || !range || !targetRealBulletPressure) return null;
     if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
-    if (!(hp <= threshold) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
+    if (!(hp <= threshold) || !(enemyHp >= targetHpMin) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
     return {
       active: true,
       selfHp: hp,
@@ -5887,6 +5888,7 @@ ${importantLogSource()}
       hpGap,
       threshold,
       minGap,
+      targetHpMin,
       noDamageMs: Math.round(elapsed),
       waitMs,
       distance: Math.round(distance),
@@ -6901,6 +6903,10 @@ ${importantLogSource()}
       && targetHp <= finishLowThreatTargetHpMax
       && hpGap <= finishLowThreatMaxHpGap
       && targetDistance <= finishLowThreatRange;
+    const passiveRunnerFireWindow = Boolean(options.passiveRunner)
+      && !Boolean(options.realBulletPressure)
+      && Number.isFinite(selfHp)
+      && selfHp >= Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
     const targetPressureFire = options.targetRealBulletPressure !== undefined
       ? Boolean(options.targetRealBulletPressure)
       : Boolean(options.realBulletPressure);
@@ -6916,6 +6922,23 @@ ${importantLogSource()}
       && selfHp >= pressureMinHp
       && hpGap <= pressureMaxHpGap
       && targetDistance <= pressureRange;
+    const winningPressureMinHp = Math.max(0, Number(cfg.combatShootWinningPressureMinHp || 0));
+    const winningPressureTargetHpMax = Math.max(0, Number(cfg.combatShootWinningPressureTargetHpMax || 0));
+    const winningPressureLeadHp = Math.max(0, Number(cfg.combatShootWinningPressureLeadHp || 0));
+    const winningPressureRange = Math.max(0, Number(cfg.combatShootWinningPressureRange || 0));
+    const winningPressureNoDamageMs = Math.max(0, Number(cfg.combatShootWinningPressureNoDamageMs || 0));
+    const winningPressureFireWindow = targetPressureFire
+      && winningPressureMinHp > 0
+      && winningPressureTargetHpMax > 0
+      && winningPressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= winningPressureMinHp
+      && targetHp <= winningPressureTargetHpMax
+      && hpGap <= -winningPressureLeadHp
+      && noDamageMs >= winningPressureNoDamageMs
+      && targetDistance <= winningPressureRange;
     const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
     const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
     const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
@@ -6947,7 +6970,9 @@ ${importantLogSource()}
       && noDamageMs >= noDamageDuelNoDamageMs
       && targetDistance <= noDamageDuelRange;
     let stance = 'normal';
-    if (closePressureFireWindow) stance = 'close-pressure';
+    if (winningPressureFireWindow) stance = 'winning-pressure';
+    else if (closePressureFireWindow) stance = 'close-pressure';
+    else if (passiveRunnerFireWindow) stance = 'passive-runner';
     else if (finishLowThreatFireWindow) stance = 'finish-low-threat';
     else if (steadyAimFireWindow) stance = 'steady-aim';
     else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
@@ -6962,14 +6987,17 @@ ${importantLogSource()}
       targetDistance,
       noDamageMs,
       highHpFireWindow,
+      passiveRunnerFireWindow,
       finishLowThreatFireWindow,
       closePressureFireWindow,
+      winningPressureFireWindow,
       steadyAimFireWindow,
       noDamageDuelFireWindow,
       farNoDamageCloseFireWindow,
       engagedCombat: Boolean(options.engagedCombat),
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
+      passiveRunner: Boolean(options.passiveRunner),
       realBulletPressure: Boolean(options.realBulletPressure),
       targetRealBulletPressure: targetPressureFire,
       steadyAim: Boolean(options.steadyAim),
@@ -7003,7 +7031,9 @@ ${importantLogSource()}
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const finishLowThreatDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootFinishLowThreatDodgeReserveMs || hardReserveMs));
+    const passiveRunnerDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPassiveRunnerDodgeReserveMs || highHpDodgeReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
+    const winningPressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootWinningPressureDodgeReserveMs || pressureDodgeReserveMs));
     const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
     const noDamageDuelDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootNoDamageDuelDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
@@ -7012,8 +7042,10 @@ ${importantLogSource()}
       : combatTrendState(self, options);
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
+    const passiveRunnerFireWindow = Boolean(trend.passiveRunnerFireWindow);
     const finishLowThreatFireWindow = Boolean(trend.finishLowThreatFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
+	    const winningPressureFireWindow = Boolean(trend.winningPressureFireWindow);
 	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
 	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
 	    const farNoDamageCloseFireWindow = Boolean(trend.farNoDamageCloseFireWindow);
@@ -7033,10 +7065,12 @@ ${importantLogSource()}
 	      && !closePressureFireWindow
 	      && !steadyAimFireWindow
 	    );
-	    let effectiveDodgeReserveMs = dodgeReserveMs;
+    let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+    if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
     if (finishLowThreatFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, finishLowThreatDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
+    if (winningPressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, winningPressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
     if (noDamageDuelFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, noDamageDuelDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
@@ -7050,15 +7084,19 @@ ${importantLogSource()}
       dodgeReserveMs: effectiveDodgeReserveMs,
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
+      passiveRunnerDodgeReserveMs,
       finishLowThreatDodgeReserveMs,
       pressureDodgeReserveMs,
+      winningPressureDodgeReserveMs,
       steadyAimDodgeReserveMs,
       noDamageDuelDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
+      passiveRunnerFireWindow,
       finishLowThreatFireWindow,
       closePressureFireWindow,
+      winningPressureFireWindow,
       steadyAimFireWindow,
 	      noDamageDuelFireWindow,
 	      farNoDamageCloseFireWindow,
@@ -7073,6 +7111,7 @@ ${importantLogSource()}
         engagedCombat: Boolean(trend.engagedCombat),
         targetActive: Boolean(trend.targetActive),
         targetMoving: Boolean(trend.targetMoving),
+        passiveRunner: Boolean(trend.passiveRunner),
         realBulletPressure: Boolean(trend.realBulletPressure),
         steadyAim: Boolean(trend.steadyAim),
         farNoDamageClose: Boolean(trend.farNoDamageCloseFireWindow)
@@ -8036,6 +8075,7 @@ ${importantLogSource()}
       steadyAim: Boolean(aim.steadyAim),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
+      passiveRunner: passiveRunner.active,
 	      targetMoving,
 	      noDamageMs: Number(aim.noDamageMs || 0),
 	      aimConfidence: aim.aimConfidence,
@@ -8054,6 +8094,7 @@ ${importantLogSource()}
       steadyAim: Boolean(aim.steadyAim),
 	      engagedCombat: target.combatIntent === 'engaged',
 	      targetActive: isCurrentlyActive(target),
+	      passiveRunner: passiveRunner.active,
 	      targetMoving,
 	      noDamageMs: Number(aim.noDamageMs || 0),
 	      aimConfidence: aim.aimConfidence,

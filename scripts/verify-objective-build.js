@@ -97,11 +97,18 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootDodgeReserveMs', value: 3800 },
   { key: 'combatShootHighHpDodgeReserveMs', value: 3000 },
   { key: 'combatShootHighHpMinHp', value: 90 },
+  { key: 'combatShootPassiveRunnerDodgeReserveMs', value: 1800 },
   { key: 'combatShootFinishLowThreatDodgeReserveMs', value: 1800 },
   { key: 'combatShootFinishLowThreatMinHp', value: 90 },
   { key: 'combatShootFinishLowThreatTargetHpMax', value: 55 },
   { key: 'combatShootFinishLowThreatMaxHpGap', value: 0 },
   { key: 'combatShootFinishLowThreatRange', value: 8500 },
+  { key: 'combatShootWinningPressureDodgeReserveMs', value: 1800 },
+  { key: 'combatShootWinningPressureMinHp', value: 60 },
+  { key: 'combatShootWinningPressureTargetHpMax', value: 75 },
+  { key: 'combatShootWinningPressureLeadHp', value: 5 },
+  { key: 'combatShootWinningPressureRange', value: 11000 },
+  { key: 'combatShootWinningPressureNoDamageMs', value: 6000 },
   { key: 'combatShootSteadyAimDodgeReserveMs', value: 3000 },
   { key: 'combatShootSteadyAimNoDamageMs', value: 6000 },
   { key: 'combatShootSteadyAimMinHp', value: 75 },
@@ -118,7 +125,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatAimLiveDivergencePrecisionRatio', value: 0.08 },
   { key: 'combatAimRadialPrecisionLateralRatio', value: 0.35 },
   { key: 'combatServerStallNoDamagePrecisionGraceMs', value: 10000 },
-  { key: 'combatPressureNoDamageExitHpThreshold', value: 70 },
+  { key: 'combatPressureNoDamageExitHpThreshold', value: 80 },
+  { key: 'combatPressureNoDamageExitTargetHpMin', value: 75 },
   { key: 'combatAimSteadyNoDamageMs', value: 6000 },
   { key: 'combatAimSteadySpeedMax', value: 5 }
 ];
@@ -800,8 +808,12 @@ function main() {
       assert(shootingBody.includes("stance: trend.stance || 'normal'"), 'combat shooting plan does not expose trend stance');
       assert(shootingBody.includes('highHpFireWindow'), 'combat shooting plan does not expose high-HP fire window');
       assert(shootingBody.includes('combatShootHighHpDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for high HP');
+      assert(shootingBody.includes('passiveRunnerFireWindow'), 'combat shooting plan does not expose passive-runner fire window');
+      assert(shootingBody.includes('combatShootPassiveRunnerDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for passive runners');
       assert(shootingBody.includes('closePressureFireWindow'), 'combat shooting plan does not expose close-pressure fire window');
       assert(shootingBody.includes('combatShootPressureDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve under close bullet pressure');
+      assert(shootingBody.includes('winningPressureFireWindow'), 'combat shooting plan does not expose winning pressure fire window');
+      assert(shootingBody.includes('combatShootWinningPressureDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for winning pressure finish');
       assert(shootingBody.includes('steadyAimFireWindow'), 'combat shooting plan does not expose steady-aim fire window');
       assert(shootingBody.includes('combatShootSteadyAimDodgeReserveMs'), 'combat shooting plan does not relax dodge reserve for steady aim');
       assert(shootingBody.includes('noDamageDuelFireWindow'), 'combat shooting plan does not expose long no-damage duel fire window');
@@ -870,7 +882,8 @@ function main() {
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageLeaveMs', 25000), 'server-stall no-damage exit wait is not configured');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamagePrecisionGraceMs', 10000), 'server-stall no-damage exit does not allow precision aim grace');
       assert(expectObjectNumber(defaultConfigSource, 'combatServerStallNoDamageHpGap', 5), 'server-stall no-damage HP gap is not configured');
-      assert(expectObjectNumber(defaultConfigSource, 'combatPressureNoDamageExitHpThreshold', 70), 'sustained pressure stop-loss HP threshold is not configured at 70');
+      assert(expectObjectNumber(defaultConfigSource, 'combatPressureNoDamageExitHpThreshold', 80), 'sustained pressure stop-loss HP threshold is not configured at 80');
+      assert(expectObjectNumber(defaultConfigSource, 'combatPressureNoDamageExitTargetHpMin', 75), 'sustained pressure stop-loss target HP floor is not configured at 75');
       assert(expectObjectNumber(defaultConfigSource, 'combatOutOfRangePressureReengageMaxHpGap', 20), 'target-owned pressure out-of-range reengage HP gap is not configured at 20');
       assert(functionBody(text, 'combatServerStallNoDamageLeaveState').includes('effectiveWaitMs'), 'server-stall no-damage exit does not use an effective precision-grace wait');
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
