@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.199"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.200"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -128,6 +128,13 @@
     combatShootFinishLowThreatTargetHpMax: 55,
     combatShootFinishLowThreatMaxHpGap: 0,
     combatShootFinishLowThreatRange: 8500,
+    combatShootPassiveRunnerDodgeReserveMs: 1800,
+    combatShootWinningPressureDodgeReserveMs: 1800,
+    combatShootWinningPressureMinHp: 60,
+    combatShootWinningPressureTargetHpMax: 75,
+    combatShootWinningPressureLeadHp: 5,
+    combatShootWinningPressureRange: 11000,
+    combatShootWinningPressureNoDamageMs: 6000,
     combatShootPressureDodgeReserveMs: 2600,
     combatShootPressureMinHp: 60,
     combatShootPressureRange: 14500,
@@ -242,8 +249,9 @@
     combatPressureExitHpThreshold: 60,
     combatPressureExitHpGap: 5,
     combatPressureNoDamageExitMs: 10000,
-    combatPressureNoDamageExitHpThreshold: 70,
+    combatPressureNoDamageExitHpThreshold: 80,
     combatPressureNoDamageExitHpGap: 10,
+    combatPressureNoDamageExitTargetHpMin: 75,
     combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
     enemyReloginMinDelayMs: 60000,
@@ -10443,6 +10451,7 @@ function hpDisplay(value) {
     const waitMs = Math.max(0, Number(cfg.combatPressureNoDamageExitMs || 0));
     const threshold = Math.max(0, Number(cfg.combatPressureNoDamageExitHpThreshold || 0));
     const minGap = Math.max(0, Number(cfg.combatPressureNoDamageExitHpGap || 0));
+    const targetHpMin = Math.max(0, Number(cfg.combatPressureNoDamageExitTargetHpMin || 0));
     const range = Math.max(0, Number(cfg.combatPressureNoDamageExitRange || cfg.combatShootPressureRange || cfg.combatAttackRange || 0));
     const hp = Number(selfHp);
     const enemyHp = Number(targetHp);
@@ -10451,7 +10460,7 @@ function hpDisplay(value) {
     const hpGap = enemyHp - hp;
     if (!waitMs || !threshold || !minGap || !range || !targetRealBulletPressure) return null;
     if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(distance)) return null;
-    if (!(hp <= threshold) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
+    if (!(hp <= threshold) || !(enemyHp >= targetHpMin) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(distance <= range)) return null;
     return {
       active: true,
       selfHp: hp,
@@ -10459,6 +10468,7 @@ function hpDisplay(value) {
       hpGap,
       threshold,
       minGap,
+      targetHpMin,
       noDamageMs: Math.round(elapsed),
       waitMs,
       distance: Math.round(distance),
@@ -11473,6 +11483,10 @@ function hpDisplay(value) {
       && targetHp <= finishLowThreatTargetHpMax
       && hpGap <= finishLowThreatMaxHpGap
       && targetDistance <= finishLowThreatRange;
+    const passiveRunnerFireWindow = Boolean(options.passiveRunner)
+      && !Boolean(options.realBulletPressure)
+      && Number.isFinite(selfHp)
+      && selfHp >= Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
     const targetPressureFire = options.targetRealBulletPressure !== undefined
       ? Boolean(options.targetRealBulletPressure)
       : Boolean(options.realBulletPressure);
@@ -11488,6 +11502,23 @@ function hpDisplay(value) {
       && selfHp >= pressureMinHp
       && hpGap <= pressureMaxHpGap
       && targetDistance <= pressureRange;
+    const winningPressureMinHp = Math.max(0, Number(cfg.combatShootWinningPressureMinHp || 0));
+    const winningPressureTargetHpMax = Math.max(0, Number(cfg.combatShootWinningPressureTargetHpMax || 0));
+    const winningPressureLeadHp = Math.max(0, Number(cfg.combatShootWinningPressureLeadHp || 0));
+    const winningPressureRange = Math.max(0, Number(cfg.combatShootWinningPressureRange || 0));
+    const winningPressureNoDamageMs = Math.max(0, Number(cfg.combatShootWinningPressureNoDamageMs || 0));
+    const winningPressureFireWindow = targetPressureFire
+      && winningPressureMinHp > 0
+      && winningPressureTargetHpMax > 0
+      && winningPressureRange > 0
+      && Number.isFinite(selfHp)
+      && Number.isFinite(targetHp)
+      && Number.isFinite(targetDistance)
+      && selfHp >= winningPressureMinHp
+      && targetHp <= winningPressureTargetHpMax
+      && hpGap <= -winningPressureLeadHp
+      && noDamageMs >= winningPressureNoDamageMs
+      && targetDistance <= winningPressureRange;
     const steadyAimMinHp = Math.max(0, Number(cfg.combatShootSteadyAimMinHp || 0));
     const steadyAimMaxHpGap = Math.max(0, Number(cfg.combatShootSteadyAimMaxHpGap || 0));
     const steadyAimNoDamageMs = Math.max(0, Number(cfg.combatShootSteadyAimNoDamageMs || cfg.combatAimSteadyNoDamageMs || 0));
@@ -11519,7 +11550,9 @@ function hpDisplay(value) {
       && noDamageMs >= noDamageDuelNoDamageMs
       && targetDistance <= noDamageDuelRange;
     let stance = 'normal';
-    if (closePressureFireWindow) stance = 'close-pressure';
+    if (winningPressureFireWindow) stance = 'winning-pressure';
+    else if (closePressureFireWindow) stance = 'close-pressure';
+    else if (passiveRunnerFireWindow) stance = 'passive-runner';
     else if (finishLowThreatFireWindow) stance = 'finish-low-threat';
     else if (steadyAimFireWindow) stance = 'steady-aim';
     else if (noDamageDuelFireWindow) stance = 'no-damage-duel';
@@ -11534,14 +11567,17 @@ function hpDisplay(value) {
       targetDistance,
       noDamageMs,
       highHpFireWindow,
+      passiveRunnerFireWindow,
       finishLowThreatFireWindow,
       closePressureFireWindow,
+      winningPressureFireWindow,
       steadyAimFireWindow,
       noDamageDuelFireWindow,
       farNoDamageCloseFireWindow,
       engagedCombat: Boolean(options.engagedCombat),
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
+      passiveRunner: Boolean(options.passiveRunner),
       realBulletPressure: Boolean(options.realBulletPressure),
       targetRealBulletPressure: targetPressureFire,
       steadyAim: Boolean(options.steadyAim),
@@ -11575,7 +11611,9 @@ function hpDisplay(value) {
     const dodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootDodgeReserveMs || hardReserveMs));
     const highHpDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootHighHpDodgeReserveMs || dodgeReserveMs));
     const finishLowThreatDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootFinishLowThreatDodgeReserveMs || hardReserveMs));
+    const passiveRunnerDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPassiveRunnerDodgeReserveMs || highHpDodgeReserveMs));
     const pressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootPressureDodgeReserveMs || highHpDodgeReserveMs));
+    const winningPressureDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootWinningPressureDodgeReserveMs || pressureDodgeReserveMs));
     const steadyAimDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootSteadyAimDodgeReserveMs || highHpDodgeReserveMs));
     const noDamageDuelDodgeReserveMs = Math.max(hardReserveMs, Number(cfg.combatShootNoDamageDuelDodgeReserveMs || highHpDodgeReserveMs));
     const reserveMs = Math.max(dodgeReserveMs, Number(cfg.combatShootReserveMs || dodgeReserveMs));
@@ -11584,8 +11622,10 @@ function hpDisplay(value) {
       : combatTrendState(self, options);
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
+    const passiveRunnerFireWindow = Boolean(trend.passiveRunnerFireWindow);
     const finishLowThreatFireWindow = Boolean(trend.finishLowThreatFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
+	    const winningPressureFireWindow = Boolean(trend.winningPressureFireWindow);
 	    const steadyAimFireWindow = Boolean(trend.steadyAimFireWindow);
 	    const noDamageDuelFireWindow = Boolean(trend.noDamageDuelFireWindow);
 	    const farNoDamageCloseFireWindow = Boolean(trend.farNoDamageCloseFireWindow);
@@ -11605,10 +11645,12 @@ function hpDisplay(value) {
 	      && !closePressureFireWindow
 	      && !steadyAimFireWindow
 	    );
-	    let effectiveDodgeReserveMs = dodgeReserveMs;
+    let effectiveDodgeReserveMs = dodgeReserveMs;
     if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+    if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
     if (finishLowThreatFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, finishLowThreatDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
+    if (winningPressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, winningPressureDodgeReserveMs);
     if (steadyAimFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, steadyAimDodgeReserveMs);
     if (noDamageDuelFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, noDamageDuelDodgeReserveMs);
     const needsMovement = Boolean(options.needsMovement || options.dodging || options.realBulletPressure || options.pressureClose);
@@ -11622,15 +11664,19 @@ function hpDisplay(value) {
       dodgeReserveMs: effectiveDodgeReserveMs,
       standardDodgeReserveMs: dodgeReserveMs,
       highHpDodgeReserveMs,
+      passiveRunnerDodgeReserveMs,
       finishLowThreatDodgeReserveMs,
       pressureDodgeReserveMs,
+      winningPressureDodgeReserveMs,
       steadyAimDodgeReserveMs,
       noDamageDuelDodgeReserveMs,
       hardReserveMs,
       needsMovement,
       highHpFireWindow,
+      passiveRunnerFireWindow,
       finishLowThreatFireWindow,
       closePressureFireWindow,
+      winningPressureFireWindow,
       steadyAimFireWindow,
 	      noDamageDuelFireWindow,
 	      farNoDamageCloseFireWindow,
@@ -11645,6 +11691,7 @@ function hpDisplay(value) {
         engagedCombat: Boolean(trend.engagedCombat),
         targetActive: Boolean(trend.targetActive),
         targetMoving: Boolean(trend.targetMoving),
+        passiveRunner: Boolean(trend.passiveRunner),
         realBulletPressure: Boolean(trend.realBulletPressure),
         steadyAim: Boolean(trend.steadyAim),
         farNoDamageClose: Boolean(trend.farNoDamageCloseFireWindow)
@@ -12608,6 +12655,7 @@ function hpDisplay(value) {
       steadyAim: Boolean(aim.steadyAim),
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
+      passiveRunner: passiveRunner.active,
 	      targetMoving,
 	      noDamageMs: Number(aim.noDamageMs || 0),
 	      aimConfidence: aim.aimConfidence,
@@ -12626,6 +12674,7 @@ function hpDisplay(value) {
       steadyAim: Boolean(aim.steadyAim),
 	      engagedCombat: target.combatIntent === 'engaged',
 	      targetActive: isCurrentlyActive(target),
+	      passiveRunner: passiveRunner.active,
 	      targetMoving,
 	      noDamageMs: Number(aim.noDamageMs || 0),
 	      aimConfidence: aim.aimConfidence,

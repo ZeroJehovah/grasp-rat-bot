@@ -28,9 +28,17 @@ const DEFAULTS = {
   combatShootPressureMinHp: 60,
   combatShootPressureRange: 14500,
   combatShootPressureMaxHpGap: 10,
+  combatShootPassiveRunnerDodgeReserveMs: 1800,
+  combatShootWinningPressureDodgeReserveMs: 1800,
+  combatShootWinningPressureMinHp: 60,
+  combatShootWinningPressureTargetHpMax: 75,
+  combatShootWinningPressureLeadHp: 5,
+  combatShootWinningPressureRange: 11000,
+  combatShootWinningPressureNoDamageMs: 6000,
   combatPressureNoDamageExitMs: 10000,
-  combatPressureNoDamageExitHpThreshold: 70,
+  combatPressureNoDamageExitHpThreshold: 80,
   combatPressureNoDamageExitHpGap: 10,
+  combatPressureNoDamageExitTargetHpMin: 75,
   combatPressureNoDamageExitRange: 14500,
   combatShootFinishLowThreatDodgeReserveMs: 1800,
   combatShootFinishLowThreatMinHp: 90,
@@ -574,7 +582,25 @@ function pressureFireActive(frame, options) {
   const minSelfHp = Math.max(0, Number(options.combatShootPressureMinHp || 0));
   const maxHpGap = Math.max(0, Number(options.combatShootPressureMaxHpGap || 0));
   const range = Math.max(0, Number(options.combatShootPressureRange || 0));
-  const reserveMs = Math.max(0, Number(options.combatShootPressureDodgeReserveMs || 0));
+  const winningMinHp = Math.max(0, Number(options.combatShootWinningPressureMinHp || 0));
+  const winningTargetHpMax = Math.max(0, Number(options.combatShootWinningPressureTargetHpMax || 0));
+  const winningLeadHp = Math.max(0, Number(options.combatShootWinningPressureLeadHp || 0));
+  const winningRange = Math.max(0, Number(options.combatShootWinningPressureRange || 0));
+  const winningNoDamageMs = Math.max(0, Number(options.combatShootWinningPressureNoDamageMs || 0));
+  const winningPressure = Boolean(
+    winningMinHp
+    && winningTargetHpMax
+    && winningRange
+    && selfHpValue >= winningMinHp
+    && targetHpValue <= winningTargetHpMax
+    && hpGap <= -winningLeadHp
+    && noDamageMs(frame) >= winningNoDamageMs
+    && liveDistance !== null
+    && liveDistance <= winningRange
+  );
+  const reserveMs = Math.max(0, Number(winningPressure
+    ? (options.combatShootWinningPressureDodgeReserveMs || options.combatShootPressureDodgeReserveMs || 0)
+    : (options.combatShootPressureDodgeReserveMs || 0)));
   return Boolean(
     Number.isFinite(selfHpValue)
     && Number.isFinite(targetHpValue)
@@ -637,11 +663,74 @@ function runPressureFireScenario(frames, shots, targetSamples, options) {
   };
 }
 
+function passiveRunnerReserveFireActive(frame, options) {
+  if (shootingReason(frame) !== 'reserve-for-dodge') return false;
+  if (!passiveRunnerActive(frame, options, true)) return false;
+  if (incomingRealBullet(frame)) return false;
+  const stamina = stamina5s(frame);
+  const reserveMs = Math.max(0, Number(options.combatShootPassiveRunnerDodgeReserveMs || 0));
+  return Boolean(stamina !== null && stamina >= reserveMs);
+}
+
+function collectPassiveRunnerReserveShots(frames, actualShots, options) {
+  const cadenceMs = Math.max(
+    Number(options.combatShootConserveEveryMs || 0),
+    Number(options.combatShootEveryMs || 0),
+    1
+  );
+  const shots = [];
+  const sortedActualShots = (actualShots || []).slice().sort((a, b) => a.frame.at - b.frame.at);
+  let actualIndex = 0;
+  let lastShotAt = -Infinity;
+  for (const frame of frames) {
+    while (actualIndex < sortedActualShots.length && sortedActualShots[actualIndex].frame.at <= frame.at) {
+      lastShotAt = Math.max(lastShotAt, sortedActualShots[actualIndex].frame.at);
+      actualIndex += 1;
+    }
+    if (!passiveRunnerReserveFireActive(frame, options)) continue;
+    if (frame.at - lastShotAt < cadenceMs) continue;
+    shots.push({
+      id: `passive-runner-reserve:${frame.lineNo}`,
+      frame,
+      hypothetical: true,
+      cadenceMs
+    });
+    lastShotAt = frame.at;
+  }
+  return shots;
+}
+
+function runPassiveRunnerReserveFireScenario(frames, shots, targetSamples, options) {
+  const hypotheticalShots = collectPassiveRunnerReserveShots(frames, shots, options);
+  const combinedShots = [...shots, ...hypotheticalShots]
+    .sort((a, b) => a.frame.at - b.frame.at || String(a.id).localeCompare(String(b.id)));
+  const scenario = runAimScenario(
+    'passive-runner reserve fire vs live target',
+    combinedShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const firstFrame = frames.find(frame => passiveRunnerReserveFireActive(frame, options)) || null;
+  return {
+    ...scenario,
+    extraShots: hypotheticalShots.length,
+    activeStart: firstFrame ? {
+      line: firstFrame.lineNo,
+      time: formatTime(firstFrame.at),
+      noDamageMs: Math.round(firstFrame.noDamageMs),
+      distanceCm: firstFrame.self && firstFrame.nearbyTarget ? Math.round(distance(firstFrame.self, firstFrame.nearbyTarget)) : null,
+      stamina5s: stamina5s(firstFrame)
+    } : null
+  };
+}
+
 function sustainedPressureExitState(frame, options) {
   if (!targetRealBulletPressure(frame)) return null;
   const waitMs = Math.max(0, Number(options.combatPressureNoDamageExitMs || 0));
   const threshold = Math.max(0, Number(options.combatPressureNoDamageExitHpThreshold || 0));
   const minGap = Math.max(0, Number(options.combatPressureNoDamageExitHpGap || 0));
+  const targetHpMin = Math.max(0, Number(options.combatPressureNoDamageExitTargetHpMin || 0));
   const range = Math.max(0, Number(options.combatPressureNoDamageExitRange || options.combatShootPressureRange || options.combatAttackRange || 0));
   const hp = Number(frame.selfHp);
   const enemyHp = Number(frame.targetHp);
@@ -650,7 +739,7 @@ function sustainedPressureExitState(frame, options) {
   const hpGap = enemyHp - hp;
   if (!waitMs || !threshold || !minGap || !range) return null;
   if (!Number.isFinite(hp) || !Number.isFinite(enemyHp) || !Number.isFinite(liveDistance)) return null;
-  if (!(hp <= threshold) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(liveDistance <= range)) return null;
+  if (!(hp <= threshold) || !(enemyHp >= targetHpMin) || !(hpGap >= minGap) || !(elapsed >= waitMs) || !(liveDistance <= range)) return null;
   return {
     active: true,
     line: frame.lineNo,
@@ -658,6 +747,7 @@ function sustainedPressureExitState(frame, options) {
     selfHp: hp,
     targetHp: enemyHp,
     hpGap,
+    targetHpMin,
     noDamageMs: Math.round(elapsed),
     distanceCm: Math.round(liveDistance)
   };
@@ -1431,6 +1521,7 @@ function replay(options) {
     runOutOfRangeReengageScenario(frames, targetSamples, options),
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
     runPassiveRunnerScenario(frames, shots, targetSamples, options),
+    runPassiveRunnerReserveFireScenario(frames, shots, targetSamples, options),
     runFinishLowThreatScenario(frames, shots, targetSamples, options),
     runPressureFireScenario(frames, shots, targetSamples, options),
     runSustainedPressureExitScenario(frames, options),
@@ -1734,6 +1825,7 @@ function selfTest() {
     const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
     const liveIntercept = result.scenarios.find(scenario => scenario.label === 'live intercept vs live target');
     const passiveRunner = result.scenarios.find(scenario => scenario.label === 'passive-runner close intercept vs live target');
+    const passiveRunnerReserve = result.scenarios.find(scenario => scenario.label === 'passive-runner reserve fire vs live target');
     const finishLowThreat = result.scenarios.find(scenario => scenario.label === 'finish-low-threat burst vs live target');
     const outOfRangeReengage = result.scenarios.find(scenario => scenario.label === 'out-of-range reengage dynamic vs live target');
     const sustainedPressureExit = result.scenarios.find(scenario => scenario.label === 'sustained pressure no-damage exit');
@@ -1797,6 +1889,7 @@ function selfTest() {
       realBulletPrecisionHits: realBulletPrecision?.hits || 0,
       liveInterceptHits: liveIntercept?.hits || 0,
       passiveRunnerHits: passiveRunner?.hits || 0,
+      passiveRunnerReserveHits: passiveRunnerReserve?.hits || 0,
       passiveRunnerApproachCm: passiveRunner?.simulatedApproachCm || 0,
       finishLowThreatHits: finishLowThreat?.hits || 0,
       finishLowThreatExtraShots: finishLowThreat?.extraShots || 0,
