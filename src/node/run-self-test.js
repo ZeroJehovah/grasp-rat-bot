@@ -93,6 +93,7 @@ function runSelfTest() {
     combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
+    combatPassiveRunnerConfirmMs: 2500,
     combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
@@ -2928,9 +2929,11 @@ function runSelfTest() {
   }
 
   function combatPassiveRunnerState(self, target, targetDistance, motionScale = 0, realBulletPressure = false) {
+    const t = Date.now();
     const selfHp = hpValue(self);
     const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
     const minDrop = Math.max(0, Number(cfg.combatPassiveRunnerMinDrop || 0));
+    const confirmMs = Math.max(0, Number(cfg.combatPassiveRunnerConfirmMs || 0));
     const targetDrop = Math.max(0, Number(dropValue(target) || target?.drop || 0));
     const moving = speed(target) >= cfg.combatStationarySpeed
       || Number(motionScale || 0) >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
@@ -2942,8 +2945,15 @@ function runSelfTest() {
       ? Math.max(0, firstSelfHp - lastSelfHp)
       : 0;
     const intent = String(target?.combatIntent || current?.intent || '');
+    const originIntent = String(current?.originIntent || current?.intent || intent);
     const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
     const rewarded = targetDrop >= minDrop || runnerIntent;
+    const engagedMs = current
+      ? Math.max(0, t - Number(current.firstSeenAt || current.at || t))
+      : 0;
+    const confirmed = engagedMs >= confirmMs;
+    const seenTargetRealBulletAt = Number(current?.seenTargetRealBulletAt || 0);
+    const seenTargetRealBulletMs = seenTargetRealBulletAt ? Math.max(0, t - seenTargetRealBulletAt) : 0;
     const active = Boolean(
       isActive(target)
       && moving
@@ -2952,6 +2962,8 @@ function runSelfTest() {
       && !isFiringEntity(target)
       && !isInvulnerable(target)
       && !realBulletPressure
+      && confirmed
+      && !seenTargetRealBulletAt
       && Number.isFinite(selfHp)
       && selfHp >= minSelfHp
       && recentSelfDamage <= 0.01
@@ -2966,7 +2978,13 @@ function runSelfTest() {
       motionScale: Number.isFinite(Number(motionScale)) ? Number(Number(motionScale).toFixed(2)) : 0,
       distance: Number.isFinite(Number(targetDistance)) ? Math.round(Number(targetDistance)) : null,
       combatIntent: intent,
-      recentSelfDamage
+      originIntent,
+      recentSelfDamage,
+      engagedMs,
+      confirmMs,
+      confirmed,
+      seenTargetRealBulletAt: seenTargetRealBulletAt || 0,
+      seenTargetRealBulletMs
     };
   }
 
@@ -3888,7 +3906,7 @@ function runSelfTest() {
           noDamageMs: Math.round(pressureClose.noDamageMs),
           farNoDamageClose: Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage')
         } : null,
-        passiveRunner: passiveRunner.active ? passiveRunner : null,
+        passiveRunner,
         noDamageMs,
 	        steadyAim,
 	        opponentProfile,
@@ -6574,10 +6592,12 @@ function runSelfTest() {
           drop: 20,
           combatIntent: 'profit'
         };
-        bot.combatTarget = null;
+        const t = Date.now();
+        bot.combatTarget = { id: 4, at: t - 3000, firstSeenAt: t - 3000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
         bot.testNativeEntities = [{ ...target }];
         const action = chooseCombatAction(self, target, []);
         bot.testNativeEntities = [];
+        bot.combatTarget = null;
         return [
           action.reason,
           action.dx,
@@ -6606,10 +6626,12 @@ function runSelfTest() {
           drop: 20,
           combatIntent: 'profit'
         };
-        bot.combatTarget = null;
+        const t = Date.now();
+        bot.combatTarget = { id: 4, at: t - 3000, firstSeenAt: t - 3000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
         bot.testNativeEntities = [{ ...target }];
         const action = chooseCombatAction(self, target, []);
         bot.testNativeEntities = [];
+        bot.combatTarget = null;
         return [
           action.reason,
           action.dx,
@@ -6636,10 +6658,12 @@ function runSelfTest() {
           drop: 20,
           combatIntent: 'profit'
         };
-        bot.combatTarget = null;
+        const t = Date.now();
+        bot.combatTarget = { id: 4, at: t - 3000, firstSeenAt: t - 3000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
         bot.testNativeEntities = [{ ...target }];
         const action = chooseCombatAction(self, target, []);
         bot.testNativeEntities = [];
+        bot.combatTarget = null;
         return [
           action.reason,
           action.shoot,
@@ -6649,6 +6673,77 @@ function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-burst-fire|true|1800|true|passive-runner'
+    },
+    {
+      name: 'passive runner waits for confirm window',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = {
+          user_id: 4,
+          name: 'runner',
+          x: 12000,
+          y: 0,
+          vx: -35,
+          vy: 35,
+          current_join_mode: 'Active',
+          hp: 100,
+          distance: 12000,
+          drop: 20,
+          combatIntent: 'profit'
+        };
+        const t = Date.now();
+        bot.combatTarget = { id: 4, at: t - 1200, firstSeenAt: t - 1200, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
+        bot.testNativeEntities = [{ ...target }];
+        const action = chooseCombatAction(self, target, []);
+        bot.testNativeEntities = [];
+        bot.combatTarget = null;
+        return [
+          action.reason,
+          Boolean(action.combatState?.passiveRunner?.active),
+          action.combatState?.passiveRunner?.confirmed,
+          action.combatState?.passiveRunner?.engagedMs >= action.combatState?.passiveRunner?.confirmMs
+        ].join('|');
+      })(),
+      want: 'combat-attack|false|false|false'
+    },
+    {
+      name: 'passive runner disables after target real bullet history',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 };
+        const target = {
+          user_id: 4,
+          name: 'runner',
+          x: 12000,
+          y: 0,
+          vx: -35,
+          vy: 35,
+          current_join_mode: 'Active',
+          hp: 100,
+          distance: 12000,
+          drop: 20,
+          combatIntent: 'engaged'
+        };
+        const t = Date.now();
+        bot.combatTarget = {
+          id: 4,
+          at: t - 5000,
+          firstSeenAt: t - 5000,
+          intent: 'engaged',
+          originIntent: 'profit',
+          seenTargetRealBulletAt: t - 800,
+          hp: 100,
+          motionSamples: [{ selfHp: 100 }, { selfHp: 100 }]
+        };
+        bot.testNativeEntities = [{ ...target }];
+        const action = chooseCombatAction(self, target, []);
+        bot.testNativeEntities = [];
+        bot.combatTarget = null;
+        return [
+          Boolean(action.combatState?.passiveRunner?.active),
+          action.combatState?.passiveRunner?.seenTargetRealBulletMs > 0
+        ].join('|');
+      })(),
+      want: 'false|true'
     },
     {
       name: 'winning pressure keeps firing to finish low target',

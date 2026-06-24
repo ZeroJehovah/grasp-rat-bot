@@ -91,6 +91,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatOutOfRangeReengageRecentInRangeMs: 2500,
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
+    combatPassiveRunnerConfirmMs: 2500,
     combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,

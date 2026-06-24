@@ -102,6 +102,7 @@
 - `combatShootWinningPressureNoDamageMs = 6000`
 - `combatPassiveRunnerMinSelfHp = 80`
 - `combatPassiveRunnerMinDrop = 1`
+- `combatPassiveRunnerConfirmMs = 2500`
 - `combatPassiveRunnerCloseRange = 4500`
 - `combatPassiveRunnerInterceptSpreadScale = 0`
 - `combatAimMotionSampleMs = 50`

@@ -3410,6 +3410,7 @@ ${importantLogSource()}
     const same = previous && String(previous.id ?? '') === String(id);
     const t = Date.now();
     const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
+    const intent = action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '';
     const currentHp = knownHpValue(target);
     const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
     const damaged = currentHp !== null && previousHp !== null && currentHp < previousHp - 0.01;
@@ -3425,6 +3426,14 @@ ${importantLogSource()}
 	      t,
 	      Math.max(Number(cfg.combatMotionHistoryWindowMs || 2000), Number(cfg.combatTradeEstimateWindowMs || 6000))
 	    );
+    const incomingOwnerId = action?.incomingBullet?.ownerId ?? action?.incomingBullet?.owner_id ?? null;
+    const targetOwnsRealBullet = Boolean(
+      action?.incomingBullet
+      && !action.incomingBullet.synthetic
+      && incomingOwnerId !== null
+      && incomingOwnerId !== undefined
+      && String(incomingOwnerId) === String(id)
+    );
 	    bot.combatTarget = {
       id,
       at: t,
@@ -3437,9 +3446,14 @@ ${importantLogSource()}
       drop: Number(target.drop || 0),
       distance: targetDistance,
       reason: action?.reason || '',
-      intent: action?.target?.combatIntent || action?.combatIntent || target.combatIntent || '',
+      intent,
+      originIntent: same ? String(previous.originIntent || previous.intent || intent) : String(intent || ''),
+      originReason: same ? String(previous.originReason || previous.reason || '') : String(action?.reason || ''),
       lastDamageAt,
       lastInRangeAt,
+	      seenTargetRealBulletAt: targetOwnsRealBullet
+	        ? t
+	        : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
 	      lastDamageAmount: damaged ? Math.max(0, previousHp - currentHp) : Number(previous?.lastDamageAmount || 0),
 	      noDamageMs: Math.max(0, t - lastDamageAt),
 	      motionSamples,
@@ -6208,9 +6222,11 @@ ${importantLogSource()}
   }
 
   function combatPassiveRunnerState(self, target, targetDistance, damageState = null, pressure = null, motionScale = 0) {
+    const t = Date.now();
     const selfHp = hpValue(self);
     const minSelfHp = Math.max(0, Number(cfg.combatPassiveRunnerMinSelfHp || 0));
     const minDrop = Math.max(0, Number(cfg.combatPassiveRunnerMinDrop || 0));
+    const confirmMs = Math.max(0, Number(cfg.combatPassiveRunnerConfirmMs || 0));
     const targetDrop = Math.max(0, Number(dropValue(target) || target?.drop || 0));
     const active = isCurrentlyActive(target);
     const moving = speed(target) >= cfg.combatStationarySpeed
@@ -6226,8 +6242,15 @@ ${importantLogSource()}
       ? Math.max(0, firstSelfHp - lastSelfHp)
       : 0;
     const intent = String(target?.combatIntent || current?.intent || '');
+    const originIntent = String(current?.originIntent || current?.intent || intent);
     const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
     const rewarded = targetDrop >= minDrop || runnerIntent;
+    const engagedMs = current
+      ? Math.max(0, t - Number(current.firstSeenAt || current.at || t))
+      : 0;
+    const confirmed = engagedMs >= confirmMs;
+    const seenTargetRealBulletAt = Number(current?.seenTargetRealBulletAt || 0);
+    const seenTargetRealBulletMs = seenTargetRealBulletAt ? Math.max(0, t - seenTargetRealBulletAt) : 0;
     const eligible = Boolean(
       active
       && moving
@@ -6237,6 +6260,8 @@ ${importantLogSource()}
       && !isInvulnerable(target)
       && !realPressure
       && !recentlyInjured
+      && confirmed
+      && !seenTargetRealBulletAt
       && Number.isFinite(selfHp)
       && selfHp >= minSelfHp
       && recentSelfDamage <= 0.01
@@ -6253,6 +6278,12 @@ ${importantLogSource()}
       recentSelfDamage,
       pressureReason: pressure?.reason || '',
       combatIntent: intent,
+      originIntent,
+      engagedMs,
+      confirmMs,
+      confirmed,
+      seenTargetRealBulletAt: seenTargetRealBulletAt || 0,
+      seenTargetRealBulletMs,
       noDamageMs: Math.max(0, Number(damageState?.noDamageMs || 0))
     };
   }
@@ -7791,6 +7822,13 @@ ${importantLogSource()}
     const targetHp = combatHpValue(target);
     const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
     const targetMotionScale = combatAimMotionScale(target);
+    const currentCombatTarget = bot.combatTarget && combatTargetId(bot.combatTarget) === combatTargetId(target)
+      ? bot.combatTarget
+      : null;
+    const combatOriginIntent = String(target?.combatEngagement?.originIntent || currentCombatTarget?.originIntent || target.combatIntent || '');
+    const combatOriginReason = String(target?.combatEngagement?.originReason || currentCombatTarget?.originReason || '');
+    const seenTargetRealBulletAt = Number(target?.combatEngagement?.seenTargetRealBulletAt || currentCombatTarget?.seenTargetRealBulletAt || 0);
+    const seenTargetRealBulletMs = seenTargetRealBulletAt ? Math.max(0, Date.now() - seenTargetRealBulletAt) : 0;
     const targetMoving = speed(target) >= cfg.combatStationarySpeed
       || targetMotionScale >= Math.max(0, Number(cfg.combatAimMovingScaleThreshold || 0.15));
     const baseTarget = {
@@ -7813,7 +7851,10 @@ ${importantLogSource()}
       life: target.life || '',
       active: isCurrentlyActive(target),
       firing: isFiringEntity(target),
-      invulnerable: isInvulnerable(target)
+      invulnerable: isInvulnerable(target),
+      combatOriginIntent,
+      combatOriginReason: combatOriginReason || '',
+      seenTargetRealBulletMs: seenTargetRealBulletMs || 0
 	    };
 	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
 	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
@@ -8190,6 +8231,10 @@ ${importantLogSource()}
       combatState: {
         selfHp,
         targetHp,
+        combatOriginIntent,
+        combatOriginReason: combatOriginReason || '',
+        seenTargetRealBulletMs: seenTargetRealBulletMs || 0,
+        targetRealBulletPressure,
         aim: {
           movementMode: aim.movementMode || '',
           strategy: aim.aimStrategy || '',
@@ -8260,7 +8305,7 @@ ${importantLogSource()}
           preferClosing: Boolean(pressureClose.active),
           merged: Boolean(!realBulletPressure)
         } : null,
-        passiveRunner: passiveRunner.active ? passiveRunner : null,
+        passiveRunner,
         movementSuppressed,
         shooting,
         disadvantageObservation,
