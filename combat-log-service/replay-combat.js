@@ -1041,6 +1041,7 @@ function passiveRunnerActive(frame, options, allowMissingIntent = false) {
   if (!frame.self || !target) return false;
   const minSelfHp = Math.max(0, Number(options.combatPassiveRunnerMinSelfHp || 0));
   const minDrop = Math.max(0, Number(options.combatPassiveRunnerMinDrop || 0));
+  const confirmMs = Math.max(0, Number(options.combatPassiveRunnerConfirmMs || 0));
   const moving = entitySpeed(target) >= Number(options.combatStationarySpeed || 0);
   const active = Boolean(target.active || target.current_join_mode === 'Active' || target.mode === 'Active');
   const firing = Boolean(target.firing || target.attacking || target.is_attacking);
@@ -1048,6 +1049,14 @@ function passiveRunnerActive(frame, options, allowMissingIntent = false) {
   const drop = Math.max(0, Number(target.drop ?? frame.target?.drop ?? 0) || 0);
   const intent = String(target.combatIntent || frame.target?.combatIntent || '');
   const runnerIntent = /^(defensive|engaged|profit|reengage)$/.test(intent);
+  const engagedAgeMs = numberOrNull(
+    frame.entry?.combatState?.passiveRunner?.engagedMs
+      ?? frame.entry?.decision?.combatState?.passiveRunner?.engagedMs
+  ) || 0;
+  const seenTargetRealBulletAt = numberOrNull(
+    frame.entry?.combatState?.passiveRunner?.seenTargetRealBulletAt
+      ?? frame.entry?.decision?.combatState?.passiveRunner?.seenTargetRealBulletAt
+  ) || 0;
   return Boolean(
     active
     && moving
@@ -1055,6 +1064,8 @@ function passiveRunnerActive(frame, options, allowMissingIntent = false) {
     && !firing
     && !invulnerable
     && !incomingRealBullet(frame)
+    && engagedAgeMs >= confirmMs
+    && !seenTargetRealBulletAt
     && Number(frame.selfHp) >= minSelfHp
     && (drop >= minDrop || runnerIntent)
   );
@@ -1071,6 +1082,7 @@ function simulatePassiveRunnerSelfSamples(frames, options) {
   let activeStarted = null;
   let activeFrames = 0;
   let runnerLocked = false;
+  let seenTargetRealBullet = false;
   const closeRange = Math.max(0, Number(options.combatPassiveRunnerCloseRange || 0));
   const speedPerMs = Math.max(0, Number(options.combatTargetDodgeSpeedPerTick || 50)) / Math.max(1, Number(options.tickMs || 50));
   for (const frame of frames) {
@@ -1078,7 +1090,8 @@ function simulatePassiveRunnerSelfSamples(frames, options) {
     if (!simulated) continue;
     const dt = Math.max(0, Number(frame.at) - previousAt);
     previousAt = Number(frame.at);
-    const active = passiveRunnerActive(frame, options, runnerLocked);
+    if (targetRealBulletPressure(frame)) seenTargetRealBullet = true;
+    const active = !seenTargetRealBullet && passiveRunnerActive(frame, options, runnerLocked);
     if (active && frame.nearbyTarget) {
       runnerLocked = true;
       activeFrames += 1;
@@ -1092,7 +1105,7 @@ function simulatePassiveRunnerSelfSamples(frames, options) {
         }
       }
     } else if (frame.self) {
-      runnerLocked = false;
+      if (!passiveRunnerActive(frame, options, runnerLocked)) runnerLocked = false;
       simulated = { ...frame.self };
     }
     samples.push({ at: frame.at, x: simulated.x, y: simulated.y });
