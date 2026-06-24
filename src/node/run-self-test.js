@@ -1682,6 +1682,17 @@ function runSelfTest() {
     }
     return { totalValue, totalStaminaCost, totalDistance };
   }
+  function coinRoutePoints(route) {
+    return (route || [])
+      .map((coin, index) => ({
+        id: coinRouteKey(coin),
+        x: Number(coin?.x),
+        y: Number(coin?.y),
+        amount: Number(coin?.amount || 0),
+        order: index + 1
+      }))
+      .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  }
   function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
     if (!self || !anchor) return null;
     const route = [anchor];
@@ -1741,6 +1752,7 @@ function runSelfTest() {
       route: true,
       coinRoute: {
         ids: bestRoute.map(coinRouteKey),
+        points: coinRoutePoints(bestRoute),
         value: summary.totalValue,
         staminaCost: summary.totalStaminaCost,
         legCount: bestRoute.length,
@@ -3951,6 +3963,7 @@ function runSelfTest() {
     };
     const buildCoinRouteMeta = route => route ? {
       ids: route.ids,
+      points: Array.isArray(route.points) ? route.points : null,
       value: Number(route.value || 0),
       staminaCost: Math.round(Number(route.staminaCost || 0)),
       legCount: Number(route.legCount || 0),
@@ -6998,9 +7011,9 @@ function runSelfTest() {
             { drop_id: 4, x: 13000, y: 0, amount: 1, native: true }
           ]
         });
-        return action.kind + ':' + action.reason + ':' + action.id + ':' + action.coinRoute?.legCount + ':' + action.coinRoute?.value;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + action.coinRoute?.legCount + ':' + action.coinRoute?.points?.length + ':' + action.coinRoute?.value;
       })(),
-      want: 'coin:best-opportunity-coin-route:2:3:3'
+      want: 'coin:best-opportunity-coin-route:2:3:3:3'
     },
     {
       name: 'visible afk drop still beats weaker coin route by stamina roi',

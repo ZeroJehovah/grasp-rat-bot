@@ -232,6 +232,21 @@ function targetOverlaySource() {
       .sort((a, b) => a.distance - b.distance)[0]?.coin || null;
   }
 
+  function targetOverlayRoutePoints(decision, target) {
+    const route = decision?.coinRoute || target?.coinRoute || null;
+    const points = Array.isArray(route?.points) ? route.points : [];
+    if (!points.length) return [];
+    const resolved = points
+      .map(point => targetOverlayResolvedCoin(point) || point)
+      .map(targetOverlayWorldPoint)
+      .filter(Boolean);
+    if (resolved.length && target) {
+      const first = targetOverlayWorldPoint(target);
+      if (first) resolved[0] = first;
+    }
+    return resolved;
+  }
+
   function targetOverlayResolvedEntity(target) {
     const targetId = target?.id ?? target?.user_id ?? target?.userId;
     const name = String(target?.name || '');
@@ -290,15 +305,33 @@ function targetOverlaySource() {
       const start = targetOverlayPoint(self, self, view);
       const end = targetOverlayPoint(target, self, view);
       if (!start || !end) return;
+      const routePoints = targetOverlayRoutePoints(decision, target)
+        .map(point => targetOverlayPoint(point, self, view))
+        .filter(Boolean);
       ctx.save();
       ctx.strokeStyle = style.stroke;
       ctx.lineWidth = 2;
       ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       ctx.setLineDash([10, 8]);
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
+      if (routePoints.length > 1) {
+        for (const point of routePoints) ctx.lineTo(point.x, point.y);
+      } else {
+        ctx.lineTo(end.x, end.y);
+      }
       ctx.stroke();
+      if (routePoints.length > 1) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(250,204,21,.24)';
+        for (const point of routePoints) {
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
       ctx.restore();
     } catch (_) {}
   }

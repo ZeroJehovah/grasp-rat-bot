@@ -8504,6 +8504,18 @@ ${importantLogSource()}
     return { totalValue, totalStaminaCost, totalDistance };
   }
 
+  function coinRoutePoints(route) {
+    return (route || [])
+      .map((coin, index) => ({
+        id: coinRouteKey(coin),
+        x: Number(coin?.x),
+        y: Number(coin?.y),
+        amount: Number(coin?.amount || 0),
+        order: index + 1
+      }))
+      .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  }
+
   function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
     if (!self || !anchor) return null;
     const route = [anchor];
@@ -8563,6 +8575,7 @@ ${importantLogSource()}
       route: true,
       coinRoute: {
         ids: bestRoute.map(coinRouteKey),
+        points: coinRoutePoints(bestRoute),
         value: summary.totalValue,
         staminaCost: summary.totalStaminaCost,
         legCount: bestRoute.length,
@@ -8849,6 +8862,7 @@ ${importantLogSource()}
     const route = coin?.coinRoute || null;
     const routeMeta = route ? {
       ids: route.ids,
+      points: Array.isArray(route.points) ? route.points : null,
       value: Number(route.value || 0),
       staminaCost: Math.round(Number(route.staminaCost || 0)),
       legCount: Number(route.legCount || 0),
