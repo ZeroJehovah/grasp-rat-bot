@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.201"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.202"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1579,6 +1579,21 @@
       .sort((a, b) => a.distance - b.distance)[0]?.coin || null;
   }
 
+  function targetOverlayRoutePoints(decision, target) {
+    const route = decision?.coinRoute || target?.coinRoute || null;
+    const points = Array.isArray(route?.points) ? route.points : [];
+    if (!points.length) return [];
+    const resolved = points
+      .map(point => targetOverlayResolvedCoin(point) || point)
+      .map(targetOverlayWorldPoint)
+      .filter(Boolean);
+    if (resolved.length && target) {
+      const first = targetOverlayWorldPoint(target);
+      if (first) resolved[0] = first;
+    }
+    return resolved;
+  }
+
   function targetOverlayResolvedEntity(target) {
     const targetId = target?.id ?? target?.user_id ?? target?.userId;
     const name = String(target?.name || '');
@@ -1637,15 +1652,33 @@
       const start = targetOverlayPoint(self, self, view);
       const end = targetOverlayPoint(target, self, view);
       if (!start || !end) return;
+      const routePoints = targetOverlayRoutePoints(decision, target)
+        .map(point => targetOverlayPoint(point, self, view))
+        .filter(Boolean);
       ctx.save();
       ctx.strokeStyle = style.stroke;
       ctx.lineWidth = 2;
       ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       ctx.setLineDash([10, 8]);
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
+      if (routePoints.length > 1) {
+        for (const point of routePoints) ctx.lineTo(point.x, point.y);
+      } else {
+        ctx.lineTo(end.x, end.y);
+      }
       ctx.stroke();
+      if (routePoints.length > 1) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(250,204,21,.24)';
+        for (const point of routePoints) {
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
       ctx.restore();
     } catch (_) {}
   }
@@ -13085,6 +13118,18 @@ function hpDisplay(value) {
     return { totalValue, totalStaminaCost, totalDistance };
   }
 
+  function coinRoutePoints(route) {
+    return (route || [])
+      .map((coin, index) => ({
+        id: coinRouteKey(coin),
+        x: Number(coin?.x),
+        y: Number(coin?.y),
+        amount: Number(coin?.amount || 0),
+        order: index + 1
+      }))
+      .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  }
+
   function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
     if (!self || !anchor) return null;
     const route = [anchor];
@@ -13144,6 +13189,7 @@ function hpDisplay(value) {
       route: true,
       coinRoute: {
         ids: bestRoute.map(coinRouteKey),
+        points: coinRoutePoints(bestRoute),
         value: summary.totalValue,
         staminaCost: summary.totalStaminaCost,
         legCount: bestRoute.length,
@@ -13430,6 +13476,7 @@ function hpDisplay(value) {
     const route = coin?.coinRoute || null;
     const routeMeta = route ? {
       ids: route.ids,
+      points: Array.isArray(route.points) ? route.points : null,
       value: Number(route.value || 0),
       staminaCost: Math.round(Number(route.staminaCost || 0)),
       legCount: Number(route.legCount || 0),

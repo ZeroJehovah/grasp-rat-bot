@@ -451,7 +451,9 @@ function main() {
       const pickBody = functionBody(text, 'pickBestOpportunity');
       assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
       assert(text.includes('function coinRouteLegClear'), 'coin route leg safety checker not found');
+      assert(text.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
       assert(text.includes('best-opportunity-coin-route'), 'coin route decision reason not found');
+      assert(text.includes('points: coinRoutePoints(bestRoute)'), 'coin route action metadata does not expose route points');
       assert(routeBody.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'coin route planner can include snapshot-only coins');
       assert(routeBody.includes('cfg.coinRoutePoolLimit'), 'coin route planner is not pool bounded');
       assert(routeBody.includes('cfg.coinRouteAnchorLimit'), 'coin route planner is not anchor bounded');
@@ -1207,8 +1209,15 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'visible afk drop still beats weaker coin route by stamina roi'"), 'AFK-vs-coin-route ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route leg threat block rejects path through active danger'"), 'coin route threat-block self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route rejects unaffordable whole route'"), 'coin route stamina budget self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'near realtime coin remains first target before known field route'"), 'near realtime coin first-target route self-test not found');
-    assert(nodeSelfTestSource.includes('coinRoute?.legCount'), 'coin route metadata self-test assertion not found');
+      assert(nodeSelfTestSource.includes("name: 'near realtime coin remains first target before known field route'"), 'near realtime coin first-target route self-test not found');
+      assert(nodeSelfTestSource.includes('coinRoute?.legCount'), 'coin route metadata self-test assertion not found');
+      assert(nodeSelfTestSource.includes('coinRoute?.points?.length'), 'coin route point metadata self-test assertion not found');
+  });
+
+  check('target overlay renders selected coin route points', () => {
+    assert(targetOverlaySourceModule.includes('function targetOverlayRoutePoints'), 'target overlay route point resolver not found');
+    assert(targetOverlaySourceModule.includes('decision?.coinRoute || target?.coinRoute'), 'target overlay does not read route metadata from decisions');
+    assert(targetOverlaySourceModule.includes('for (const point of routePoints) ctx.lineTo(point.x, point.y);'), 'target overlay does not connect route points');
   });
 
   check('run-self-test module covers combat fire discipline self-tests', () => {
