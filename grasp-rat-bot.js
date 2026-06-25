@@ -253,6 +253,7 @@ function browserBotSource(config) {
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
 		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
 		  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
+	      const LOGIN_POINT_SAFETY_KEY = 'graspRatLoginPointSafety';
 	      const EXIT_AUDIT_PENDING_LOGS_KEY = 'graspRatExitAuditPendingLogs';
 	      const IMPORTANT_LOGS_KEY = 'graspRatImportantLogs';
 	      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
@@ -480,6 +481,7 @@ function browserBotSource(config) {
 	      lastRemoteError: String(preserved.importantLogging?.lastRemoteError || '')
 	    },
 	    loginSnapshotGate: normalizeLoginSnapshotGateState(preserved.loginSnapshotGate),
+	    loginPointSafety: preserved.loginPointSafety && typeof preserved.loginPointSafety === 'object' ? { ...preserved.loginPointSafety } : null,
 	    leave403SnapshotRecovery: {
       streak: Math.max(0, Number(preserved.leave403SnapshotRecovery?.streak || 0) || 0),
       required: Math.max(1, Math.round(Number(cfg.leave403SnapshotSuccessRequired || 5) || 5)),
@@ -3871,7 +3873,7 @@ ${importantLogSource()}
 	      bot.globalState.coinDrops = snapshot?.coin_drops || [];
 		      bot.globalState.messages = snapshot?.messages || [];
 		      bot.globalState.snapshotRefreshedAt = Date.now();
-		      noteLoginSnapshotProbe(true, { tick: bot.globalState.tick });
+		      noteLoginSnapshotProbe(true, { tick: bot.globalState.tick, entities: bot.globalState.entities });
 		      noteLeave403SnapshotProbe(true, { tick: bot.globalState.tick });
 		    } else {
 		      const message = snapshotRes.reason?.message || String(snapshotRes.reason || '');
@@ -10404,6 +10406,7 @@ ${importantLogSource()}
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
 	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
+      maybeRecordLoginPoint(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {
@@ -10478,6 +10481,7 @@ ${importantLogSource()}
           nearestActive: bot.lastSafety?.nearestActive || null,
           nearestHuman: bot.lastSafety?.nearestHuman || null
         };
+        rememberLoginPointDamageThreat(bot.pendingInjuryLeave, 'self-hp-drop');
       }
 	      ensureControlWs();
       const serverPositionStall = assessServerPositionStall(self);

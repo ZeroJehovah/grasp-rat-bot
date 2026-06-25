@@ -30,6 +30,7 @@ function buildBrowserPreservedState(previousBot) {
       }
       : null,
     loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
+    loginPointSafety: previousBot?.loginPointSafety && typeof previousBot.loginPointSafety === 'object' ? { ...previousBot.loginPointSafety } : null,
     leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
     postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
     combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'

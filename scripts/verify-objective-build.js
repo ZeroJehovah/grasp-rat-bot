@@ -37,6 +37,10 @@ const NUMERIC_INVARIANTS = [
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'loginSnapshotSuccessRequired', value: 3 },
+  { key: 'loginPointSafetySuccessRequired', value: 12 },
+  { key: 'loginPointSafetyRadius', value: 16000 },
+  { key: 'loginPointSafetyMoveThreshold', value: 500 },
+  { key: 'loginPointSafetyDangerDropMin', value: 2 },
   { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
   { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
   { key: 'opportunityVisibleDistance', value: 50000 },
@@ -1002,6 +1006,22 @@ function main() {
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not advance login gate');
       assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
+      assert(text.includes('function loginPointSafetyStatus'), 'login-point safety status helper not found');
+      assert(text.includes('function evaluateLoginPointSafety'), 'login-point safety evaluator not found');
+      assert(text.includes('function maybeRecordLoginPoint'), 'post-login point recorder not found');
+      assert(text.includes('LOGIN_POINT_SAFETY_KEY'), 'login-point safety persistence key not found');
+      const pointProbeBody = functionBody(text, 'noteLoginPointSafetyProbe');
+      assert(pointProbeBody.includes('evaluateLoginPointSafety'), 'login-point safety probe does not evaluate snapshot entities');
+      assert(pointProbeBody.includes('state.streak = 0'), 'unsafe login-point sample does not reset streak');
+      const resetGateBody = functionBody(text, 'resetLoginSnapshotGate');
+      assert(resetGateBody.includes('resetLoginPointSafetyGate(reason)'), 'exit snapshot gate reset does not reset login-point safety streak');
+      const pointDangerBody = functionBody(text, 'loginPointDangerReason');
+      assert(pointDangerBody.includes("'damaged-self-today'"), 'login-point safety does not block known same-day damage actors');
+      assert(pointDangerBody.includes("dropValue(entity) >= minDrop"), 'login-point safety does not hard-block Drop danger');
+      assert(pointDangerBody.includes("return 'active-mode'"), 'login-point safety does not block Active mode');
+      assert(pointDangerBody.includes("return 'recent-movement'"), 'login-point safety does not block recent movement');
+      assert(pointDangerBody.includes("return 'stamina-not-full'"), 'login-point safety does not block non-full 5s stamina');
+      assert(pointDangerBody.includes("return 'firing'"), 'login-point safety does not block firing evidence');
       const loginBody = functionBody(text, 'maybeStartAutoLogin');
       assert(loginBody.includes('await ensureLoginSnapshotGate(reason)'), 'auto login does not wait for snapshot gate');
       assert(loginBody.includes("reason: 'snapshot-gate'"), 'snapshot gate block reason not reported');
