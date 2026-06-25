@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `245`.
+- Latest bot self-test count: `248`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `18`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -25,6 +25,7 @@
   - missing held 54m coin target prevents a same-value 151m visible coin from taking over during source flicker;
   - nearby Drop=3 AFK target beats far single coin by stamina ROI;
   - Drop=3 AFK target in attack range beats 400m visible coin;
+  - out-of-range AFK Drop targets cool down after observed 5s stamina consumption, while newly visible AFK-like targets remain eligible and in-range AFK targets ignore the cooldown;
   - low target motion shrinks combat aim jitter;
   - moving combat targets use intercept aim, and the intercept solver leads lateral targets with render-delay compensation;
   - CDP validation on 2026-06-17 showed direct float `vel` components such as `0.6 0.8` and `0.9239 0.3827` do not move the player, while `2 1` collapses to the same 45° diagonal as `1 1`; movement remains 8-direction quantized and does not accept continuous float vectors;

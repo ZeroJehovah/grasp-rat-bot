@@ -14,6 +14,7 @@ function buildBrowserPreservedState(previousBot) {
     lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
     opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
     opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
+    opportunityAfkStamina: previousBot?.opportunityAfkStamina instanceof Map ? new Map(previousBot.opportunityAfkStamina) : new Map(),
     pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
     lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
     lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,

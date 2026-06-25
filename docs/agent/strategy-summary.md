@@ -44,6 +44,7 @@
   - non-survival actions are skipped when estimated cost cannot fit the 1h/1d stamina budget.
   - if the 1h budget cannot afford the nearest safe coin candidate, the bot exits immediately with `stamina-budget-coin-leave` instead of waiting in game; this exit waits a fixed 30 minutes before relogin.
   - AFK Drop targets enter opportunity scoring from Drop `3`; active/profit combat still uses the higher attack gates.
+  - out-of-range AFK Drop targets are skipped for 60s after the bot observes their 5s stamina decreasing. In-range AFK targets keep the old immediate attack behavior, and newly visible AFK-like targets without observed stamina consumption can still be approached immediately.
   - opportunity stick bonus is disabled and switch hysteresis is small, so a clearly better nearby ROI target can replace an older far target promptly.
   - similar same-tier opportunities are chosen immediately; once a target is selected, switch hold/margins keep the bot from jumping to another similar-ROI target unless it is clearly better.
   - held coin opportunities are matched by id or nearby coordinates and can survive short candidate-source gaps for the remaining hold window, so a temporarily missing current coin does not cause a same-tier 1-coin target flip.
