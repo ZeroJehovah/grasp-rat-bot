@@ -114,7 +114,7 @@ Options:
   --target-name <name> Enemy name fallback when id is unavailable.
   --hit-radius <cm>    Bullet hit radius estimate. Default: ${DEFAULTS.hitRadiusCm}
   --json               Print JSON instead of a compact text report.
-  --self-test          Replay the 2026-06-14 xmsthc reference fight and require improvement.
+  --self-test          Replay available historical reference fights and require improvement.
 `);
 }
 
@@ -1832,7 +1832,16 @@ function selfTest() {
       expectOutOfRangeReengageImproved: true
     }
   ];
-  const summaries = cases.map(item => {
+  const skipped = [];
+  const summaries = cases.filter(item => {
+    if (fs.existsSync(item.file)) return true;
+    skipped.push({
+      id: item.id,
+      file: path.relative(__dirname, item.file),
+      reason: 'missing-local-log'
+    });
+    return false;
+  }).map(item => {
     const result = replay({ ...DEFAULTS, ...item });
     const logged = result.scenarios.find(scenario => scenario.label === 'logged aimTarget vs live target');
     const realBulletPrecision = result.scenarios.find(scenario => scenario.label === 'real-bullet live precision vs live target');
@@ -1917,7 +1926,7 @@ function selfTest() {
       snapshotOutlierRejections: result.snapshotOutlierRejections
     };
   });
-  console.log(JSON.stringify({ ok: true, cases: summaries }, null, 2));
+  console.log(JSON.stringify({ ok: true, cases: summaries, skipped }, null, 2));
 }
 
 function main() {

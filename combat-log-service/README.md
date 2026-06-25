@@ -39,6 +39,20 @@ node server.js --host 127.0.0.1 --port 18765 --dir ./logs
 
 `--max-body-bytes` 可以提高单次批量 POST 的最大请求体，默认 8 MiB。
 
+服务启动时会先清理一次详细日志，然后按本地时间每天 `03:30` 清理一次。默认只保留最近 3 个本地日期目录里的详细 `combat`/`misc` JSONL 和旧版平铺战斗 JSONL；`important`、`audit` 和 `daily-*.md` 会保留，用于日报和退出审计。可用参数调整：
+
+```bash
+node server.js --cleanup-retention-days 3 --cleanup-at 03:30
+node server.js --no-cleanup
+```
+
+也可以单独手动执行或预览清理：
+
+```bash
+npm run cleanup
+npm run cleanup -- --dry-run
+```
+
 ## Tampermonkey 配置
 
 在游戏页面控制台执行：
