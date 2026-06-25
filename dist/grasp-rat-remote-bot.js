@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.207"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.208"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -3639,6 +3639,154 @@ function hpDisplay(value) {
 	    };
 		  }
 
+  function recentUnsafeExitContext(detail, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
+    if (!detail || typeof detail !== 'object') return null;
+    const at = Number(
+      detail.confirmedAt
+        || detail.completedAt
+        || detail.exitTriggeredAt
+        || detail.leaveRequestSentAt
+        || detail.at
+        || 0
+    ) || 0;
+    const ageMs = at ? Math.max(0, Math.round(t - at)) : Infinity;
+    if (!(ageMs <= Math.max(1000, Number(maxAgeMs || 0) || 0))) return null;
+    const text = [
+      detail.reason,
+      detail.summary,
+      detail.displayReason,
+      detail.enemyLeaveReason,
+      detail.loginSuppressReason,
+      detail.pendingLoginSuppressReason
+    ].map(value => String(value || '').toLowerCase()).join(' ');
+    const offlineSafety = detail.offlineSafety || null;
+    const unsafe = Boolean(
+      offlineSafety?.unsafe
+        || offlineSafety?.reconnectChurn
+        || offlineSafety?.noSelfGameSession
+        || /websocket|offline|disconnect|reconnect|server position|missing self|stamina|pending unsafe/i.test(text)
+    );
+    if (!unsafe) return null;
+    return {
+      reason: String(detail.reason || detail.summary || detail.displayReason || 'recent unsafe exit'),
+      ageMs,
+      at
+    };
+  }
+
+  function firstRecentUnsafeExitContext(details, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
+    for (const detail of Array.isArray(details) ? details : [details]) {
+      const context = recentUnsafeExitContext(detail, t, maxAgeMs);
+      if (context) return context;
+    }
+    return null;
+  }
+
+  function liveSessionMismatchTakeoverState(control, noSelfExit) {
+    const t = Date.now();
+    const blockedBy = [];
+    const userId = Number(control?.currentUserId || getCurrentUserId() || 0) || 0;
+    const hasToken = Boolean(control?.hasToken || getSessionToken());
+    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+    const nativeWsOpenOrConnecting = Boolean(
+      control?.rawWsOpen
+        || control?.nativeWsOpen
+        || control?.connecting
+        || isWsConnectingOrOpen(control?.nativeWsReadyState)
+        || isWsConnectingOrOpen(control?.wsReadyState)
+    );
+    const reconnectChurn = Boolean(noSelfExit?.reconnectChurn || control?.nativeReconnectChurn);
+    const wsOfflineish = Boolean(noSelfExit?.wsOfflineish);
+    const suppressRemainingMs = loginSuppressRemainingMs();
+    let suppressReason = '';
+    try {
+      suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+    } catch (_) {}
+    const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs(t);
+    const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
+    const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+    const gate = snapshotLoginGateStatus(t);
+    const resetReason = String(gate?.resetReason || '');
+    const exitGateReset = Boolean(
+      !gate.satisfied
+        && (resetReason.includes('exit-trigger:') || resetReason.includes('exit-confirmed:'))
+    );
+    const recentWindowMs = Math.max(
+      unsafeExitReloginMinDelayMs(),
+      Number(cfg.loginCooldownMs || 0) || 0,
+      60000
+    );
+    const recentOfflineExit = recentUnsafeExitContext(bot.lastOfflineLeaveResult, t, recentWindowMs);
+    const recentEnemyExit = firstRecentUnsafeExitContext([
+      bot.lastEnemyLeaveResult,
+      bot.lastCombatLeaveResult,
+      bot.lastPursuitLeaveResult,
+      bot.lastInjuryLeaveResult
+    ], t, recentWindowMs);
+    const offlineContextAgeMs = bot.offlineSince ? Math.max(0, Math.round(t - Number(bot.offlineSince || t))) : 0;
+    const recentOfflineContext = Boolean(bot.offlineSince && offlineContextAgeMs <= recentWindowMs);
+
+    if (!noSelfExit?.sessionMismatch || !noSelfExit?.mismatchTimedOut) blockedBy.push('session-mismatch-not-timed-out');
+    if (!controlHasAuthoritativeSessionMismatch(control)) blockedBy.push('not-authoritative-session-mismatch');
+    if (!userId) blockedBy.push('missing-user-id');
+    if (hasToken) blockedBy.push('token-still-present');
+    if (loginRequired) blockedBy.push('login-required-ui-visible');
+    if (!nativeWsOpenOrConnecting) blockedBy.push('native-ws-not-open');
+    if (reconnectChurn) blockedBy.push('native-reconnect-churn');
+    if (wsOfflineish) blockedBy.push('ws-offlineish');
+    if (bot.pendingExit) blockedBy.push('pending-exit-active');
+    if (exitMotionLockRemainingMs > 0) blockedBy.push('exit-motion-lock');
+    if (enemyHoldRemainingMs > 0) blockedBy.push('enemy-relogin-hold');
+    if (offlineHoldRemainingMs > 0) blockedBy.push('offline-relogin-hold');
+    if (suppressRemainingMs > 0) blockedBy.push('login-suppress-active');
+    if (exitGateReset) blockedBy.push('exit-snapshot-gate-reset');
+    if (recentOfflineContext) blockedBy.push('recent-offline-context');
+    if (recentOfflineExit) blockedBy.push('recent-offline-exit');
+    if (recentEnemyExit) blockedBy.push('recent-enemy-exit');
+
+    return {
+      allowed: blockedBy.length === 0,
+      reason: blockedBy[0] || 'live-session-mismatch-takeover',
+      blockedBy,
+      userId: userId || null,
+      noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+      nativeWsOpenOrConnecting,
+      reconnectChurn,
+      wsOfflineish,
+      pendingExit: bot.pendingExit ? summarizePendingExit(bot.pendingExit) : null,
+      suppressRemainingMs: Math.max(0, Math.round(suppressRemainingMs)),
+      suppressReason,
+      enemyHoldRemainingMs,
+      offlineHoldRemainingMs,
+      exitMotionLockRemainingMs,
+      snapshotGate: {
+        satisfied: Boolean(gate.satisfied),
+        streak: Number(gate.streak || 0),
+        required: Number(gate.required || 0),
+        resetReason,
+        exitGateReset,
+        pointSafety: gate.pointSafety ? {
+          hasPoint: Boolean(gate.pointSafety.hasPoint),
+          satisfied: Boolean(gate.pointSafety.satisfied),
+          streak: Number(gate.pointSafety.streak || 0),
+          required: Number(gate.pointSafety.required || 0)
+        } : null
+      },
+      recentOfflineContext: recentOfflineContext ? { ageMs: offlineContextAgeMs } : null,
+      recentOfflineExit,
+      recentEnemyExit,
+      control: control ? {
+        rawWsOpen: Boolean(control.rawWsOpen),
+        nativeWsOpen: Boolean(control.nativeWsOpen),
+        connecting: Boolean(control.connecting),
+        wsReadyState: control.wsReadyState ?? null,
+        nativeWsReadyState: control.nativeWsReadyState ?? null,
+        transport: control.transport || '',
+        hasToken: Boolean(control.hasToken)
+      } : null
+    };
+  }
+
 			  function isVisible(el) {
     if (!el) return false;
     const style = getComputedStyle(el);
@@ -4186,9 +4334,15 @@ function hpDisplay(value) {
 	    return snapshotLoginGateStatus(t);
 	  }
 
-  async function ensureLoginSnapshotGate(reason = 'login') {
+  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
     let status = snapshotLoginGateStatus();
     if (status.satisfied) return status;
+    if (options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed) {
+      status.blockReason = String(reason || 'login');
+      status.liveSessionTakeoverBypass = true;
+      status.liveSessionTakeover = options.liveSessionTakeover;
+      return status;
+    }
     const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
@@ -6059,6 +6213,8 @@ function hpDisplay(value) {
     const force = Boolean(options.force || options.immediate || options.manual);
     const ignoreSuppress = Boolean(options.ignoreSuppress || force);
     const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
+    const liveSessionTakeover = options.liveSessionTakeover || null;
+    const allowLiveSessionTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && liveSessionTakeover?.allowed);
     if (syncPausedFromPage()) {
       return {
         needed: false,
@@ -6100,7 +6256,11 @@ function hpDisplay(value) {
     const hasAliveSelf = Boolean(self && isAlive(self));
     const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
     const hasPageSession = Boolean(hasToken || hasNativeSession);
-    const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || (force && canStartLogin && !hasNativeSession));
+    const needsLogin = !hasAliveSelf && (
+      loginRequired
+        || !hasPageSession
+        || (force && canStartLogin && (!hasNativeSession || allowLiveSessionTakeoverBypass))
+    );
 	    if (!needsLogin) {
 	      return force ? {
 	        needed: false,
@@ -6113,6 +6273,7 @@ function hpDisplay(value) {
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover,
 	        self: hasAliveSelf ? summarizeSelf(self) : null
 	      } : null;
 	    }
@@ -6131,7 +6292,8 @@ function hpDisplay(value) {
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
-	        snapshotGate: snapshotLoginGateStatus()
+	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover
 	      };
 	    }
 	    const suppressRemainingMs = loginSuppressRemainingMs();
@@ -6147,7 +6309,8 @@ function hpDisplay(value) {
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
-	        snapshotGate: snapshotLoginGateStatus()
+	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover
 	      };
 	    }
     if (!ignoreLoginCooldown && t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
@@ -6162,11 +6325,15 @@ function hpDisplay(value) {
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
-	        snapshotGate: snapshotLoginGateStatus()
+	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover
 	      };
 	    }
-	    const snapshotGate = await ensureLoginSnapshotGate(reason);
-	    if (!snapshotGate.satisfied) {
+	    const snapshotGate = await ensureLoginSnapshotGate(reason, {
+	      allowLiveSessionTakeoverBypass,
+	      liveSessionTakeover
+	    });
+	    if (!snapshotGate.satisfied && !snapshotGate.liveSessionTakeoverBypass) {
 	      return {
 	        needed: true,
 	        attempted: false,
@@ -6177,7 +6344,8 @@ function hpDisplay(value) {
 	        hasToken,
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
-	        currentUserId: userId
+	        currentUserId: userId,
+	        liveSessionTakeover
 	      };
 	    }
 	    const detail = {
@@ -6192,6 +6360,8 @@ function hpDisplay(value) {
 	      forced: force,
 	      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
 	      snapshotGate,
+	      liveSessionTakeover,
+	      snapshotGateBypassed: Boolean(snapshotGate.liveSessionTakeoverBypass),
 	      loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
       method: '',
       error: ''
@@ -15323,6 +15493,61 @@ function hpDisplay(value) {
 	        const control = summarizeControl();
         const noSelfAgeMs = Math.max(0, Date.now() - Number(bot.waitSince || Date.now()));
         const noSelfExit = !self ? noSelfGameSessionExitState(control, noSelfAgeMs) : null;
+        const liveSessionTakeover = !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut
+          ? liveSessionMismatchTakeoverState(control, noSelfExit)
+          : null;
+        if (!cfg.dryRun && liveSessionTakeover?.allowed) {
+          const login = await maybeStartAutoLogin('session-mismatch-recovery', {
+            force: true,
+            ignoreSuppress: true,
+            ignoreLoginCooldown: true,
+            allowLiveSessionTakeoverBypass: true,
+            liveSessionTakeover
+          });
+          const sessionMismatchWaitReason = login?.attempted
+            ? 'auto-login'
+            : (login?.reason === 'snapshot-gate'
+              ? 'login-snapshot-gate'
+              : (login?.reason === 'exit-log-flush-pending'
+                ? 'exit-log-flush-pending'
+                : (login?.reason === 'important-log-flush-pending'
+                  ? 'important-log-flush-pending'
+                  : 'session-mismatch-recovery')));
+          const sessionMismatchDisplayReason = login?.attempted
+            ? '界面显示未登录但原生会话仍在线，已通过接管门禁，正在重登接管'
+            : (sessionMismatchWaitReason === 'login-snapshot-gate'
+              ? loginSnapshotGateDisplayReason(login?.snapshotGate)
+              : (sessionMismatchWaitReason === 'exit-log-flush-pending'
+                ? '等待退出日志发送完成，暂不刷新或重新登录'
+                : (sessionMismatchWaitReason === 'important-log-flush-pending'
+                  ? '等待会话结束日志发送完成，暂不刷新或重新登录'
+                  : '界面显示未登录但原生会话仍在线，等待接管')));
+          const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
+          refreshGlobalState(false).catch(err => {
+            bot.globalState.error = err.message || String(err);
+          });
+          bot.lastDecision = {
+            kind: 'wait',
+            reason: sessionMismatchWaitReason,
+            dx: 0,
+            dy: 0,
+            currentUserId: getCurrentUserId(),
+            control,
+            visibleEntities: arrayCount(bot.globalState.entities),
+            self: null,
+            noSelfAgeMs,
+            noSelfGameSession: noSelfExit,
+            liveSessionTakeover,
+            login,
+            displayReason: sessionMismatchDisplayReason
+          };
+          updateBotPanel(bot.lastDecision);
+          if (!sessionMismatchLoginPending && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
+            requestReload('session mismatch recovery stalled');
+          }
+          if (cfg.once) bot.stop('once');
+          return;
+        }
         if (!cfg.dryRun && noSelfExit?.shouldLeave) {
 	          if (!bot.offlineSince) bot.offlineSince = Date.now();
 	          const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
@@ -15330,6 +15555,7 @@ function hpDisplay(value) {
 	            unsafe: true,
 	            noSelfGameSession: noSelfExit,
 	            reconnectChurn: noSelfExit.reconnectChurn,
+	            liveSessionTakeover,
 	            passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0)),
 	            nearestHuman: null,
 	            nearestActive: null
@@ -15356,6 +15582,7 @@ function hpDisplay(value) {
 	            offlineAgeMs,
 	            noSelfAgeMs,
 	            noSelfGameSession: noSelfExit,
+	            liveSessionTakeover,
 	            offlineSafety,
 	            displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || noSelfExit.displayReason,
 	            leave: leaveResult
@@ -15364,55 +15591,6 @@ function hpDisplay(value) {
 	          if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
 	            requestReload('game session missing self too long');
 	          }
-          if (cfg.once) bot.stop('once');
-          return;
-        }
-        if (!cfg.dryRun && !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut) {
-          const login = await maybeStartAutoLogin('session-mismatch-recovery', {
-            force: true,
-            ignoreSuppress: true,
-            ignoreLoginCooldown: true
-          });
-          const sessionMismatchWaitReason = login?.attempted
-            ? 'auto-login'
-            : (login?.reason === 'snapshot-gate'
-              ? 'login-snapshot-gate'
-              : (login?.reason === 'exit-log-flush-pending'
-                ? 'exit-log-flush-pending'
-                : (login?.reason === 'important-log-flush-pending'
-                  ? 'important-log-flush-pending'
-                  : 'session-mismatch-recovery')));
-          const sessionMismatchDisplayReason = login?.attempted
-            ? '界面显示未登录但原生会话仍在线，已通过安全门禁，正在重登接管'
-            : (sessionMismatchWaitReason === 'login-snapshot-gate'
-              ? loginSnapshotGateDisplayReason(login?.snapshotGate)
-              : (sessionMismatchWaitReason === 'exit-log-flush-pending'
-                ? '等待退出日志发送完成，暂不刷新或重新登录'
-                : (sessionMismatchWaitReason === 'important-log-flush-pending'
-                  ? '等待会话结束日志发送完成，暂不刷新或重新登录'
-                  : '界面显示未登录但原生会话仍在线，等待安全重登')));
-          const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
-          refreshGlobalState(false).catch(err => {
-            bot.globalState.error = err.message || String(err);
-          });
-          bot.lastDecision = {
-            kind: 'wait',
-            reason: sessionMismatchWaitReason,
-            dx: 0,
-            dy: 0,
-            currentUserId: getCurrentUserId(),
-            control,
-            visibleEntities: arrayCount(bot.globalState.entities),
-            self: null,
-            noSelfAgeMs,
-            noSelfGameSession: noSelfExit,
-            login,
-            displayReason: sessionMismatchDisplayReason
-          };
-          updateBotPanel(bot.lastDecision);
-          if (!sessionMismatchLoginPending && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
-            requestReload('session mismatch recovery stalled');
-          }
           if (cfg.once) bot.stop('once');
           return;
         }

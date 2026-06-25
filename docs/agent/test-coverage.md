@@ -1,12 +1,13 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `248`.
+- Latest bot self-test count: `249`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `18`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
+  - session-mismatch recovery now has bot self-tests for explicit live-session takeover bypass state and for post-exit blockers including pending exit, login suppress, exit-reset snapshot gate, reconnect churn, and offline-ish WebSocket state;
   - local snapshot coin at `185m` cannot beat visible/native coin;
   - local snapshot-only coin is not chased;
   - nearby native coin with stale snapshot metadata still reports visible coin reason;
@@ -125,4 +126,4 @@
   - low-threat finishing pressure now has bot self-test coverage for keeping burst fire while bullet risk is absent, starting at low target HP, and staying bounded above that HP band. Replay self-test coverage includes the 2026-06-21 `mango` 09:13 window improving estimated hits from logged `178/456` to `334/774` with `318` extra simulated shots, plus the 06:43 high-stamina kill improving from `95/486` to `164/612` with `126` extra simulated shots.
   - target-owned real-bullet pressure fire has bot self-test coverage for the mid-HP pressure window, and sustained pressure no-damage stop-loss has bot self-test coverage for waiting above the 70HP stop-loss gate and exiting a losing target-owned pressure trade after 10s without target damage once self HP reaches that later gate. Replay coverage for 2026-06-21 pressure samples shows 07:56 biliee improving from logged `3/56` to `11/72`, 09:21 biliee from `5/112` to `38/192`, ahy6a from `9/76` to `13/90`, and the 10:15 biliee stop-loss sample exiting about 13s before the logged end at `67/79` after `11596ms` no-damage.
 - Static objective build verifier checks that manual pause removes the target overlay and that overlay rendering suppresses paused decisions.
-- `node scripts/verify-objective-build.js` now includes source/dist checks that movement and shooting prefer direct sends over the existing native page WebSocket, that movement repeats use the configured 50ms/220ms cadence, that default nonzero direct movement keeps local page key/prediction sync for combat safety, that optional server-marker probe mode is off by default, that stop cleanup cancels/repeats direct control safely, and that shared source modules are still inlined into the generated single-file runtime without runtime `require()` calls.
+- `node scripts/verify-objective-build.js` now includes source/dist checks that movement and shooting prefer direct sends over the existing native page WebSocket, that movement repeats use the configured 50ms/220ms cadence, that default nonzero direct movement keeps local page key/prediction sync for combat safety, that optional server-marker probe mode is off by default, that stop cleanup cancels/repeats direct control safely, that shared source modules are still inlined into the generated single-file runtime without runtime `require()` calls, and that session-mismatch recovery can bypass the login snapshot gate only through explicit live-session takeover state guarded by no-exit/no-disconnect context checks.

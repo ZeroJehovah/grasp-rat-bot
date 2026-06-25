@@ -2867,6 +2867,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     const force = Boolean(options.force || options.immediate || options.manual);
     const ignoreSuppress = Boolean(options.ignoreSuppress || force);
     const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
+    const liveSessionTakeover = options.liveSessionTakeover || null;
+    const allowLiveSessionTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && liveSessionTakeover?.allowed);
     if (syncPausedFromPage()) {
       return {
         needed: false,
@@ -2908,7 +2910,11 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     const hasAliveSelf = Boolean(self && isAlive(self));
     const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
     const hasPageSession = Boolean(hasToken || hasNativeSession);
-    const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || (force && canStartLogin && !hasNativeSession));
+    const needsLogin = !hasAliveSelf && (
+      loginRequired
+        || !hasPageSession
+        || (force && canStartLogin && (!hasNativeSession || allowLiveSessionTakeoverBypass))
+    );
 	    if (!needsLogin) {
 	      return force ? {
 	        needed: false,
@@ -2921,6 +2927,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover,
 	        self: hasAliveSelf ? summarizeSelf(self) : null
 	      } : null;
 	    }
@@ -2939,7 +2946,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
-	        snapshotGate: snapshotLoginGateStatus()
+	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover
 	      };
 	    }
 	    const suppressRemainingMs = loginSuppressRemainingMs();
@@ -2955,7 +2963,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
-	        snapshotGate: snapshotLoginGateStatus()
+	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover
 	      };
 	    }
     if (!ignoreLoginCooldown && t - Number(bot.lastLoginAt || 0) < cfg.loginCooldownMs) {
@@ -2970,11 +2979,15 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
-	        snapshotGate: snapshotLoginGateStatus()
+	        snapshotGate: snapshotLoginGateStatus(),
+	        liveSessionTakeover
 	      };
 	    }
-	    const snapshotGate = await ensureLoginSnapshotGate(reason);
-	    if (!snapshotGate.satisfied) {
+	    const snapshotGate = await ensureLoginSnapshotGate(reason, {
+	      allowLiveSessionTakeoverBypass,
+	      liveSessionTakeover
+	    });
+	    if (!snapshotGate.satisfied && !snapshotGate.liveSessionTakeoverBypass) {
 	      return {
 	        needed: true,
 	        attempted: false,
@@ -2985,7 +2998,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        hasToken,
 	        hasNativeSession,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
-	        currentUserId: userId
+	        currentUserId: userId,
+	        liveSessionTakeover
 	      };
 	    }
 	    const detail = {
@@ -3000,6 +3014,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	      forced: force,
 	      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
 	      snapshotGate,
+	      liveSessionTakeover,
+	      snapshotGateBypassed: Boolean(snapshotGate.liveSessionTakeoverBypass),
 	      loginControl: loginControl ? (loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase())) : '',
       method: '',
       error: ''
@@ -10369,6 +10385,61 @@ ${importantLogSource()}
 	        const control = summarizeControl();
         const noSelfAgeMs = Math.max(0, Date.now() - Number(bot.waitSince || Date.now()));
         const noSelfExit = !self ? noSelfGameSessionExitState(control, noSelfAgeMs) : null;
+        const liveSessionTakeover = !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut
+          ? liveSessionMismatchTakeoverState(control, noSelfExit)
+          : null;
+        if (!cfg.dryRun && liveSessionTakeover?.allowed) {
+          const login = await maybeStartAutoLogin('session-mismatch-recovery', {
+            force: true,
+            ignoreSuppress: true,
+            ignoreLoginCooldown: true,
+            allowLiveSessionTakeoverBypass: true,
+            liveSessionTakeover
+          });
+          const sessionMismatchWaitReason = login?.attempted
+            ? 'auto-login'
+            : (login?.reason === 'snapshot-gate'
+              ? 'login-snapshot-gate'
+              : (login?.reason === 'exit-log-flush-pending'
+                ? 'exit-log-flush-pending'
+                : (login?.reason === 'important-log-flush-pending'
+                  ? 'important-log-flush-pending'
+                  : 'session-mismatch-recovery')));
+          const sessionMismatchDisplayReason = login?.attempted
+            ? '界面显示未登录但原生会话仍在线，已通过接管门禁，正在重登接管'
+            : (sessionMismatchWaitReason === 'login-snapshot-gate'
+              ? loginSnapshotGateDisplayReason(login?.snapshotGate)
+              : (sessionMismatchWaitReason === 'exit-log-flush-pending'
+                ? '等待退出日志发送完成，暂不刷新或重新登录'
+                : (sessionMismatchWaitReason === 'important-log-flush-pending'
+                  ? '等待会话结束日志发送完成，暂不刷新或重新登录'
+                  : '界面显示未登录但原生会话仍在线，等待接管')));
+          const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
+          refreshGlobalState(false).catch(err => {
+            bot.globalState.error = err.message || String(err);
+          });
+          bot.lastDecision = {
+            kind: 'wait',
+            reason: sessionMismatchWaitReason,
+            dx: 0,
+            dy: 0,
+            currentUserId: getCurrentUserId(),
+            control,
+            visibleEntities: arrayCount(bot.globalState.entities),
+            self: null,
+            noSelfAgeMs,
+            noSelfGameSession: noSelfExit,
+            liveSessionTakeover,
+            login,
+            displayReason: sessionMismatchDisplayReason
+          };
+          updateBotPanel(bot.lastDecision);
+          if (!sessionMismatchLoginPending && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
+            requestReload('session mismatch recovery stalled');
+          }
+          if (cfg.once) bot.stop('once');
+          return;
+        }
         if (!cfg.dryRun && noSelfExit?.shouldLeave) {
 	          if (!bot.offlineSince) bot.offlineSince = Date.now();
 	          const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
@@ -10376,6 +10447,7 @@ ${importantLogSource()}
 	            unsafe: true,
 	            noSelfGameSession: noSelfExit,
 	            reconnectChurn: noSelfExit.reconnectChurn,
+	            liveSessionTakeover,
 	            passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0)),
 	            nearestHuman: null,
 	            nearestActive: null
@@ -10402,6 +10474,7 @@ ${importantLogSource()}
 	            offlineAgeMs,
 	            noSelfAgeMs,
 	            noSelfGameSession: noSelfExit,
+	            liveSessionTakeover,
 	            offlineSafety,
 	            displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || noSelfExit.displayReason,
 	            leave: leaveResult
@@ -10410,55 +10483,6 @@ ${importantLogSource()}
 	          if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
 	            requestReload('game session missing self too long');
 	          }
-          if (cfg.once) bot.stop('once');
-          return;
-        }
-        if (!cfg.dryRun && !self && noSelfExit?.sessionMismatch && noSelfExit?.mismatchTimedOut) {
-          const login = await maybeStartAutoLogin('session-mismatch-recovery', {
-            force: true,
-            ignoreSuppress: true,
-            ignoreLoginCooldown: true
-          });
-          const sessionMismatchWaitReason = login?.attempted
-            ? 'auto-login'
-            : (login?.reason === 'snapshot-gate'
-              ? 'login-snapshot-gate'
-              : (login?.reason === 'exit-log-flush-pending'
-                ? 'exit-log-flush-pending'
-                : (login?.reason === 'important-log-flush-pending'
-                  ? 'important-log-flush-pending'
-                  : 'session-mismatch-recovery')));
-          const sessionMismatchDisplayReason = login?.attempted
-            ? '界面显示未登录但原生会话仍在线，已通过安全门禁，正在重登接管'
-            : (sessionMismatchWaitReason === 'login-snapshot-gate'
-              ? loginSnapshotGateDisplayReason(login?.snapshotGate)
-              : (sessionMismatchWaitReason === 'exit-log-flush-pending'
-                ? '等待退出日志发送完成，暂不刷新或重新登录'
-                : (sessionMismatchWaitReason === 'important-log-flush-pending'
-                  ? '等待会话结束日志发送完成，暂不刷新或重新登录'
-                  : '界面显示未登录但原生会话仍在线，等待安全重登')));
-          const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
-          refreshGlobalState(false).catch(err => {
-            bot.globalState.error = err.message || String(err);
-          });
-          bot.lastDecision = {
-            kind: 'wait',
-            reason: sessionMismatchWaitReason,
-            dx: 0,
-            dy: 0,
-            currentUserId: getCurrentUserId(),
-            control,
-            visibleEntities: arrayCount(bot.globalState.entities),
-            self: null,
-            noSelfAgeMs,
-            noSelfGameSession: noSelfExit,
-            login,
-            displayReason: sessionMismatchDisplayReason
-          };
-          updateBotPanel(bot.lastDecision);
-          if (!sessionMismatchLoginPending && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
-            requestReload('session mismatch recovery stalled');
-          }
           if (cfg.once) bot.stop('once');
           return;
         }

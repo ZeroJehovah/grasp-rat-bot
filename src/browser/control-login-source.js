@@ -231,6 +231,154 @@ function controlLoginSource(helpers = {}) {
 	    };
 		  }
 
+  function recentUnsafeExitContext(detail, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
+    if (!detail || typeof detail !== 'object') return null;
+    const at = Number(
+      detail.confirmedAt
+        || detail.completedAt
+        || detail.exitTriggeredAt
+        || detail.leaveRequestSentAt
+        || detail.at
+        || 0
+    ) || 0;
+    const ageMs = at ? Math.max(0, Math.round(t - at)) : Infinity;
+    if (!(ageMs <= Math.max(1000, Number(maxAgeMs || 0) || 0))) return null;
+    const text = [
+      detail.reason,
+      detail.summary,
+      detail.displayReason,
+      detail.enemyLeaveReason,
+      detail.loginSuppressReason,
+      detail.pendingLoginSuppressReason
+    ].map(value => String(value || '').toLowerCase()).join(' ');
+    const offlineSafety = detail.offlineSafety || null;
+    const unsafe = Boolean(
+      offlineSafety?.unsafe
+        || offlineSafety?.reconnectChurn
+        || offlineSafety?.noSelfGameSession
+        || /websocket|offline|disconnect|reconnect|server position|missing self|stamina|pending unsafe/i.test(text)
+    );
+    if (!unsafe) return null;
+    return {
+      reason: String(detail.reason || detail.summary || detail.displayReason || 'recent unsafe exit'),
+      ageMs,
+      at
+    };
+  }
+
+  function firstRecentUnsafeExitContext(details, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
+    for (const detail of Array.isArray(details) ? details : [details]) {
+      const context = recentUnsafeExitContext(detail, t, maxAgeMs);
+      if (context) return context;
+    }
+    return null;
+  }
+
+  function liveSessionMismatchTakeoverState(control, noSelfExit) {
+    const t = Date.now();
+    const blockedBy = [];
+    const userId = Number(control?.currentUserId || getCurrentUserId() || 0) || 0;
+    const hasToken = Boolean(control?.hasToken || getSessionToken());
+    const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+    const nativeWsOpenOrConnecting = Boolean(
+      control?.rawWsOpen
+        || control?.nativeWsOpen
+        || control?.connecting
+        || isWsConnectingOrOpen(control?.nativeWsReadyState)
+        || isWsConnectingOrOpen(control?.wsReadyState)
+    );
+    const reconnectChurn = Boolean(noSelfExit?.reconnectChurn || control?.nativeReconnectChurn);
+    const wsOfflineish = Boolean(noSelfExit?.wsOfflineish);
+    const suppressRemainingMs = loginSuppressRemainingMs();
+    let suppressReason = '';
+    try {
+      suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+    } catch (_) {}
+    const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs(t);
+    const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
+    const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+    const gate = snapshotLoginGateStatus(t);
+    const resetReason = String(gate?.resetReason || '');
+    const exitGateReset = Boolean(
+      !gate.satisfied
+        && (resetReason.includes('exit-trigger:') || resetReason.includes('exit-confirmed:'))
+    );
+    const recentWindowMs = Math.max(
+      unsafeExitReloginMinDelayMs(),
+      Number(cfg.loginCooldownMs || 0) || 0,
+      60000
+    );
+    const recentOfflineExit = recentUnsafeExitContext(bot.lastOfflineLeaveResult, t, recentWindowMs);
+    const recentEnemyExit = firstRecentUnsafeExitContext([
+      bot.lastEnemyLeaveResult,
+      bot.lastCombatLeaveResult,
+      bot.lastPursuitLeaveResult,
+      bot.lastInjuryLeaveResult
+    ], t, recentWindowMs);
+    const offlineContextAgeMs = bot.offlineSince ? Math.max(0, Math.round(t - Number(bot.offlineSince || t))) : 0;
+    const recentOfflineContext = Boolean(bot.offlineSince && offlineContextAgeMs <= recentWindowMs);
+
+    if (!noSelfExit?.sessionMismatch || !noSelfExit?.mismatchTimedOut) blockedBy.push('session-mismatch-not-timed-out');
+    if (!controlHasAuthoritativeSessionMismatch(control)) blockedBy.push('not-authoritative-session-mismatch');
+    if (!userId) blockedBy.push('missing-user-id');
+    if (hasToken) blockedBy.push('token-still-present');
+    if (loginRequired) blockedBy.push('login-required-ui-visible');
+    if (!nativeWsOpenOrConnecting) blockedBy.push('native-ws-not-open');
+    if (reconnectChurn) blockedBy.push('native-reconnect-churn');
+    if (wsOfflineish) blockedBy.push('ws-offlineish');
+    if (bot.pendingExit) blockedBy.push('pending-exit-active');
+    if (exitMotionLockRemainingMs > 0) blockedBy.push('exit-motion-lock');
+    if (enemyHoldRemainingMs > 0) blockedBy.push('enemy-relogin-hold');
+    if (offlineHoldRemainingMs > 0) blockedBy.push('offline-relogin-hold');
+    if (suppressRemainingMs > 0) blockedBy.push('login-suppress-active');
+    if (exitGateReset) blockedBy.push('exit-snapshot-gate-reset');
+    if (recentOfflineContext) blockedBy.push('recent-offline-context');
+    if (recentOfflineExit) blockedBy.push('recent-offline-exit');
+    if (recentEnemyExit) blockedBy.push('recent-enemy-exit');
+
+    return {
+      allowed: blockedBy.length === 0,
+      reason: blockedBy[0] || 'live-session-mismatch-takeover',
+      blockedBy,
+      userId: userId || null,
+      noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+      nativeWsOpenOrConnecting,
+      reconnectChurn,
+      wsOfflineish,
+      pendingExit: bot.pendingExit ? summarizePendingExit(bot.pendingExit) : null,
+      suppressRemainingMs: Math.max(0, Math.round(suppressRemainingMs)),
+      suppressReason,
+      enemyHoldRemainingMs,
+      offlineHoldRemainingMs,
+      exitMotionLockRemainingMs,
+      snapshotGate: {
+        satisfied: Boolean(gate.satisfied),
+        streak: Number(gate.streak || 0),
+        required: Number(gate.required || 0),
+        resetReason,
+        exitGateReset,
+        pointSafety: gate.pointSafety ? {
+          hasPoint: Boolean(gate.pointSafety.hasPoint),
+          satisfied: Boolean(gate.pointSafety.satisfied),
+          streak: Number(gate.pointSafety.streak || 0),
+          required: Number(gate.pointSafety.required || 0)
+        } : null
+      },
+      recentOfflineContext: recentOfflineContext ? { ageMs: offlineContextAgeMs } : null,
+      recentOfflineExit,
+      recentEnemyExit,
+      control: control ? {
+        rawWsOpen: Boolean(control.rawWsOpen),
+        nativeWsOpen: Boolean(control.nativeWsOpen),
+        connecting: Boolean(control.connecting),
+        wsReadyState: control.wsReadyState ?? null,
+        nativeWsReadyState: control.nativeWsReadyState ?? null,
+        transport: control.transport || '',
+        hasToken: Boolean(control.hasToken)
+      } : null
+    };
+  }
+
 			  function isVisible(el) {
     if (!el) return false;
     const style = getComputedStyle(el);
@@ -778,9 +926,15 @@ function controlLoginSource(helpers = {}) {
 	    return snapshotLoginGateStatus(t);
 	  }
 
-  async function ensureLoginSnapshotGate(reason = 'login') {
+  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
     let status = snapshotLoginGateStatus();
     if (status.satisfied) return status;
+    if (options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed) {
+      status.blockReason = String(reason || 'login');
+      status.liveSessionTakeoverBypass = true;
+      status.liveSessionTakeover = options.liveSessionTakeover;
+      return status;
+    }
     const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
