@@ -177,6 +177,7 @@ function statusPanelSource(helpers = {}) {
 	      'safe-distant-coin': '前往远处安全金币',
 	      'post-attack-drop-coin': '战斗后优先拾取掉落',
 	      'best-opportunity-coin': '综合收益最高：拾取金币',
+	      'best-opportunity-coin-route': '综合收益最高：金币路线',
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 		      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
 		      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',

@@ -1430,6 +1430,18 @@ function runSelfTest() {
     if (amountDiff) return amountDiff;
     return Number(a.distance || 0) - Number(b.distance || 0);
   }
+  function mergeCoinRouteDisplay(base, routeCoin) {
+    if (!base || !routeCoin?.coinRoute) return base;
+    return {
+      ...base,
+      reason: 'best-opportunity-coin-route',
+      coinRoute: routeCoin.coinRoute,
+      routeValue: routeCoin.routeValue || null,
+      routeKind: routeCoin.routeKind || '',
+      routeLegs: routeCoin.routeLegs || 0,
+      routeDisplayOnly: true
+    };
+  }
   function nearestRealtimeCoinWithin(self, coins, activeThreats, maxDistance) {
     if (!(Number(maxDistance) > 0)) return null;
     return safeCoins(self, (coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance)
@@ -3959,6 +3971,8 @@ function runSelfTest() {
         || (Number(item.score || -Infinity) === Number(previous.score || -Infinity) && Number(item.amount || 0) > Number(previous.amount || 0))
         || (Number(item.score || -Infinity) === Number(previous.score || -Infinity) && Number(item.distance || Infinity) < Number(previous.distance || Infinity))) {
         opportunities[index] = item;
+      } else if (item.reason === 'best-opportunity-coin-route' && item.coinRoute) {
+        opportunities[index] = mergeCoinRouteDisplay(previous, item);
       }
     };
     const buildCoinRouteMeta = route => route ? {
@@ -7016,6 +7030,21 @@ function runSelfTest() {
       want: 'coin:best-opportunity-coin-route:2:3:3:3'
     },
     {
+      name: 'same first coin route keeps overlay metadata when single coin roi is higher',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: 2000, y: 0, amount: 1, native: true },
+            { drop_id: 2, x: 16000, y: 0, amount: 1, native: true },
+            { drop_id: 3, x: 17000, y: 0, amount: 1, native: true }
+          ]
+        });
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + action.coinRoute?.legCount + ':' + action.coinRoute?.points?.length + ':' + action.score;
+      })(),
+      want: 'coin:best-opportunity-coin-route:1:3:3:300000'
+    },
+    {
       name: 'visible afk drop still beats weaker coin route by stamina roi',
       got: (() => {
         const action = choose({
@@ -7031,7 +7060,7 @@ function runSelfTest() {
       want: 'attack:best-opportunity-afk-drop-target'
     },
     {
-      name: 'coin route leg threat block rejects path through active danger',
+      name: 'same first coin route keeps overlay metadata near non-avoidance active',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -7042,9 +7071,26 @@ function runSelfTest() {
             { drop_id: 3, x: 15000, y: 0, amount: 1, native: true }
           ]
         });
-        return action.reason;
+        return action.reason + ':' + action.coinRoute?.legCount;
       })(),
-      want: 'best-opportunity-coin'
+      want: 'best-opportunity-coin-route:3'
+    },
+    {
+      name: 'coin route leg threat block rejects path through active danger',
+      got: (() => {
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const threat = decorateThreat(self, { user_id: 4, x: 25000, y: 0, current_join_mode: 'Active', vx: -50 });
+        const route = pickCoinRouteOpportunity(self, [
+          { drop_id: 1, x: 10000, y: 0, amount: 1, native: true },
+          { drop_id: 2, x: 16000, y: 0, amount: 1, native: true },
+          { drop_id: 3, x: 22000, y: 0, amount: 1, native: true },
+          { drop_id: 4, x: -8000, y: 0, amount: 1, native: true },
+          { drop_id: 5, x: -9000, y: 1000, amount: 1, native: true },
+          { drop_id: 6, x: -10000, y: -1000, amount: 1, native: true }
+        ], [threat]);
+        return route ? route.drop_id + ':' + route.coinRoute?.ids?.join(',') : 'none';
+      })(),
+      want: '4:4,5,6'
     },
     {
       name: 'coin route rejects unaffordable whole route',
