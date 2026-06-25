@@ -2,7 +2,7 @@
 
 
 - Latest bot self-test count: `233`.
-- Latest combat-log analyzer self-test count: `82`.
+- Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `18`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
@@ -84,6 +84,7 @@
   - combat-log analyzer `npm test` covers `--fail-on-audit-issue` semantics: evidence-only gaps do not count as audit failures, while missing/generic exit reasons and behavior regressions do;
   - combat-log analyzer `npm test` covers `--require-exit-events` success when current exit events exist and `no-matching-exit-events` failure when current logs contain no exit sample;
   - combat-log analyzer `npm test` covers Active-in-range combat-response evidence counts, `--require-active-combat-events`, and `no-active-in-range-combat-events`;
+  - combat-log analyzer `npm test` covers Active-in-range coin-action regression detection using only actionable realtime evidence, so `native`/`render`/`realtime` Active targets still fail when coin actions override them, while snapshot-only Active context does not create a false combat regression;
   - combat-log analyzer `npm test` covers `mode=Active` / `active:false` stationary/full-stamina entities as Active-in-range evidence for coin-action regression and combat-response evidence;
   - combat-log analyzer `npm test` covers Active-in-range combat-response evidence from current `decision.target` fields even when `nearbyEntities` is absent, while coin targets do not false-positive as Active players;
   - combat-log analyzer `npm test` covers HP-disadvantage combat-exit evidence counts, `--require-hp-disadvantage-exit-events`, and `no-hp-disadvantage-exit-events`;

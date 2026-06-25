@@ -488,6 +488,18 @@ function activePlayerCandidateSources(entry) {
   return sources;
 }
 
+function loggedEntityRealtimeEvidence(entity) {
+  return loggedTruthyFlag(entity?.native)
+    || loggedTruthyFlag(entity?.render)
+    || loggedTruthyFlag(entity?.realtime)
+    || /^(native|render|realtime|visual)$/i.test(String(entity?.source || entity?.coordinateSource || ''));
+}
+
+function activePlayerCandidateActionable(source) {
+  if (source?.strict) return true;
+  return loggedEntityRealtimeEvidence(source?.entity);
+}
+
 function isActivePlayerCandidate(entry, entity, range, strict) {
   if (!entity || typeof entity !== 'object') return false;
   if (String(entity.type || '').toLowerCase() === 'coin') return false;
@@ -512,19 +524,21 @@ function activePlayerCandidateKey(entity, index) {
   return 'index:' + index;
 }
 
-function activePlayersInAttackRange(entry, options) {
+function activePlayersInAttackRange(entry, options, filters = {}) {
   const range = Math.max(0, Number(options.combatAttackRange || DEFAULTS.combatAttackRange) || 0);
   const seen = new Set();
   const out = [];
   activePlayerCandidateSources(entry).forEach((source, index) => {
     const entity = source.entity;
     if (!isActivePlayerCandidate(entry, entity, range, source.strict)) return;
+    if (filters.actionableOnly && !activePlayerCandidateActionable(source)) return;
     const key = activePlayerCandidateKey(entity, index);
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
       ...entity,
-      distance: loggedEntityDistance(entry, entity)
+      distance: loggedEntityDistance(entry, entity),
+      activeEvidence: source.strict ? 'strict-target' : (loggedEntityRealtimeEvidence(entity) ? 'realtime' : 'snapshot-only')
     });
   });
   return out;
@@ -533,7 +547,8 @@ function activePlayersInAttackRange(entry, options) {
 function behaviorIssues(entry, options) {
   const issues = [];
   if (isAmbiguousOpportunityWait(entry)) issues.push('ambiguous-opportunity-wait');
-  if (!isCombatDecision(entry) && isCoinDecision(entry) && activePlayersInAttackRange(entry, options).length) {
+  const actionableActivePlayers = activePlayersInAttackRange(entry, options, { actionableOnly: true });
+  if (!isCombatDecision(entry) && isCoinDecision(entry) && actionableActivePlayers.length) {
     issues.push('coin-action-with-active-player-in-range');
   }
   return issues;
@@ -705,7 +720,7 @@ function auditFile(file, rootDir, options) {
     }
     const currentBehaviorIssues = behaviorIssues(entry, options);
     if (currentBehaviorIssues.length) {
-      const activeTarget = activePlayersInAttackRange(entry, options)[0] || null;
+      const activeTarget = activePlayersInAttackRange(entry, options, { actionableOnly: true })[0] || null;
       const activeTargetLabel = activeTarget ? String(activeTarget.name || activeTarget.id || activeTarget.user_id || '') : '';
       const decision = entry?.decision || {};
       const reason = String(decision.reason || decision.kind || currentBehaviorIssues[0] || '');
@@ -733,6 +748,7 @@ function auditFile(file, rootDir, options) {
         reason,
         summary,
         target,
+        activeEvidence: activeTarget?.activeEvidence || '',
         count: 0,
         issues: []
       };
@@ -778,6 +794,7 @@ function auditFile(file, rootDir, options) {
         summary,
         target,
         activeTarget: activeTargetLabel,
+        activeEvidence: activeTarget?.activeEvidence || '',
         count: 0,
         issues: []
       };
@@ -1247,6 +1264,7 @@ function printHuman(report, options) {
     for (const event of latestBehavior) {
       const flags = [];
       if (event.count > 1) flags.push(`count=${event.count}`);
+      if (event.activeEvidence) flags.push(`activeEvidence=${event.activeEvidence}`);
       if (event.issues.length) flags.push(`issues=${event.issues.join('+')}`);
       console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
       if (event.summary && event.summary !== event.reason) console.log(`  ${event.summary}`);
@@ -1260,6 +1278,7 @@ function printHuman(report, options) {
       const flags = [];
       if (event.count > 1) flags.push(`count=${event.count}`);
       if (event.activeTarget && event.activeTarget !== event.target) flags.push(`active=${event.activeTarget}`);
+      if (event.activeEvidence) flags.push(`activeEvidence=${event.activeEvidence}`);
       console.log(`- ${isoTime(event.lastAt) || '-'} ${event.file}:${event.firstLine}-${event.lastLine} ${event.reason || '-'}${event.target ? ` target=${event.target}` : ''} (${flags.join(', ') || 'ok'})`);
       if (event.summary && event.summary !== event.reason) console.log(`  ${event.summary}`);
     }
@@ -1788,7 +1807,41 @@ function runSelfTest() {
             active: true,
             moving: true,
             invulnerable: false,
+            native: true,
+            realtime: true,
             distance: 11000,
+            stamina_5s_remaining_milli: 8500,
+            stamina_5s_limit_milli: 10000
+          }
+        ]
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 7600,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'move',
+          reason: 'visible-coin',
+          target: {
+            type: 'coin',
+            id: 125,
+            distance: 900
+          }
+        },
+        nearbyEntities: [
+          {
+            id: 44,
+            name: 'SnapshotOnlyActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            moving: true,
+            invulnerable: false,
+            snapshot: true,
+            native: false,
+            realtime: false,
+            render: false,
+            distance: 9000,
             stamina_5s_remaining_milli: 8500,
             stamina_5s_limit_milli: 10000
           }
@@ -1813,6 +1866,8 @@ function runSelfTest() {
             active: true,
             moving: true,
             invulnerable: false,
+            native: true,
+            realtime: true,
             distance: 12000,
             stamina_5s_remaining_milli: 8500,
             stamina_5s_limit_milli: 10000
@@ -1852,6 +1907,10 @@ function runSelfTest() {
     assertSelfTest(issueCount(behaviorReport, 'ambiguous-opportunity-wait') === 1, 'expected one ambiguous opportunity wait issue');
     cases += 1;
     assertSelfTest(issueCount(behaviorReport, 'coin-action-with-active-player-in-range') === 1, 'expected one coin action with active player in range issue');
+    cases += 1;
+    assertSelfTest(!behaviorReport.behaviorEvents.some(event => event.target === 'SnapshotOnlyActiveEnemy'), 'expected snapshot-only Active coin action not to be a behavior issue');
+    cases += 1;
+    assertSelfTest(behaviorReport.behaviorEvents.some(event => event.target === 'MovingActiveEnemy' && event.activeEvidence === 'realtime'), 'expected realtime Active coin issue to expose realtime evidence');
     cases += 1;
     assertSelfTest(issueCount(behaviorReport, 'missing-top-level-exit') === 0, 'expected behavior issues not to require top-level exit');
     cases += 1;

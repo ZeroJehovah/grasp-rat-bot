@@ -132,6 +132,8 @@ npm run monitor -- --since now --min-version bootstrap-0.4.101 --latest 10
 
 `validate:objective` 更严格：它要求当前 manifest 版本既有日志，也至少有一个退出事件、至少一个射程内 Active 敌人触发战斗响应的事件、至少一个交战血量劣势退出事件，并且没有退出/重连/行为回归问题。没有当前版本退出样本时会返回 `no-matching-exit-events`，没有射程内 Active 战斗响应样本时会返回 `no-active-in-range-combat-events`，没有血量劣势退出样本时会返回 `no-hp-disadvantage-exit-events`，避免把“还没发生关键场景”误判成“逻辑已验证”。
 
+射程内 Active 行为审计只把可行动的实时证据作为回归问题：`native`、`render`、`realtime` 或当前严格目标里的 Active 玩家被金币动作覆盖时才会触发 `coin-action-with-active-player-in-range`。仅来自 snapshot 的 Active 玩家仍会作为上下文出现，但不会触发该失败项，因为战斗目标、瞄准和开火不能使用 snapshot authority。
+
 需要验证刚发布的当前版本时，建议先启动收集服务并开启 Tampermonkey 战斗日志，然后从当前时间开始严格监控：
 
 ```bash
