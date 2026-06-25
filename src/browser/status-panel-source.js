@@ -234,7 +234,7 @@ function statusPanelSource(helpers = {}) {
       'login-cooldown': '登录已触发，等待页面跳转',
       'login-snapshot-gate': '等待snapshot连续成功',
       'login-control-missing': '等待登录控件出现',
-      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，立即恢复接管',
+      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',
       'game-session-connecting': '已登录，等待游戏连接/自身实体',
       'no-self': '未读到自身实体',
       'not-alive': '不在存活状态',

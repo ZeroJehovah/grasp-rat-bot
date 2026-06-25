@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.206"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.207"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1958,7 +1958,7 @@ function hpDisplay(value) {
       'login-cooldown': '登录已触发，等待页面跳转',
       'login-snapshot-gate': '等待snapshot连续成功',
       'login-control-missing': '等待登录控件出现',
-      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，立即恢复接管',
+      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',
       'game-session-connecting': '已登录，等待游戏连接/自身实体',
       'no-self': '未读到自身实体',
       'not-alive': '不在存活状态',
@@ -4189,11 +4189,6 @@ function hpDisplay(value) {
   async function ensureLoginSnapshotGate(reason = 'login') {
     let status = snapshotLoginGateStatus();
     if (status.satisfied) return status;
-    if (String(reason || '') === 'session-mismatch-recovery') {
-      status.blockReason = String(reason || 'login');
-      status.recoveryBypass = true;
-      return status;
-    }
     const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
@@ -15378,12 +15373,31 @@ function hpDisplay(value) {
             ignoreSuppress: true,
             ignoreLoginCooldown: true
           });
+          const sessionMismatchWaitReason = login?.attempted
+            ? 'auto-login'
+            : (login?.reason === 'snapshot-gate'
+              ? 'login-snapshot-gate'
+              : (login?.reason === 'exit-log-flush-pending'
+                ? 'exit-log-flush-pending'
+                : (login?.reason === 'important-log-flush-pending'
+                  ? 'important-log-flush-pending'
+                  : 'session-mismatch-recovery')));
+          const sessionMismatchDisplayReason = login?.attempted
+            ? '界面显示未登录但原生会话仍在线，已通过安全门禁，正在重登接管'
+            : (sessionMismatchWaitReason === 'login-snapshot-gate'
+              ? loginSnapshotGateDisplayReason(login?.snapshotGate)
+              : (sessionMismatchWaitReason === 'exit-log-flush-pending'
+                ? '等待退出日志发送完成，暂不刷新或重新登录'
+                : (sessionMismatchWaitReason === 'important-log-flush-pending'
+                  ? '等待会话结束日志发送完成，暂不刷新或重新登录'
+                  : '界面显示未登录但原生会话仍在线，等待安全重登')));
+          const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
           refreshGlobalState(false).catch(err => {
             bot.globalState.error = err.message || String(err);
           });
           bot.lastDecision = {
             kind: 'wait',
-            reason: login?.attempted ? 'auto-login' : 'session-mismatch-recovery',
+            reason: sessionMismatchWaitReason,
             dx: 0,
             dy: 0,
             currentUserId: getCurrentUserId(),
@@ -15393,12 +15407,10 @@ function hpDisplay(value) {
             noSelfAgeMs,
             noSelfGameSession: noSelfExit,
             login,
-            displayReason: login?.attempted
-              ? '界面显示未登录但原生会话仍在线，立即重登接管'
-              : '界面显示未登录但原生会话仍在线，等待立即重登'
+            displayReason: sessionMismatchDisplayReason
           };
           updateBotPanel(bot.lastDecision);
-          if (!login?.attempted && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
+          if (!sessionMismatchLoginPending && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
             requestReload('session mismatch recovery stalled');
           }
           if (cfg.once) bot.stop('once');
@@ -15416,7 +15428,7 @@ function hpDisplay(value) {
         const loginDisplayReason = waitReason === 'game-session-connecting'
           ? '已登录，等待游戏连接/自身实体'
           : (waitReason === 'session-mismatch-recovery'
-            ? '界面显示未登录但原生会话仍在线，等待立即重登'
+            ? '界面显示未登录但原生会话仍在线，等待安全重登'
           : (waitReason === 'exit-log-flush-pending'
             ? '等待退出日志发送完成，暂不刷新或重新登录'
           : (waitReason === 'important-log-flush-pending'

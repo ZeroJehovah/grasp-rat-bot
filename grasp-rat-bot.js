@@ -10419,12 +10419,31 @@ ${importantLogSource()}
             ignoreSuppress: true,
             ignoreLoginCooldown: true
           });
+          const sessionMismatchWaitReason = login?.attempted
+            ? 'auto-login'
+            : (login?.reason === 'snapshot-gate'
+              ? 'login-snapshot-gate'
+              : (login?.reason === 'exit-log-flush-pending'
+                ? 'exit-log-flush-pending'
+                : (login?.reason === 'important-log-flush-pending'
+                  ? 'important-log-flush-pending'
+                  : 'session-mismatch-recovery')));
+          const sessionMismatchDisplayReason = login?.attempted
+            ? '界面显示未登录但原生会话仍在线，已通过安全门禁，正在重登接管'
+            : (sessionMismatchWaitReason === 'login-snapshot-gate'
+              ? loginSnapshotGateDisplayReason(login?.snapshotGate)
+              : (sessionMismatchWaitReason === 'exit-log-flush-pending'
+                ? '等待退出日志发送完成，暂不刷新或重新登录'
+                : (sessionMismatchWaitReason === 'important-log-flush-pending'
+                  ? '等待会话结束日志发送完成，暂不刷新或重新登录'
+                  : '界面显示未登录但原生会话仍在线，等待安全重登')));
+          const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error));
           refreshGlobalState(false).catch(err => {
             bot.globalState.error = err.message || String(err);
           });
           bot.lastDecision = {
             kind: 'wait',
-            reason: login?.attempted ? 'auto-login' : 'session-mismatch-recovery',
+            reason: sessionMismatchWaitReason,
             dx: 0,
             dy: 0,
             currentUserId: getCurrentUserId(),
@@ -10434,12 +10453,10 @@ ${importantLogSource()}
             noSelfAgeMs,
             noSelfGameSession: noSelfExit,
             login,
-            displayReason: login?.attempted
-              ? '界面显示未登录但原生会话仍在线，立即重登接管'
-              : '界面显示未登录但原生会话仍在线，等待立即重登'
+            displayReason: sessionMismatchDisplayReason
           };
           updateBotPanel(bot.lastDecision);
-          if (!login?.attempted && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
+          if (!sessionMismatchLoginPending && Date.now() - bot.waitSince > Math.max(10000, Number(cfg.loginCooldownMs || 5000) * 2)) {
             requestReload('session mismatch recovery stalled');
           }
           if (cfg.once) bot.stop('once');
@@ -10457,7 +10474,7 @@ ${importantLogSource()}
         const loginDisplayReason = waitReason === 'game-session-connecting'
           ? '已登录，等待游戏连接/自身实体'
           : (waitReason === 'session-mismatch-recovery'
-            ? '界面显示未登录但原生会话仍在线，等待立即重登'
+            ? '界面显示未登录但原生会话仍在线，等待安全重登'
           : (waitReason === 'exit-log-flush-pending'
             ? '等待退出日志发送完成，暂不刷新或重新登录'
           : (waitReason === 'important-log-flush-pending'
