@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.204"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.205"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1897,6 +1897,7 @@ function hpDisplay(value) {
 	      'safe-distant-coin': '前往远处安全金币',
 	      'post-attack-drop-coin': '战斗后优先拾取掉落',
 	      'best-opportunity-coin': '综合收益最高：拾取金币',
+	      'best-opportunity-coin-route': '综合收益最高：金币路线',
 	      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
 		      'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
 		      'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
@@ -11670,13 +11671,26 @@ function hpDisplay(value) {
     return amount * Number(weight || 1) * scale / opportunityEffectiveStaminaCost(staminaCost);
   }
 
-  function compareCoinOpportunity(a, b) {
-    const scoreDiff = scoreCoinOpportunity(b) - scoreCoinOpportunity(a);
-    if (scoreDiff) return scoreDiff;
-    const amountDiff = Number(b.amount || 0) - Number(a.amount || 0);
-    if (amountDiff) return amountDiff;
-    return Number(a.distance || 0) - Number(b.distance || 0);
-  }
+	  function compareCoinOpportunity(a, b) {
+	    const scoreDiff = scoreCoinOpportunity(b) - scoreCoinOpportunity(a);
+	    if (scoreDiff) return scoreDiff;
+	    const amountDiff = Number(b.amount || 0) - Number(a.amount || 0);
+	    if (amountDiff) return amountDiff;
+	    return Number(a.distance || 0) - Number(b.distance || 0);
+	  }
+
+	  function mergeCoinRouteDisplay(base, routeCoin) {
+	    if (!base || !routeCoin?.coinRoute) return base;
+	    return {
+	      ...base,
+	      coinRoute: routeCoin.coinRoute,
+	      route: true,
+	      routeValue: routeCoin.routeValue || null,
+	      routeKind: routeCoin.routeKind || '',
+	      routeLegs: routeCoin.routeLegs || 0,
+	      routeDisplayOnly: true
+	    };
+	  }
 
   function combatTargetId(target) {
     const id = target?.user_id ?? target?.id;
@@ -14143,22 +14157,24 @@ function hpDisplay(value) {
         }
       }
     }
-    const routeCoin = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
-    if (routeCoin) {
-      const id = String(routeCoin.drop_id);
-      const score = scoreCoinOpportunity(routeCoin);
-      const previous = coinById.get(id);
-      if (!previous
-        || score > Number(previous.opportunitySortScore || -Infinity)
-        || (score === Number(previous.opportunitySortScore || -Infinity) && Number(routeCoin.routeValue || 0) > Number(previous.amount || 0))) {
-        coinById.set(id, {
-          ...routeCoin,
-          opportunitySortScore: score,
-          opportunityStaminaCost: opportunityCoinStaminaCost(routeCoin),
-          opportunityMaxDistance: cfg.coinRouteMaxDistance
-        });
-      }
-    }
+	    const routeCoin = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
+	    if (routeCoin) {
+	      const id = String(routeCoin.drop_id);
+	      const score = scoreCoinOpportunity(routeCoin);
+	      const previous = coinById.get(id);
+	      if (!previous
+	        || score > Number(previous.opportunitySortScore || -Infinity)
+	        || (score === Number(previous.opportunitySortScore || -Infinity) && Number(routeCoin.routeValue || 0) > Number(previous.amount || 0))) {
+	        coinById.set(id, {
+	          ...routeCoin,
+	          opportunitySortScore: score,
+	          opportunityStaminaCost: opportunityCoinStaminaCost(routeCoin),
+	          opportunityMaxDistance: cfg.coinRouteMaxDistance
+	        });
+	      } else if (previous) {
+	        coinById.set(id, mergeCoinRouteDisplay(previous, routeCoin));
+	      }
+	    }
     for (const coin of coinById.values()) {
       const reason = coin.route ? 'best-opportunity-coin-route' : snapshotCoinNavigationReason(coin);
 	      opportunities.push({

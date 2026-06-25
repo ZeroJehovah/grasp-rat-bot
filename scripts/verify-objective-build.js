@@ -468,6 +468,7 @@ function main() {
       assert(routeBody.includes('coinRouteLegClear(self, anchor, activeThreats)'), 'coin route planner does not safety-check first leg');
       assert(bestBody.includes('pickCoinRouteOpportunity'), 'profitable combat comparison does not include coin route score');
       assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
+      assert(pickBody.includes('mergeCoinRouteDisplay(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
       assert(pickBody.includes('coin.distance <= cfg.coinMaxDistance ?') && pickBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
     });
     check(`${file} lets high-value combat drops interrupt recovery`, () => {
@@ -1247,6 +1248,7 @@ function main() {
 
   check('run-self-test module covers native visible coin route self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'visible coin route beats closer single coin by route roi'"), 'coin route ROI self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'same first coin route keeps overlay metadata when single coin roi is higher'"), 'same-first-coin route overlay self-test not found');
     assert(nodeSelfTestSource.includes("name: 'visible afk drop still beats weaker coin route by stamina roi'"), 'AFK-vs-coin-route ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route leg threat block rejects path through active danger'"), 'coin route threat-block self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route rejects unaffordable whole route'"), 'coin route stamina budget self-test not found');

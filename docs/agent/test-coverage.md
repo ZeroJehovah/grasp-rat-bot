@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `233`.
+- Latest bot self-test count: `245`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `18`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -43,7 +43,7 @@
   - real incoming bullet pressure can switch moving-target aim to live/native precision before intercept lead, while lateral live targets under real-bullet pressure or server stall can stay on live intercept instead of collapsing to live precision; replay self-tests include 2026-06-17 xmsthc (`0 -> 28` estimated hits) and Motor (`1 -> 25`) samples plus 2026-06-18 Noah_Z (`0 -> 5` dynamic, `7` pure live-intercept), lockcc (`1 -> 8` dynamic), BeingS (`0 -> 7` dynamic/live-intercept in the old high-HP exit window), and long tyshine (`14 -> 36` dynamic, `38` pure live-intercept);
   - visible/native AFK Drop targets beat richer snapshot fallback targets, and visible native coins beat snapshot coins before any snapshot idle fallback;
   - native visible coin routes beat isolated single coins when route-level stamina ROI is better, while weaker routes still lose to higher-yield visible AFK Drop targets;
-  - visible coin route metadata, including per-coin route points for overlay drawing, is exposed on actions; near realtime coins remain the first route target when a route continues toward a farther field, route legs through active danger are rejected, and whole routes are skipped when the 1h/1d stamina budget cannot afford the full route;
+  - visible coin route metadata, including per-coin route points for overlay drawing, is exposed on actions; same-first-coin routes keep that overlay metadata even when the first coin's single-coin ROI is higher than the whole route score; near realtime coins remain the first route target when a route continues toward a farther field, route legs through active danger are rejected, and whole routes are skipped when the 1h/1d stamina budget cannot afford the full route;
   - snapshot-only coins remain valid only as a fallback when no visible/realtime profit exists;
   - already engaged out-of-range combat targets hold position instead of chasing until `combatDisengageRange`;
   - recently damaged low-HP out-of-range finish targets within 160m reengage without firing out of range;
