@@ -459,6 +459,7 @@ function main() {
       const pickBody = functionBody(text, 'pickBestOpportunity');
       assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
       assert(text.includes('function coinRouteLegClear'), 'coin route leg safety checker not found');
+      assert(text.includes('function coinRouteSkipsCloserFirstCoin'), 'coin route closer-first guard not found');
       assert(text.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
       assert(text.includes('best-opportunity-coin-route'), 'coin route decision reason not found');
       assert(text.includes('points: coinRoutePoints(bestRoute)'), 'coin route action metadata does not expose route points');
@@ -466,6 +467,7 @@ function main() {
       assert(routeBody.includes('cfg.coinRoutePoolLimit'), 'coin route planner is not pool bounded');
       assert(routeBody.includes('cfg.coinRouteAnchorLimit'), 'coin route planner is not anchor bounded');
       assert(routeBody.includes('coinRouteLegClear(self, anchor, activeThreats)'), 'coin route planner does not safety-check first leg');
+      assert(routeBody.includes('coinRouteSkipsCloserFirstCoin(self, route, candidates)'), 'coin route planner can skip much closer local coins');
       assert(bestBody.includes('pickCoinRouteOpportunity'), 'profitable combat comparison does not include coin route score');
       assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
       assert(pickBody.includes('mergeCoinRouteDisplay(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
@@ -1283,6 +1285,7 @@ function main() {
   check('run-self-test module covers native visible coin route self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'visible coin route beats closer single coin by route roi'"), 'coin route ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'same first coin route keeps overlay metadata when single coin roi is higher'"), 'same-first-coin route overlay self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'coin route does not skip much closer local coin'"), 'coin route closer-first self-test not found');
     assert(nodeSelfTestSource.includes("name: 'visible afk drop still beats weaker coin route by stamina roi'"), 'AFK-vs-coin-route ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route leg threat block rejects path through active danger'"), 'coin route threat-block self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route rejects unaffordable whole route'"), 'coin route stamina budget self-test not found');
