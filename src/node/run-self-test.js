@@ -251,6 +251,9 @@ function runSelfTest() {
     coinRouteMaxPointsMid: 4,
     coinRouteMaxPointsSparse: 2,
     coinRouteLegSampleDistance: 10000,
+    coinRouteNearbyFirstCoinDistance: 22000,
+    coinRouteFirstCoinDistanceRatio: 1.45,
+    coinRouteFirstCoinDistanceSlack: 6000,
     fieldMigrationMaxDistance: 45000,
     fieldMigrationMinDistance: 22000,
     fieldMigrationClusterRadius: 18000,
@@ -1857,6 +1860,26 @@ function runSelfTest() {
       opportunityStaminaCost: summary.totalStaminaCost
     };
   }
+
+  function coinRouteSkipsCloserFirstCoin(self, route, candidates) {
+    if (!self || !route) return false;
+    const firstDistance = Number(route.distance ?? route.coinRoute?.firstDistance ?? Infinity);
+    if (!Number.isFinite(firstDistance)) return false;
+    const nearbyLimit = Math.max(0, Number(cfg.coinRouteNearbyFirstCoinDistance || 0));
+    if (!(nearbyLimit > 0)) return false;
+    const firstKey = coinRouteKey(route);
+    const nearest = (candidates || [])
+      .filter(coin => coinRouteKey(coin) !== firstKey)
+      .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin.distance)) ? Number(coin.distance) : dist(self, coin) }))
+      .filter(coin => Number.isFinite(coin.distance) && coin.distance <= nearbyLimit)
+      .sort((a, b) => a.distance - b.distance || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
+    if (!nearest) return false;
+    const ratio = Math.max(1, Number(cfg.coinRouteFirstCoinDistanceRatio || 1));
+    const slack = Math.max(0, Number(cfg.coinRouteFirstCoinDistanceSlack || 0));
+    const allowedFirstDistance = Math.max(Number(nearest.distance || 0) * ratio, Number(nearest.distance || 0) + slack);
+    return firstDistance > allowedFirstDistance;
+  }
+
   function pickCoinRouteOpportunity(self, coins, activeThreats) {
     if (!self) return null;
     const maxDistance = Math.max(0, Number(cfg.coinRouteMaxDistance || cfg.globalCoinMaxDistance || 0));
@@ -1886,6 +1909,7 @@ function runSelfTest() {
       if (!coinRouteLegClear(self, anchor, activeThreats)) continue;
       const route = buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats);
       if (!route) continue;
+      if (coinRouteSkipsCloserFirstCoin(self, route, candidates)) continue;
       const score = Number(route.opportunityScore || -Infinity);
       if (!best
         || score > Number(best.opportunityScore || -Infinity)
@@ -7207,6 +7231,22 @@ function runSelfTest() {
         return action.reason + ':' + action.coinRoute?.legCount;
       })(),
       want: 'best-opportunity-coin-route:3'
+    },
+    {
+      name: 'coin route does not skip much closer local coin',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: -8000, y: 0, amount: 1, native: true },
+            { drop_id: 2, x: 22000, y: 0, amount: 1, native: true },
+            { drop_id: 3, x: 22500, y: 0, amount: 1, native: true },
+            { drop_id: 4, x: 23000, y: 0, amount: 1, native: true }
+          ]
+        });
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + Boolean(action.coinRoute);
+      })(),
+      want: 'coin:best-opportunity-coin:1:false'
     },
     {
       name: 'coin route leg threat block rejects path through active danger',
