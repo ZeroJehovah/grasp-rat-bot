@@ -341,7 +341,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     loginSnapshotSuccessRequired: 3,
     loginSnapshotProbeMinMs: 5000,
     loginPointSafetySuccessRequired: 12,
-    loginPointSafetyRadius: 16000,
+    loginPointSafetyRadius: 60000,
     loginPointSafetyMoveThreshold: 500,
     loginPointSafetyDangerDropMin: 2,
     loginPointSafetyStaminaFullRatio: 0.98,
