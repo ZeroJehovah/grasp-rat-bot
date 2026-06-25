@@ -1047,10 +1047,15 @@ function main() {
       assert(text.includes('loginSnapshotGate: snapshotLoginGateStatus()'), 'status/logs do not expose login snapshot gate');
     });
     check(`${file} leaves broken no-self game sessions`, () => {
+      const snapshotSelfBody = functionBody(text, 'snapshotSelfPresenceState');
+      assert(snapshotSelfBody.includes('snapshotSelfFreshEnough') && snapshotSelfBody.includes('snapshotDataAgeMs'), 'snapshot self takeover evidence does not use fresh snapshot age gates');
+      assert(snapshotSelfBody.includes('bot.globalState.entities'), 'snapshot self takeover evidence does not inspect snapshot entities');
+      assert(snapshotSelfBody.includes('isAlive(entity)'), 'snapshot self takeover evidence does not require alive self');
       const takeoverBody = functionBody(text, 'liveSessionMismatchTakeoverState');
       assert(takeoverBody.includes('noSelfExit?.sessionMismatch') && takeoverBody.includes('noSelfExit?.mismatchTimedOut'), 'live session takeover does not require a timed-out session mismatch');
       assert(takeoverBody.includes('controlHasAuthoritativeSessionMismatch(control)'), 'live session takeover does not require authoritative mismatch evidence');
-      assert(takeoverBody.includes('nativeWsOpenOrConnecting'), 'live session takeover does not require native websocket online evidence');
+      assert(takeoverBody.includes('snapshotSelf') && takeoverBody.includes('snapshotSelf.present'), 'live session takeover does not include fresh snapshot-self evidence');
+      assert(takeoverBody.includes('liveSessionEvidence') && takeoverBody.includes('nativeWsOpenOrConnecting || snapshotSelf.present'), 'live session takeover does not require native websocket or snapshot-self live evidence');
       assert(takeoverBody.includes('bot.pendingExit'), 'live session takeover does not block active pending exits');
       assert(takeoverBody.includes('loginSuppressRemainingMs()'), 'live session takeover does not block login suppress context');
       assert(takeoverBody.includes('exit-trigger:') && takeoverBody.includes('exit-confirmed:'), 'live session takeover does not block exit-reset snapshot gates');
@@ -1060,9 +1065,11 @@ function main() {
       assert(takeoverBody.includes('recentUnsafeExitContext(bot.lastOfflineLeaveResult'), 'live session takeover does not block recent unsafe offline exits');
       const mismatchBody = functionBody(text, 'controlHasAuthoritativeSessionMismatch');
       assert(mismatchBody.includes('controlHasNativeGameSession(control)'), 'authoritative session mismatch helper does not use native session evidence');
+      assert(mismatchBody.includes('snapshotSelfPresenceState') && mismatchBody.includes('snapshotSelfState?.present'), 'authoritative session mismatch helper does not use fresh snapshot-self evidence');
       assert(mismatchBody.includes('Boolean(control.hasToken)'), 'authoritative session mismatch helper does not check cleared token state');
       const noSelfBody = functionBody(text, 'noSelfGameSessionExitState');
       assert(noSelfBody.includes('controlHasNativeGameSession(control)'), 'no-self session detection does not use native session evidence');
+      assert(noSelfBody.includes('snapshotSelfPresenceState(userId)') && noSelfBody.includes('snapshotSelf.present'), 'no-self session detection does not use fresh snapshot-self evidence');
       assert(noSelfBody.includes('control?.nativeReconnectChurn'), 'no-self session detection does not detect reconnect churn');
       assert(noSelfBody.includes('cfg.gameSessionNoSelfLeaveMs'), 'no-self session detection does not use timeout');
       assert(noSelfBody.includes('sessionMismatch'), 'no-self session detection does not track session mismatch');
