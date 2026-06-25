@@ -781,11 +781,6 @@ function controlLoginSource(helpers = {}) {
   async function ensureLoginSnapshotGate(reason = 'login') {
     let status = snapshotLoginGateStatus();
     if (status.satisfied) return status;
-    if (String(reason || '') === 'session-mismatch-recovery') {
-      status.blockReason = String(reason || 'login');
-      status.recoveryBypass = true;
-      return status;
-    }
     const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {

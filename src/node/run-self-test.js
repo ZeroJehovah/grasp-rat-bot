@@ -7488,12 +7488,26 @@ function runSelfTest() {
       want: 'pending-exit-active|pending hostile exit|pending hostile exit wait|retry later'
     },
     {
-      name: 'session mismatch recovery bypasses snapshot gate',
+      name: 'session mismatch recovery respects snapshot gate',
       got: (() => {
-        const reason = 'session-mismatch-recovery';
-        return String(reason === 'session-mismatch-recovery');
+        const status = {
+          satisfied: false,
+          streak: 0,
+          required: 3,
+          pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
+        };
+        const gated = {
+          ...status,
+          blockReason: 'session-mismatch-recovery'
+        };
+        return [
+          String(gated.satisfied),
+          gated.blockReason,
+          String(Boolean(gated.recoveryBypass)),
+          String(Boolean(gated.pointSafety?.satisfied))
+        ].join('|');
       })(),
-      want: 'true'
+      want: 'false|session-mismatch-recovery|false|false'
     },
     {
       name: 'local exit confirmation must not accept active session mismatch',

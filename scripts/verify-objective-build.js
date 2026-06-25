@@ -1008,6 +1008,8 @@ function main() {
     check(`${file} gates relogin on consecutive snapshot success`, () => {
       const gateBody = functionBody(text, 'ensureLoginSnapshotGate');
       assert(gateBody.includes('await refreshGlobalState(true)'), 'login snapshot gate does not actively probe snapshot');
+      assert(!gateBody.includes('session-mismatch-recovery'), 'session mismatch recovery can bypass login snapshot gate');
+      assert(!gateBody.includes('recoveryBypass'), 'login snapshot gate exposes a recovery bypass');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not advance login gate');
       assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
@@ -1054,7 +1056,12 @@ function main() {
       assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
       assert(tickBody.includes("stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session')"), 'no-self session exit does not stop motion with explicit reason');
       assert(tickBody.includes('await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety)'), 'no-self session exit does not issue offline leave');
-      assert(tickBody.includes("await maybeStartAutoLogin('session-mismatch-recovery'"), 'session mismatch recovery does not trigger immediate relogin attempt');
+      assert(tickBody.includes("await maybeStartAutoLogin('session-mismatch-recovery'"), 'session mismatch recovery does not route through auto login');
+      assert(tickBody.includes("login?.reason === 'snapshot-gate'"), 'session mismatch recovery does not surface snapshot-gate waits');
+      assert(tickBody.includes('const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error))'), 'session mismatch recovery does not treat gated login waits as pending');
+      assert(tickBody.includes('if (!sessionMismatchLoginPending && Date.now() - bot.waitSince >'), 'session mismatch recovery can reload while login gate is pending');
+      assert(!text.includes('等待立即重登'), 'session mismatch recovery still exposes immediate relogin text');
+      assert(!text.includes('立即恢复接管'), 'session mismatch recovery panel still exposes immediate recovery text');
       assert(text.includes("'session-mismatch-recovery'"), 'session mismatch recovery reason is not exposed');
       assert(text.includes("control-ws-no-self-game-session"), 'no-self session exit reason is not exposed');
     });
