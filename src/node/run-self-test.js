@@ -226,6 +226,8 @@ function runSelfTest() {
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
+    opportunityAfkStaminaCooldownMs: 60000,
+    opportunityAfkStaminaDropThresholdMs: 100,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     invulnerableActiveCoinDangerRadius: 36000,
@@ -323,7 +325,7 @@ function runSelfTest() {
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null };
+  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map() };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -1619,10 +1621,84 @@ function runSelfTest() {
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function opportunityAfkTargetId(target) {
+    const id = target?.user_id ?? target?.id;
+    return id === undefined || id === null || id === '' ? '' : String(id);
+  }
+
+  function targetStamina5sRemaining(target) {
+    const value = Number(target?.stamina_5s_remaining_milli ?? target?.stamina5s ?? target?.stamina_5s ?? NaN);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function opportunityAfkStaminaState() {
+    if (!(bot.opportunityAfkStamina instanceof Map)) bot.opportunityAfkStamina = new Map();
+    return bot.opportunityAfkStamina;
+  }
+
+  function opportunityAfkStaminaCooldownMs() {
+    const value = Number(cfg.opportunityAfkStaminaCooldownMs ?? 60000);
+    return Math.max(0, Number.isFinite(value) ? value : 60000);
+  }
+
+  function opportunityAfkStaminaDropThresholdMs() {
+    const value = Number(cfg.opportunityAfkStaminaDropThresholdMs ?? 100);
+    return Math.max(0, Number.isFinite(value) ? value : 100);
+  }
+
+  function updateOpportunityAfkStaminaObservations(targets, t = Date.now()) {
+    const state = opportunityAfkStaminaState();
+    const cooldownMs = opportunityAfkStaminaCooldownMs();
+    const dropThreshold = opportunityAfkStaminaDropThresholdMs();
+    const observationGapMs = Math.max(1000, Number(cfg.activeSeenMs || 0) * 2, Number(cfg.tickMs || 0) * 8);
+    for (const target of targets || []) {
+      const id = opportunityAfkTargetId(target);
+      if (!id) continue;
+      const stamina5s = targetStamina5sRemaining(target);
+      const previous = state.get(id) || {};
+      const previousStamina = Number(previous.stamina5s);
+      const previousSeenAt = Number(previous.lastSeenAt || 0);
+      const continuous = previousSeenAt > 0 && t - previousSeenAt <= observationGapMs;
+      let cooldownUntil = Math.max(0, Number(previous.cooldownUntil || 0));
+      let consumedAt = Math.max(0, Number(previous.consumedAt || 0));
+      if (Number.isFinite(stamina5s) && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina) {
+        cooldownUntil = Math.max(cooldownUntil, t + cooldownMs);
+        consumedAt = t;
+      }
+      state.set(id, {
+        stamina5s: Number.isFinite(stamina5s) ? stamina5s : (Number.isFinite(previousStamina) ? previousStamina : null),
+        lastSeenAt: t,
+        cooldownUntil,
+        consumedAt
+      });
+    }
+    const ttlMs = Math.max(300000, cooldownMs * 5);
+    for (const [id, item] of state.entries()) {
+      const lastSeenAt = Number(item?.lastSeenAt || 0);
+      const cooldownUntil = Number(item?.cooldownUntil || 0);
+      if (cooldownUntil <= t && lastSeenAt > 0 && t - lastSeenAt > ttlMs) state.delete(id);
+    }
+  }
+
+  function opportunityAfkStaminaCooldownRemaining(target, t = Date.now()) {
+    const id = opportunityAfkTargetId(target);
+    if (!id) return 0;
+    const item = opportunityAfkStaminaState().get(id);
+    return Math.max(0, Math.round(Number(item?.cooldownUntil || 0) - t));
+  }
+
+  function afkOpportunityBlockedByStaminaCooldown(target, t = Date.now()) {
+    if (!isAfkProfitTarget(target)) return false;
+    const distance = Number(target?.distance ?? Infinity);
+    if (Number.isFinite(distance) && distance <= Number(cfg.attackRange || 0)) return false;
+    return opportunityAfkStaminaCooldownRemaining(target, t) > 0;
+  }
+
   function scoreEnemyOpportunity(target) {
     if (isWhitelistedTarget(target)) return null;
     const afk = isAfkProfitTarget(target);
     const inRange = target.distance <= (afk ? cfg.attackRange : cfg.attackEngageRange);
+    if (afk && !inRange && afkOpportunityBlockedByStaminaCooldown(target)) return null;
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     const sticky = bot.lastTarget?.kind === 'enemy'
       && String(bot.lastTarget.id) === String(target.user_id)
@@ -4211,6 +4287,7 @@ function runSelfTest() {
 
   function choose({ local = [], global = [], coins = [], bullets = [], attacks = [], snapshotWaitAgeMs = 0, self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 } }) {
     const entities = [...global, ...local];
+    updateOpportunityAfkStaminaObservations(entities);
     const fullHp = isFullHp(self);
     const activeThreats = entities
       .filter(isActive)
@@ -4723,6 +4800,62 @@ function runSelfTest() {
         return action.kind + ':' + action.reason;
       })(),
       want: 'seek-enemy:approach-afk-drop-target'
+    },
+    {
+      name: 'new out-of-range afk target can be chased before stamina drop observed',
+      got: (() => {
+        bot.opportunityChoice = null;
+        bot.opportunitySwitchLock = null;
+        bot.opportunityAfkStamina.clear();
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          global: [{ user_id: 8801, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 5000, death_reward_preview: 20 }],
+          coins: [{ drop_id: 1, x: -5000, y: 0, amount: 1, native: true }]
+        });
+        bot.opportunityAfkStamina.clear();
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'seek-enemy:approach-afk-drop-target'
+    },
+    {
+      name: 'out-of-range afk target cools down after observed stamina drop',
+      got: (() => {
+        bot.opportunityChoice = null;
+        bot.opportunitySwitchLock = null;
+        bot.opportunityAfkStamina.clear();
+        const self = { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
+        const coin = { drop_id: 1, x: -5000, y: 0, amount: 1, native: true };
+        choose({
+          self,
+          global: [{ user_id: 8802, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 10000, death_reward_preview: 20 }],
+          coins: [coin]
+        });
+        const action = choose({
+          self,
+          global: [{ user_id: 8802, x: 49000, y: 0, current_join_mode: 'Passive', stamina_5s_remaining_milli: 8000, death_reward_preview: 20 }],
+          coins: [coin]
+        });
+        bot.opportunityAfkStamina.clear();
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:best-opportunity-coin'
+    },
+    {
+      name: 'in-range afk target ignores stamina cooldown',
+      got: (() => {
+        bot.opportunityChoice = null;
+        bot.opportunitySwitchLock = null;
+        bot.opportunityAfkStamina.clear();
+        bot.opportunityAfkStamina.set('8803', { cooldownUntil: Date.now() + cfg.opportunityAfkStaminaCooldownMs, lastSeenAt: Date.now(), stamina5s: 8000, consumedAt: Date.now() });
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 8803, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 20 }],
+          coins: [{ drop_id: 1, x: 8000, y: 0, amount: 1, native: true }]
+        });
+        bot.opportunityAfkStamina.clear();
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'attack:best-opportunity-afk-drop-target'
     },
     {
       name: 'near high afk drop beats low coin by value',

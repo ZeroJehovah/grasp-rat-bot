@@ -219,6 +219,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
+    opportunityAfkStaminaCooldownMs: 60000,
+    opportunityAfkStaminaDropThresholdMs: 100,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     invulnerableActiveCoinDangerRadius: 36000,

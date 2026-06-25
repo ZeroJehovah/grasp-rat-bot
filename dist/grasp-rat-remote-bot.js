@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.205"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.206"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -39,6 +39,7 @@
     lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === 'object' ? { ...previousBot.lastCombatShot } : null,
     opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
     opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
+    opportunityAfkStamina: previousBot?.opportunityAfkStamina instanceof Map ? new Map(previousBot.opportunityAfkStamina) : new Map(),
     pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
     lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
     lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
@@ -288,6 +289,8 @@
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
+    opportunityAfkStaminaCooldownMs: 60000,
+    opportunityAfkStaminaDropThresholdMs: 100,
     coinMaxDistance: 18000,
     coinDangerRadius: 25000,
     invulnerableActiveCoinDangerRadius: 36000,
@@ -767,6 +770,7 @@
 			    actionThreats: [],
 			    opportunityChoice: preserved.opportunityChoice,
 			    opportunitySwitchLock: preserved.opportunitySwitchLock,
+			    opportunityAfkStamina: preserved.opportunityAfkStamina instanceof Map ? new Map(preserved.opportunityAfkStamina) : new Map(),
 			    returnBlockLock: null,
     returnBlockScan: null,
     returnBlockCooldownUntil: 0,
@@ -13394,10 +13398,84 @@ function hpDisplay(value) {
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
+  function opportunityAfkTargetId(target) {
+    const id = target?.user_id ?? target?.id;
+    return id === undefined || id === null || id === '' ? '' : String(id);
+  }
+
+  function targetStamina5sRemaining(target) {
+    const value = Number(target?.stamina_5s_remaining_milli ?? target?.stamina5s ?? target?.stamina_5s ?? NaN);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function opportunityAfkStaminaState() {
+    if (!(bot.opportunityAfkStamina instanceof Map)) bot.opportunityAfkStamina = new Map();
+    return bot.opportunityAfkStamina;
+  }
+
+  function opportunityAfkStaminaCooldownMs() {
+    const value = Number(cfg.opportunityAfkStaminaCooldownMs ?? 60000);
+    return Math.max(0, Number.isFinite(value) ? value : 60000);
+  }
+
+  function opportunityAfkStaminaDropThresholdMs() {
+    const value = Number(cfg.opportunityAfkStaminaDropThresholdMs ?? 100);
+    return Math.max(0, Number.isFinite(value) ? value : 100);
+  }
+
+  function updateOpportunityAfkStaminaObservations(targets, t = now()) {
+    const state = opportunityAfkStaminaState();
+    const cooldownMs = opportunityAfkStaminaCooldownMs();
+    const dropThreshold = opportunityAfkStaminaDropThresholdMs();
+    const observationGapMs = Math.max(1000, Number(cfg.activeSeenMs || 0) * 2, Number(cfg.tickMs || 0) * 8);
+    for (const target of targets || []) {
+      const id = opportunityAfkTargetId(target);
+      if (!id) continue;
+      const stamina5s = targetStamina5sRemaining(target);
+      const previous = state.get(id) || {};
+      const previousStamina = Number(previous.stamina5s);
+      const previousSeenAt = Number(previous.lastSeenAt || 0);
+      const continuous = previousSeenAt > 0 && t - previousSeenAt <= observationGapMs;
+      let cooldownUntil = Math.max(0, Number(previous.cooldownUntil || 0));
+      let consumedAt = Math.max(0, Number(previous.consumedAt || 0));
+      if (Number.isFinite(stamina5s) && continuous && Number.isFinite(previousStamina) && stamina5s + dropThreshold < previousStamina) {
+        cooldownUntil = Math.max(cooldownUntil, t + cooldownMs);
+        consumedAt = t;
+      }
+      state.set(id, {
+        stamina5s: Number.isFinite(stamina5s) ? stamina5s : (Number.isFinite(previousStamina) ? previousStamina : null),
+        lastSeenAt: t,
+        cooldownUntil,
+        consumedAt
+      });
+    }
+    const ttlMs = Math.max(300000, cooldownMs * 5);
+    for (const [id, item] of state.entries()) {
+      const lastSeenAt = Number(item?.lastSeenAt || 0);
+      const cooldownUntil = Number(item?.cooldownUntil || 0);
+      if (cooldownUntil <= t && lastSeenAt > 0 && t - lastSeenAt > ttlMs) state.delete(id);
+    }
+  }
+
+  function opportunityAfkStaminaCooldownRemaining(target, t = now()) {
+    const id = opportunityAfkTargetId(target);
+    if (!id) return 0;
+    const item = opportunityAfkStaminaState().get(id);
+    return Math.max(0, Math.round(Number(item?.cooldownUntil || 0) - t));
+  }
+
+  function afkOpportunityBlockedByStaminaCooldown(target, t = now()) {
+    if (!isAfkProfitTarget(target)) return false;
+    const distance = Number(target?.distance ?? Infinity);
+    if (Number.isFinite(distance) && distance <= Number(cfg.attackRange || 0)) return false;
+    return opportunityAfkStaminaCooldownRemaining(target, t) > 0;
+  }
+
   function scoreEnemyOpportunity(target) {
     if (isWhitelistedTarget(target)) return null;
     const afk = isAfkProfitTarget(target);
     const inRange = Number(target.distance || Infinity) <= (afk ? cfg.attackRange : cfg.attackEngageRange);
+    if (afk && !inRange && afkOpportunityBlockedByStaminaCooldown(target)) return null;
     if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
     const sticky = bot.lastTarget?.kind === 'enemy'
       && String(bot.lastTarget.id) === String(target.user_id)
@@ -14697,6 +14775,7 @@ function hpDisplay(value) {
       bullets
     } = classify(self);
     bot.lastActionEntities = entities;
+    updateOpportunityAfkStaminaObservations(realtimeEntities);
     const fullHp = isFullHp(self);
     const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
     bot.actionThreats = avoidanceThreats;
