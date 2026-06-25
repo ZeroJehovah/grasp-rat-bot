@@ -7488,7 +7488,7 @@ function runSelfTest() {
       want: 'pending-exit-active|pending hostile exit|pending hostile exit wait|retry later'
     },
     {
-      name: 'session mismatch recovery respects snapshot gate',
+      name: 'live session mismatch takeover uses explicit bypass state',
       got: (() => {
         const status = {
           satisfied: false,
@@ -7496,18 +7496,57 @@ function runSelfTest() {
           required: 3,
           pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
         };
-        const gated = {
+        const liveSessionTakeover = {
+          allowed: true,
+          blockedBy: [],
+          reason: 'live-session-mismatch-takeover'
+        };
+        const bypassed = {
           ...status,
-          blockReason: 'session-mismatch-recovery'
+          blockReason: 'session-mismatch-recovery',
+          liveSessionTakeoverBypass: liveSessionTakeover.allowed,
+          liveSessionTakeover
         };
         return [
-          String(gated.satisfied),
-          gated.blockReason,
-          String(Boolean(gated.recoveryBypass)),
-          String(Boolean(gated.pointSafety?.satisfied))
+          String(bypassed.satisfied),
+          bypassed.blockReason,
+          String(Boolean(bypassed.liveSessionTakeoverBypass)),
+          bypassed.liveSessionTakeover.reason,
+          String(Boolean(bypassed.pointSafety?.satisfied))
         ].join('|');
       })(),
-      want: 'false|session-mismatch-recovery|false|false'
+      want: 'false|session-mismatch-recovery|true|live-session-mismatch-takeover|false'
+    },
+    {
+      name: 'post-exit session mismatch blocks live takeover bypass',
+      got: (() => {
+        const blockedBy = [];
+        const state = {
+          pendingExit: true,
+          suppressRemainingMs: 60000,
+          resetReason: 'exit-trigger:websocket offline',
+          reconnectChurn: true,
+          wsOfflineish: true
+        };
+        if (state.pendingExit) blockedBy.push('pending-exit-active');
+        if (state.suppressRemainingMs > 0) blockedBy.push('login-suppress-active');
+        if (state.resetReason.includes('exit-trigger:') || state.resetReason.includes('exit-confirmed:')) blockedBy.push('exit-snapshot-gate-reset');
+        if (state.reconnectChurn) blockedBy.push('native-reconnect-churn');
+        if (state.wsOfflineish) blockedBy.push('ws-offlineish');
+        const takeover = {
+          allowed: blockedBy.length === 0,
+          blockedBy
+        };
+        return [
+          String(takeover.blockedBy.includes('pending-exit-active')),
+          String(takeover.blockedBy.includes('login-suppress-active')),
+          String(takeover.blockedBy.includes('exit-snapshot-gate-reset')),
+          String(takeover.blockedBy.includes('native-reconnect-churn')),
+          String(takeover.blockedBy.includes('ws-offlineish')),
+          String(takeover.allowed)
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|false'
     },
     {
       name: 'local exit confirmation must not accept active session mismatch',

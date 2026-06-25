@@ -1008,8 +1008,11 @@ function main() {
     check(`${file} gates relogin on consecutive snapshot success`, () => {
       const gateBody = functionBody(text, 'ensureLoginSnapshotGate');
       assert(gateBody.includes('await refreshGlobalState(true)'), 'login snapshot gate does not actively probe snapshot');
-      assert(!gateBody.includes('session-mismatch-recovery'), 'session mismatch recovery can bypass login snapshot gate');
-      assert(!gateBody.includes('recoveryBypass'), 'login snapshot gate exposes a recovery bypass');
+      assert(!gateBody.includes('session-mismatch-recovery'), 'login snapshot gate still has a reason-based session mismatch bypass');
+      assert(!gateBody.includes('recoveryBypass'), 'login snapshot gate exposes the old recovery bypass');
+      assert(gateBody.includes('options.allowLiveSessionTakeoverBypass'), 'login snapshot gate does not require an explicit live-session takeover bypass option');
+      assert(gateBody.includes('options.liveSessionTakeover?.allowed'), 'login snapshot gate bypass is not tied to allowed live-session takeover state');
+      assert(gateBody.includes('status.liveSessionTakeoverBypass = true'), 'login snapshot gate does not mark explicit live-session takeover bypasses');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not advance login gate');
       assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
@@ -1030,7 +1033,9 @@ function main() {
       assert(pointDangerBody.includes("return 'stamina-not-full'"), 'login-point safety does not block non-full 5s stamina');
       assert(pointDangerBody.includes("return 'firing'"), 'login-point safety does not block firing evidence');
       const loginBody = functionBody(text, 'maybeStartAutoLogin');
-      assert(loginBody.includes('await ensureLoginSnapshotGate(reason)'), 'auto login does not wait for snapshot gate');
+      assert(loginBody.includes('await ensureLoginSnapshotGate(reason, {'), 'auto login does not pass explicit options to snapshot gate');
+      assert(loginBody.includes('allowLiveSessionTakeoverBypass'), 'auto login does not thread live-session takeover bypass state');
+      assert(loginBody.includes('!snapshotGate.liveSessionTakeoverBypass'), 'auto login still blocks explicit live-session takeover bypasses');
       assert(loginBody.includes("reason: 'snapshot-gate'"), 'snapshot gate block reason not reported');
       const manualBody = functionBody(text, 'forceLoginNow');
       assert(manualBody.includes('await ensureLoginSnapshotGate(manualReason)'), 'manual login does not check snapshot gate');
@@ -1042,6 +1047,17 @@ function main() {
       assert(text.includes('loginSnapshotGate: snapshotLoginGateStatus()'), 'status/logs do not expose login snapshot gate');
     });
     check(`${file} leaves broken no-self game sessions`, () => {
+      const takeoverBody = functionBody(text, 'liveSessionMismatchTakeoverState');
+      assert(takeoverBody.includes('noSelfExit?.sessionMismatch') && takeoverBody.includes('noSelfExit?.mismatchTimedOut'), 'live session takeover does not require a timed-out session mismatch');
+      assert(takeoverBody.includes('controlHasAuthoritativeSessionMismatch(control)'), 'live session takeover does not require authoritative mismatch evidence');
+      assert(takeoverBody.includes('nativeWsOpenOrConnecting'), 'live session takeover does not require native websocket online evidence');
+      assert(takeoverBody.includes('bot.pendingExit'), 'live session takeover does not block active pending exits');
+      assert(takeoverBody.includes('loginSuppressRemainingMs()'), 'live session takeover does not block login suppress context');
+      assert(takeoverBody.includes('exit-trigger:') && takeoverBody.includes('exit-confirmed:'), 'live session takeover does not block exit-reset snapshot gates');
+      assert(takeoverBody.includes('noSelfExit?.reconnectChurn') && takeoverBody.includes('control?.nativeReconnectChurn'), 'live session takeover does not block reconnect churn');
+      assert(takeoverBody.includes('noSelfExit?.wsOfflineish'), 'live session takeover does not block offline-ish websocket state');
+      assert(takeoverBody.includes('enemyReloginHoldRemainingMs()') && takeoverBody.includes('offlineReloginHoldRemainingMs()'), 'live session takeover does not block active relogin holds');
+      assert(takeoverBody.includes('recentUnsafeExitContext(bot.lastOfflineLeaveResult'), 'live session takeover does not block recent unsafe offline exits');
       const mismatchBody = functionBody(text, 'controlHasAuthoritativeSessionMismatch');
       assert(mismatchBody.includes('controlHasNativeGameSession(control)'), 'authoritative session mismatch helper does not use native session evidence');
       assert(mismatchBody.includes('Boolean(control.hasToken)'), 'authoritative session mismatch helper does not check cleared token state');
@@ -1054,9 +1070,13 @@ function main() {
       assert(noSelfBody.includes('shouldLeave'), 'no-self helper does not return leave decision');
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
+      assert(tickBody.includes('liveSessionMismatchTakeoverState(control, noSelfExit)'), 'main loop does not evaluate guarded live-session takeover state');
+      assert(tickBody.includes('if (!cfg.dryRun && liveSessionTakeover?.allowed)'), 'main loop does not require allowed takeover state before fast recovery');
       assert(tickBody.includes("stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session')"), 'no-self session exit does not stop motion with explicit reason');
       assert(tickBody.includes('await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety)'), 'no-self session exit does not issue offline leave');
       assert(tickBody.includes("await maybeStartAutoLogin('session-mismatch-recovery'"), 'session mismatch recovery does not route through auto login');
+      assert(tickBody.includes('allowLiveSessionTakeoverBypass: true'), 'session mismatch recovery can call auto login without explicit takeover bypass option');
+      assert(tickBody.includes('liveSessionTakeover,'), 'session mismatch recovery does not log/pass takeover detail');
       assert(tickBody.includes("login?.reason === 'snapshot-gate'"), 'session mismatch recovery does not surface snapshot-gate waits');
       assert(tickBody.includes('const sessionMismatchLoginPending = Boolean(login?.attempted || (login?.needed && !login?.error))'), 'session mismatch recovery does not treat gated login waits as pending');
       assert(tickBody.includes('if (!sessionMismatchLoginPending && Date.now() - bot.waitSince >'), 'session mismatch recovery can reload while login gate is pending');
