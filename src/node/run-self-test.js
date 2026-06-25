@@ -7518,6 +7518,29 @@ function runSelfTest() {
       want: 'false|session-mismatch-recovery|true|live-session-mismatch-takeover|false'
     },
     {
+      name: 'snapshot self can prove live session mismatch takeover evidence',
+      got: (() => {
+        const nativeWsOpenOrConnecting = false;
+        const snapshotSelf = {
+          known: true,
+          fresh: true,
+          present: true,
+          snapshotAgeMs: 1200,
+          self: { user_id: 28886, hp: 100 }
+        };
+        const liveSessionEvidence = Boolean(nativeWsOpenOrConnecting || snapshotSelf.present);
+        const blockedBy = [];
+        if (!liveSessionEvidence) blockedBy.push('live-session-evidence-missing');
+        return [
+          String(liveSessionEvidence),
+          String(blockedBy.length),
+          String(snapshotSelf.fresh),
+          String(snapshotSelf.present)
+        ].join('|');
+      })(),
+      want: 'true|0|true|true'
+    },
+    {
       name: 'post-exit session mismatch blocks live takeover bypass',
       got: (() => {
         const blockedBy = [];

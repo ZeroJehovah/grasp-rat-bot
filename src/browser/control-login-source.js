@@ -157,25 +157,52 @@ function controlLoginSource(helpers = {}) {
     ));
   }
 
-  function controlHasAuthoritativeSessionMismatch(control) {
+  function snapshotSelfPresenceState(userId = getCurrentUserId()) {
+    const id = Number(userId || 0) || 0;
+    const snapshotAgeMs = typeof snapshotDataAgeMs === 'function'
+      ? snapshotDataAgeMs()
+      : (bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity);
+    const fresh = typeof snapshotSelfFreshEnough === 'function'
+      ? snapshotSelfFreshEnough()
+      : snapshotAgeMs <= Number(cfg.snapshotSelfStaleMs || 0);
+    const entities = Array.isArray(bot.globalState.entities) ? bot.globalState.entities : [];
+    const entity = id && fresh
+      ? entities.find(item => Number(item?.user_id ?? item?.userId ?? item?.id ?? NaN) === id) || null
+      : null;
+    const present = Boolean(entity && isAlive(entity));
+    return {
+      known: Boolean(id && fresh),
+      present,
+      source: 'snapshot',
+      userId: id || null,
+      fresh,
+      snapshotAgeMs: Number.isFinite(snapshotAgeMs) ? Math.max(0, Math.round(snapshotAgeMs)) : null,
+      self: entity ? summarizeSelf(entity) : null
+    };
+  }
+
+  function controlHasAuthoritativeSessionMismatch(control, snapshotSelf = null) {
     if (!control) return false;
     if (Boolean(control.hasToken)) return false;
     if (Boolean(hasLoginRequiredText() || findLoginControl())) return false;
-    return controlHasNativeGameSession(control);
+    const snapshotSelfState = snapshotSelf || snapshotSelfPresenceState(control?.currentUserId || getCurrentUserId());
+    return Boolean(controlHasNativeGameSession(control) || snapshotSelfState?.present);
   }
 
   function noSelfGameSessionExitState(control, noSelfAgeMs = 0) {
     const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
     const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
+    const snapshotSelf = snapshotSelfPresenceState(userId);
     const hasSessionEvidence = Boolean(userId && !loginRequired && (
 	      control?.hasToken
 	      || controlHasNativeGameSession(control)
+	      || snapshotSelf.present
 	      || control?.transport === 'native-page'
       || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState))
       || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))
     ));
     const reconnectChurn = Boolean(control?.nativeReconnectChurn);
-    const sessionMismatch = controlHasAuthoritativeSessionMismatch(control);
+    const sessionMismatch = controlHasAuthoritativeSessionMismatch(control, snapshotSelf);
     const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
     const leaveMs = Math.max(0, Number(cfg.gameSessionNoSelfLeaveMs || 0) || 0);
     const timedOut = Boolean(leaveMs && ageMs >= leaveMs);
@@ -211,6 +238,7 @@ function controlLoginSource(helpers = {}) {
       leaveMs,
       timedOut,
       sessionMismatch,
+      snapshotSelf,
       mismatchLeaveMs,
       mismatchTimedOut,
       reconnectChurn: reconnectChurn ? {
@@ -287,6 +315,8 @@ function controlLoginSource(helpers = {}) {
         || isWsConnectingOrOpen(control?.nativeWsReadyState)
         || isWsConnectingOrOpen(control?.wsReadyState)
     );
+    const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
+    const liveSessionEvidence = Boolean(nativeWsOpenOrConnecting || snapshotSelf.present);
     const reconnectChurn = Boolean(noSelfExit?.reconnectChurn || control?.nativeReconnectChurn);
     const wsOfflineish = Boolean(noSelfExit?.wsOfflineish);
     const suppressRemainingMs = loginSuppressRemainingMs();
@@ -323,7 +353,7 @@ function controlLoginSource(helpers = {}) {
     if (!userId) blockedBy.push('missing-user-id');
     if (hasToken) blockedBy.push('token-still-present');
     if (loginRequired) blockedBy.push('login-required-ui-visible');
-    if (!nativeWsOpenOrConnecting) blockedBy.push('native-ws-not-open');
+    if (!liveSessionEvidence) blockedBy.push('live-session-evidence-missing');
     if (reconnectChurn) blockedBy.push('native-reconnect-churn');
     if (wsOfflineish) blockedBy.push('ws-offlineish');
     if (bot.pendingExit) blockedBy.push('pending-exit-active');
@@ -343,6 +373,8 @@ function controlLoginSource(helpers = {}) {
       userId: userId || null,
       noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
       nativeWsOpenOrConnecting,
+      liveSessionEvidence,
+      snapshotSelf,
       reconnectChurn,
       wsOfflineish,
       pendingExit: bot.pendingExit ? summarizePendingExit(bot.pendingExit) : null,
