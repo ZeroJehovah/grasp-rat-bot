@@ -5,6 +5,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { cleanupDetailedLogs } = require('./cleanup-logs');
 
 const DEFAULTS = {
   host: '127.0.0.1',
@@ -12,6 +13,9 @@ const DEFAULTS = {
   dir: path.join(__dirname, 'logs'),
   maxBodyBytes: 8 * 1024 * 1024,
   splitFiles: true,
+  cleanupEnabled: true,
+  cleanupRetentionDays: 3,
+  cleanupAt: '03:30',
   selfTest: false
 };
 
@@ -24,6 +28,9 @@ function parseArgs(args) {
     else if (arg === '--dir') out.dir = path.resolve(args[++i] || out.dir);
     else if (arg === '--max-body-bytes') out.maxBodyBytes = Math.max(1024, Number(args[++i] || out.maxBodyBytes) || out.maxBodyBytes);
     else if (arg === '--flat-files') out.splitFiles = false;
+    else if (arg === '--no-cleanup') out.cleanupEnabled = false;
+    else if (arg === '--cleanup-retention-days') out.cleanupRetentionDays = Math.max(1, Math.floor(Number(args[++i] || out.cleanupRetentionDays) || out.cleanupRetentionDays));
+    else if (arg === '--cleanup-at') out.cleanupAt = String(args[++i] || out.cleanupAt).trim() || out.cleanupAt;
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
       printHelp();
@@ -44,6 +51,10 @@ Options:
   --dir <dir>               Log output directory. Default: ./logs
   --max-body-bytes <bytes>  Maximum POST body. Default: ${DEFAULTS.maxBodyBytes}
   --flat-files              Keep legacy logs/YYYY-MM-DD/<combatId>.jsonl layout
+  --no-cleanup              Disable startup/daily detailed-log cleanup.
+  --cleanup-retention-days <days>
+                            Keep detailed combat/misc logs for this many local date directories. Default: ${DEFAULTS.cleanupRetentionDays}
+  --cleanup-at <HH:MM>      Local time for daily cleanup. Default: ${DEFAULTS.cleanupAt}
   --self-test               Run collector regression checks
 `);
 }
@@ -177,6 +188,79 @@ function createServer(options) {
   });
 }
 
+function parseCleanupAt(value) {
+  const text = String(value || DEFAULTS.cleanupAt).trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(text);
+  if (!match) throw new Error(`Invalid --cleanup-at time: ${value}`);
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    throw new Error(`Invalid --cleanup-at time: ${value}`);
+  }
+  return { hour, minute };
+}
+
+function nextCleanupDelayMs(nowMs = Date.now(), cleanupAt = DEFAULTS.cleanupAt) {
+  const { hour, minute } = parseCleanupAt(cleanupAt);
+  const now = new Date(Number(nowMs) || Date.now());
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return Math.max(1, next.getTime() - now.getTime());
+}
+
+function summarizeCleanup(result) {
+  return {
+    retentionDays: result.retentionDays,
+    retainedSinceDay: result.retainedSinceDay,
+    deletedFiles: result.deletedFiles,
+    deletedDirs: result.deletedDirs,
+    deletedBytes: result.deletedBytes,
+    removedEmptyDirs: result.removedEmptyDirs
+  };
+}
+
+async function runCleanupOnce(options, reason = 'scheduled') {
+  const result = await cleanupDetailedLogs({
+    dir: options.dir,
+    retentionDays: options.cleanupRetentionDays
+  });
+  console.log(JSON.stringify({
+    ok: true,
+    service: 'grasp-rat-combat-log-service',
+    event: 'detailed-log-cleanup',
+    reason,
+    ...summarizeCleanup(result)
+  }, null, 2));
+  return result;
+}
+
+function scheduleDailyCleanup(options) {
+  if (!options.cleanupEnabled) return null;
+  parseCleanupAt(options.cleanupAt);
+  let timer = null;
+  const scheduleNext = () => {
+    const delayMs = nextCleanupDelayMs(Date.now(), options.cleanupAt);
+    timer = setTimeout(async () => {
+      try {
+        await runCleanupOnce(options, 'daily');
+      } catch (err) {
+        console.error(JSON.stringify({
+          ok: false,
+          service: 'grasp-rat-combat-log-service',
+          event: 'detailed-log-cleanup',
+          reason: 'daily',
+          error: err?.message || String(err)
+        }, null, 2));
+      } finally {
+        scheduleNext();
+      }
+    }, delayMs);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return timer;
+  };
+  return scheduleNext();
+}
+
 async function runSelfTest() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-log-server-'));
   const req = { socket: { remoteAddress: 'test' }, headers: { 'user-agent': 'self-test' } };
@@ -209,7 +293,11 @@ async function runSelfTest() {
     if (!flat.files.includes('2026-06-17/flat_one.jsonl')) {
       throw new Error(`legacy flat file missing; got ${flat.files.join(', ')}`);
     }
-    console.log(JSON.stringify({ ok: true, cases: 2 }, null, 2));
+    const morning = new Date(2026, 5, 26, 3, 0, 0, 0).getTime();
+    const later = new Date(2026, 5, 26, 4, 0, 0, 0).getTime();
+    if (nextCleanupDelayMs(morning, '03:30') !== 30 * 60 * 1000) throw new Error('same-day cleanup delay mismatch');
+    if (nextCleanupDelayMs(later, '03:30') !== 23.5 * 60 * 60 * 1000) throw new Error('next-day cleanup delay mismatch');
+    console.log(JSON.stringify({ ok: true, cases: 4 }, null, 2));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -232,11 +320,27 @@ function main() {
       service: 'grasp-rat-combat-log-service',
       endpoint: `http://${options.host}:${options.port}/combat-log`,
       health: `http://${options.host}:${options.port}/health`,
-      dir: options.dir
+      dir: options.dir,
+      cleanup: options.cleanupEnabled ? {
+        retentionDays: options.cleanupRetentionDays,
+        dailyAt: options.cleanupAt
+      } : { enabled: false }
     }, null, 2));
+    if (options.cleanupEnabled) {
+      runCleanupOnce(options, 'startup').catch(err => {
+        console.error(JSON.stringify({
+          ok: false,
+          service: 'grasp-rat-combat-log-service',
+          event: 'detailed-log-cleanup',
+          reason: 'startup',
+          error: err?.message || String(err)
+        }, null, 2));
+      });
+      scheduleDailyCleanup(options);
+    }
   });
 }
 
 if (require.main === module) main();
 
-module.exports = { createServer, appendCombatLog, parseArgs, runSelfTest };
+module.exports = { createServer, appendCombatLog, parseArgs, nextCleanupDelayMs, scheduleDailyCleanup, runSelfTest };

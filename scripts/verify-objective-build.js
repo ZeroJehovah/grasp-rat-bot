@@ -1160,11 +1160,14 @@ function main() {
 
   check('combat-log package exposes daily summary commands', () => {
     const pkg = readJson('combat-log-service/package.json');
+    assert(pkg.scripts && pkg.scripts.cleanup === 'node cleanup-logs.js', 'combat-log cleanup npm script missing');
+    assert(pkg.scripts && pkg.scripts['cleanup:self-test'] === 'node cleanup-logs.js --self-test', 'combat-log cleanup self-test npm script missing');
     assert(pkg.scripts && pkg.scripts.daily === 'node daily-summary.js', 'daily summary npm script missing');
     assert(pkg.scripts && pkg.scripts['daily:self-test'] === 'node daily-summary.js --self-test', 'daily summary self-test npm script missing');
     assert(pkg.scripts && pkg.scripts.replay === 'node replay-combat.js', 'combat replay npm script missing');
     assert(pkg.scripts && pkg.scripts['replay:self-test'] === 'node replay-combat.js --self-test', 'combat replay self-test npm script missing');
     assert(String(pkg.scripts.test || '').includes('server.js --self-test'), 'npm test does not run collector self-test');
+    assert(String(pkg.scripts.test || '').includes('cleanup-logs.js --self-test'), 'npm test does not run cleanup self-test');
     assert(String(pkg.scripts.test || '').includes('daily-summary.js --self-test'), 'npm test does not run daily summary self-test');
     assert(String(pkg.scripts.test || '').includes('replay-combat.js --self-test'), 'npm test does not run combat replay self-test');
   });
@@ -1178,6 +1181,20 @@ function main() {
     assert(server.includes('path.join(rootDir, day, logKind(payload, entry), `${combatId}.jsonl`)'), 'collector does not write kind subdirectories');
     assert(server.includes('--flat-files'), 'collector does not expose legacy flat-file switch');
     assert(server.includes('missing split file'), 'collector self-test does not cover split files');
+  });
+
+  check('combat-log service schedules detailed-log retention cleanup', () => {
+    const server = readText('combat-log-service/server.js');
+    const cleanup = readText('combat-log-service/cleanup-logs.js');
+    assert(server.includes("const { cleanupDetailedLogs } = require('./cleanup-logs');"), 'collector does not import cleanup helper');
+    assert(server.includes('cleanupRetentionDays: 3'), 'collector default detailed-log retention is not 3 days');
+    assert(server.includes("cleanupAt: '03:30'"), 'collector default daily cleanup time is not 03:30');
+    assert(server.includes('--no-cleanup'), 'collector does not expose cleanup disable switch');
+    assert(server.includes('scheduleDailyCleanup(options)'), 'collector does not schedule daily cleanup');
+    assert(server.includes("runCleanupOnce(options, 'startup')"), 'collector does not run cleanup on startup');
+    assert(cleanup.includes("const SPLIT_DETAIL_DIRS = new Set(['combat', 'misc']);"), 'cleanup does not target detailed split directories');
+    assert(cleanup.includes("return !/^(?:important|audit)(?:[-_.]|$)/i.test(entry.name);"), 'cleanup does not retain legacy important/audit JSONL');
+    assert(cleanup.includes('daily Markdown reports should be retained'), 'cleanup self-test does not retain daily reports');
   });
 
   check('combat replay tool verifies reference combat improvement', () => {

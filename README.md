@@ -95,6 +95,14 @@ window.__graspRatBotBootstrap.configureCombatLogging({ enabled: false })
 
 The setting is persisted by the active bootstrap. Once an endpoint has been configured, the compact panel shows the logging dot so logging can be toggled without returning to the console. Logs are written as split JSONL under `combat-log-service/logs/YYYY-MM-DD/<kind>/<combatId>.jsonl`, usually `combat`, `important`, `audit`, or `misc`. The bot records roughly 10 seconds before combat, every combat tick, and roughly 10 seconds after combat. Entries include the final decision, exit reason, self/target HP, nearby entities, incoming bullets, pursuit/injury context, control state, and snapshot ages. Entity and bullet lists are capped so normal fights should be MB-scale rather than unbounded full-page dumps.
 
+The collector runs detailed-log cleanup on startup and then daily at local `03:30`, keeping only the latest 3 local date directories of detailed `combat`/`misc` JSONL and legacy flat combat JSONL. Summary material such as `important`, `audit`, and `daily-*.md` is retained for daily reports and exit audits. Manual cleanup is available with:
+
+```bash
+cd combat-log-service
+npm run cleanup
+npm run cleanup -- --dry-run
+```
+
 ## Build Script B
 
 After changing strategy code in `grasp-rat-bot.js`, regenerate the remote bot and manifest:
@@ -144,6 +152,7 @@ node --check extension/background.js
 node --check extension/content-bridge.js
 node --check extension/page-bootstrap.js
 node --check extension/popup.js
+node --check combat-log-service/cleanup-logs.js
 node --check combat-log-service/server.js
 node grasp-rat-bot.js --self-test
 node scripts/objective-status.js --self-test

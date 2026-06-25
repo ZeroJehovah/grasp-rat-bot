@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node server.js --self-test && node analyze-logs.js --self-test && node daily-summary.js --self-test && node replay-combat.js --self-test",
+    "test": "node server.js --self-test && node cleanup-logs.js --self-test && node analyze-logs.js --self-test && node daily-summary.js --self-test && node replay-combat.js --self-test",
+    "cleanup": "node cleanup-logs.js",
+    "cleanup:self-test": "node cleanup-logs.js --self-test",
     "analyze": "node analyze-logs.js",
     "replay": "node replay-combat.js",
     "replay:self-test": "node replay-combat.js --self-test",
