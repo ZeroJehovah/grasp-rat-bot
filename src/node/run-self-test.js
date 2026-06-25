@@ -43,6 +43,9 @@ function runSelfTest() {
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
     combatDisengageRange: 17000,
+    combatLowValueActiveDropMax: 3,
+    highValueCoinPriorityAmount: 10,
+    highValueCoinPriorityHealthyHp: 50,
     combatCriticalHpLeaveThreshold: 20,
     combatLowHpLeaveThreshold: 50,
     combatLowHpCloseRiskMargin: 5,
@@ -1525,6 +1528,55 @@ function runSelfTest() {
       .sort(compareCoinOpportunity);
   }
 
+  function highValueCoinPriorityAmount() {
+    const value = Number(cfg.highValueCoinPriorityAmount ?? 10);
+    return Math.max(1, Number.isFinite(value) ? value : 10);
+  }
+
+  function highValueCoinPriorityHealthyHp() {
+    const value = Number(cfg.highValueCoinPriorityHealthyHp ?? cfg.combatLowHpLeaveThreshold ?? 50);
+    return Math.max(1, Number.isFinite(value) ? value : 50);
+  }
+
+  function pickHighValueVisibleCoin(self, coins, activeThreats) {
+    const maxDistance = Math.max(0, Number(cfg.globalCoinMaxDistance || cfg.opportunityVisibleDistance || cfg.coinMaxDistance || 0));
+    return safeCoins(self, (coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance)
+      .filter(coin => Number(coin.amount || 0) >= highValueCoinPriorityAmount())
+      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+  }
+
+  function nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId = null, unknownIncoming = false) {
+    if (!threat || isWhitelistedTarget(threat)) return false;
+    const distance = Number(threat.distance ?? Infinity);
+    const radius = Math.max(
+      Number(cfg.combatAttackRange || 0),
+      Number(threat.cautionRadius || 0) + Number(cfg.activeCautionExitMargin || 0),
+      isInvulnerable(threat) ? Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) : 0
+    );
+    if (!Number.isFinite(distance) || distance > radius) return false;
+    if (isInvulnerable(threat)) return true;
+    if (isLowValueActiveCombatTarget(threat)) return lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming);
+    return hasCombatActivitySignalForTest(threat) || isActive(threat) || isFiringEntity(threat);
+  }
+
+  function canPrioritizeHighValueVisibleCoin(self, coin, context = {}) {
+    if (!coin) return false;
+    const hp = hpValue(self);
+    const healthyHp = highValueCoinPriorityHealthyHp();
+    if (context.engagedCombatTarget && hp < healthyHp) return false;
+    const incoming = incomingBulletInfo(self, context.bullets || []);
+    if (incoming.incoming) return false;
+    if (hp >= healthyHp) return true;
+    return !(context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incoming.ownerId, incoming.unknownIncoming));
+  }
+
+  function highValueVisibleCoinPriorityNeeded(self, context = {}) {
+    if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
+    if ((context.avoidanceThreats || []).length) return true;
+    const incoming = incomingBulletInfo(self, context.bullets || []);
+    return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incoming.ownerId, incoming.unknownIncoming));
+  }
+
   function snapshotLocalCoinAllowed(self, coin) {
     if (!coin?.snapshot || coin?.native) return true;
     const distance = self ? dist(self, coin) : Infinity;
@@ -2332,7 +2384,7 @@ function runSelfTest() {
     return state;
   }
 
-  function pickEngagedCombatTarget(self, entities) {
+  function pickEngagedCombatTarget(self, entities, bullets = []) {
     const engaged = bot.combatTarget;
     if (!engaged?.id) return null;
     if (combatRetreatIgnoreActive({ id: engaged.id })) {
@@ -2349,13 +2401,21 @@ function runSelfTest() {
       bot.combatTarget = null;
       return null;
     }
-    return {
+    const decorated = {
       ...target,
       distance,
       drop: dropValue(target),
       speed: speed(target),
       hp: combatHpValue(target),
-      knownHp: knownHpValue(target),
+      knownHp: knownHpValue(target)
+    };
+    const { ownerId: incomingOwnerId, unknownIncoming } = incomingBulletInfo(self, bullets);
+    if (isLowValueActiveCombatTarget(decorated) && !lowValueActiveThreatensSelf(decorated, incomingOwnerId, unknownIncoming)) {
+      bot.combatTarget = null;
+      return null;
+    }
+    return {
+      ...decorated,
       combatIntent: 'engaged'
     };
   }
@@ -2384,6 +2444,38 @@ function runSelfTest() {
     return false;
   }
 
+  function lowValueActiveDropMax() {
+    const value = Number(cfg.combatLowValueActiveDropMax ?? 3);
+    return Math.max(0, Number.isFinite(value) ? value : 3);
+  }
+
+  function isLowValueActiveCombatTarget(target) {
+    if (!target || isAfkProfitTarget(target)) return false;
+    return hasCombatActivitySignalForTest(target) && Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax();
+  }
+
+  function incomingOwnerMatchesTarget(target, incomingOwnerId) {
+    if (!target || incomingOwnerId === null || incomingOwnerId === undefined) return false;
+    const targetId = target.user_id ?? target.id;
+    return targetId !== null && targetId !== undefined && String(targetId) === String(incomingOwnerId);
+  }
+
+  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!isLowValueActiveCombatTarget(target)) return true;
+    if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
+    return Boolean(unknownIncoming && isFiringEntity(target));
+  }
+
+  function incomingBulletInfo(self, bullets = []) {
+    const incoming = (bullets || []).find(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) !== Number(self.user_id));
+    const ownerId = incoming ? (incoming.owner_id ?? incoming.ownerId ?? incoming.source_user_id ?? incoming.user_id) : null;
+    return {
+      incoming,
+      ownerId,
+      unknownIncoming: Boolean(incoming && (ownerId === null || ownerId === undefined))
+    };
+  }
+
   function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
     const incomingMatch = incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId);
     return (incomingMatch ? 1000000000 : 0)
@@ -2396,13 +2488,14 @@ function runSelfTest() {
   }
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
-    if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
+    if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
+    if (isLowValueActiveCombatTarget(target)) return lowValueActiveThreatensSelf(target, incomingOwnerId, unknownIncoming);
     if (isFiringEntity(target)) return true;
     if (isActive(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
   }
   function isProfitableCombatTarget(target) {
-    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isActive(target) && Number(target.drop || 0) > 0);
+    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isActive(target) && Number(target.drop || 0) > lowValueActiveDropMax());
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -2428,9 +2521,7 @@ function runSelfTest() {
       .filter(e => !isWhitelistedTarget(e))
       .filter(e => !isInvulnerable(e))
       .filter(e => e.distance <= candidateRange);
-    const incoming = (bullets || []).find(b => Number(b.owner_id ?? b.ownerId ?? b.source_user_id ?? b.user_id) !== Number(self.user_id));
-    const incomingOwnerId = incoming ? (incoming.owner_id ?? incoming.ownerId ?? incoming.source_user_id ?? incoming.user_id) : null;
-    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    const { incoming, ownerId: incomingOwnerId, unknownIncoming } = incomingBulletInfo(self, bullets);
     if (incoming) {
       const shooter = candidates.find(e => String(e.user_id) === String(incomingOwnerId));
       if (shooter) return { ...shooter, incomingBullet: incoming, combatIntent: 'defensive' };
@@ -4346,11 +4437,13 @@ function runSelfTest() {
     };
   }
 
-  function pickActiveCombatWaitThreat(activeThreats) {
+  function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
     const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const { ownerId: incomingOwnerId, unknownIncoming } = incomingBulletInfo(self, bullets);
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
       .filter(threat => hasCombatActivitySignalForTest(threat))
+      .filter(threat => !isLowValueActiveCombatTarget(threat) || lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming))
       .filter(threat => Number(threat.distance || 0) <= range)
       .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
   }
@@ -4391,11 +4484,29 @@ function runSelfTest() {
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const realtimeCoins = usableCoins.filter(coin => !isSnapshotOnlyCoin(coin));
     const snapshotCoins = usableCoins.filter(isSnapshotOnlyCoin);
-    const engagedCombatTarget = pickEngagedCombatTarget(self, entities);
+    const engagedCombatTarget = pickEngagedCombatTarget(self, entities, bullets);
     const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
     const recoveryCombatTarget = defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
+    const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, attacks, entities);
+    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats);
+    const highValuePriorityContext = { recovery, engagedCombatTarget, defensiveCombatTarget, activeThreats, avoidanceThreats, bullets };
+    if (!pendingPostAttackWaitTarget
+      && highValueVisibleCoinPriorityNeeded(self, highValuePriorityContext)
+      && canPrioritizeHighValueVisibleCoin(self, highValuePriorityCoin, highValuePriorityContext)) {
+      if (engagedCombatTarget) bot.combatTarget = null;
+      const dir = directionTo(self, highValuePriorityCoin);
+      return {
+        kind: highValuePriorityCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
+        reason: 'high-value-visible-coin-priority',
+        id: highValuePriorityCoin.drop_id,
+        amount: highValuePriorityCoin.amount,
+        dx: dir.dx,
+        dy: dir.dy,
+        target: { distance: Math.round(dir.distance) }
+      };
+    }
     if (recovery && recoveryCombatTarget) {
       const recoveryCombatAction = chooseCombatAction(self, recoveryCombatTarget, bullets);
       if (recoveryCombatAction) return recoveryCombatAction;
@@ -4407,7 +4518,7 @@ function runSelfTest() {
     if (fullHp && closeThreats.length) return { kind: 'flee' };
     if (fullHp && cautionThreats.length) return { kind: 'flee' };
     if (!recovery && defensiveCombatTarget) return chooseCombatAction(self, defensiveCombatTarget, bullets);
-    const activeCombatWaitThreat = pickActiveCombatWaitThreat(activeThreats);
+    const activeCombatWaitThreat = pickActiveCombatWaitThreat(self, activeThreats, bullets);
     if (!recovery && activeCombatWaitThreat) return activeCombatThreatWaitAction(activeCombatWaitThreat);
     const nearCoinLimit = recovery
       ? cfg.recoveryCoinMaxDistance
@@ -4430,7 +4541,7 @@ function runSelfTest() {
       minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0
     });
     if (postAttackCoin) return { kind: 'coin', reason: 'post-attack-drop-coin', id: postAttackCoin.drop_id, amount: postAttackCoin.amount };
-    const postAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, attacks, entities);
+    const postAttackWaitTarget = pendingPostAttackWaitTarget || pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, attacks, entities);
     if (postAttackWaitTarget) return buildPostAttackDropWaitAction(self, postAttackWaitTarget);
     const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
       self,
@@ -4543,31 +4654,46 @@ function runSelfTest() {
 
   const cases = [
     {
-      name: 'defensive combat beats coins inside attack range',
+      name: 'low-drop active incoming bullet beats coins inside attack range',
       got: choose({
         local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', firing: true }],
         global: [{ user_id: 3, x: 2000, y: 0, death_reward_preview: 50 }],
-        coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
+        coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }],
+        bullets: [{ ownerId: 2 }]
       }).kind,
       want: 'attack'
     },
     {
-      name: 'active combat in range beats foot coin without firing',
+      name: 'low-drop active in range does not beat foot coin without incoming fire',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100 }],
         coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
       }).kind,
-      want: 'attack'
+      want: 'coin'
     },
     {
-      name: 'retreat ignored active threat waits instead of taking foot coin',
+      name: 'low-drop retreat ignored active threat does not wait over foot coin',
       got: (() => {
         bot.combatRetreatIgnore.set('2', Date.now() + 10000);
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
           local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100 }],
           coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
+        });
+        bot.combatRetreatIgnore.clear();
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:foot-coin-priority'
+    },
+    {
+      name: 'high-drop retreat ignored active threat waits instead of taking foot coin',
+      got: (() => {
+        bot.combatRetreatIgnore.set('2', Date.now() + 10000);
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100, death_reward_preview: 10 }],
+          coins: [{ drop_id: 1, x: 10, y: 0, amount: 1 }]
         });
         bot.combatRetreatIgnore.clear();
         return action.kind + ':' + action.reason;
@@ -4594,6 +4720,55 @@ function runSelfTest() {
         return action.kind + ':' + action.reason + ':' + action.combatState?.disadvantageObservation?.kind + ':' + Boolean(action.combatState?.disadvantageObservation?.ready);
       })(),
       want: 'attack:combat-spacing:hp-gap:false'
+    },
+    {
+      name: 'healthy high-value visible coin beats active combat state',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100, death_reward_preview: 30 }],
+          coins: [{ drop_id: 1, x: 5000, y: 0, amount: 10, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:high-value-visible-coin-priority'
+    },
+    {
+      name: 'low hp existing combat is not interrupted by high-value coin',
+      got: (() => {
+        bot.combatTarget = { id: 2, at: Date.now(), firstSeenAt: Date.now(), intent: 'defensive' };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 40, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 30, death_reward_preview: 30 }],
+          coins: [{ drop_id: 1, x: 5000, y: 0, amount: 10, native: true }]
+        });
+        bot.combatTarget = null;
+        return action.kind;
+      })(),
+      want: 'attack'
+    },
+    {
+      name: 'low hp no-threat high-value visible coin beats recovery wait',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 40, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [{ drop_id: 1, x: 5000, y: 0, amount: 10, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:high-value-visible-coin-priority'
+    },
+    {
+      name: 'healthy high-value coin away from invulnerable active beats flee',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 23000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
+          coins: [{ drop_id: 2, x: -18000, y: 0, amount: 10, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:high-value-visible-coin-priority'
     },
     {
       name: 'near profitable active combat beats far snapshot cluster by yield',
@@ -5144,7 +5319,7 @@ function runSelfTest() {
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true }],
+          local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true, death_reward_preview: 20 }],
           bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
         });
         return action.kind + ':' + action.reason + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.reason;
@@ -5155,7 +5330,7 @@ function runSelfTest() {
       name: 'active combat hp disadvantage leaves before taking a bullet',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 40, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Active', hp: 80 }]
+        local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Active', hp: 80, death_reward_preview: 20 }]
       }).reason,
       want: 'combat-low-hp-leave'
     },
@@ -5164,7 +5339,7 @@ function runSelfTest() {
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 100 },
-          local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true }],
+          local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true, death_reward_preview: 20 }],
           bullets: [{ owner_id: 4, x: 900, y: 0, vx: -100, vy: 0 }]
         });
         return action.kind + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatCover?.movementSuppressed?.reason;
@@ -5176,7 +5351,7 @@ function runSelfTest() {
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 40, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 4, name: '影', x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true }]
+          local: [{ user_id: 4, name: '影', x: 1000, y: 0, current_join_mode: 'Passive', hp: 80, firing: true, death_reward_preview: 20 }]
         });
         return action.exitSummary?.includes('与影战斗')
           && action.exitSummary.includes('血量40不足50')
@@ -5189,7 +5364,7 @@ function runSelfTest() {
 	      name: 'critical hp combat leaves even when target hp is lower',
 	      got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 19, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true }]
+        local: [{ user_id: 4, x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true, death_reward_preview: 20 }]
 	      }).reason,
 	      want: 'combat-critical-hp-leave'
 	    },
@@ -5197,7 +5372,7 @@ function runSelfTest() {
       name: 'combat critical exit summary includes emergency threshold',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 19, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, name: '强敌', x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true }]
+        local: [{ user_id: 4, name: '强敌', x: 1000, y: 0, current_join_mode: 'Passive', hp: 5, firing: true, death_reward_preview: 20 }]
       }).exitSummary,
       want: '与强敌战斗，血量19低于20，紧急退出'
     },
@@ -5206,7 +5381,7 @@ function runSelfTest() {
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 91, firing: true }]
+          local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 91, firing: true, death_reward_preview: 20 }]
         });
         const observation = action.combatState?.disadvantageObservation;
         return action.kind + ':' + action.reason + ':' + observation?.kind + ':' + Boolean(observation?.ready);
@@ -5244,7 +5419,7 @@ function runSelfTest() {
       name: 'recovering combat gap at threshold keeps fighting',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 90, firing: true }]
+        local: [{ user_id: 4, x: 10000, y: 0, current_join_mode: 'Passive', hp: 90, firing: true, death_reward_preview: 20 }]
       }).kind,
       want: 'attack'
     },
@@ -5301,7 +5476,7 @@ function runSelfTest() {
         bot.combatTarget = { id: 7, at: Date.now(), lastInRangeAt: Date.now(), reason: 'combat-tangent-dodge' };
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 77, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 7, x: 14000, y: 0, current_join_mode: 'Active', hp: 97, vx: 50 }]
+          local: [{ user_id: 7, x: 14000, y: 0, current_join_mode: 'Active', hp: 97, vx: 50, death_reward_preview: 20 }]
         });
         bot.combatTarget = null;
         return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
@@ -5319,7 +5494,7 @@ function runSelfTest() {
         };
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 97, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 7, x: 16000, y: 0, current_join_mode: 'Active', hp: 94, vx: -50 }]
+          local: [{ user_id: 7, x: 16000, y: 0, current_join_mode: 'Active', hp: 94, vx: -50, death_reward_preview: 20 }]
         });
         bot.combatTarget = null;
         return action.kind + ':' + Boolean(action.combat) + ':' + action.target?.id;
@@ -5333,8 +5508,8 @@ function runSelfTest() {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
           local: [
-            { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100 },
-            { user_id: 8, name: 'shooter', x: 9000, y: 0, current_join_mode: 'Active', hp: 100 }
+            { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100, death_reward_preview: 20 },
+            { user_id: 8, name: 'shooter', x: 9000, y: 0, current_join_mode: 'Active', hp: 100, death_reward_preview: 20 }
           ],
           bullets: [{ owner_id: 8, x: 8000, y: 0, vx: -100, vy: 0, distance: 2500 }]
         });
@@ -5350,8 +5525,8 @@ function runSelfTest() {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
           local: [
-            { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100 },
-            { user_id: 8, name: 'firing', x: 9000, y: 0, current_join_mode: 'Active', hp: 100, firing: true }
+            { user_id: 7, name: 'old', x: 10000, y: 0, current_join_mode: 'Active', hp: 100, death_reward_preview: 20 },
+            { user_id: 8, name: 'firing', x: 9000, y: 0, current_join_mode: 'Active', hp: 100, firing: true, death_reward_preview: 20 }
           ]
         });
         bot.combatTarget = null;
@@ -5759,7 +5934,7 @@ function runSelfTest() {
       name: 'combat firing target without visible bullet uses tangent dodge',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, firing: true }]
+        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, firing: true, death_reward_preview: 20 }]
       }).reason,
       want: 'combat-tangent-dodge'
     },

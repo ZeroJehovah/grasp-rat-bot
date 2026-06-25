@@ -62,6 +62,7 @@
   - known coin-field migration is scored in the same opportunity pool as visible coin routing, so it shares ROI comparison and switch hysteresis instead of competing as a separate fallback branch.
   - far low-value single snapshot coins are gated by distance/value during normal selection, but after 60s of continuous snapshot-coin waiting the bot chases a safe, fresh far snapshot coin instead of idling, even when ordinary long-window stamina ROI budget would otherwise keep it waiting.
   - visible/native coin opportunities use visible coin reasons, not snapshot navigation reasons.
+  - a visible/native coin worth at least `highValueCoinPriorityAmount = 10` can take an early priority path before combat, recovery, or invulnerable-player avoidance when it is safe under the existing visible-coin safety filters and either self HP is at least `highValueCoinPriorityHealthyHp = 50` or there is no nearby real threat. This shortcut is only used when it must beat a blocking combat/recovery/avoidance condition; ordinary high-value coin selection still flows through the normal ROI/hysteresis opportunity pool.
   - when no action is chosen because only non-coin targets exceed the 1h/1d stamina budget, the wait reason remains `wait-for-stamina-budget`; coin-budget waits are no longer allowed to reach the 60s snapshot fallback when the nearest safe coin is unaffordable by 1h stamina.
   - invulnerable active players use a wider coin danger radius and a heading/lane block, so the bot avoids walking toward them for coins even when the coin point itself is outside the old danger bubble.
 - Coin movement:
@@ -71,8 +72,8 @@
   - pickup pulses now shorten by distance bands as the bot nears the coin coordinate, and repeated close pickup misses further reduce pulse length before giving up on the coin.
 - Combat:
   - defensive combat beats normal coin logic when a real threat exists;
-  - any non-whitelisted, non-invulnerable Active enemy inside `combatAttackRange` is a defensive combat target even if it is stationary, full-stamina, zero-drop, and not firing, so combat immediately beats coin pickup;
-  - if a non-invulnerable Active threat is inside `combatAttackRange` but is temporarily unavailable as a combat target, such as during a retreat-ignore window, the bot waits with `combat-active-threat-wait` instead of taking foot/visible coins in that danger window;
+  - non-whitelisted, non-invulnerable Active enemies inside `combatAttackRange` remain defensive combat targets only when they are real threats or have worthwhile Drop. Active targets with `Drop <= combatLowValueActiveDropMax = 3` are ignored for proactive combat and profit combat unless they own an incoming bullet, an unknown incoming bullet is paired with their firing signal, or recent injury evidence makes them the likely shooter;
+  - if a non-invulnerable Active threat is inside `combatAttackRange` but is temporarily unavailable as a combat target, such as during a retreat-ignore window, the bot waits with `combat-active-threat-wait` instead of taking foot/visible coins in that danger window. Low-Drop Active targets without real threat evidence do not create this wait state;
   - combat HP disadvantage checks run as soon as the Active target enters combat selection, before waiting for a bullet/injury trigger, but high-HP static HP-gap and trade-estimate disadvantages now enter a short observation window instead of leaving on the first detection;
   - close combat backs away while shooting inside the shorter 45m spacing threshold;
   - combat logging analysis showed 105-145m fights had very poor hit yield versus 30-75m, so default combat spacing now favors 45-65m instead of 75-105m;

@@ -5024,11 +5024,15 @@ ${importantLogSource()}
     return safety;
   }
 
-  function pickActiveCombatWaitThreat(activeThreats) {
+  function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
     const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const incoming = incomingBulletThreat(self, null, bullets);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
       .filter(threat => hasCombatActivitySignal(threat))
+      .filter(threat => !isLowValueActiveCombatTarget(threat) || lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming))
       .filter(threat => Number(threat.distance || 0) <= range)
       .sort((a, b) => {
         if (hasCombatActivitySignal(a) !== hasCombatActivitySignal(b)) return hasCombatActivitySignal(a) ? -1 : 1;
@@ -5205,9 +5209,86 @@ ${importantLogSource()}
     return candidates[0];
   }
 
+  function highValueCoinPriorityAmount() {
+    const value = Number(cfg.highValueCoinPriorityAmount ?? 10);
+    return Math.max(1, Number.isFinite(value) ? value : 10);
+  }
+
+  function highValueCoinPriorityHealthyHp() {
+    const value = Number(cfg.highValueCoinPriorityHealthyHp ?? cfg.combatLowHpLeaveThreshold ?? 50);
+    return Math.max(1, Number.isFinite(value) ? value : 50);
+  }
+
+  function pickHighValueVisibleCoin(self, coins, activeThreats) {
+    const minAmount = highValueCoinPriorityAmount();
+    const maxDistance = Math.max(0, Number(cfg.globalCoinMaxDistance || cfg.opportunityVisibleDistance || cfg.coinMaxDistance || 0));
+    return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance, self)
+      .filter(coin => Number(coin.amount || 0) >= minAmount)
+      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+  }
+
+  function nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId = null, unknownIncoming = false) {
+    if (!threat || isWhitelistedTarget(threat)) return false;
+    const distance = Number(threat.distance ?? Infinity);
+    const radius = Math.max(
+      Number(cfg.combatAttackRange || 0),
+      Number(threat.cautionRadius || 0) + Number(cfg.activeCautionExitMargin || 0),
+      isInvulnerable(threat) ? Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) : 0
+    );
+    if (!Number.isFinite(distance) || distance > radius) return false;
+    if (isInvulnerable(threat)) return true;
+    if (isLowValueActiveCombatTarget(threat)) return lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming);
+    return hasCombatActivitySignal(threat) || isCurrentlyActive(threat) || isFiringEntity(threat);
+  }
+
+  function canPrioritizeHighValueVisibleCoin(self, coin, context = {}) {
+    if (!coin) return false;
+    const hp = hpValue(self);
+    const healthyHp = highValueCoinPriorityHealthyHp();
+    if (context.engagedCombatTarget && hp < healthyHp) return false;
+    const incoming = incomingBulletThreat(self, null, context.bullets || []);
+    if (incoming) return false;
+    if (hp >= healthyHp) return true;
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    return !(context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId, unknownIncoming));
+  }
+
+  function highValueVisibleCoinPriorityNeeded(self, context = {}) {
+    if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
+    if ((context.avoidanceThreats || []).length) return true;
+    const incoming = incomingBulletThreat(self, null, context.bullets || []);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId, unknownIncoming));
+  }
+
   function recentCombatInjuryActive() {
     const injury = bot.pendingInjuryLeave;
     return injury && Date.now() - Number(injury.at || 0) <= Math.max(1000, cfg.combatStrafeLockMs * 3);
+  }
+
+  function lowValueActiveDropMax() {
+    const value = Number(cfg.combatLowValueActiveDropMax ?? 3);
+    return Math.max(0, Number.isFinite(value) ? value : 3);
+  }
+
+  function isLowValueActiveCombatTarget(target) {
+    if (!target || isAfkProfitTarget(target)) return false;
+    return hasCombatActivitySignal(target) && Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax();
+  }
+
+  function incomingOwnerMatchesTarget(target, incomingOwnerId) {
+    if (!target || incomingOwnerId === null || incomingOwnerId === undefined) return false;
+    const targetId = target.user_id ?? target.id;
+    return targetId !== null && targetId !== undefined && String(targetId) === String(incomingOwnerId);
+  }
+
+  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!isLowValueActiveCombatTarget(target)) return true;
+    if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
+    if (unknownIncoming && isFiringEntity(target)) return true;
+    return Boolean(recentCombatInjuryActive() && (isFiringEntity(target) || isCurrentlyActive(target)));
   }
 
   function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
@@ -5224,7 +5305,8 @@ ${importantLogSource()}
 
   function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
-    if (incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId)) return true;
+    if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
+    if (isLowValueActiveCombatTarget(target)) return lowValueActiveThreatensSelf(target, incomingOwnerId, unknownIncoming);
     if (isFiringEntity(target)) return true;
     if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
@@ -5232,7 +5314,7 @@ ${importantLogSource()}
   }
 
   function isProfitableCombatTarget(target) {
-    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isCurrentlyActive(target) && Number(target.drop || 0) > 0);
+    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isCurrentlyActive(target) && Number(target.drop || 0) > lowValueActiveDropMax());
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -5310,7 +5392,7 @@ ${importantLogSource()}
     };
   }
 
-  function pickEngagedCombatTarget(self, combatTargets, entities) {
+  function pickEngagedCombatTarget(self, combatTargets, entities, bullets = []) {
     const engaged = bot.combatTarget;
     if (!engaged?.id) return null;
     if (combatRetreatIgnoreActive({ id: engaged.id })) {
@@ -5327,6 +5409,13 @@ ${importantLogSource()}
     if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
       if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(target)) {
         clearCombatEngagement('afk-profit-target');
+        return null;
+      }
+      const incoming = incomingBulletThreat(self, null, bullets);
+      const incomingOwnerId = incoming?.ownerId;
+      const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+      if (isLowValueActiveCombatTarget(target) && !lowValueActiveThreatensSelf(target, incomingOwnerId, unknownIncoming)) {
+        clearCombatEngagement('low-value-active-not-threatening');
         return null;
       }
       return {
@@ -5360,6 +5449,13 @@ ${importantLogSource()}
     if (!reengageTarget) return null;
     if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(reengageTarget)) {
       clearCombatEngagement('afk-profit-target');
+      return null;
+    }
+    const incoming = incomingBulletThreat(self, null, bullets);
+    const incomingOwnerId = incoming?.ownerId;
+    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
+    if (isLowValueActiveCombatTarget(reengageTarget) && !lowValueActiveThreatensSelf(reengageTarget, incomingOwnerId, unknownIncoming)) {
+      clearCombatEngagement('low-value-active-not-threatening');
       return null;
     }
     return {
@@ -9926,7 +10022,7 @@ ${importantLogSource()}
     const coinThreats = avoidanceThreats;
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
-    const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities);
+    const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities, bullets);
     const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
     bot.lastSafety = {
       fullHp,
@@ -9971,6 +10067,24 @@ ${importantLogSource()}
     const recoveryCombatTarget = defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
+    const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
+    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats);
+    const highValuePriorityContext = { recovery, engagedCombatTarget, defensiveCombatTarget, activeThreats, avoidanceThreats, bullets };
+    if (!pendingPostAttackWaitTarget
+      && highValueVisibleCoinPriorityNeeded(self, highValuePriorityContext)
+      && canPrioritizeHighValueVisibleCoin(self, highValuePriorityCoin, highValuePriorityContext)) {
+      bot.fleeLock = null;
+      bot.returnBlockScan = null;
+      if (engagedCombatTarget) clearCombatEngagement('high-value-visible-coin-priority');
+      const action = buildCoinAction(self, highValuePriorityCoin, 'high-value-visible-coin-priority');
+      action.highValueCoinPriority = {
+        amount: Number(highValuePriorityCoin.amount || 0),
+        minAmount: highValueCoinPriorityAmount(),
+        hp: Math.round(hpValue(self)),
+        healthyHp: highValueCoinPriorityHealthyHp()
+      };
+      return action;
+    }
     if (recovery && recoveryCombatTarget) {
       const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets);
       if (recoveryCombatAction) {
@@ -10017,7 +10131,7 @@ ${importantLogSource()}
       bot.returnBlockScan = null;
       return buildCombatAction(self, defensiveCombatTarget, bullets);
     }
-    const activeCombatWaitThreat = pickActiveCombatWaitThreat(activeThreats);
+    const activeCombatWaitThreat = pickActiveCombatWaitThreat(self, activeThreats, bullets);
     if (!recovery && activeCombatWaitThreat) {
       bot.fleeLock = null;
       bot.returnBlockScan = null;
@@ -10064,7 +10178,7 @@ ${importantLogSource()}
       action.postAttackTarget = postAttackCoin.postAttackTarget;
       return action;
     }
-    const postAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
+    const postAttackWaitTarget = pendingPostAttackWaitTarget || pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
     if (postAttackWaitTarget) {
       bot.fleeLock = null;
       clearOpportunityChoiceFor('enemy', postAttackWaitTarget.id);
