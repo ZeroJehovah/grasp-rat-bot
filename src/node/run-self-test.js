@@ -254,6 +254,9 @@ function runSelfTest() {
     coinRouteNearbyFirstCoinDistance: 22000,
     coinRouteFirstCoinDistanceRatio: 1.45,
     coinRouteFirstCoinDistanceSlack: 6000,
+    coinRouteSwitchMargin: 3000,
+    coinRouteSwitchRelativeMargin: 0.1,
+    coinRouteHeldMinOverlap: 2,
     fieldMigrationMaxDistance: 45000,
     fieldMigrationMinDistance: 22000,
     fieldMigrationClusterRadius: 18000,
@@ -1880,6 +1883,48 @@ function runSelfTest() {
     return firstDistance > allowedFirstDistance;
   }
 
+  function coinRouteIdsFrom(value) {
+    const ids = Array.isArray(value?.coinRoute?.ids) ? value.coinRoute.ids : (Array.isArray(value?.routeIds) ? value.routeIds : value?.coinRouteIds);
+    return Array.isArray(ids) ? ids.map(id => String(id)).filter(Boolean) : [];
+  }
+
+  function currentHeldCoinRouteChoice(t = Date.now()) {
+    const choice = bot.opportunityChoice;
+    if (!choice || opportunityChoiceType(choice) !== 'coin') return null;
+    if (t >= Number(choice.until || 0)) return null;
+    const id = opportunityChoiceId(choice);
+    if (!id && id !== '0') return null;
+    if (String(choice.reason || '') !== 'best-opportunity-coin-route' && !coinRouteIdsFrom(choice).length) return null;
+    return choice;
+  }
+
+  function coinRouteMatchesHeldChoice(route, choice) {
+    if (!route || !choice) return false;
+    const firstKey = coinRouteKey(route);
+    const choiceId = opportunityChoiceId(choice);
+    if (!choiceId || String(firstKey) !== String(choiceId)) return false;
+    const previousIds = coinRouteIdsFrom(choice);
+    if (!previousIds.length) return true;
+    const routeIds = coinRouteIdsFrom(route);
+    const previousSet = new Set(previousIds);
+    const overlap = routeIds.reduce((count, id) => count + (previousSet.has(String(id)) ? 1 : 0), 0);
+    const minOverlap = Math.max(1, Math.min(previousIds.length, Math.max(1, Number(cfg.coinRouteHeldMinOverlap || 2))));
+    return overlap >= minOverlap;
+  }
+
+  function heldCoinRouteBeatsSwitch(heldRoute, bestRoute) {
+    if (!heldRoute) return false;
+    if (!bestRoute) return true;
+    if (coinRouteKey(heldRoute) === coinRouteKey(bestRoute)) return false;
+    const heldScore = Number(heldRoute.opportunityScore || -Infinity);
+    const bestScore = Number(bestRoute.opportunityScore || -Infinity);
+    if (!Number.isFinite(heldScore) || !Number.isFinite(bestScore)) return false;
+    const margin = Math.max(0, Number(cfg.coinRouteSwitchMargin ?? cfg.opportunitySwitchMargin) || 0);
+    const relativeMargin = Math.max(0, Number(cfg.coinRouteSwitchRelativeMargin ?? cfg.opportunitySwitchRelativeMargin) || 0);
+    const requiredScore = Math.max(heldScore + margin, heldScore * (1 + relativeMargin));
+    return bestScore <= requiredScore;
+  }
+
   function pickCoinRouteOpportunity(self, coins, activeThreats) {
     if (!self) return null;
     const maxDistance = Math.max(0, Number(cfg.coinRouteMaxDistance || cfg.globalCoinMaxDistance || 0));
@@ -1895,6 +1940,9 @@ function runSelfTest() {
       const key = coinRouteKey(coin);
       if (!anchors.some(item => coinRouteKey(item) === key)) anchors.push(coin);
     };
+    const heldChoice = currentHeldCoinRouteChoice();
+    const heldAnchor = heldChoice ? candidates.find(coin => coinRouteKey(coin) === opportunityChoiceId(heldChoice)) : null;
+    if (heldAnchor) addAnchor(heldAnchor);
     candidates.slice(0, Math.max(1, Number(cfg.coinRouteAnchorLimit || 22))).forEach(addAnchor);
     candidates.slice().sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, 8).forEach(addAnchor);
     candidates.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, 8).forEach(addAnchor);
@@ -1905,11 +1953,13 @@ function runSelfTest() {
       return bCount - aCount || Number(a.distance || Infinity) - Number(b.distance || Infinity);
     }).slice(0, 8).forEach(addAnchor);
     let best = null;
+    let heldRoute = null;
     for (const anchor of anchors.slice(0, Math.max(1, Number(cfg.coinRouteAnchorLimit || 22)))) {
       if (!coinRouteLegClear(self, anchor, activeThreats)) continue;
       const route = buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats);
       if (!route) continue;
       if (coinRouteSkipsCloserFirstCoin(self, route, candidates)) continue;
+      if (coinRouteMatchesHeldChoice(route, heldChoice)) heldRoute = route;
       const score = Number(route.opportunityScore || -Infinity);
       if (!best
         || score > Number(best.opportunityScore || -Infinity)
@@ -1917,6 +1967,13 @@ function runSelfTest() {
         || (score === Number(best.opportunityScore || -Infinity) && Number(route.distance || Infinity) < Number(best.distance || Infinity))) {
         best = route;
       }
+    }
+    if (heldCoinRouteBeatsSwitch(heldRoute, best)) {
+      return {
+        ...heldRoute,
+        routeHeld: true,
+        competingRouteScore: best ? Number(best.opportunityScore || 0) : null
+      };
     }
     return best;
   }
@@ -2130,6 +2187,8 @@ function runSelfTest() {
     if (current) {
       const same = opportunityMatchesChoice(chosen, current);
       const missingHold = Boolean(chosen.missingHold);
+      const routeMeta = chosen.coinRoute || null;
+      const routeIds = Array.isArray(routeMeta?.ids) ? routeMeta.ids.map(id => String(id)).filter(Boolean) : [];
       bot.opportunityChoice = {
         key: opportunityKey(chosen),
         type: chosen.type || '',
@@ -2149,7 +2208,10 @@ function runSelfTest() {
         maxDistance: Number.isFinite(Number(chosen.maxDistance)) ? Number(chosen.maxDistance) : null,
         missingSince: missingHold ? Number(current?.missingSince || t) : 0,
         oscillationLocked: Boolean(chosen.oscillationLocked),
-        oscillationSwitchCount: Number(chosen.oscillationSwitchCount || 0)
+        oscillationSwitchCount: Number(chosen.oscillationSwitchCount || 0),
+        coinRouteIds: routeIds.length ? routeIds : null,
+        coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
+        coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null
       };
     }
     return chosen;
@@ -4123,7 +4185,9 @@ function runSelfTest() {
           coinRoute: routeCoin.coinRoute || null,
           routeValue: routeCoin.routeValue || null,
           routeKind: routeCoin.routeKind || '',
-          routeLegs: routeCoin.routeLegs || 0
+          routeLegs: routeCoin.routeLegs || 0,
+          routeHeld: Boolean(routeCoin.routeHeld),
+          competingRouteScore: routeCoin.competingRouteScore
         });
       }
     }
@@ -4208,7 +4272,9 @@ function runSelfTest() {
         score: Math.round(Number(chosen.score || 0)),
         staminaCost: Math.round(Number(chosen.staminaCost || 0)),
         coinRoute,
-        missingHold: Boolean(chosen.missingHold)
+        missingHold: Boolean(chosen.missingHold),
+        routeHeld: Boolean(chosen.routeHeld),
+        competingRouteScore: chosen.competingRouteScore
       };
     }
     return chosen;
@@ -7185,6 +7251,73 @@ function runSelfTest() {
         return action.kind + ':' + action.reason + ':' + action.id + ':' + action.coinRoute?.legCount + ':' + action.coinRoute?.points?.length + ':' + action.coinRoute?.value;
       })(),
       want: 'coin:best-opportunity-coin-route:2:3:3:3'
+    },
+    {
+      name: 'held coin route keeps first coin through near tie replans',
+      got: (() => {
+        const t = Date.now();
+        bot.opportunityChoice = {
+          key: 'coin:1',
+          type: 'coin',
+          id: 1,
+          reason: 'best-opportunity-coin-route',
+          x: -3000,
+          y: 8000,
+          amount: 1,
+          score: 104545,
+          coinRouteIds: ['1', '3', '2'],
+          coinRouteValue: 3,
+          coinRouteLegs: 3,
+          at: t - 500,
+          lastSeenAt: t - 100,
+          until: t + cfg.opportunitySwitchHoldMs
+        };
+        const action = choose({
+          self: { user_id: 1, x: 500, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: -3000, y: 8000, amount: 1, native: true },
+            { drop_id: 2, x: 3000, y: 8000, amount: 1, native: true },
+            { drop_id: 3, x: 0, y: 11000, amount: 1, native: true }
+          ]
+        });
+        const remembered = bot.opportunityChoice?.id + ':' + (bot.opportunityChoice?.coinRouteIds || []).join('-');
+        bot.opportunityChoice = null;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + Boolean(action.routeHeld) + ':' + action.coinRoute?.ids?.join('-') + ':' + remembered;
+      })(),
+      want: 'coin:best-opportunity-coin-route:1:true:1-3-2:1:1-3-2'
+    },
+    {
+      name: 'held coin route switches first coin when route score is clearly better',
+      got: (() => {
+        const t = Date.now();
+        bot.opportunityChoice = {
+          key: 'coin:1',
+          type: 'coin',
+          id: 1,
+          reason: 'best-opportunity-coin-route',
+          x: -3000,
+          y: 8000,
+          amount: 1,
+          score: 97375,
+          coinRouteIds: ['1', '3', '2'],
+          coinRouteValue: 3,
+          coinRouteLegs: 3,
+          at: t - 500,
+          lastSeenAt: t - 100,
+          until: t + cfg.opportunitySwitchHoldMs
+        };
+        const action = choose({
+          self: { user_id: 1, x: 3000, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: -3000, y: 8000, amount: 1, native: true },
+            { drop_id: 2, x: 3000, y: 8000, amount: 1, native: true },
+            { drop_id: 3, x: 0, y: 11000, amount: 1, native: true }
+          ]
+        });
+        bot.opportunityChoice = null;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + Boolean(action.routeHeld) + ':' + action.coinRoute?.ids?.join('-');
+      })(),
+      want: 'coin:best-opportunity-coin-route:2:false:2-3-1'
     },
     {
       name: 'same first coin route keeps overlay metadata when single coin roi is higher',
