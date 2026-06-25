@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.204`.
 - Latest manifest SHA-256: `48ed0887b57935090ce6f23c893d778b58faf599ee1aaf21523362589e9e34f7`.
-- Latest release commit: `TO_BE_FILLED_AFTER_COMMIT` (`bootstrap-0.4.204` wider login-point safety radius), previous release commit `22b334e` (`bootstrap-0.4.203` login-point safety gate).
+- Latest release commit: `0e022a8` (`bootstrap-0.4.204` wider login-point safety radius), previous release commit `22b334e` (`bootstrap-0.4.203` login-point safety gate).
 - Latest bootstrap A versions: Tampermonkey `0.4.52`, extension `0.1.31`.
 - `bootstrap-0.4.204` makes the learned login-point safety gate more conservative by expanding the safety radius to `60000cm`, matching the measured `50000cm` active view radius plus a `10000cm` margin. The gate remains additive: future relogins still honor all existing suppress/cooldown/enemy/offline holds, then require 12 consecutive safe `/snapshot` samples around the learned point before login. Dangerous nearby players still include same-day damage actors, `Drop >= 2`, `Active` mode, recent movement over `500cm`, non-full 5s stamina, or firing evidence. It also fixes relogin hold display text so the reason row uses the current remaining hold time before falling back to the original delay, avoiding stale "等待1分钟" text during longer stamina/offline holds. Static verification checks the widened radius, existing danger rules, and remaining-hold display preference.
 - Current objective: optimize live action logic using measured game parameters. Priorities are survival first, then stamina-aware ROI, reduced wasteful movement/target jitter, and low-noise runtime behavior.
