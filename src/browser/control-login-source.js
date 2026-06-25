@@ -407,17 +407,333 @@ function controlLoginSource(helpers = {}) {
 	    return remaining;
 	  }
 
+  function loginPointSafetySuccessRequired() {
+    return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 12) || 12));
+  }
+
+  function loginPointSafetyRadius() {
+    return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 16000) || 16000);
+  }
+
+  function loginPointSafetyDayKey(t = Date.now()) {
+    const d = new Date(t);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return year + '-' + month + '-' + day;
+  }
+
+  function finiteNumber(...values) {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return NaN;
+  }
+
+  function loginPointEntityKey(entity) {
+    const id = entity?.user_id ?? entity?.userId ?? entity?.id;
+    if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
+    const name = String(entity?.name || '').trim();
+    return name ? 'name:' + name : '';
+  }
+
+  function loginPointActorSummary(entity, extra = {}) {
+    if (!entity || typeof entity !== 'object') return null;
+    const key = loginPointEntityKey(entity);
+    if (!key) return null;
+    const rawId = entity.user_id ?? entity.userId ?? entity.id;
+    return {
+      key,
+      id: rawId === undefined || rawId === null || rawId === '' ? '' : String(rawId),
+      name: String(entity.name || ''),
+      x: Number.isFinite(Number(entity.x)) ? Math.round(Number(entity.x)) : null,
+      y: Number.isFinite(Number(entity.y)) ? Math.round(Number(entity.y)) : null,
+      drop: Math.max(0, Math.round(dropValue(entity))),
+      mode: String(entity.current_join_mode || entity.mode || ''),
+      ...extra
+    };
+  }
+
+  function normalizeLoginPointSafetyState(state = null, t = Date.now()) {
+    const source = state && typeof state === 'object' ? state : {};
+    const required = loginPointSafetySuccessRequired();
+    const point = source.point && Number.isFinite(Number(source.point.x)) && Number.isFinite(Number(source.point.y))
+      ? {
+        x: Number(source.point.x),
+        y: Number(source.point.y),
+        userId: source.point.userId ?? source.point.id ?? null,
+        at: Number(source.point.at || 0) || 0,
+        tick: Number(source.point.tick || 0) || 0,
+        loginAt: Number(source.point.loginAt || 0) || 0,
+        source: String(source.point.source || '')
+      }
+      : null;
+    const dayKey = loginPointSafetyDayKey(t);
+    const damagedBy = source.damagedBy && source.damagedBy.dayKey === dayKey
+      ? {
+        dayKey,
+        actors: Array.isArray(source.damagedBy.actors)
+          ? source.damagedBy.actors.filter(actor => actor && actor.key).slice(-80)
+          : []
+      }
+      : { dayKey, actors: [] };
+    const movement = source.movement && typeof source.movement === 'object' ? { ...source.movement } : {};
+    return {
+      point,
+      streak: Math.max(0, Math.round(Number(source.streak || 0) || 0)),
+      required,
+      radius: loginPointSafetyRadius(),
+      lastSampleAt: Number(source.lastSampleAt || source.lastOkAt || source.lastUnsafeAt || source.lastErrorAt || 0) || 0,
+      lastOkAt: Number(source.lastOkAt || 0) || 0,
+      lastUnsafeAt: Number(source.lastUnsafeAt || 0) || 0,
+      lastErrorAt: Number(source.lastErrorAt || 0) || 0,
+      lastError: String(source.lastError || ''),
+      lastTick: Number(source.lastTick || 0) || 0,
+      lastDanger: source.lastDanger && typeof source.lastDanger === 'object' ? { ...source.lastDanger } : null,
+      movement,
+      damagedBy
+    };
+  }
+
+  function readLoginPointSafetyState(t = Date.now()) {
+    let stored = null;
+    try {
+      stored = JSON.parse(localStorage.getItem(LOGIN_POINT_SAFETY_KEY) || 'null');
+    } catch (_) {
+      stored = null;
+    }
+    const state = normalizeLoginPointSafetyState(bot.loginPointSafety || stored, t);
+    bot.loginPointSafety = state;
+    return state;
+  }
+
+  function writeLoginPointSafetyState(state) {
+    bot.loginPointSafety = state;
+    try {
+      localStorage.setItem(LOGIN_POINT_SAFETY_KEY, JSON.stringify(state));
+    } catch (_) {}
+    return state;
+  }
+
+  function loginPointDamageActorKeys(state) {
+    return new Set((state?.damagedBy?.actors || []).map(actor => String(actor.key || '')).filter(Boolean));
+  }
+
+  function loginPointEntityMoved(state, entity, t) {
+    const key = loginPointEntityKey(entity);
+    if (!key) return false;
+    const x = Number(entity.x);
+    const y = Number(entity.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    const threshold = Math.max(0, Number(cfg.loginPointSafetyMoveThreshold ?? 500) || 500);
+    const previous = state.movement?.[key] || null;
+    let moved = false;
+    if (previous && Number.isFinite(Number(previous.x)) && Number.isFinite(Number(previous.y))) {
+      moved = Math.hypot(x - Number(previous.x), y - Number(previous.y)) >= threshold;
+    }
+    if (!state.movement || typeof state.movement !== 'object') state.movement = {};
+    state.movement[key] = {
+      x,
+      y,
+      at: t,
+      movedAt: moved ? t : Number(previous?.movedAt || 0) || 0
+    };
+    const entries = Object.entries(state.movement)
+      .filter(([, item]) => t - Number(item?.at || 0) <= 10 * 60 * 1000)
+      .slice(-300);
+    state.movement = Object.fromEntries(entries);
+    return moved || Boolean(state.movement[key].movedAt && t - Number(state.movement[key].movedAt || 0) <= 10 * 60 * 1000);
+  }
+
+  function loginPointEntityStaminaUnsafe(entity) {
+    const remaining = finiteNumber(entity?.stamina_5s_remaining_milli, entity?.stamina5s);
+    const limit = finiteNumber(entity?.stamina_5s_limit_milli, entity?.stamina5sLimit, 10000);
+    if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return false;
+    const ratio = Math.max(0, Math.min(1, Number(cfg.loginPointSafetyStaminaFullRatio ?? 0.98) || 0.98));
+    return remaining < limit * ratio;
+  }
+
+  function loginPointDangerReason(state, entity, moved) {
+    if (!entity || typeof entity !== 'object') return '';
+    const damagedKeys = loginPointDamageActorKeys(state);
+    const key = loginPointEntityKey(entity);
+    if (key && damagedKeys.has(key)) return 'damaged-self-today';
+    const minDrop = Math.max(0, Number(cfg.loginPointSafetyDangerDropMin ?? 2) || 2);
+    if (dropValue(entity) >= minDrop) return 'drop';
+    if (isJoinModeActive(entity)) return 'active-mode';
+    if (moved) return 'recent-movement';
+    if (loginPointEntityStaminaUnsafe(entity)) return 'stamina-not-full';
+    if (isFiringEntity(entity)) return 'firing';
+    return '';
+  }
+
+  function evaluateLoginPointSafety(state, detail = {}, t = Date.now()) {
+    if (!state.point) return { safe: true, reason: 'no-login-point', danger: null };
+    const entities = Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities;
+    if (!Array.isArray(entities)) {
+      return { safe: false, reason: 'snapshot-entities-missing', danger: null };
+    }
+    const point = state.point;
+    const radius = loginPointSafetyRadius();
+    for (const entity of entities) {
+      if (!entity || typeof entity !== 'object') continue;
+      if (!isAlive(entity) || isInvulnerable(entity)) continue;
+      const id = Number(entity.user_id ?? entity.userId ?? entity.id ?? NaN);
+      if (Number.isFinite(id) && Number(point.userId ?? NaN) === id) continue;
+      const x = Number(entity.x);
+      const y = Number(entity.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const distance = Math.hypot(x - Number(point.x), y - Number(point.y));
+      if (!(distance <= radius)) continue;
+      const moved = loginPointEntityMoved(state, entity, t);
+      const reason = loginPointDangerReason(state, entity, moved);
+      if (!reason) continue;
+      return {
+        safe: false,
+        reason,
+        danger: loginPointActorSummary(entity, {
+          distance: Math.round(distance),
+          moved: Boolean(moved),
+          stamina5s: finiteNumber(entity.stamina_5s_remaining_milli, entity.stamina5s),
+          stamina5sLimit: finiteNumber(entity.stamina_5s_limit_milli, entity.stamina5sLimit, 10000)
+        })
+      };
+    }
+    return { safe: true, reason: 'safe', danger: null };
+  }
+
+  function noteLoginPointSafetyProbe(success, detail = {}) {
+    const t = Date.now();
+    const state = readLoginPointSafetyState(t);
+    state.required = loginPointSafetySuccessRequired();
+    state.radius = loginPointSafetyRadius();
+    state.lastSampleAt = t;
+    state.lastTick = Number(detail.tick || state.lastTick || 0) || 0;
+    let ok = Boolean(success);
+    let safety = { safe: ok, reason: ok ? 'safe' : 'snapshot-error', danger: null };
+    if (ok) {
+      safety = evaluateLoginPointSafety(state, detail, t);
+      ok = Boolean(safety.safe);
+    }
+    if (ok) {
+      state.streak = Math.min(state.required, Math.max(0, Number(state.streak || 0)) + 1);
+      state.lastOkAt = t;
+      state.lastError = '';
+      state.lastDanger = null;
+    } else {
+      state.streak = 0;
+      if (success) {
+        state.lastUnsafeAt = t;
+        state.lastDanger = {
+          reason: safety.reason || 'unsafe',
+          actor: safety.danger || null,
+          at: t
+        };
+        state.lastError = '';
+      } else {
+        state.lastErrorAt = t;
+        state.lastError = String(detail.error || detail.message || 'snapshot failed');
+      }
+    }
+    writeLoginPointSafetyState(state);
+    return loginPointSafetyStatus(t);
+  }
+
+  function loginPointSafetyStatus(t = Date.now()) {
+    const state = readLoginPointSafetyState(t);
+    const required = loginPointSafetySuccessRequired();
+    const hasPoint = Boolean(state.point);
+    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastUnsafeAt || state.lastErrorAt || 0) || 0;
+    return {
+      ...state,
+      required,
+      radius: loginPointSafetyRadius(),
+      hasPoint,
+      satisfied: !hasPoint || required <= 0 || state.streak >= required,
+      remaining: hasPoint ? Math.max(0, required - state.streak) : 0,
+      lastSampleAt,
+      lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
+      lastUnsafeAgeMs: state.lastUnsafeAt ? Math.max(0, Math.round(t - Number(state.lastUnsafeAt || t))) : null,
+      lastErrorAgeMs: state.lastErrorAt ? Math.max(0, Math.round(t - Number(state.lastErrorAt || t))) : null,
+      lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
+    };
+  }
+
+  function resetLoginPointSafetyGate(reason = 'exit') {
+    const t = Date.now();
+    const state = readLoginPointSafetyState(t);
+    state.streak = 0;
+    state.lastDanger = null;
+    state.lastError = '';
+    state.resetAt = t;
+    state.resetReason = String(reason || 'exit');
+    writeLoginPointSafetyState(state);
+    return loginPointSafetyStatus(t);
+  }
+
+  function rememberLoginPointDamageThreat(injury, reason = 'self-damage') {
+    const t = Date.now();
+    const state = readLoginPointSafetyState(t);
+    const candidates = [
+      injury?.nearestActive,
+      injury?.nearestAvoidance,
+      injury?.nearestHuman
+    ].filter(Boolean);
+    if (!candidates.length) return state;
+    const existing = new Map((state.damagedBy?.actors || []).map(actor => [String(actor.key || ''), actor]));
+    for (const candidate of candidates) {
+      const actor = loginPointActorSummary(candidate, { at: t, reason });
+      if (!actor?.key) continue;
+      existing.set(actor.key, { ...(existing.get(actor.key) || {}), ...actor, at: t, reason });
+    }
+    state.damagedBy = {
+      dayKey: loginPointSafetyDayKey(t),
+      actors: Array.from(existing.values()).slice(-80)
+    };
+    writeLoginPointSafetyState(state);
+    return state;
+  }
+
+  function maybeRecordLoginPoint(currentSummary) {
+    if (!currentSummary || !Number.isFinite(Number(currentSummary.x)) || !Number.isFinite(Number(currentSummary.y))) return null;
+    const loginAt = Number(bot.lastLoginAt || 0);
+    if (!loginAt) return null;
+    const t = Date.now();
+    const maxAge = Math.max(Number(cfg.postLoginGraceMs || 45000) * 2, 60000);
+    if (t - loginAt > maxAge) return null;
+    const state = readLoginPointSafetyState(t);
+    if (Number(state.point?.loginAt || 0) >= loginAt) return state;
+    state.point = {
+      x: Number(currentSummary.x),
+      y: Number(currentSummary.y),
+      userId: currentSummary.id ?? currentSummary.user_id ?? getCurrentUserId() ?? null,
+      at: t,
+      tick: Number(bot.globalState?.tick || 0) || 0,
+      loginAt,
+      source: 'post-login-self'
+    };
+    state.streak = 0;
+    state.lastDanger = null;
+    state.lastError = '';
+    state.movement = {};
+    writeLoginPointSafetyState(state);
+    return state;
+  }
+
 	  function snapshotLoginGateStatus(t = Date.now()) {
 	    const state = normalizeLoginSnapshotGateState(bot.loginSnapshotGate);
 	    const required = loginSnapshotSuccessRequired();
 	    state.required = required;
 	    if (state.streak > required) state.streak = required;
 	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
+	    const pointSafety = loginPointSafetyStatus(t);
 	    return {
 	      ...state,
 	      lastSampleAt,
-	      satisfied: required <= 0 || state.streak >= required,
+	      satisfied: (required <= 0 || state.streak >= required) && pointSafety.satisfied,
 	      remaining: Math.max(0, required - state.streak),
+	      pointSafety,
 	      lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
 	      lastErrorAgeMs: state.lastErrorAt ? Math.max(0, Math.round(t - Number(state.lastErrorAt || t))) : null,
 	      lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
@@ -434,6 +750,7 @@ function controlLoginSource(helpers = {}) {
 	      resetAt: t,
 	      resetReason: String(reason || 'exit')
 	    };
+	    resetLoginPointSafetyGate(reason);
 	    return snapshotLoginGateStatus(t);
 	  }
 
@@ -454,6 +771,10 @@ function controlLoginSource(helpers = {}) {
 	      state.lastError = String(detail.error || detail.message || '');
 	    }
 	    bot.loginSnapshotGate = state;
+	    noteLoginPointSafetyProbe(success, {
+	      ...detail,
+	      entities: Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities
+	    });
 	    return snapshotLoginGateStatus(t);
 	  }
 
@@ -484,6 +805,20 @@ function controlLoginSource(helpers = {}) {
 	  function loginSnapshotGateDisplayReason(snapshotGate = snapshotLoginGateStatus()) {
 	    const gate = snapshotGate || snapshotLoginGateStatus();
 	    if (gate.satisfied) return '';
+	    const pointSafety = gate.pointSafety || loginPointSafetyStatus();
+	    if (pointSafety.hasPoint && !pointSafety.satisfied) {
+	      const pieces = [
+	        '等待登录点安全快照',
+	        String(pointSafety.streak || 0) + '/' + String(pointSafety.required || 0),
+	        '半径' + Math.round(pointSafety.radius || 0) + 'cm'
+	      ];
+	      if (pointSafety.lastDanger?.reason) {
+	        const actor = pointSafety.lastDanger.actor || {};
+	        pieces.push('危险：' + pointSafety.lastDanger.reason + (actor.name || actor.id ? ' ' + (actor.name || ('#' + actor.id)) : ''));
+	      }
+	      if (pointSafety.lastError) pieces.push('最近错误：' + pointSafety.lastError);
+	      return pieces.join('，');
+	    }
 	    const pieces = [
 	      '等待snapshot连续成功',
 	      String(gate.streak || 0) + '/' + String(gate.required || 0)
