@@ -61,6 +61,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatDisengageRange', value: 17000 },
+  { key: 'combatLowValueActiveDropMax', value: 3 },
+  { key: 'highValueCoinPriorityAmount', value: 10 },
+  { key: 'highValueCoinPriorityHealthyHp', value: 50 },
   { key: 'combatRetreatEdgeRange', value: 13800 },
   { key: 'combatRetreatRadialSpeedMin', value: 5 },
   { key: 'combatRetreatDistanceDeltaMin', value: 600 },
@@ -577,8 +580,8 @@ function main() {
         'combat target priority does not include join-mode Active'
       );
       assert(
-        countMatches(text, /!isAfkProfitTarget\(target\) && !isInvulnerable\(target\) && is(?:Currently)?Active\(target\) && Number\(target\.drop \|\| 0\) > 0/g) >= expectedMin,
-        'profitable combat can still select passive Active profit targets'
+        countMatches(text, /!isAfkProfitTarget\(target\) && !isInvulnerable\(target\) && is(?:Currently)?Active\(target\) && Number\(target\.drop \|\| 0\) > lowValueActiveDropMax\(\)/g) >= expectedMin,
+        'profitable combat can still select low-value or passive Active profit targets'
       );
       assert(
         countMatches(text, /filter\(isAfkProfitTarget\)/g) >= expectedMin,
@@ -881,7 +884,7 @@ function main() {
       assert(text.includes('function pickActiveCombatWaitThreat'), 'active combat wait threat helper not found');
       assert(text.includes('function activeCombatThreatWaitAction'), 'active combat wait action helper not found');
       assert(text.includes("reason: 'combat-active-threat-wait'"), 'active combat wait action reason not found');
-      assert(chooseActionBody.includes('const activeCombatWaitThreat = pickActiveCombatWaitThreat(activeThreats)'), 'chooseAction does not compute active combat wait threat');
+      assert(chooseActionBody.includes('const activeCombatWaitThreat = pickActiveCombatWaitThreat(self, activeThreats, bullets)'), 'chooseAction does not compute active combat wait threat with bullet context');
       assert(chooseActionBody.includes('return activeCombatThreatWaitAction(activeCombatWaitThreat)'), 'chooseAction does not wait instead of taking coins near active combat threats');
       assert(!shootingBody.includes('authorityOutOfRange'), 'combat shooting plan still accepts authority out-of-range state');
       assert(!shootingBody.includes("reason: 'authority-target-out-of-range'"), 'combat shooting plan still suppresses out-of-authority-range fire');
@@ -1265,6 +1268,18 @@ function main() {
       /name: 'stationary full-stamina active with drop is non-combat profit attack'[\s\S]*current_join_mode: 'Active'[\s\S]*death_reward_preview: 20[\s\S]*want: 'attack:false:best-opportunity-afk-drop-target'/.test(nodeSelfTestSource),
       'stationary full-stamina Active profit attack non-combat self-test not found'
     );
+  });
+
+  check('run-self-test module covers low-value active and high-value coin priority self-tests', () => {
+    assert(sourceBot.includes('function isLowValueActiveCombatTarget'), 'low-value Active combat gate not found');
+    assert(sourceBot.includes('function highValueVisibleCoinPriorityNeeded'), 'high-value coin priority gate not found');
+    assert(sourceBot.includes("'high-value-visible-coin-priority'"), 'high-value visible coin action reason not found');
+    assert(nodeSelfTestSource.includes("name: 'low-drop active incoming bullet beats coins inside attack range'"), 'low-drop incoming bullet combat self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low-drop active in range does not beat foot coin without incoming fire'"), 'low-drop no-incoming coin self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'healthy high-value visible coin beats active combat state'"), 'healthy high-value coin combat override self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low hp existing combat is not interrupted by high-value coin'"), 'low-HP combat high-value coin guard self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low hp no-threat high-value visible coin beats recovery wait'"), 'low-HP no-threat high-value coin self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'healthy high-value coin away from invulnerable active beats flee'"), 'high-value coin invulnerable flee override self-test not found');
   });
 
   check('run-self-test module covers visible opportunity ROI self-tests', () => {
