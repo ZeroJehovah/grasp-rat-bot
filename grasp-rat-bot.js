@@ -1164,7 +1164,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 
   function leaveWaitDisplay(base, detail) {
 	    const summary = String(base || '').trim();
-	    const waitMs = Number(detail?.reloginDelayMs ?? detail?.holdRemainingMs ?? 0);
+	    const waitMs = Number(detail?.holdRemainingMs ?? detail?.reloginDelayMs ?? 0);
 	    if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
     return summary + '，等待' + formatDurationMs(waitMs);
   }

@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.203"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.204"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -410,7 +410,7 @@
     loginSnapshotSuccessRequired: 3,
     loginSnapshotProbeMinMs: 5000,
     loginPointSafetySuccessRequired: 12,
-    loginPointSafetyRadius: 16000,
+    loginPointSafetyRadius: 60000,
     loginPointSafetyMoveThreshold: 500,
     loginPointSafetyDangerDropMin: 2,
     loginPointSafetyStaminaFullRatio: 0.98,
@@ -4357,7 +4357,7 @@ function hpDisplay(value) {
 
   function leaveWaitDisplay(base, detail) {
 	    const summary = String(base || '').trim();
-	    const waitMs = Number(detail?.reloginDelayMs ?? detail?.holdRemainingMs ?? 0);
+	    const waitMs = Number(detail?.holdRemainingMs ?? detail?.reloginDelayMs ?? 0);
 	    if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
     return summary + '，等待' + formatDurationMs(waitMs);
   }

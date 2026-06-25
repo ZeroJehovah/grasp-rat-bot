@@ -38,7 +38,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'loginSnapshotSuccessRequired', value: 3 },
   { key: 'loginPointSafetySuccessRequired', value: 12 },
-  { key: 'loginPointSafetyRadius', value: 16000 },
+  { key: 'loginPointSafetyRadius', value: 60000 },
   { key: 'loginPointSafetyMoveThreshold', value: 500 },
   { key: 'loginPointSafetyDangerDropMin', value: 2 },
   { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
@@ -368,6 +368,10 @@ function main() {
       assert(staminaSummaryBody.includes("最近金币距离' + formatDistance(detail.distance)"), 'stamina budget leave summary does not use meter distance formatting');
       const pursuitSummaryBody = functionBody(text, 'pursuitLeaveSummary');
       assert(pursuitSummaryBody.includes("'，距离' + formatDistance(distance)"), 'pursuit leave summary does not use meter distance formatting');
+    });
+    check(`${file} displays relogin wait using remaining hold before original delay`, () => {
+      const body = functionBody(text, 'leaveWaitDisplay');
+      assert(body.includes('detail?.holdRemainingMs ?? detail?.reloginDelayMs'), 'leave wait display does not prefer remaining hold time');
     });
     check(`${file} keeps shared runtime utility helpers available`, () => {
       const runtimeUtilsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeUtilsSource : text;
