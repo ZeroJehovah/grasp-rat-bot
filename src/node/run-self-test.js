@@ -208,12 +208,12 @@ function runSelfTest() {
     leaveRetryMinMs: 10000,
     leaveCommandTimeoutMs: 10000,
     leave403ReloginDelayMs: 3600000,
-    enemyReloginMinDelayMs: 60000,
-    enemyReloginMaxDelayMs: 600000,
-    enemyReloginJitterMs: 15000,
+    enemyReloginMinDelayMs: 0,
+    enemyReloginMaxDelayMs: 0,
+    enemyReloginJitterMs: 0,
     enemyReloginRepeatResetMs: 7200000,
-    enemyReloginRepeatSecondMaxMs: 1800000,
-    enemyReloginRepeatThirdMaxMs: 3600000,
+    enemyReloginRepeatSecondMaxMs: 0,
+    enemyReloginRepeatThirdMaxMs: 0,
     postAttackDropCoinMinAmount: 1,
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
@@ -8260,14 +8260,14 @@ function runSelfTest() {
       want: '一小时体力不足以拾取最近金币，退出等待重连'
     },
     {
-      name: 'same enemy relogin repeat backoff steps up',
+      name: 'same enemy relogin repeat backoff is disabled',
       got: [
         enemyRepeatDelayMsForCount(1),
         enemyRepeatDelayMsForCount(2),
         enemyRepeatDelayMsForCount(3),
         enemyRepeatDelayMsForCount(4)
       ].join(','),
-      want: '0,1800000,3600000,3600000'
+      want: '0,0,0,0'
     },
     {
 	      name: 'stamina leave summary identifies hourly limit',

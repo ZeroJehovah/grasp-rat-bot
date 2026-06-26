@@ -98,7 +98,7 @@ http://127.0.0.1:18765/combat-log
 
 ## 退出/重连审计
 
-分析已收集的 JSONL，检查退出原因是否写入顶层 `exit`，非安全退出是否至少保留 60 秒重连等待，以及特定退出原因是否满足更长等待：
+分析已收集的 JSONL，检查退出原因是否写入顶层 `exit`，是否出现退出 hold 期间登录，以及特定退出原因是否满足要求的等待。普通非安全退出默认不再要求固定等待；需要临时恢复旧规则时可传 `--min-unsafe-delay-ms <ms>`：
 
 ```bash
 cd combat-log-service
@@ -208,7 +208,7 @@ npm run daily -- --json
 - `missing-top-level-exit`: 日志帧只有旧的 `enemyExit`/决策原因，没有顶层 `exit` 摘要；
 - `missing-exit-reason`: 日志帧有顶层 `exit` 摘要，但没有明确的 `exit.reason`；
 - `generic-exit-reason`: 顶层 `exit.reason` 是 `cooldown` 等泛化值，不能说明真实退出根因；
-- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到最小重连等待；带 `safeReloginAllowed` 的普通安全离线退出允许零等待；
+- `unsafe-exit-delay-below-minimum`: 受伤、交战劣势、追击、断连/WebSocket 等非安全退出没有达到命令行指定的最小重连等待；默认最小值为 `0`，带 `safeReloginAllowed` 的普通安全离线退出允许零等待；
 - `exit-delay-below-required`: 退出等待低于该退出原因要求的等待，例如 1h 体力预算退出低于 30 分钟；
 - `login-attempt-during-exit-hold`: 退出后的 suppress/hold 仍有效时出现自动登录尝试；
 - `manual-login-cleared-exit-hold`: 手动登录清除了退出后的 suppress/hold；

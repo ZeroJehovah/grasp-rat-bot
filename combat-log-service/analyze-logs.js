@@ -8,7 +8,7 @@ const { StringDecoder } = require('string_decoder');
 
 const DEFAULTS = {
   dir: path.join(__dirname, 'logs'),
-  minUnsafeDelayMs: 60000,
+  minUnsafeDelayMs: 0,
   staminaBudgetDelayMs: 1800000,
   combatAttackRange: 14500,
   eventGapMs: 30000,
@@ -40,8 +40,13 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--dir') out.dir = path.resolve(args[++i] || out.dir);
-    else if (arg === '--min-unsafe-delay-ms') out.minUnsafeDelayMs = Math.max(0, Number(args[++i] || out.minUnsafeDelayMs) || out.minUnsafeDelayMs);
-    else if (arg === '--stamina-budget-delay-ms') out.staminaBudgetDelayMs = Math.max(0, Number(args[++i] || out.staminaBudgetDelayMs) || out.staminaBudgetDelayMs);
+    else if (arg === '--min-unsafe-delay-ms') {
+      const value = Number(args[++i]);
+      out.minUnsafeDelayMs = Number.isFinite(value) ? Math.max(0, value) : out.minUnsafeDelayMs;
+    } else if (arg === '--stamina-budget-delay-ms') {
+      const value = Number(args[++i]);
+      out.staminaBudgetDelayMs = Number.isFinite(value) ? Math.max(0, value) : out.staminaBudgetDelayMs;
+    }
     else if (arg === '--combat-attack-range') out.combatAttackRange = Math.max(0, Number(args[++i] || out.combatAttackRange) || out.combatAttackRange);
     else if (arg === '--event-gap-ms') out.eventGapMs = Math.max(0, Number(args[++i] || out.eventGapMs) || out.eventGapMs);
     else if (arg === '--event-line-gap') out.eventLineGap = Math.max(0, Number(args[++i] || out.eventLineGap) || out.eventLineGap);
@@ -1458,7 +1463,7 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(issueCount(allReport, 'missing-top-level-exit') === 1, 'expected one missing top-level exit issue');
     cases += 1;
-    assertSelfTest(issueCount(allReport, 'unsafe-exit-delay-below-minimum') === 1, 'expected one unsafe-delay issue');
+    assertSelfTest(issueCount(allReport, 'unsafe-exit-delay-below-minimum') === 0, 'expected no default unsafe-delay issue');
     const allCombatReason = allReport.exitReasonCounts.find(item => item.reason === 'combat-hp-disadvantage-leave') || null;
     cases += 1;
     assertSelfTest(allCombatReason?.events === 2, `expected 2 combat reason events, got ${allCombatReason?.events}`);
@@ -1471,9 +1476,9 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(allReport.exitSafetyCounts.safe === 1, `expected 1 safe exit, got ${allReport.exitSafetyCounts.safe}`);
     cases += 1;
-    assertSelfTest(allReport.exitSafetyCounts.unsafeDelayOk === 1, `expected 1 unsafe delay ok exit, got ${allReport.exitSafetyCounts.unsafeDelayOk}`);
+    assertSelfTest(allReport.exitSafetyCounts.unsafeDelayOk === 2, `expected 2 unsafe delay ok exits, got ${allReport.exitSafetyCounts.unsafeDelayOk}`);
     cases += 1;
-    assertSelfTest(allReport.exitSafetyCounts.unsafeDelayBelowMin === 1, `expected 1 unsafe delay below minimum exit, got ${allReport.exitSafetyCounts.unsafeDelayBelowMin}`);
+    assertSelfTest(allReport.exitSafetyCounts.unsafeDelayBelowMin === 0, `expected 0 unsafe delay below minimum exits, got ${allReport.exitSafetyCounts.unsafeDelayBelowMin}`);
 
     const currentReport = auditLogs({ dir: logsDir, manifestPath });
     cases += 1;
