@@ -37,6 +37,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'loginSnapshotSuccessRequired', value: 3 },
+  { key: 'sessionMismatchRecoveryReloadMaxAgeMs', value: 120000 },
   { key: 'pendingExitPersistMaxMs', value: 3600000 },
   { key: 'leaveSuccessReloadUnknownGraceMs', value: 12000 },
   { key: 'loginPointSafetySuccessRequired', value: 12 },
@@ -1301,6 +1302,15 @@ function main() {
       assert(takeoverBody.includes('noSelfExit?.wsOfflineish'), 'live session takeover does not block offline-ish websocket state');
       assert(takeoverBody.includes('enemyReloginHoldRemainingMs()') && takeoverBody.includes('offlineReloginHoldRemainingMs()'), 'live session takeover does not block active relogin holds');
       assert(takeoverBody.includes('recentUnsafeExitContext(bot.lastOfflineLeaveResult'), 'live session takeover does not block recent unsafe offline exits');
+      assert(text.includes('SESSION_MISMATCH_RECOVERY_KEY'), 'session mismatch recovery persistence key not found');
+      assert(text.includes("'graspRatSessionMismatchRecovery'"), 'session mismatch recovery state is not stored under the expected localStorage key');
+      const recoveryReloadBody = functionBody(text, 'requestSessionMismatchRecoveryReload');
+      assert(recoveryReloadBody.includes('liveSessionTakeover?.allowed'), 'session mismatch refresh can run without allowed takeover state');
+      assert(recoveryReloadBody.includes("reason: 'session-mismatch-refresh'"), 'session mismatch refresh wait reason not reported');
+      assert(recoveryReloadBody.includes('persistCombatLogPendingEntries()'), 'session mismatch refresh does not persist pending combat logs');
+      assert(recoveryReloadBody.includes('writeSessionMismatchRecoveryState'), 'session mismatch refresh does not persist recovery state');
+      const recoverySatisfiedBody = functionBody(text, 'sessionMismatchRecoveryReloadSatisfied');
+      assert(recoverySatisfiedBody.includes('sessionMismatchRecoveryStateMatches') && recoverySatisfiedBody.includes('sessionMismatchRecoveryPageReloadedAfter'), 'session mismatch takeover does not require same-user post-refresh state');
       const mismatchBody = functionBody(text, 'controlHasAuthoritativeSessionMismatch');
       assert(mismatchBody.includes('controlHasNativeGameSession(control)'), 'authoritative session mismatch helper does not use native session evidence');
       assert(mismatchBody.includes('snapshotSelfPresenceState') && mismatchBody.includes('snapshotSelfState?.present'), 'authoritative session mismatch helper does not use fresh snapshot-self evidence');
@@ -1321,6 +1331,11 @@ function main() {
       assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
       assert(tickBody.includes('liveSessionMismatchTakeoverState(control, noSelfExit)'), 'main loop does not evaluate guarded live-session takeover state');
       assert(tickBody.includes('if (!cfg.dryRun && liveSessionTakeover?.allowed)'), 'main loop does not require allowed takeover state before fast recovery');
+      assert(tickBody.includes('sessionMismatchRecoveryReloadSatisfied(control, noSelfExit)'), 'session mismatch recovery does not check whether a controlled refresh already happened');
+      assert(tickBody.includes('requestSessionMismatchRecoveryReload(control, noSelfExit, liveSessionTakeover)'), 'session mismatch recovery does not request a controlled refresh before takeover');
+      assert(tickBody.includes("'session-mismatch-refresh'"), 'session mismatch refresh reason is not exposed in main loop');
+      assert(!tickBody.includes('const reloadPending'), 'session mismatch recovery can still fall through to takeover when refresh was not satisfied');
+      assert(tickBody.includes('sessionMismatchRecoveryReload: reload || null'), 'session mismatch recovery wait state does not preserve refresh request result');
       assert(tickBody.includes("stopMotionSafely(noSelfExit.reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-no-self-game-session')"), 'no-self session exit does not stop motion with explicit reason');
       assert(tickBody.includes('await leaveOffline(noSelfExit.reason, bot.lastSelf, offlineSafety)'), 'no-self session exit does not issue offline leave');
       assert(tickBody.includes("await maybeStartAutoLogin('session-mismatch-recovery'"), 'session mismatch recovery does not route through auto login');

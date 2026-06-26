@@ -417,6 +417,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     serverPositionServerMoveMax: 80,
     serverPositionGapMin: 400,
     sessionResetMissingMs: 10000,
+    sessionMismatchRecoveryReloadMaxAgeMs: 120000,
     reloadAfterNoSelfMs: 45000,
     reloadAfterOfflineMs: 20000,
     cloudflareErrorReloadMs: 5000,

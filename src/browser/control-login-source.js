@@ -107,11 +107,105 @@ function controlLoginSource(helpers = {}) {
 		      reloadConfirmation,
 		      displayReason: 'leave接口已返回成功，刷新页面确认服务端在线状态'
 		    });
-		    location.reload();
-		    return true;
-		  }
+			    location.reload();
+			    return true;
+			  }
 
-		  function cloudflareErrorInfo() {
+	  function requestSessionMismatchRecoveryReload(control, noSelfExit, liveSessionTakeover) {
+	    if (cfg.dryRun || cfg.once) return { requested: false, reason: 'disabled' };
+	    if (bot.reloadRequestedAt) return {
+	      requested: false,
+	      reason: 'reload-already-requested',
+	      state: summarizeSessionMismatchRecoveryStatus()
+	    };
+	    if (!liveSessionTakeover?.allowed) return {
+	      requested: false,
+	      reason: liveSessionTakeover?.reason || 'takeover-not-allowed'
+	    };
+	    if (exitAuditFlushPending()) {
+	      const blocked = exitAuditFlushBlockDetail('session-mismatch-refresh:' + (liveSessionTakeover.reason || ''));
+	      bot.exitAudit.lastBlockedReload = blocked;
+	      flushCombatLogs(true);
+	      logStatus('session mismatch refresh blocked until exit audit logs flush', {
+	        kind: 'wait',
+	        reason: 'exit-log-flush-pending',
+	        dx: 0,
+	        dy: 0,
+	        self: bot.lastSelf,
+	        noSelfGameSession: noSelfExit,
+	        liveSessionTakeover,
+	        exitAuditFlush: blocked,
+	        displayReason: '等待退出日志发送完成，暂不刷新确认会话状态'
+	      });
+	      return {
+	        requested: false,
+	        blocked: true,
+	        reason: 'exit-log-flush-pending',
+	        exitAuditFlush: blocked
+	      };
+	    }
+	    const t = Date.now();
+	    const state = writeSessionMismatchRecoveryState({
+	      schemaVersion: 1,
+	      reason: 'session-mismatch-recovery',
+	      userId: Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || null,
+	      requestedAt: t,
+	      expiresAt: t + sessionMismatchRecoveryReloadMaxAgeMs(),
+	      reloadCount: 1,
+	      pageTimeOrigin: pageTimeOriginMs(),
+	      noSelfAgeMs: Math.max(0, Math.round(Number(noSelfExit?.ageMs || 0) || 0)),
+	      mismatchLeaveMs: Math.max(0, Math.round(Number(noSelfExit?.mismatchLeaveMs || 0) || 0)),
+	      liveSessionEvidence: Boolean(liveSessionTakeover.liveSessionEvidence),
+	      snapshotSelfPresent: Boolean(liveSessionTakeover.snapshotSelf?.present || noSelfExit?.snapshotSelf?.present),
+	      nativeWsOpenOrConnecting: Boolean(liveSessionTakeover.nativeWsOpenOrConnecting),
+	      takeoverReason: String(liveSessionTakeover.reason || ''),
+	      control: {
+	        rawWsOpen: Boolean(control?.rawWsOpen),
+	        nativeWsOpen: Boolean(control?.nativeWsOpen),
+	        connecting: Boolean(control?.connecting),
+	        wsReadyState: control?.wsReadyState ?? null,
+	        nativeWsReadyState: control?.nativeWsReadyState ?? null,
+	        transport: control?.transport || '',
+	        hasToken: Boolean(control?.hasToken)
+	      }
+	    });
+	    if (!state) {
+	      return {
+	        requested: false,
+	        reason: 'state-persist-failed',
+	        error: bot.sessionMismatchRecovery?.error || 'session mismatch recovery state persist failed'
+	      };
+	    }
+	    try {
+	      persistCombatLogPendingEntries();
+	      flushCombatLogs(true);
+	    } catch (_) {}
+	    bot.reloadRequestedAt = t;
+	    const displayReason = '界面显示未登录但原生会话仍在线，先刷新页面确认状态';
+	    logStatus('session mismatch recovery refresh', {
+	      kind: 'wait',
+	      reason: 'session-mismatch-refresh',
+	      dx: 0,
+	      dy: 0,
+	      currentUserId: getCurrentUserId(),
+	      control,
+	      visibleEntities: arrayCount(bot.globalState.entities),
+	      self: null,
+	      noSelfGameSession: noSelfExit,
+	      liveSessionTakeover,
+	      sessionMismatchRecovery: state,
+	      displayReason
+	    });
+	    location.reload();
+	    return {
+	      requested: true,
+	      reason: 'session-mismatch-refresh',
+	      state,
+	      displayReason
+	    };
+	  }
+
+			  function cloudflareErrorInfo() {
 	    if (location.origin !== 'https://grasp-rat-game.h-e.top') return null;
 	    const title = String(document.title || '');
 	    const text = String(document.body?.innerText || '').slice(0, 5000);
@@ -361,15 +455,134 @@ function controlLoginSource(helpers = {}) {
     };
   }
 
-  function firstRecentUnsafeExitContext(details, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
-    for (const detail of Array.isArray(details) ? details : [details]) {
-      const context = recentUnsafeExitContext(detail, t, maxAgeMs);
-      if (context) return context;
-    }
-    return null;
-  }
+	  function firstRecentUnsafeExitContext(details, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
+	    for (const detail of Array.isArray(details) ? details : [details]) {
+	      const context = recentUnsafeExitContext(detail, t, maxAgeMs);
+	      if (context) return context;
+	    }
+	    return null;
+	  }
 
-  function liveSessionMismatchTakeoverState(control, noSelfExit) {
+	  function sessionMismatchRecoveryReloadMaxAgeMs() {
+	    return Math.max(60000, Number(cfg.sessionMismatchRecoveryReloadMaxAgeMs ?? 120000) || 120000);
+	  }
+
+	  function pageTimeOriginMs() {
+	    try {
+	      return Number((typeof performance === 'object' && performance ? performance.timeOrigin : 0) || 0) || 0;
+	    } catch (_) {
+	      return 0;
+	    }
+	  }
+
+	  function normalizeSessionMismatchRecoveryState(value, t = Date.now()) {
+	    if (!value || typeof value !== 'object') return null;
+	    const requestedAt = Number(value.requestedAt || 0) || 0;
+	    const maxAgeMs = sessionMismatchRecoveryReloadMaxAgeMs();
+	    const expiresAt = Number(value.expiresAt || 0) || (requestedAt ? requestedAt + maxAgeMs : 0);
+	    if (!requestedAt || (expiresAt && t > expiresAt)) return null;
+	    return {
+	      schemaVersion: 1,
+	      reason: String(value.reason || 'session-mismatch-recovery'),
+	      userId: Number(value.userId || 0) || null,
+	      requestedAt,
+	      reloadedAt: Number(value.reloadedAt || 0) || 0,
+	      expiresAt,
+	      reloadCount: Math.max(1, Math.round(Number(value.reloadCount || 1) || 1)),
+	      pageTimeOrigin: Number(value.pageTimeOrigin || 0) || 0,
+	      noSelfAgeMs: Math.max(0, Math.round(Number(value.noSelfAgeMs || 0) || 0)),
+	      mismatchLeaveMs: Math.max(0, Math.round(Number(value.mismatchLeaveMs || 0) || 0)),
+	      liveSessionEvidence: Boolean(value.liveSessionEvidence),
+	      snapshotSelfPresent: Boolean(value.snapshotSelfPresent),
+	      nativeWsOpenOrConnecting: Boolean(value.nativeWsOpenOrConnecting),
+	      takeoverReason: String(value.takeoverReason || ''),
+	      control: value.control && typeof value.control === 'object' ? { ...value.control } : null,
+	      lastError: String(value.lastError || '')
+	    };
+	  }
+
+	  function readSessionMismatchRecoveryState(t = Date.now()) {
+	    let raw = null;
+	    try {
+	      raw = JSON.parse(localStorage.getItem(SESSION_MISMATCH_RECOVERY_KEY) || 'null');
+	    } catch (_) {
+	      raw = null;
+	    }
+	    const state = normalizeSessionMismatchRecoveryState(raw, t);
+	    if (!state && raw) {
+	      try {
+	        localStorage.removeItem(SESSION_MISMATCH_RECOVERY_KEY);
+	      } catch (_) {}
+	    }
+	    bot.sessionMismatchRecovery = state;
+	    return state;
+	  }
+
+	  function writeSessionMismatchRecoveryState(value, t = Date.now()) {
+	    const state = normalizeSessionMismatchRecoveryState(value, t);
+	    if (!state) return null;
+	    try {
+	      localStorage.setItem(SESSION_MISMATCH_RECOVERY_KEY, JSON.stringify(state));
+	      bot.sessionMismatchRecovery = state;
+	      return state;
+	    } catch (err) {
+	      bot.sessionMismatchRecovery = {
+	        reason: 'session-mismatch-recovery',
+	        error: err?.message || String(err),
+	        failedAt: t
+	      };
+	      return null;
+	    }
+	  }
+
+	  function clearSessionMismatchRecoveryState(reason = 'resolved') {
+	    try {
+	      localStorage.removeItem(SESSION_MISMATCH_RECOVERY_KEY);
+	    } catch (_) {}
+	    bot.sessionMismatchRecovery = {
+	      reason: 'session-mismatch-recovery',
+	      clearedAt: Date.now(),
+	      clearedReason: String(reason || 'resolved')
+	    };
+	    return bot.sessionMismatchRecovery;
+	  }
+
+	  function sessionMismatchRecoveryStateMatches(state, control, noSelfExit) {
+	    if (!state || state.reason !== 'session-mismatch-recovery') return false;
+	    const stateUserId = Number(state.userId || 0) || 0;
+	    const currentUserId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || 0;
+	    return Boolean(stateUserId && currentUserId && stateUserId === currentUserId);
+	  }
+
+	  function sessionMismatchRecoveryPageReloadedAfter(state) {
+	    const requestedAt = Number(state?.requestedAt || 0) || 0;
+	    const origin = pageTimeOriginMs();
+	    return Boolean(requestedAt && origin && origin >= requestedAt - 500);
+	  }
+
+	  function sessionMismatchRecoveryReloadSatisfied(control, noSelfExit, t = Date.now()) {
+	    const state = readSessionMismatchRecoveryState(t);
+	    if (!sessionMismatchRecoveryStateMatches(state, control, noSelfExit)) return null;
+	    if (!sessionMismatchRecoveryPageReloadedAfter(state)) return null;
+	    if (!state.reloadedAt) {
+	      state.reloadedAt = t;
+	      writeSessionMismatchRecoveryState(state, t);
+	    }
+	    return state;
+	  }
+
+	  function summarizeSessionMismatchRecoveryStatus(t = Date.now()) {
+	    const state = readSessionMismatchRecoveryState(t);
+	    if (!state) return null;
+	    return {
+	      ...state,
+	      ageMs: Math.max(0, Math.round(t - Number(state.requestedAt || t))),
+	      remainingMs: Math.max(0, Math.round(Number(state.expiresAt || t) - t)),
+	      pageReloadedAfterRequest: sessionMismatchRecoveryPageReloadedAfter(state)
+	    };
+	  }
+
+	  function liveSessionMismatchTakeoverState(control, noSelfExit) {
     const t = Date.now();
     const blockedBy = [];
     const userId = Number(control?.currentUserId || getCurrentUserId() || 0) || 0;
