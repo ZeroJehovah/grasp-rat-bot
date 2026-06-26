@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.232"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.233"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -447,6 +447,8 @@
     loginSnapshotProbeMinMs: 5000,
     loginPointSafetySuccessRequired: 12,
     loginPointSafetyRadius: 60000,
+    loginPointSafetyHealthyRadius: 20000,
+    loginPointSafetyHealthyHpThreshold: 80,
     loginPointSafetyMoveThreshold: 500,
     loginPointSafetyDangerDropMin: 2,
     loginPointSafetyStaminaFullRatio: 0.98,
@@ -4744,8 +4746,52 @@ function hpDisplay(value) {
     return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 12) || 12));
   }
 
-  function loginPointSafetyRadius() {
-    return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 16000) || 16000);
+  function optionalFiniteNumber(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function loginPointSafetyLastExitHp(state = null) {
+    return optionalFiniteNumber(
+      state?.lastExitSelfHp
+        ?? state?.lastExitHp
+        ?? state?.lastExitSelf?.hp
+        ?? state?.lastExitSelf?.selfHp
+    );
+  }
+
+  function loginPointSafetyHealthyHpThreshold() {
+    return Math.max(0, Number(cfg.loginPointSafetyHealthyHpThreshold ?? 80) || 80);
+  }
+
+  function loginPointSafetyLowHpRadius() {
+    return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 60000) || 60000);
+  }
+
+  function loginPointSafetyHealthyRadius() {
+    return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 20000) || 20000);
+  }
+
+  function loginPointSafetyRadiusInfo(state = null) {
+    const lastExitSelfHp = loginPointSafetyLastExitHp(state);
+    const healthyHpThreshold = loginPointSafetyHealthyHpThreshold();
+    const lowHpRadius = loginPointSafetyLowHpRadius();
+    const healthyRadius = loginPointSafetyHealthyRadius();
+    const healthyExit = Number.isFinite(lastExitSelfHp) && lastExitSelfHp >= healthyHpThreshold;
+    return {
+      radius: healthyExit ? healthyRadius : lowHpRadius,
+      lowHpRadius,
+      healthyRadius,
+      healthyHpThreshold,
+      lastExitSelfHp: Number.isFinite(lastExitSelfHp) ? lastExitSelfHp : null,
+      lastExitSelfHpKnown: Number.isFinite(lastExitSelfHp),
+      radiusReason: healthyExit ? 'last-exit-hp-healthy' : 'last-exit-hp-low-or-unknown'
+    };
+  }
+
+  function loginPointSafetyRadius(state = null) {
+    return loginPointSafetyRadiusInfo(state).radius;
   }
 
   function loginPointSafetyDayKey(t = Date.now()) {
@@ -4762,6 +4808,39 @@ function hpDisplay(value) {
       if (Number.isFinite(n)) return n;
     }
     return NaN;
+  }
+
+  function loginPointSafetyExitSelfHpFrom(...values) {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'object') {
+        const nested = loginPointSafetyExitSelfHpFrom(
+          value.hp,
+          value.selfHp,
+          value.currentHp,
+          value.self?.hp,
+          value.self?.selfHp,
+          value.summary?.hp,
+          value.detail?.self?.hp
+        );
+        if (Number.isFinite(nested)) return nested;
+        continue;
+      }
+      const n = optionalFiniteNumber(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return NaN;
+  }
+
+  function loginPointSafetyExitSelfForDetail(detail = null, meta = null, fallback = null) {
+    return meta?.self
+      || detail?.self
+      || detail?.injury?.self
+      || detail?.injury
+      || detail?.combat?.self
+      || detail?.offlineSafety?.self
+      || fallback
+      || null;
   }
 
   function loginPointEntityKey(entity) {
@@ -4812,11 +4891,21 @@ function hpDisplay(value) {
       }
       : { dayKey, actors: [] };
     const movement = source.movement && typeof source.movement === 'object' ? { ...source.movement } : {};
+    const lastExitSelfHp = loginPointSafetyLastExitHp(source);
+    const radiusInfo = loginPointSafetyRadiusInfo({ lastExitSelfHp });
     return {
       point,
       streak: Math.max(0, Math.round(Number(source.streak || 0) || 0)),
       required,
-      radius: loginPointSafetyRadius(),
+      radius: radiusInfo.radius,
+      lowHpRadius: radiusInfo.lowHpRadius,
+      healthyRadius: radiusInfo.healthyRadius,
+      healthyHpThreshold: radiusInfo.healthyHpThreshold,
+      radiusReason: radiusInfo.radiusReason,
+      lastExitSelfHp: Number.isFinite(lastExitSelfHp) ? lastExitSelfHp : null,
+      lastExitSelfHpKnown: Number.isFinite(lastExitSelfHp),
+      lastExitSelfHpAt: Number(source.lastExitSelfHpAt || source.lastExitHpAt || 0) || 0,
+      lastExitSelfHpReason: String(source.lastExitSelfHpReason || source.lastExitHpReason || ''),
       lastSampleAt: Number(source.lastSampleAt || source.lastOkAt || source.lastUnsafeAt || source.lastErrorAt || 0) || 0,
       lastOkAt: Number(source.lastOkAt || 0) || 0,
       lastUnsafeAt: Number(source.lastUnsafeAt || 0) || 0,
@@ -4857,6 +4946,15 @@ function hpDisplay(value) {
     const storedHasPoint = loginPointHasPoint(stored);
     if (storedHasPoint && (!memoryHasPoint || loginPointPointStamp(stored) > loginPointPointStamp(memory))) {
       return stored;
+    }
+    if (Number(stored.lastExitSelfHpAt || 0) > Number(memory.lastExitSelfHpAt || 0)) {
+      return normalizeLoginPointSafetyState({
+        ...memory,
+        lastExitSelfHp: stored.lastExitSelfHp,
+        lastExitSelfHpKnown: stored.lastExitSelfHpKnown,
+        lastExitSelfHpAt: stored.lastExitSelfHpAt,
+        lastExitSelfHpReason: stored.lastExitSelfHpReason
+      }, t);
     }
     return memory;
   }
@@ -4940,7 +5038,7 @@ function hpDisplay(value) {
       return { safe: false, reason: 'snapshot-entities-missing', danger: null };
     }
     const point = state.point;
-    const radius = loginPointSafetyRadius();
+    const radius = loginPointSafetyRadius(state);
     for (const entity of entities) {
       if (!entity || typeof entity !== 'object') continue;
       if (!isAlive(entity) || isInvulnerable(entity)) continue;
@@ -4972,7 +5070,7 @@ function hpDisplay(value) {
     const t = Date.now();
     const state = readLoginPointSafetyState(t);
     state.required = loginPointSafetySuccessRequired();
-    state.radius = loginPointSafetyRadius();
+    state.radius = loginPointSafetyRadius(state);
     state.lastSampleAt = t;
     state.lastTick = Number(detail.tick || state.lastTick || 0) || 0;
     if (!loginPointHasPoint(state)) {
@@ -5023,10 +5121,17 @@ function hpDisplay(value) {
     const required = loginPointSafetySuccessRequired();
     const hasPoint = Boolean(state.point);
     const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastUnsafeAt || state.lastErrorAt || 0) || 0;
+    const radiusInfo = loginPointSafetyRadiusInfo(state);
     return {
       ...state,
       required,
-      radius: loginPointSafetyRadius(),
+      radius: radiusInfo.radius,
+      lowHpRadius: radiusInfo.lowHpRadius,
+      healthyRadius: radiusInfo.healthyRadius,
+      healthyHpThreshold: radiusInfo.healthyHpThreshold,
+      radiusReason: radiusInfo.radiusReason,
+      lastExitSelfHp: radiusInfo.lastExitSelfHp,
+      lastExitSelfHpKnown: radiusInfo.lastExitSelfHpKnown,
       hasPoint,
       missingPoint: !hasPoint && required > 0,
       satisfied: required <= 0 || (hasPoint && state.streak >= required),
@@ -5039,12 +5144,18 @@ function hpDisplay(value) {
     };
   }
 
-  function resetLoginPointSafetyGate(reason = 'exit') {
+  function resetLoginPointSafetyGate(reason = 'exit', exitSelfLike = null) {
     const t = Date.now();
     const state = readLoginPointSafetyState(t);
+    const exitHp = loginPointSafetyExitSelfHpFrom(exitSelfLike);
     state.streak = 0;
     state.lastDanger = null;
     state.lastError = '';
+    state.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null;
+    state.lastExitSelfHpKnown = Number.isFinite(exitHp);
+    state.lastExitSelfHpAt = t;
+    state.lastExitSelfHpReason = String(reason || 'exit');
+    state.radius = loginPointSafetyRadius(state);
     state.resetAt = t;
     state.resetReason = String(reason || 'exit');
     writeLoginPointSafetyState(state);
@@ -5149,7 +5260,7 @@ function hpDisplay(value) {
 	    };
 	  }
 
-	  function resetLoginSnapshotGate(reason = 'exit') {
+	  function resetLoginSnapshotGate(reason = 'exit', exitSelfLike = null) {
 	    const t = Date.now();
 	    bot.loginSnapshotGate = {
 	      ...normalizeLoginSnapshotGateState(bot.loginSnapshotGate),
@@ -5159,7 +5270,7 @@ function hpDisplay(value) {
 	      resetAt: t,
 	      resetReason: String(reason || 'exit')
 	    };
-	    resetLoginPointSafetyGate(reason);
+	    resetLoginPointSafetyGate(reason, exitSelfLike);
 	    return snapshotLoginGateStatus(t);
 	  }
 
@@ -5986,7 +6097,10 @@ function hpDisplay(value) {
 
 	  function startExitAudit(detail, meta = {}) {
 	    if (!detail || typeof detail !== 'object') return null;
-	    detail.loginSnapshotGateReset = resetLoginSnapshotGate('exit-trigger:' + (meta.reason || detail.reason || ''));
+	    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
+	      'exit-trigger:' + (meta.reason || detail.reason || ''),
+	      loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)
+	    );
 	    ensureExitAuditDetail(detail, meta);
 	    recordExitAuditEvent('exit-trigger', detail, {
       ...meta,
@@ -6785,7 +6899,10 @@ function hpDisplay(value) {
 	    detail.exitConfirmed = true;
 	    detail.exitConfirmedAt = t;
 	    detail.exitConfirmation = state || null;
-	    detail.loginSnapshotGateReset = resetLoginSnapshotGate('exit-confirmed:' + (detail.reason || pending.reason || ''));
+	    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
+	      'exit-confirmed:' + (detail.reason || pending.reason || ''),
+	      loginPointSafetyExitSelfForDetail(detail, { self: pending.self || state?.self || null }, bot.lastSelf)
+	    );
 	    detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
     detail.pendingExitRetryCount = Number(pending.retryCount || 0);
     const http403 = Boolean(state?.http403 || leaveDetailHasHttp403(detail));
