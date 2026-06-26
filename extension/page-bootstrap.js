@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.32';
+  const BOOTSTRAP_VERSION = '0.1.33';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -430,6 +430,99 @@
     if (n >= 3600000) return `${Math.floor(n / 3600000)}h${String(Math.floor((n % 3600000) / 60000)).padStart(2, '0')}m`;
     if (n >= 60000) return `${Math.floor(n / 60000)}m${String(Math.floor((n % 60000) / 1000)).padStart(2, '0')}s`;
     return `${Math.ceil(n / 1000)}s`;
+  }
+
+  function formatReloginGateDuration(ms) {
+    const totalSeconds = Math.max(0, Math.ceil(Number(ms) / 1000) || 0);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) return `${hours}h${String(minutes).padStart(2, '0')}m${String(seconds).padStart(2, '0')}s`;
+    return `${minutes}m${String(seconds).padStart(2, '0')}s`;
+  }
+
+  function reloginGateFromStatus(status) {
+    const gate = status?.reloginGate || {};
+    const snapshot = gate.snapshot || status?.loginSnapshotGate || status?.globalState?.loginSnapshotGate || {};
+    const point = gate.loginPointSafety || snapshot.pointSafety || {};
+    const cooldown = gate.cooldown || {};
+    const cooldownTotalMs = Math.max(
+      Number(cooldown.totalMs || 0) || 0,
+      Number(cooldown.remainingMs || 0) || 0
+    );
+    return {
+      cooldown: {
+        remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
+        totalMs: Math.max(0, Math.round(cooldownTotalMs)),
+        source: String(cooldown.source || ''),
+        reason: String(cooldown.reason || '')
+      },
+      snapshot: {
+        ok: Boolean(snapshot.ok ?? snapshot.satisfied),
+        streak: Math.max(0, Math.round(Number(snapshot.streak || 0) || 0)),
+        required: Math.max(0, Math.round(Number(snapshot.required || 0) || 0)),
+        lastError: String(snapshot.lastError || '')
+      },
+      loginPointSafety: {
+        ok: Boolean(point.ok ?? point.satisfied),
+        hasPoint: Boolean(point.hasPoint),
+        missingPoint: Boolean(point.missingPoint),
+        streak: Math.max(0, Math.round(Number(point.streak || 0) || 0)),
+        required: Math.max(0, Math.round(Number(point.required || 0) || 0)),
+        lastDanger: point.lastDanger || null,
+        lastError: String(point.lastError || '')
+      }
+    };
+  }
+
+  function reloginGateVisible(status, reloginHold = 0) {
+    if (!status) return false;
+    if (Number(reloginHold || 0) > 0) return true;
+    const reason = String(status?.lastDecision?.reason || status?.login?.lastResult?.reason || '');
+    if (/login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait/.test(reason)) return true;
+    return !pageLooksLoggedIn(status);
+  }
+
+  function reloginGateLineColor(ok, blocked = false) {
+    if (ok) return '#86efac';
+    return blocked ? '#fca5a5' : '#fde68a';
+  }
+
+  function reloginGateDangerText(danger) {
+    const reason = String(danger?.reason || '').trim();
+    const actor = danger?.actor || {};
+    const actorText = actor.name || (actor.id ? '#' + actor.id : '');
+    if (!reason && !actorText) return '';
+    return '，阻塞 ' + [reason, actorText].filter(Boolean).join(' ');
+  }
+
+  function reloginGatePanelRows(status) {
+    const gate = reloginGateFromStatus(status);
+    const cooldownOk = gate.cooldown.remainingMs <= 0;
+    const snapshotOk = gate.snapshot.required <= 0 || gate.snapshot.streak >= gate.snapshot.required || gate.snapshot.ok;
+    const pointOk = gate.loginPointSafety.required <= 0 || gate.loginPointSafety.ok;
+    const rows = [
+      {
+        text: '冷却时间: ' + formatReloginGateDuration(gate.cooldown.remainingMs) + ' / ' + formatReloginGateDuration(gate.cooldown.totalMs),
+        ok: cooldownOk,
+        title: gate.cooldown.reason || gate.cooldown.source || 'login cooldown'
+      },
+      {
+        text: '快照接口连通性: ' + gate.snapshot.streak + ' / ' + gate.snapshot.required + (gate.snapshot.lastError ? '，错误 ' + gate.snapshot.lastError : ''),
+        ok: snapshotOk,
+        title: 'loginSnapshotGate'
+      },
+      {
+        text: '登录点安全: ' + gate.loginPointSafety.streak + ' / ' + gate.loginPointSafety.required
+          + (gate.loginPointSafety.missingPoint ? '，缺少登录点' : '')
+          + reloginGateDangerText(gate.loginPointSafety.lastDanger)
+          + (gate.loginPointSafety.lastError ? '，错误 ' + gate.loginPointSafety.lastError : ''),
+        ok: pointOk,
+        blocked: Boolean(gate.loginPointSafety.missingPoint || gate.loginPointSafety.lastDanger || gate.loginPointSafety.lastError),
+        title: 'loginPointSafety'
+      }
+    ];
+    return rows;
   }
 
   function readPersistentExitState(key, t = Date.now()) {
@@ -1775,6 +1868,12 @@
       { text: '原因：', style: 'color:#64748b' },
       { text: reasonDetail, style: 'color:#94a3b8' }
     ], 'font-size:11px;color:#94a3b8');
+    if (reloginGateVisible(status, hold)) {
+      for (const row of reloginGatePanelRows(status)) {
+        appendLine(row.text, 'font-size:10.8px;color:' + reloginGateLineColor(row.ok, row.blocked) + ';font-variant-numeric:tabular-nums');
+        if (appendParent.lastChild && row.title) appendParent.lastChild.title = row.title;
+      }
+    }
     if (isCombatDecision(decision, status)) {
       const hp = combatHpSummary(decision, status, self);
       appendCombatHpPanel(panel, hp);

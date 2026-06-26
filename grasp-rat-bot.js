@@ -888,6 +888,7 @@ function browserBotSource(config) {
 			        opportunitySwitchLock: this.opportunitySwitchLock,
 	        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
 	        loginSnapshotGate: snapshotLoginGateStatus(),
+	        reloginGate: summarizeReloginGateStatus(),
 	        postLoginZoom: this.postLoginZoom,
 		        exitMotionStop: {
 		          at: this.lastExitMotionStopAt || 0,

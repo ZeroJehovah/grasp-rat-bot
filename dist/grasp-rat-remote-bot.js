@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.224"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.225"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1207,6 +1207,7 @@
 			        opportunitySwitchLock: this.opportunitySwitchLock,
 	        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
 	        loginSnapshotGate: snapshotLoginGateStatus(),
+	        reloginGate: summarizeReloginGateStatus(),
 	        postLoginZoom: this.postLoginZoom,
 		        exitMotionStop: {
 		          at: this.lastExitMotionStopAt || 0,
@@ -4637,6 +4638,29 @@ function hpDisplay(value) {
 	    return remaining;
 	  }
 
+  function loginSuppressStatus(t = Date.now()) {
+    let until = 0;
+    let reason = '';
+    try {
+      until = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+      reason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+    } catch (_) {}
+    const remainingMs = Math.max(0, Math.round(until - t));
+    if (!remainingMs && until) {
+      try {
+        localStorage.removeItem(LOGIN_SUPPRESS_KEY);
+        localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+      } catch (_) {}
+      until = 0;
+      reason = '';
+    }
+    return {
+      until,
+      reason,
+      remainingMs
+    };
+  }
+
   function loginPointSafetySuccessRequired() {
     return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 12) || 12));
   }
@@ -5129,6 +5153,129 @@ function hpDisplay(value) {
 	    if (gate.lastError) pieces.push('最近错误：' + gate.lastError);
 	    return pieces.join('，');
 		  }
+
+  function reloginCooldownCandidates(t = Date.now()) {
+    const suppress = loginSuppressStatus(t);
+    const candidates = [];
+    const pushCandidate = (source, remainingMs, totalMs = 0, reason = '', until = 0) => {
+      const remaining = Math.max(0, Math.round(Number(remainingMs || 0) || 0));
+      const total = Math.max(remaining, Math.round(Number(totalMs || 0) || 0));
+      if (!remaining && !total) return;
+      candidates.push({
+        source,
+        reason: String(reason || ''),
+        remainingMs: remaining,
+        totalMs: total,
+        until: Number(until || 0) || 0
+      });
+    };
+    const loginCooldownTotalMs = Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0));
+    const loginCooldownRemainingMs = bot.lastLoginAt
+      ? Math.max(0, Math.round(Number(bot.lastLoginAt || 0) + loginCooldownTotalMs - t))
+      : 0;
+    pushCandidate('login-cooldown', loginCooldownRemainingMs, loginCooldownTotalMs, 'login cooldown', Number(bot.lastLoginAt || 0) + loginCooldownTotalMs);
+    pushCandidate('login-suppress', suppress.remainingMs, suppress.remainingMs, suppress.reason || 'login suppress', suppress.until);
+    const enemyDetail = activeEnemyLeaveDetail(t);
+    const enemyUntil = Math.max(Number(enemyDetail?.reloginUntil || 0) || 0, Number(bot.pursuitReloginUntil || 0) || 0);
+    const enemyRemainingMs = Math.max(
+      0,
+      Math.round(Number(enemyDetail?.holdRemainingMs || 0) || 0),
+      Math.round(enemyUntil - t)
+    );
+    pushCandidate(
+      'enemy-hold',
+      enemyRemainingMs,
+      Number(enemyDetail?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || enemyRemainingMs || 0),
+      enemyDetail?.reason || enemyDetail?.summary || 'enemy leave hold',
+      enemyUntil
+    );
+    const offlineDetail = activeOfflineLeaveDetail(t);
+    const offlineUntil = Math.max(Number(offlineDetail?.reloginUntil || 0) || 0, Number(bot.offlineReloginUntil || 0) || 0);
+    const offlineRemainingMs = Math.max(
+      0,
+      Math.round(Number(offlineDetail?.holdRemainingMs || 0) || 0),
+      Math.round(offlineUntil - t)
+    );
+    pushCandidate(
+      'offline-hold',
+      offlineRemainingMs,
+      Number(offlineDetail?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || offlineRemainingMs || 0),
+      offlineDetail?.reason || offlineDetail?.summary || 'offline leave hold',
+      offlineUntil
+    );
+    const lastLoginResult = bot.lastLoginResult && typeof bot.lastLoginResult === 'object' ? bot.lastLoginResult : null;
+    pushCandidate(
+      'last-login-result',
+      Number(lastLoginResult?.cooldownRemainingMs || 0) || 0,
+      Number(lastLoginResult?.cooldownTotalMs || lastLoginResult?.cooldownRemainingMs || 0) || 0,
+      lastLoginResult?.suppressReason || lastLoginResult?.reason || 'last login result',
+      0
+    );
+    return candidates.sort((a, b) => {
+      const remainingDelta = Number(b.remainingMs || 0) - Number(a.remainingMs || 0);
+      if (remainingDelta) return remainingDelta;
+      return Number(b.totalMs || 0) - Number(a.totalMs || 0);
+    });
+  }
+
+  function summarizeReloginGateStatus(t = Date.now()) {
+    const snapshotGate = snapshotLoginGateStatus(t);
+    const pointSafety = snapshotGate.pointSafety || loginPointSafetyStatus(t);
+    const cooldowns = reloginCooldownCandidates(t);
+    const cooldown = cooldowns[0] || {
+      source: 'none',
+      reason: '',
+      remainingMs: 0,
+      totalMs: Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0)),
+      until: 0
+    };
+    const snapshotRequired = Math.max(0, Math.round(Number(snapshotGate.required || 0) || 0));
+    const snapshotStreak = Math.max(0, Math.min(snapshotRequired, Math.round(Number(snapshotGate.streak || 0) || 0)));
+    const safetyRequired = Math.max(0, Math.round(Number(pointSafety.required || 0) || 0));
+    const safetyStreak = Math.max(0, Math.min(safetyRequired, Math.round(Number(pointSafety.streak || 0) || 0)));
+    return {
+      satisfied: Boolean(
+        Number(cooldown.remainingMs || 0) <= 0
+          && (snapshotRequired <= 0 || snapshotStreak >= snapshotRequired)
+          && Boolean(pointSafety.satisfied)
+      ),
+      cooldown: {
+        source: cooldown.source,
+        reason: cooldown.reason,
+        remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
+        totalMs: Math.max(0, Math.round(Number(cooldown.totalMs || 0) || 0)),
+        until: Number(cooldown.until || 0) || 0,
+        candidates: cooldowns.slice(0, 5)
+      },
+      snapshot: {
+        ok: snapshotRequired <= 0 || snapshotStreak >= snapshotRequired,
+        streak: snapshotStreak,
+        required: snapshotRequired,
+        remaining: Math.max(0, snapshotRequired - snapshotStreak),
+        lastSampleAgeMs: snapshotGate.lastSampleAgeMs ?? null,
+        lastOkAgeMs: snapshotGate.lastOkAgeMs ?? null,
+        lastErrorAgeMs: snapshotGate.lastErrorAgeMs ?? null,
+        lastError: String(snapshotGate.lastError || ''),
+        resetReason: String(snapshotGate.resetReason || '')
+      },
+      loginPointSafety: {
+        ok: Boolean(pointSafety.satisfied),
+        hasPoint: Boolean(pointSafety.hasPoint),
+        missingPoint: Boolean(pointSafety.missingPoint),
+        streak: safetyStreak,
+        required: safetyRequired,
+        remaining: Math.max(0, safetyRequired - safetyStreak),
+        radius: Number(pointSafety.radius || 0) || 0,
+        lastSampleAgeMs: pointSafety.lastSampleAgeMs ?? null,
+        lastOkAgeMs: pointSafety.lastOkAgeMs ?? null,
+        lastUnsafeAgeMs: pointSafety.lastUnsafeAgeMs ?? null,
+        lastErrorAgeMs: pointSafety.lastErrorAgeMs ?? null,
+        lastDanger: pointSafety.lastDanger || null,
+        lastError: String(pointSafety.lastError || ''),
+        resetReason: String(pointSafety.resetReason || '')
+      }
+    };
+  }
 
 	  function clearExitHoldDetail(detail, reason, t = Date.now()) {
     if (!detail || typeof detail !== 'object') return null;

@@ -1248,6 +1248,10 @@ function main() {
       const confirmBody = functionBody(text, 'confirmPendingExit');
       assert(confirmBody.includes("resetLoginSnapshotGate('exit-confirmed:'"), 'exit confirmation does not reset login snapshot gate');
       assert(text.includes('loginSnapshotGate: snapshotLoginGateStatus()'), 'status/logs do not expose login snapshot gate');
+      assert(text.includes('reloginGate: summarizeReloginGateStatus()'), 'status does not expose relogin gate summary');
+      const reloginGateBody = functionBody(text, 'summarizeReloginGateStatus');
+      assert(reloginGateBody.includes('cooldown') && reloginGateBody.includes('snapshot') && reloginGateBody.includes('loginPointSafety'), 'relogin gate summary does not include all gate dimensions');
+      assert(reloginGateBody.includes('snapshotLoginGateStatus(t)') && reloginGateBody.includes('loginPointSafetyStatus(t)'), 'relogin gate summary does not reuse login snapshot / point safety gates');
     });
     check(`${file} leaves broken no-self game sessions`, () => {
       const snapshotSelfBody = functionBody(text, 'snapshotSelfPresenceState');
@@ -1696,6 +1700,14 @@ function main() {
       assert(text.includes('padding:9px 16px'), 'panel sections do not use 16px horizontal padding');
       assert(text.includes("appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''))"), 'relogin countdown is not inline with current behavior');
       assert(!text.includes("appendLine('等待重连：' + formatDuration(hold))"), 'standalone relogin countdown line is still present');
+    });
+    check(`${file} renders relogin gate conditions in the panel`, () => {
+      assert(text.includes('function reloginGateFromStatus(status)'), 'relogin gate status normalizer not found');
+      assert(text.includes('function formatReloginGateDuration(ms)'), 'relogin gate duration formatter not found');
+      assert(text.includes("text: '冷却时间: ' + formatReloginGateDuration(gate.cooldown.remainingMs) + ' / ' + formatReloginGateDuration(gate.cooldown.totalMs)"), 'cooldown gate row not rendered');
+      assert(text.includes("text: '快照接口连通性: ' + gate.snapshot.streak + ' / ' + gate.snapshot.required"), 'snapshot connectivity gate row not rendered');
+      assert(text.includes("text: '登录点安全: ' + gate.loginPointSafety.streak + ' / ' + gate.loginPointSafety.required"), 'login point safety gate row not rendered');
+      assert(text.includes('if (reloginGateVisible(status, hold))'), 'relogin gate rows are not guarded by relogin visibility');
     });
     check(`${file} displays current clock and distinct action reason labels`, () => {
       assert(text.includes('function formatClockTime'), 'clock formatter not found');
