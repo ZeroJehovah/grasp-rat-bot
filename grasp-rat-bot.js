@@ -23,6 +23,11 @@ const {
   buildRuntimeDefaults
 } = require('./src/shared/runtime-defaults');
 const {
+  normalizeTargetWhitelistName,
+  parseTargetWhitelistNames,
+  deriveTargetWhitelistUrl
+} = require('./src/shared/target-whitelist');
+const {
   escapeHtml,
   formatDistance,
   formatDurationMs,
@@ -264,6 +269,12 @@ function browserBotSource(config) {
 
 		  ${buildRuntimeDefaults.toString()}
 
+		  ${normalizeTargetWhitelistName.toString()}
+
+		  ${parseTargetWhitelistNames.toString()}
+
+		  ${deriveTargetWhitelistUrl.toString()}
+
 		  ${staminaExhaustedLongWindows.toString()}
 
 		  ${staminaEvidenceRemaining.toString()}
@@ -274,6 +285,24 @@ function browserBotSource(config) {
 	  const preserved = buildBrowserPreservedState(previousBot);
 	  const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
 	  const cfg = buildRuntimeDefaults(config, combatLogEndpointConfigured);
+	  const targetWhitelistUrl = deriveTargetWhitelistUrl(cfg.sourceUrl, cfg.targetWhitelistUrl);
+	  const preservedTargetWhitelistUrl = String(preserved.targetWhitelist?.url || '');
+	  const preservedTargetWhitelistMatchesUrl = Boolean(targetWhitelistUrl && preservedTargetWhitelistUrl === targetWhitelistUrl);
+	  const preservedTargetWhitelistNames = preservedTargetWhitelistMatchesUrl
+	    ? parseTargetWhitelistNames(preserved.targetWhitelist?.names || [], cfg.targetWhitelistMaxNames)
+	    : [];
+	  const targetWhitelistState = {
+	    url: targetWhitelistUrl,
+	    names: preservedTargetWhitelistNames,
+	    nameSet: new Set(preservedTargetWhitelistNames),
+	    timer: 0,
+	    fetching: false,
+	    lastFetchAt: 0,
+	    lastOkAt: preservedTargetWhitelistMatchesUrl ? Number(preserved.targetWhitelist?.lastOkAt || 0) || 0 : 0,
+	    lastErrorAt: 0,
+	    lastError: '',
+	    lastReason: preservedTargetWhitelistNames.length ? 'preserved' : 'empty'
+	  };
 
 	  function readPersistentExitState(key, t = Date.now()) {
 	    let state = null;
@@ -617,6 +646,7 @@ function browserBotSource(config) {
 	    errors: [],
 	    lastDebugAt: 0,
 	    stopReason: '',
+	    targetWhitelist: targetWhitelistState,
 	    paused: Boolean(config.paused || window.__graspRatBotPaused),
 	    pauseReason: '',
 	    pauseChangedAt: 0,
@@ -631,6 +661,8 @@ function browserBotSource(config) {
 	      closeControlWs(reason);
 	      if (this.timer) clearInterval(this.timer);
 	      this.timer = 0;
+	      if (this.targetWhitelist?.timer) clearInterval(this.targetWhitelist.timer);
+	      if (this.targetWhitelist) this.targetWhitelist.timer = 0;
 	      try {
 	        if (!String(reason || '').startsWith('replaced by ')) flushCombatLogs(true);
 	      } catch (_) {}
@@ -730,6 +762,7 @@ function browserBotSource(config) {
 	        lastTarget: this.lastTarget,
 	        combatTarget: this.combatTarget,
 	        combatAim: this.combatAim,
+	        targetWhitelist: summarizeTargetWhitelistStatus(),
 		        combatLogging: summarizeCombatLoggingStatus(),
 		        importantLogging: summarizeImportantLoggingStatus(),
 		        exitAudit: {
@@ -905,20 +938,26 @@ function browserBotSource(config) {
   const isAvoidanceThreat = e => isInvulnerable(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
-  const normalizeTargetText = value => String(value ?? '').trim();
-  const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
-    .map(normalizeTargetText)
-    .filter(Boolean));
-  const targetWhitelistIds = new Set((Array.isArray(cfg.targetWhitelistIds) ? cfg.targetWhitelistIds : [])
-    .map(normalizeTargetText)
-    .filter(Boolean));
-  const isWhitelistedTarget = e => {
+  function isWhitelistedTarget(e) {
     if (!e) return false;
-    const id = e.user_id ?? e.id;
-    if (id !== null && id !== undefined && targetWhitelistIds.has(String(id))) return true;
-    const name = normalizeTargetText(e.name);
-    return Boolean(name && targetWhitelistNames.has(name));
-  };
+    const name = normalizeTargetWhitelistName(e.name);
+    return Boolean(name && bot.targetWhitelist?.nameSet?.has(name));
+  }
+  function summarizeTargetWhitelistStatus() {
+    const state = bot.targetWhitelist || targetWhitelistState;
+    return {
+      url: String(state?.url || ''),
+      names: Array.isArray(state?.names) ? state.names.slice() : [],
+      count: Array.isArray(state?.names) ? state.names.length : 0,
+      loaded: Boolean(state?.lastOkAt),
+      fetching: Boolean(state?.fetching),
+      lastFetchAt: Number(state?.lastFetchAt || 0) || 0,
+      lastOkAt: Number(state?.lastOkAt || 0) || 0,
+      lastErrorAt: Number(state?.lastErrorAt || 0) || 0,
+      lastError: String(state?.lastError || ''),
+      lastReason: String(state?.lastReason || '')
+    };
+  }
   const hpValue = e => Number(e?.hp ?? 0) || 0;
   const combatHpValue = e => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
   const knownHpValue = e => {
@@ -1177,6 +1216,69 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
             return undefined;
           }
         };
+      }
+
+      function targetWhitelistFetchUrl(url) {
+        const raw = String(url || '').trim();
+        if (!raw) return '';
+        try {
+          const parsed = new URL(raw, location.href);
+          parsed.searchParams.set('_graspRatWhitelistTs', String(Date.now()));
+          return parsed.toString();
+        } catch (_) {
+          return raw + (raw.includes('?') ? '&' : '?') + '_graspRatWhitelistTs=' + Date.now();
+        }
+      }
+
+      async function refreshTargetWhitelist(reason = 'manual') {
+        const state = bot.targetWhitelist || targetWhitelistState;
+        const url = String(state.url || '').trim();
+        const t = Date.now();
+        if (!url) {
+          state.lastFetchAt = t;
+          state.lastReason = 'no-url';
+          return summarizeTargetWhitelistStatus();
+        }
+        if (state.fetching) return summarizeTargetWhitelistStatus();
+        state.fetching = true;
+        state.lastFetchAt = t;
+        try {
+          const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
+          const validPayload = Array.isArray(payload)
+            || Array.isArray(payload?.names)
+            || Array.isArray(payload?.usernames);
+          if (!validPayload) throw new Error('target whitelist JSON must be an array or contain names/usernames array');
+          const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
+          state.names = names;
+          state.nameSet = new Set(names);
+          state.lastOkAt = Date.now();
+          state.lastError = '';
+          state.lastErrorAt = 0;
+          state.lastReason = String(reason || 'refresh');
+          return summarizeTargetWhitelistStatus();
+        } catch (err) {
+          state.lastError = err?.message || String(err);
+          state.lastErrorAt = Date.now();
+          state.lastReason = String(reason || 'refresh') + '-failed';
+          return summarizeTargetWhitelistStatus();
+        } finally {
+          state.fetching = false;
+        }
+      }
+
+      function startTargetWhitelistPolling() {
+        const state = bot.targetWhitelist || targetWhitelistState;
+        if (!String(state.url || '').trim()) {
+          state.lastReason = 'no-url';
+          return;
+        }
+        refreshTargetWhitelist('startup').catch(err => recordUnhandledTickError('target-whitelist-startup', err));
+        const pollMs = Math.max(0, Number(cfg.targetWhitelistPollMs || 0) || 0);
+        if (pollMs > 0 && !cfg.once) {
+          state.timer = setInterval(() => {
+            refreshTargetWhitelist('interval').catch(err => recordUnhandledTickError('target-whitelist-interval', err));
+          }, pollMs);
+        }
       }
 
 		${controlLoginSource({ staminaExhaustedWindowLabel })}
@@ -11548,6 +11650,7 @@ ${importantLogSource()}
 	      console.warn('[grasp-rat-bot] previous stop failed', err);
 	    }
 	  }
+	  startTargetWhitelistPolling();
 
 		  return refreshGlobalState(true)
 		    .catch(err => {

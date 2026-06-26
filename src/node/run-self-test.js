@@ -19,6 +19,11 @@ const {
 const {
   buildBrowserPreservedState
 } = require('../shared/browser-preserved-state');
+const {
+  normalizeTargetWhitelistName,
+  parseTargetWhitelistNames,
+  deriveTargetWhitelistUrl
+} = require('../shared/target-whitelist');
 
 function runSelfTest() {
   const cfg = {
@@ -215,8 +220,7 @@ function runSelfTest() {
     attackMinAfkDrop: 3,
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
-    targetWhitelistNames: ['文月'],
-    targetWhitelistIds: [],
+    targetWhitelistMaxNames: 100,
     coinOpportunityValue: 60000,
     dropOpportunityValue: 60000,
     opportunityDistanceFloor: 50,
@@ -393,19 +397,12 @@ function runSelfTest() {
   const isAvoidanceThreat = e => isInvulnerable(e);
   const isAfkTarget = e => !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
-  const normalizeTargetText = value => String(value ?? '').trim();
-  const targetWhitelistNames = new Set((Array.isArray(cfg.targetWhitelistNames) ? cfg.targetWhitelistNames : [])
-    .map(normalizeTargetText)
-    .filter(Boolean));
-  const targetWhitelistIds = new Set((Array.isArray(cfg.targetWhitelistIds) ? cfg.targetWhitelistIds : [])
-    .map(normalizeTargetText)
-    .filter(Boolean));
+  const targetWhitelistNames = parseTargetWhitelistNames({ names: ['文月', 'Firefox'] }, cfg.targetWhitelistMaxNames);
+  const targetWhitelistNameSet = new Set(targetWhitelistNames);
   const isWhitelistedTarget = e => {
     if (!e) return false;
-    const id = e.user_id ?? e.id;
-    if (id !== null && id !== undefined && targetWhitelistIds.has(String(id))) return true;
-    const name = normalizeTargetText(e.name);
-    return Boolean(name && targetWhitelistNames.has(name));
+    const name = normalizeTargetWhitelistName(e.name);
+    return Boolean(name && targetWhitelistNameSet.has(name));
   };
   const decorateThreat = (self, e) => {
     const moving = isMovingThreat(e);
@@ -7155,9 +7152,24 @@ function runSelfTest() {
       name: 'whitelisted firing target is not shot defensively',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 9, name: '文月', x: 10000, y: 0, current_join_mode: 'Passive', firing: true, hp: 100, death_reward_preview: 100 }]
+        local: [{ user_id: 9, name: 'Firefox', x: 10000, y: 0, current_join_mode: 'Passive', firing: true, hp: 100, death_reward_preview: 100 }]
       }).kind,
       want: 'wait'
+    },
+    {
+      name: 'target whitelist matches username only, not ids',
+      got: isWhitelistedTarget({ user_id: '文月', id: 'Firefox', name: 'NotListed' }),
+      want: false
+    },
+    {
+      name: 'target whitelist parser trims and deduplicates usernames',
+      got: JSON.stringify(parseTargetWhitelistNames({ usernames: [' 文月 ', 'Firefox', '文月', '', null] }, cfg.targetWhitelistMaxNames)),
+      want: JSON.stringify(['文月', 'Firefox'])
+    },
+    {
+      name: 'target whitelist URL defaults next to remote script',
+      got: deriveTargetWhitelistUrl('https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/grasp-rat-remote-bot.js?cache=1#hash'),
+      want: 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/target-whitelist.json'
     },
     {
       name: 'safe near coin beats active caution migration',

@@ -141,7 +141,10 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatPressureNoDamageExitHpThreshold', value: 80 },
   { key: 'combatPressureNoDamageExitTargetHpMin', value: 75 },
   { key: 'combatAimSteadyNoDamageMs', value: 6000 },
-  { key: 'combatAimSteadySpeedMax', value: 5 }
+  { key: 'combatAimSteadySpeedMax', value: 5 },
+  { key: 'targetWhitelistPollMs', value: 10000 },
+  { key: 'targetWhitelistTimeoutMs', value: 7000 },
+  { key: 'targetWhitelistMaxNames', value: 100 }
 ];
 
 const results = [];
@@ -244,6 +247,7 @@ function extractSingle(text, re, label) {
 
 function main() {
   const manifest = readJson('dist/manifest.json');
+  const targetWhitelistConfig = readJson('dist/target-whitelist.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
@@ -258,6 +262,7 @@ function main() {
   const sharedDisplayFormatSource = readText('src/shared/display-format.js');
   const sharedPreservedStateSource = readText('src/shared/browser-preserved-state.js');
   const sharedRuntimeDefaultsSource = readText('src/shared/runtime-defaults.js');
+  const sharedTargetWhitelistSource = readText('src/shared/target-whitelist.js');
   const sourceRuntimeText = [
     sourceBot,
     targetOverlaySourceModule,
@@ -303,6 +308,7 @@ function main() {
     assert(sourceBot.includes("require('./src/shared/display-format')"), 'display-format module import not found');
     assert(sourceBot.includes("require('./src/shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(sourceBot.includes("require('./src/shared/runtime-defaults')"), 'runtime-defaults module import not found');
+    assert(sourceBot.includes("require('./src/shared/target-whitelist')"), 'target-whitelist module import not found');
     assert(sourceBot.includes("require('./src/browser/target-overlay-source')"), 'target-overlay source module import not found');
     assert(sourceBot.includes("require('./src/browser/status-panel-source')"), 'status-panel source module import not found');
     assert(sourceBot.includes("require('./src/browser/combat-log-source')"), 'combat-log source module import not found');
@@ -312,6 +318,9 @@ function main() {
     assert(sourceBot.includes("require('./src/browser/runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(sourceBot.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
     assert(sourceBot.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
+    assert(sourceBot.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
+    assert(sourceBot.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
+    assert(sourceBot.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
     assert(sourceBot.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
     assert(sourceBot.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
     assert(sourceBot.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
@@ -320,7 +329,27 @@ function main() {
     assert(sourceBot.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(sourceBot.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
     assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
+    assert(distSource.includes('function normalizeTargetWhitelistName') && distSource.includes('function parseTargetWhitelistNames') && distSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
     assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
+  });
+
+  check('dist target whitelist is a standalone username list', () => {
+    assert(targetWhitelistConfig && typeof targetWhitelistConfig === 'object' && !Array.isArray(targetWhitelistConfig), 'target whitelist JSON must be an object');
+    assert(Array.isArray(targetWhitelistConfig.names), 'target whitelist names array not found');
+    assert(targetWhitelistConfig.names.length === 2, `expected 2 whitelist names, got ${targetWhitelistConfig.names.length}`);
+    assert(targetWhitelistConfig.names[0] === '文月' && targetWhitelistConfig.names[1] === 'Firefox', `unexpected whitelist names: ${targetWhitelistConfig.names.join(',')}`);
+    assert(!Object.prototype.hasOwnProperty.call(targetWhitelistConfig, 'ids'), 'target whitelist must not contain ids');
+    assert(!Object.prototype.hasOwnProperty.call(targetWhitelistConfig, 'userIds'), 'target whitelist must not contain userIds');
+  });
+
+  check('target whitelist helper parses usernames and derives same-directory remote URL', () => {
+    assert(functionBody(sharedTargetWhitelistSource, 'normalizeTargetWhitelistName').includes('.trim()'), 'target whitelist names are not trimmed');
+    assert(functionBody(sharedTargetWhitelistSource, 'parseTargetWhitelistNames').includes('payload?.names'), 'target whitelist parser does not accept names');
+    assert(functionBody(sharedTargetWhitelistSource, 'parseTargetWhitelistNames').includes('payload?.usernames'), 'target whitelist parser does not accept usernames alias');
+    assert(!functionBody(sharedTargetWhitelistSource, 'parseTargetWhitelistNames').includes('ids'), 'target whitelist parser still accepts ids');
+    const deriveBody = functionBody(sharedTargetWhitelistSource, 'deriveTargetWhitelistUrl');
+    assert(deriveBody.includes("url.pathname = url.pathname.replace(/[^/]*$/, 'target-whitelist.json')"), 'target whitelist URL is not derived from remote script directory');
+    assert(deriveBody.includes("return source.replace(/[^/?#]*([?#].*)?$/, 'target-whitelist.json')"), 'target whitelist URL does not handle non-URL source paths');
   });
 
   check('browser UI source modules export overlay, status panel, combat-log, important-log, and control-login runtime fragments', () => {
@@ -363,6 +392,35 @@ function main() {
     }
     check(`${file} accepts injected sourceHash`, () => {
       assert(defaultConfigSource.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
+    });
+    check(`${file} uses remote username-only target whitelist`, () => {
+      const whitelistSource = file === 'grasp-rat-bot.js' ? sharedTargetWhitelistSource : text;
+      assert(defaultConfigSource.includes('targetWhitelistUrl: String(config.targetWhitelistUrl || \'\')'), 'targetWhitelistUrl config field not found');
+      assert(!defaultConfigSource.includes('targetWhitelistNames:'), 'runtime defaults still include built-in target whitelist names');
+      assert(!defaultConfigSource.includes('targetWhitelistIds:'), 'runtime defaults still include built-in target whitelist ids');
+      assert(!text.includes('targetWhitelistIds'), 'runtime still references targetWhitelistIds');
+      assert(text.includes('const targetWhitelistUrl = deriveTargetWhitelistUrl(cfg.sourceUrl, cfg.targetWhitelistUrl)'), 'runtime does not derive target whitelist URL from source URL');
+      assert(text.includes('targetWhitelist: targetWhitelistState'), 'bot status/state does not attach target whitelist state');
+      assert(functionBody(text, 'summarizeTargetWhitelistStatus').includes('loaded: Boolean(state?.lastOkAt)'), 'target whitelist status does not expose loaded state');
+      assert(functionBody(text, 'targetWhitelistFetchUrl').includes("_graspRatWhitelistTs"), 'target whitelist fetch URL is not cache-busted');
+      const refreshBody = functionBody(text, 'refreshTargetWhitelist');
+      assert(refreshBody.includes('fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs)'), 'target whitelist refresh does not use configured timeout');
+      assert(refreshBody.includes('Array.isArray(payload?.names)') && refreshBody.includes('Array.isArray(payload?.usernames)'), 'target whitelist refresh does not validate username arrays');
+      assert(refreshBody.includes('const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames)'), 'target whitelist refresh does not parse/cap names');
+      assert(refreshBody.includes('state.names = names') && refreshBody.includes('state.nameSet = new Set(names)'), 'target whitelist success does not replace the name set');
+      assert(refreshBody.includes("state.lastReason = String(reason || 'refresh') + '-failed'"), 'target whitelist failure reason is not recorded');
+      assert(!/catch\s*\([^)]*\)\s*\{[\s\S]{0,600}state\.names\s*=/.test(refreshBody), 'target whitelist failure can clear names');
+      assert(!/catch\s*\([^)]*\)\s*\{[\s\S]{0,600}state\.nameSet\s*=/.test(refreshBody), 'target whitelist failure can clear nameSet');
+      const startBody = functionBody(text, 'startTargetWhitelistPolling');
+      assert(startBody.includes("refreshTargetWhitelist('startup')"), 'target whitelist is not fetched on startup');
+      assert(startBody.includes("refreshTargetWhitelist('interval')"), 'target whitelist is not refreshed by interval');
+      assert(startBody.includes('cfg.targetWhitelistPollMs'), 'target whitelist polling interval config not used');
+      const matcherBody = functionBody(text, 'isWhitelistedTarget');
+      assert(matcherBody.includes('normalizeTargetWhitelistName(e.name)'), 'target whitelist matcher does not use username');
+      assert(matcherBody.includes('bot.targetWhitelist?.nameSet?.has(name)'), 'target whitelist matcher does not use the remote name set');
+      assert(!matcherBody.includes('user_id') && !matcherBody.includes('target_id') && !matcherBody.includes(' id') && !matcherBody.includes('.id'), 'target whitelist matcher still checks ids');
+      assert(functionBody(whitelistSource, 'parseTargetWhitelistNames').includes('seen.has(name)'), 'target whitelist parser does not de-duplicate names');
+      assert(!functionBody(whitelistSource, 'parseTargetWhitelistNames').includes('ids'), 'target whitelist parser still includes id fields');
     });
     check(`${file} reduces routine browser status logging`, () => {
       assert(defaultConfigSource.includes('statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000)'), 'runtime statusEvery default/disable logic not found');

@@ -8,6 +8,7 @@ The primary runtime uses a small bootstrap script A plus the shared remote bot s
 - `extension/` is the Chrome extension version of script A. Load this directory as an unpacked extension in Chrome.
 - `dist/grasp-rat-remote-bot.js` is script B. It contains the game strategy and native page WebSocket control.
 - `dist/manifest.json` points A at B and includes the SHA-256 hash A must verify before injection.
+- `dist/target-whitelist.json` is the remote target whitelist. Script B derives this URL from the remote script URL by default, polls it every 10 seconds, and matches only exact trimmed usernames. Poll failures keep the last successful list; before the first successful load, the whitelist is empty. The current usernames are `文月` and `Firefox`.
 
 The older CDP entry points remain available in `grasp-rat-bot.js` as a fallback, but normal use should prefer bootstrap injection through Tampermonkey or the extension.
 
