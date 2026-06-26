@@ -8313,6 +8313,16 @@ function runSelfTest() {
 	      want: '战斗主循环断档，按网络波动退出等待重连'
 	    },
 	    {
+	      name: 'login point safety entry summary is explicit',
+	      got: offlineLeaveSummaryText('login point safety gate', {
+	        loginPointSafetyGate: {
+	          reason: 'login-point-safety',
+	          loginPointSafety: { streak: 0, required: 12 }
+	        }
+	      }),
+	      want: '登录点安全快照未满足，退出等待安全重连'
+	    },
+	    {
 	      name: 'combat sampling outage triggers offline leave gate',
 	      got: globalSamplingOutageOfflineStateForTest({
 	        nowMs: 10000,
@@ -8677,6 +8687,48 @@ function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|true|true|true|false'
+    },
+    {
+      name: 'unsafe relogin entry gate blocks only relogin contexts',
+      got: (() => {
+        const shouldBlock = state => {
+          const pointSafety = state.pointSafety || {};
+          const gateAllowed = Boolean(state.gateSatisfied || (state.liveSessionTakeoverBypass && pointSafety.satisfied));
+          if (gateAllowed) return false;
+          const combinedBlockReason = !pointSafety.hasPoint && Number(pointSafety.required || 0) > 0
+            ? 'login-point-missing'
+            : (!pointSafety.satisfied ? 'login-point-safety' : 'snapshot-connectivity');
+          const blockReason = combinedBlockReason === 'snapshot-connectivity' ? '' : combinedBlockReason;
+          if (!blockReason) return false;
+          const exitReset = /exit-trigger:|exit-confirmed:/.test(String(state.resetReason || ''));
+          const loginFlowWait = /^login-|auto-login|manual-login|session-mismatch-recovery/.test(String(state.waitReason || ''));
+          const entryGateContext = Boolean(exitReset || state.reloginHoldActive || state.pendingExitActive || state.recentLoginAttempt || loginFlowWait);
+          return entryGateContext ? blockReason : '';
+        };
+        return [
+          shouldBlock({
+            resetReason: 'exit-confirmed:global sampling outage',
+            pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
+          }),
+          shouldBlock({
+            waitReason: 'login-snapshot-gate',
+            pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
+          }),
+          shouldBlock({
+            pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
+          }),
+          String(Boolean(shouldBlock({
+            resetReason: 'exit-confirmed:websocket offline',
+            pointSafety: { hasPoint: true, satisfied: true, streak: 12, required: 12 }
+          }))),
+          String(Boolean(shouldBlock({
+            resetReason: 'exit-confirmed:websocket offline',
+            pointSafety: { hasPoint: true, satisfied: true, streak: 12, required: 12 },
+            gateSatisfied: true
+          })))
+        ].join('|');
+      })(),
+      want: 'login-point-safety|login-point-safety||false|false'
     },
     {
       name: 'local exit confirmation must not accept active session mismatch',

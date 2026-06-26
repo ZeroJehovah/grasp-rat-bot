@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.227"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.228"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -4746,6 +4746,8 @@ function hpDisplay(value) {
       lastErrorAt: Number(source.lastErrorAt || 0) || 0,
       lastError: String(source.lastError || ''),
       lastTick: Number(source.lastTick || 0) || 0,
+      resetAt: Number(source.resetAt || 0) || 0,
+      resetReason: String(source.resetReason || ''),
       lastDanger: source.lastDanger && typeof source.lastDanger === 'object' ? { ...source.lastDanger } : null,
       movement,
       damagedBy
@@ -5053,10 +5055,15 @@ function hpDisplay(value) {
 	    if (state.streak > required) state.streak = required;
 	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
 	    const pointSafety = loginPointSafetyStatus(t);
+	    const snapshotConnectivitySatisfied = required <= 0 || state.streak >= required;
+	    const loginPointSafetySatisfied = Boolean(pointSafety.satisfied);
 	    return {
 	      ...state,
 	      lastSampleAt,
-	      satisfied: (required <= 0 || state.streak >= required) && pointSafety.satisfied,
+	      satisfied: snapshotConnectivitySatisfied && loginPointSafetySatisfied,
+	      snapshotConnectivitySatisfied,
+	      loginPointSafetySatisfied,
+	      loginPointSafetyBlocked: !loginPointSafetySatisfied,
 	      remaining: Math.max(0, required - state.streak),
 	      pointSafety,
 	      lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
@@ -5108,6 +5115,63 @@ function hpDisplay(value) {
 	    if (gate.satisfied) return true;
 	    return Boolean(gate.liveSessionTakeoverBypass
 	      && gate.pointSafety?.satisfied);
+	  }
+
+	  function loginSnapshotGateBlockReason(gate = snapshotLoginGateStatus()) {
+	    const status = gate || snapshotLoginGateStatus();
+	    if (loginSnapshotGateAllowsLogin(status)) return '';
+	    const pointSafety = status.pointSafety || loginPointSafetyStatus();
+	    if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return 'login-point-missing';
+	    if (!pointSafety.satisfied) return 'login-point-safety';
+	    if (!status.snapshotConnectivitySatisfied) return 'snapshot-connectivity';
+	    return 'snapshot-gate';
+	  }
+
+	  function unsafeReloginEntryGateStatus(selfSummary = null, t = Date.now()) {
+	    const gate = snapshotLoginGateStatus(t);
+	    const pointSafety = gate.pointSafety || loginPointSafetyStatus(t);
+	    const combinedBlockReason = loginSnapshotGateBlockReason(gate);
+	    if (!combinedBlockReason) return null;
+	    const blockReason = !pointSafety.hasPoint && Number(pointSafety.required || 0) > 0
+	      ? 'login-point-missing'
+	      : (!pointSafety.satisfied ? 'login-point-safety' : '');
+	    if (!blockReason) return null;
+	    const userId = selfSummary?.id ?? selfSummary?.user_id ?? getCurrentUserId() ?? null;
+	    const session = bot.session || {};
+	    const sameUser = userId === null || session.userId === null || session.userId === undefined || String(session.userId) === String(userId);
+	    const activeSession = Boolean(session.startedAt && sameUser && !session.missingSince && !session.exitAt);
+	    const resetReason = String(pointSafety.resetReason || gate.resetReason || '');
+	    const exitReset = /exit-trigger:|exit-confirmed:/.test(resetReason);
+	    const waitReason = String(bot.lastDecision?.reason || '');
+	    const waitingForLogin = Boolean(
+	      bot.waitSince
+	        || session.missingSince
+	        || bot.pendingExit
+	        || /^no-self|not-alive|login-|auto-login|manual-login|session-mismatch-recovery|game-session-connecting|offline-leave|enemy-leave|combat-leave|stamina-exhausted/.test(waitReason)
+	    );
+	    const loginFlowWait = /^login-|auto-login|manual-login|session-mismatch-recovery/.test(waitReason);
+	    const reloginHoldActive = Boolean(enemyReloginHoldRemainingMs() > 0 || offlineReloginHoldRemainingMs() > 0 || loginSuppressRemainingMs() > 0);
+	    const recentLoginAttempt = Boolean(Number(bot.lastLoginAt || 0) && t - Number(bot.lastLoginAt || 0) <= Math.max(60000, Number(cfg.postLoginGraceMs || 45000) * 2));
+	    const pendingExitActive = Boolean(bot.pendingExit);
+	    const entryGateContext = Boolean(exitReset || reloginHoldActive || pendingExitActive || recentLoginAttempt || loginFlowWait);
+	    if (activeSession && !entryGateContext) return null;
+	    if (!entryGateContext) return null;
+	    return {
+	      blocked: true,
+	      reason: blockReason,
+	      combinedBlockReason,
+	      gate,
+	      loginPointSafety: pointSafety,
+	      resetReason,
+	      exitReset,
+	      waitingForLogin,
+	      loginFlowWait,
+	      pendingExitActive,
+	      reloginHoldActive,
+	      recentLoginAttempt,
+	      entryGateContext,
+	      activeSession
+	    };
 	  }
 
 	  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
@@ -5646,6 +5710,7 @@ function hpDisplay(value) {
 				    if (staminaLabel === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
 				    const text = String(reason || '').toLowerCase();
 				    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+				    if (offlineSafety?.loginPointSafetyGate || text.includes('login point safety')) return '登录点安全快照未满足，退出等待安全重连';
 				    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
 				    if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
 				    if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
@@ -17564,11 +17629,46 @@ function hpDisplay(value) {
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
-	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
-	      const currentSummary = summarizeSelf(self);
+      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
+      const currentSummary = summarizeSelf(self);
       updateSessionStats(currentSummary);
       maybeRecordLoginPoint(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
+      const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary);
+      if (unsafeEntryGate && !bot.pendingExit) {
+        bot.pursuit = null;
+        bot.lastSelf = currentSummary;
+        stopMotionSafely('login-point-safety-entry-gate');
+        if (!bot.offlineSince) bot.offlineSince = Date.now();
+        const offlineAgeMs = Date.now() - bot.offlineSince;
+        const offlineSafety = {
+          ...assessOfflineSafety(self),
+          unsafe: true,
+          loginPointSafetyGate: unsafeEntryGate,
+          passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0))
+        };
+        bot.lastOfflineSafety = offlineSafety;
+        const leaveResult = await leaveOffline('login point safety gate', currentSummary, offlineSafety);
+        const offlineDetail = activeOfflineLeaveDetail();
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'login-snapshot-gate',
+          dx: 0,
+          dy: 0,
+          control: summarizeControl(),
+          self: currentSummary,
+          offlineAgeMs,
+          leaveDelayMs: 0,
+          offlineSafety,
+          snapshotGate: unsafeEntryGate.gate,
+          loginPointSafety: unsafeEntryGate.loginPointSafety,
+          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || loginSnapshotGateDisplayReason(unsafeEntryGate.gate),
+          leave: leaveResult
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {
         stopMotionSafely('stamina-sample-wait');

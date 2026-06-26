@@ -760,6 +760,8 @@ function controlLoginSource(helpers = {}) {
       lastErrorAt: Number(source.lastErrorAt || 0) || 0,
       lastError: String(source.lastError || ''),
       lastTick: Number(source.lastTick || 0) || 0,
+      resetAt: Number(source.resetAt || 0) || 0,
+      resetReason: String(source.resetReason || ''),
       lastDanger: source.lastDanger && typeof source.lastDanger === 'object' ? { ...source.lastDanger } : null,
       movement,
       damagedBy
@@ -1067,10 +1069,15 @@ function controlLoginSource(helpers = {}) {
 	    if (state.streak > required) state.streak = required;
 	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
 	    const pointSafety = loginPointSafetyStatus(t);
+	    const snapshotConnectivitySatisfied = required <= 0 || state.streak >= required;
+	    const loginPointSafetySatisfied = Boolean(pointSafety.satisfied);
 	    return {
 	      ...state,
 	      lastSampleAt,
-	      satisfied: (required <= 0 || state.streak >= required) && pointSafety.satisfied,
+	      satisfied: snapshotConnectivitySatisfied && loginPointSafetySatisfied,
+	      snapshotConnectivitySatisfied,
+	      loginPointSafetySatisfied,
+	      loginPointSafetyBlocked: !loginPointSafetySatisfied,
 	      remaining: Math.max(0, required - state.streak),
 	      pointSafety,
 	      lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
@@ -1122,6 +1129,63 @@ function controlLoginSource(helpers = {}) {
 	    if (gate.satisfied) return true;
 	    return Boolean(gate.liveSessionTakeoverBypass
 	      && gate.pointSafety?.satisfied);
+	  }
+
+	  function loginSnapshotGateBlockReason(gate = snapshotLoginGateStatus()) {
+	    const status = gate || snapshotLoginGateStatus();
+	    if (loginSnapshotGateAllowsLogin(status)) return '';
+	    const pointSafety = status.pointSafety || loginPointSafetyStatus();
+	    if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return 'login-point-missing';
+	    if (!pointSafety.satisfied) return 'login-point-safety';
+	    if (!status.snapshotConnectivitySatisfied) return 'snapshot-connectivity';
+	    return 'snapshot-gate';
+	  }
+
+	  function unsafeReloginEntryGateStatus(selfSummary = null, t = Date.now()) {
+	    const gate = snapshotLoginGateStatus(t);
+	    const pointSafety = gate.pointSafety || loginPointSafetyStatus(t);
+	    const combinedBlockReason = loginSnapshotGateBlockReason(gate);
+	    if (!combinedBlockReason) return null;
+	    const blockReason = !pointSafety.hasPoint && Number(pointSafety.required || 0) > 0
+	      ? 'login-point-missing'
+	      : (!pointSafety.satisfied ? 'login-point-safety' : '');
+	    if (!blockReason) return null;
+	    const userId = selfSummary?.id ?? selfSummary?.user_id ?? getCurrentUserId() ?? null;
+	    const session = bot.session || {};
+	    const sameUser = userId === null || session.userId === null || session.userId === undefined || String(session.userId) === String(userId);
+	    const activeSession = Boolean(session.startedAt && sameUser && !session.missingSince && !session.exitAt);
+	    const resetReason = String(pointSafety.resetReason || gate.resetReason || '');
+	    const exitReset = /exit-trigger:|exit-confirmed:/.test(resetReason);
+	    const waitReason = String(bot.lastDecision?.reason || '');
+	    const waitingForLogin = Boolean(
+	      bot.waitSince
+	        || session.missingSince
+	        || bot.pendingExit
+	        || /^no-self|not-alive|login-|auto-login|manual-login|session-mismatch-recovery|game-session-connecting|offline-leave|enemy-leave|combat-leave|stamina-exhausted/.test(waitReason)
+	    );
+	    const loginFlowWait = /^login-|auto-login|manual-login|session-mismatch-recovery/.test(waitReason);
+	    const reloginHoldActive = Boolean(enemyReloginHoldRemainingMs() > 0 || offlineReloginHoldRemainingMs() > 0 || loginSuppressRemainingMs() > 0);
+	    const recentLoginAttempt = Boolean(Number(bot.lastLoginAt || 0) && t - Number(bot.lastLoginAt || 0) <= Math.max(60000, Number(cfg.postLoginGraceMs || 45000) * 2));
+	    const pendingExitActive = Boolean(bot.pendingExit);
+	    const entryGateContext = Boolean(exitReset || reloginHoldActive || pendingExitActive || recentLoginAttempt || loginFlowWait);
+	    if (activeSession && !entryGateContext) return null;
+	    if (!entryGateContext) return null;
+	    return {
+	      blocked: true,
+	      reason: blockReason,
+	      combinedBlockReason,
+	      gate,
+	      loginPointSafety: pointSafety,
+	      resetReason,
+	      exitReset,
+	      waitingForLogin,
+	      loginFlowWait,
+	      pendingExitActive,
+	      reloginHoldActive,
+	      recentLoginAttempt,
+	      entryGateContext,
+	      activeSession
+	    };
 	  }
 
 	  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
