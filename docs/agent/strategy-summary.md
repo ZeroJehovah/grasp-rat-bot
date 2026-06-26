@@ -50,6 +50,7 @@
   - opportunity stick bonus is disabled and switch hysteresis is small, so a clearly better nearby ROI target can replace an older far target promptly.
   - similar same-tier opportunities are chosen immediately; once a target is selected, switch hold/margins keep the bot from jumping to another similar-ROI target unless it is clearly better.
   - held coin opportunities are matched by id or nearby coordinates and can survive short candidate-source gaps for the remaining hold window, so a temporarily missing current coin does not cause a same-tier 1-coin target flip.
+  - held visible/native coin opportunities are released immediately when current native/render coin sources are available and no longer contain that target inside the visible-authority radius. This prevents continuing toward a stale coin coordinate after another player picks it up, while retaining the short missing-hold only for real source gaps.
 - Coin routing:
   - nearby and foot coins are prioritized before broader opportunities;
   - post-attack dropped coins are prioritized when appropriate;

@@ -10289,37 +10289,106 @@ ${importantLogSource()}
 		    return dist({ x, y }, { x: choiceX, y: choiceY }) <= opportunitySameCoinRadius();
 		  }
 
-		  function opportunityMissingHoldUntil(choice, t) {
-		    if (!choice || opportunityChoiceType(choice) !== 'coin') return 0;
-		    const holdMs = Math.max(0, Number(cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs) || 0);
-		    const lastSeenAt = Number(choice.lastSeenAt || choice.at || t);
-		    const until = Math.min(Number(choice.until || 0), lastSeenAt + holdMs);
-		    return until > t ? until : 0;
-		  }
+			  function opportunityMissingHoldUntil(choice, t) {
+			    if (!choice || opportunityChoiceType(choice) !== 'coin') return 0;
+			    const holdMs = Math.max(0, Number(cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs) || 0);
+			    const lastSeenAt = Number(choice.lastSeenAt || choice.at || t);
+			    const until = Math.min(Number(choice.until || 0), lastSeenAt + holdMs);
+			    return until > t ? until : 0;
+			  }
 
-		  function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
-		    const current = bot.opportunityChoice;
-		    const t = now();
-		    const holdUntil = opportunityMissingHoldUntil(current, t);
-		    if (!holdUntil) return null;
-		    if ((opportunities || []).some(item => opportunityMatchesChoice(item, current))) return null;
-		    const id = opportunityChoiceId(current);
-		    if (!id && id !== '0') return null;
-		    if (bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))) return null;
-		    const x = Number(current.x);
-		    const y = Number(current.y);
-		    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-		    const amount = Math.max(0, Number(current.amount || 0)) || 1;
-		    const coin = {
-		      drop_id: id,
-		      x,
-		      y,
-		      amount,
-		      distance: self ? dist(self, { x, y }) : Number(current.distance || Infinity)
-		    };
-		    const maxDistance = Math.max(
-		      0,
-		      Number(current.maxDistance || 0),
+			  function currentVisibleCoinListForMissingHold() {
+			    if (typeof getNativeCoinSources !== 'function') return null;
+			    let sources = [];
+			    try {
+			      sources = getNativeCoinSources();
+			    } catch (_) {
+			      return null;
+			    }
+			    if (!Array.isArray(sources) || !sources.length) return null;
+			    const visibleSources = sources.filter(source => {
+			      if (!source || !Array.isArray(source.list)) return false;
+			      const label = String(source.label || '').toLowerCase();
+			      return !label.includes('snapshot');
+			    });
+			    if (!visibleSources.length) return null;
+			    const coins = [];
+			    for (const source of visibleSources) {
+			      for (const raw of source.list) {
+			        const coin = normalizeCoinDrop(raw, 'native');
+			        if (coin) coins.push(coin);
+			      }
+			    }
+			    return coins;
+			  }
+
+			  function visibleCoinSourcesConfirmTargetMissing(target) {
+			    const visibleCoins = currentVisibleCoinListForMissingHold();
+			    if (!Array.isArray(visibleCoins)) return false;
+			    return !visibleCoins.some(coin => coinMatchesTrackedTarget(coin, target));
+			  }
+
+			  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
+			    const reason = String(choice?.reason || '');
+			    if (reason.startsWith('snapshot-coin')) return false;
+			    const distance = Number(coin?.distance ?? choice?.distance);
+			    const radius = Math.max(0, Number(typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius) || 0);
+			    return !Number.isFinite(distance) || !(radius > 0) || distance <= radius + opportunitySameCoinRadius();
+			  }
+
+			  function clearMissingVisibleCoinTarget(choice, coin, reason, t) {
+			    const id = opportunityChoiceId(choice);
+			    const idText = id || id === '0' ? String(id) : '';
+			    if (coin) recordCoinFilterDiagnostic(coin, 'visible-missing');
+			    if (idText) {
+			      const ignoreMs = Math.max(0, Number(cfg.coinCollectedIgnoreMs || 0));
+			      if (ignoreMs > 0) bot.ignoredCoins.set(idText, t + ignoreMs);
+			      bot.coinAttempts.delete(idText);
+			    }
+			    if (!idText || (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === idText)) {
+			      bot.lastTarget = null;
+			      bot.lastTargetAt = 0;
+			    }
+			    if (!idText || (bot.coinProgress?.id && String(bot.coinProgress.id) === idText)) bot.coinProgress = null;
+			    if (!idText || bot.coinApproachLock?.id === idText) bot.coinApproachLock = null;
+			    clearOpportunityChoiceFor('coin', idText || null);
+			    bot.lastCoinClearReason = reason;
+			    bot.lastMissingVisibleCoin = {
+			      id: idText,
+			      reason,
+			      amount: Number.isFinite(Number(coin?.amount)) ? Math.round(Number(coin.amount)) : null,
+			      distance: Number.isFinite(Number(coin?.distance)) ? Math.round(Number(coin.distance)) : null,
+			      at: Date.now()
+			    };
+			  }
+
+			  function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
+			    const current = bot.opportunityChoice;
+			    const t = now();
+			    const holdUntil = opportunityMissingHoldUntil(current, t);
+			    if (!holdUntil) return null;
+			    if ((opportunities || []).some(item => opportunityMatchesChoice(item, current))) return null;
+			    const id = opportunityChoiceId(current);
+			    if (!id && id !== '0') return null;
+			    const x = Number(current.x);
+			    const y = Number(current.y);
+			    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+			    const amount = Math.max(0, Number(current.amount || 0)) || 1;
+			    const coin = {
+			      drop_id: id,
+			      x,
+			      y,
+			      amount,
+			      distance: self ? dist(self, { x, y }) : Number(current.distance || Infinity)
+			    };
+			    if (missingHeldCoinCoveredByVisibleAuthority(current, coin) && visibleCoinSourcesConfirmTargetMissing(current)) {
+			      clearMissingVisibleCoinTarget(current, coin, 'visible-coin-disappeared', t);
+			      return null;
+			    }
+			    if (bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))) return null;
+			    const maxDistance = Math.max(
+			      0,
+			      Number(current.maxDistance || 0),
 		      Number(cfg.snapshotCoinMaxDistance || 0),
 		      Number(cfg.globalCoinMaxDistance || 0),
 		      Number(cfg.coinMaxDistance || 0)
