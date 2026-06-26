@@ -38,6 +38,10 @@ function controlLoginSource(helpers = {}) {
 		      });
 		      return false;
 		    }
+		    try {
+		      persistCombatLogPendingEntries({ force: true });
+		      flushCombatLogs(true);
+		    } catch (_) {}
 		    bot.reloadRequestedAt = Date.now();
 		    logStatus('reload: ' + reason);
 		    location.reload();
@@ -72,7 +76,7 @@ function controlLoginSource(helpers = {}) {
 		      return false;
 		    }
 		    try {
-		      persistCombatLogPendingEntries();
+		      persistCombatLogPendingEntries({ force: true });
 		      flushCombatLogs(true);
 		    } catch (_) {}
 		    const t = Date.now();
@@ -177,7 +181,7 @@ function controlLoginSource(helpers = {}) {
 	      };
 	    }
 	    try {
-	      persistCombatLogPendingEntries();
+	      persistCombatLogPendingEntries({ force: true });
 	      flushCombatLogs(true);
 	    } catch (_) {}
 	    bot.reloadRequestedAt = t;

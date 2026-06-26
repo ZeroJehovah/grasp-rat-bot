@@ -79,6 +79,10 @@ function combatLogSource(helpers = {}) {
         }
       }
 
+      function combatLogMaxPersistedEntries() {
+        return Math.max(20, Number(cfg.combatLogMaxPersistedEntries || 160) || 160);
+      }
+
       function writePersistedCombatLogPendingEntries(entries) {
         try {
           const list = Array.isArray(entries)
@@ -89,16 +93,30 @@ function combatLogSource(helpers = {}) {
             const key = combatLogPersistentEntryKey(entry);
             if (key) byKey.set(key, safeJsonClone(entry) || entry);
           }
-          localStorage.setItem(COMBAT_LOG_PENDING_ENTRIES_KEY, safeStringify(Array.from(byKey.values()).slice(-1000)));
+          const persisted = Array.from(byKey.values()).slice(-combatLogMaxPersistedEntries());
+          localStorage.setItem(COMBAT_LOG_PENDING_ENTRIES_KEY, safeStringify(persisted));
+          return persisted.length;
         } catch (_) {}
+        return 0;
       }
 
-      function persistCombatLogPendingEntries() {
+      function persistCombatLogPendingEntries(options = {}) {
         const state = bot.combatLogging || {};
+        const force = Boolean(options?.force);
+        const t = Date.now();
+        if (!force) {
+          const minMs = Math.max(1000, Number(cfg.combatLogPendingPersistMinMs || 5000) || 5000);
+          if (state.lastPendingPersistAt && t - Number(state.lastPendingPersistAt || 0) < minMs) {
+            state.pendingPersistenceDirty = true;
+            return readPersistedCombatLogPendingEntries().length;
+          }
+        }
         const existing = readPersistedCombatLogPendingEntries();
         const pending = Array.isArray(state.pending) ? state.pending : [];
-        writePersistedCombatLogPendingEntries(existing.concat(pending));
-        return readPersistedCombatLogPendingEntries().length;
+        const count = writePersistedCombatLogPendingEntries(existing.concat(pending));
+        state.lastPendingPersistAt = t;
+        state.pendingPersistenceDirty = false;
+        return count;
       }
 
       function removePersistedCombatLogPendingEntries(entries) {
@@ -1339,7 +1357,10 @@ function combatLogSource(helpers = {}) {
           state.pending.splice(dropIndex, 1);
           state.dropped += 1;
         }
-        if (shouldPersistCombatLogPendingEntry(queued)) persistCombatLogPendingEntries();
+        if (shouldPersistCombatLogPendingEntry(queued)) {
+          state.pendingPersistenceDirty = true;
+          state.lastPendingPersistenceQueuedAt = Date.now();
+        }
         return true;
       }
 
@@ -1420,9 +1441,10 @@ function combatLogSource(helpers = {}) {
           return false;
         }
         state.lastFlushAt = t;
+        const configuredBatchMax = Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 12);
         const batchSize = force
-          ? Math.min(state.pending.length, Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50) * 4)
-          : Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50);
+          ? Math.min(state.pending.length, configuredBatchMax * 4)
+          : configuredBatchMax;
         const entries = state.pending.splice(0, batchSize);
         const exitAuditIds = entries.map(entry => entry?.exitAuditLogId).filter(Boolean);
         const importantLogIds = entries.map(entry => entry?.importantLogId).filter(Boolean);
@@ -1490,7 +1512,7 @@ function combatLogSource(helpers = {}) {
               state.sendingExitAuditIds = state.sendingExitAuditIds.filter(id => !exitAuditIds.includes(id));
             }
             state.sending = false;
-            if (sentOk && (force || state.pending.length >= Math.max(1, Number(cfg.combatLogBatchMaxEntries) || 50)) && state.pending.length) {
+            if (sentOk && (force || state.pending.length >= configuredBatchMax) && state.pending.length) {
               flushCombatLogs(force);
             }
           });
