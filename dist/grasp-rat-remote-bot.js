@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.216"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.217"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -166,6 +166,9 @@
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
     combatPassiveRunnerConfirmMs: 2500,
+    combatOpponentProbeMs: 6000,
+    combatOpponentProbeReserveMs: 5600,
+    combatOpponentProbeEveryMs: 520,
     combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
@@ -12457,6 +12460,9 @@ function hpDisplay(value) {
     const targetPressureFire = options.targetRealBulletPressure !== undefined
       ? Boolean(options.targetRealBulletPressure)
       : Boolean(options.realBulletPressure);
+    const opponentProbeMs = Math.max(0, Number(cfg.combatOpponentProbeMs || 0));
+    const opponentProbeEngagedMs = Math.max(0, Number(options.opponentProbeEngagedMs || 0));
+    const opponentProbeSeenTargetRealBullet = Math.max(0, Number(options.opponentProbeSeenTargetRealBulletMs || 0)) > 0;
     const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
     const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
     const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
@@ -12516,9 +12522,21 @@ function hpDisplay(value) {
       && hpGap <= noDamageDuelMaxHpGap
       && noDamageMs >= noDamageDuelNoDamageMs
       && targetDistance <= noDamageDuelRange;
+    const opponentProbeFireWindow = Boolean(
+      opponentProbeMs > 0
+      && opponentProbeEngagedMs < opponentProbeMs
+      && Boolean(options.targetActive)
+      && !Boolean(options.realBulletPressure)
+      && !targetPressureFire
+      && !opponentProbeSeenTargetRealBullet
+      && !finishLowThreatFireWindow
+      && Number.isFinite(selfHp)
+      && selfHp >= Math.max(0, Number(cfg.combatLowHpLeaveThreshold || 0))
+    );
     let stance = 'normal';
     if (winningPressureFireWindow) stance = 'winning-pressure';
     else if (closePressureFireWindow) stance = 'close-pressure';
+    else if (opponentProbeFireWindow) stance = 'opponent-probe';
     else if (passiveRunnerFireWindow) stance = 'passive-runner';
     else if (finishLowThreatFireWindow) stance = 'finish-low-threat';
     else if (steadyAimFireWindow) stance = 'steady-aim';
@@ -12535,6 +12553,8 @@ function hpDisplay(value) {
       noDamageMs,
       highHpFireWindow,
       passiveRunnerFireWindow,
+      opponentProbeFireWindow,
+      opponentProbeEngagedMs,
       finishLowThreatFireWindow,
       closePressureFireWindow,
       winningPressureFireWindow,
@@ -12545,6 +12565,7 @@ function hpDisplay(value) {
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
       passiveRunner: Boolean(options.passiveRunner),
+      opponentProbe: opponentProbeFireWindow,
       realBulletPressure: Boolean(options.realBulletPressure),
       targetRealBulletPressure: targetPressureFire,
       steadyAim: Boolean(options.steadyAim),
@@ -12777,6 +12798,7 @@ function hpDisplay(value) {
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
     const passiveRunnerFireWindow = Boolean(trend.passiveRunnerFireWindow);
+    const opponentProbeFireWindow = Boolean(trend.opponentProbeFireWindow);
     const finishLowThreatFireWindow = Boolean(trend.finishLowThreatFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
 	    const winningPressureFireWindow = Boolean(trend.winningPressureFireWindow);
@@ -12790,6 +12812,14 @@ function hpDisplay(value) {
 	    const lowConfidenceMinDistance = Math.max(0, Number(cfg.combatAimLowConfidenceMinDistance || 0));
 	    const lowConfidenceMotionScale = Math.max(0, Number(cfg.combatAimLowConfidenceMotionScale || 0));
 	    const lowConfidenceEveryMs = Math.max(conserveEveryMs, Number(cfg.combatAimLowConfidenceEveryMs || conserveEveryMs));
+    const opponentProbeReserveMs = Math.max(
+      dodgeReserveMs,
+      Number(cfg.combatOpponentProbeReserveMs || reserveMs)
+    );
+    const opponentProbeEveryMs = Math.max(
+      normalEveryMs,
+      Number(cfg.combatOpponentProbeEveryMs || lowConfidenceEveryMs)
+    );
 	    const lowConfidenceWindow = Boolean(
 	      aimConfidence !== null
 	      && lowConfidenceThreshold > 0
@@ -12800,8 +12830,12 @@ function hpDisplay(value) {
 	      && !steadyAimFireWindow
 	    );
     let effectiveDodgeReserveMs = dodgeReserveMs;
-    if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
-    if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
+    if (opponentProbeFireWindow) {
+      effectiveDodgeReserveMs = Math.max(effectiveDodgeReserveMs, opponentProbeReserveMs);
+    } else {
+      if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+      if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
+    }
     if (finishLowThreatFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, finishLowThreatDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (winningPressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, winningPressureDodgeReserveMs);
@@ -12834,6 +12868,9 @@ function hpDisplay(value) {
       steadyAimFireWindow,
 	      noDamageDuelFireWindow,
 	      farNoDamageCloseFireWindow,
+      opponentProbeFireWindow,
+      opponentProbeReserveMs,
+      opponentProbeEveryMs,
 	      aimConfidence,
 	      lowConfidenceWindow,
 	      noDamageMs,
@@ -12846,6 +12883,8 @@ function hpDisplay(value) {
         targetActive: Boolean(trend.targetActive),
         targetMoving: Boolean(trend.targetMoving),
         passiveRunner: Boolean(trend.passiveRunner),
+        opponentProbe: Boolean(trend.opponentProbeFireWindow),
+        opponentProbeEngagedMs: Math.round(Math.max(0, Number(trend.opponentProbeEngagedMs || 0))),
         realBulletPressure: Boolean(trend.realBulletPressure),
         steadyAim: Boolean(trend.steadyAim),
         farNoDamageClose: Boolean(trend.farNoDamageCloseFireWindow)
@@ -12856,12 +12895,18 @@ function hpDisplay(value) {
     if (stamina5s !== null && stamina5s < hardReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
     }
+    if (stamina5s !== null && opponentProbeFireWindow && stamina5s < effectiveDodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
     if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
     }
 	    if (stamina5s !== null && stamina5s < reserveMs) {
 	      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
 	    }
+    if (opponentProbeFireWindow) {
+      return { ...base, shootEveryMs: opponentProbeEveryMs, reason: 'opponent-probe', throttled: true };
+    }
 	    if (lowConfidenceWindow) {
 	      return { ...base, shootEveryMs: lowConfidenceEveryMs, reason: 'low-confidence-burst', throttled: true };
 	    }
@@ -13820,6 +13865,8 @@ function hpDisplay(value) {
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isCurrentlyActive(target),
       passiveRunner: passiveRunner.active,
+      opponentProbeEngagedMs: passiveRunner.engagedMs,
+      opponentProbeSeenTargetRealBulletMs: passiveRunner.seenTargetRealBulletMs,
 	      targetMoving,
 	      noDamageMs: Number(aim.noDamageMs || 0),
 	      aimConfidence: aim.aimConfidence,
@@ -13839,6 +13886,8 @@ function hpDisplay(value) {
 	      engagedCombat: target.combatIntent === 'engaged',
 	      targetActive: isCurrentlyActive(target),
 	      passiveRunner: passiveRunner.active,
+      opponentProbeEngagedMs: passiveRunner.engagedMs,
+      opponentProbeSeenTargetRealBulletMs: passiveRunner.seenTargetRealBulletMs,
 	      targetMoving,
 	      noDamageMs: Number(aim.noDamageMs || 0),
 	      aimConfidence: aim.aimConfidence,
@@ -13880,7 +13929,7 @@ function hpDisplay(value) {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled ? 'combat-burst-fire' : baseReason)))),
+        : (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled && shooting.reason !== 'opponent-probe' ? 'combat-burst-fire' : baseReason)))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,

@@ -99,6 +99,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatOutOfRangePressureReengageMaxHpGap', value: 20 },
   { key: 'combatOutOfRangeReengageRecentInRangeMs', value: 2500 },
   { key: 'combatPassiveRunnerCloseRange', value: 4500 },
+  { key: 'combatOpponentProbeMs', value: 6000 },
+  { key: 'combatOpponentProbeReserveMs', value: 5600 },
+  { key: 'combatOpponentProbeEveryMs', value: 520 },
   { key: 'combatShootEveryMs', value: 160 },
   { key: 'combatShootReserveMs', value: 5600 },
   { key: 'combatShootDodgeReserveMs', value: 3800 },
@@ -1002,7 +1005,7 @@ function main() {
       assert(!combatBody.includes('authority: aim.authority || null'), 'combat logs still expose aim authority evidence');
       assert(combatBody.includes("shooting.suppressed ? 'combat-stamina-conserve'"), 'combat action does not report fire suppression reason');
       assert(combatBody.includes("retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating'"), 'retreating edge action reason does not preserve finish-pressure and fighter-close exceptions');
-      assert(combatBody.includes("shooting.throttled ? 'combat-burst-fire'"), 'combat action does not report burst-fire reason');
+      assert(combatBody.includes("shooting.throttled && shooting.reason !== 'opponent-probe' ? 'combat-burst-fire'"), 'combat action does not preserve movement reason for opponent-probe throttling');
       assert(!combatBody.includes("combat-low-hp-no-damage-leave', baseTarget"), 'low no-damage can still trigger combat leave');
       assert(!text.includes('forceShoot: true'), 'force shooting is still present');
       const switchBody = functionBody(text, 'defensiveTargetOverridesEngaged');

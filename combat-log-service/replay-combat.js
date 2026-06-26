@@ -52,6 +52,9 @@ const DEFAULTS = {
   combatFarNoDamageCloseMaxHpGap: 10,
   combatPassiveRunnerMinSelfHp: 80,
   combatPassiveRunnerMinDrop: 1,
+  combatOpponentProbeMs: 6000,
+  combatOpponentProbeReserveMs: 5600,
+  combatOpponentProbeEveryMs: 520,
   combatPassiveRunnerCloseRange: 4500,
   combatPassiveRunnerInterceptSpreadScale: 0,
   combatOutOfRangeReengageRange: 15000,
@@ -69,7 +72,8 @@ const DEFAULTS = {
   combatAimSnapshotOutlierCloseNativeRange: 8000,
   combatAimSnapshotOutlierCloseSnapshotRatio: 2,
   combatAimSnapshotOutlierDisadvantageRange: 11000,
-  combatAimSnapshotOutlierNoDamageMs: 1000
+  combatAimSnapshotOutlierNoDamageMs: 1000,
+  opportunityShotStaminaCostMs: 500
 };
 
 function parseArgs(argv) {
@@ -721,6 +725,86 @@ function runPassiveRunnerReserveFireScenario(frames, shots, targetSamples, optio
       noDamageMs: Math.round(firstFrame.noDamageMs),
       distanceCm: firstFrame.self && firstFrame.nearbyTarget ? Math.round(distance(firstFrame.self, firstFrame.nearbyTarget)) : null,
       stamina5s: stamina5s(firstFrame)
+    } : null
+  };
+}
+
+function opponentProbePressureFrame(frames) {
+  return frames.find(frame => targetRealBulletPressure(frame)) || null;
+}
+
+function runOpponentProbeReserveScenario(frames, shots, options) {
+  const windowMs = Math.max(0, Number(options.combatOpponentProbeMs || 0));
+  const reserveMs = Math.max(0, Number(options.combatOpponentProbeReserveMs || options.combatShootReserveMs || 0));
+  const cadenceMs = Math.max(
+    Number(options.combatShootEveryMs || 0),
+    Number(options.combatOpponentProbeEveryMs || options.combatAimLowConfidenceEveryMs || 0),
+    1
+  );
+  const shotCostMs = Math.max(0, Number(options.opportunityShotStaminaCostMs || 500));
+  const startFrame = frames[0] || null;
+  const pressureFrame = opponentProbePressureFrame(frames);
+  const startAt = startFrame ? startFrame.at : 0;
+  const cutoffAt = Math.min(
+    startAt + windowMs,
+    pressureFrame ? pressureFrame.at : Infinity
+  );
+  const probeShots = (shots || [])
+    .filter(shot => shot.frame.at >= startAt && shot.frame.at < cutoffAt)
+    .sort((a, b) => a.frame.at - b.frame.at || String(a.id).localeCompare(String(b.id)));
+  const kept = [];
+  const skipped = [];
+  let lastKeptAt = -Infinity;
+  let savedStaminaMs = 0;
+  for (const shot of probeShots) {
+    const projectedStamina = Math.max(0, Number(stamina5s(shot.frame) || 0)) + savedStaminaMs;
+    const cadenceReady = shot.frame.at - lastKeptAt >= cadenceMs;
+    const reserveReady = projectedStamina >= reserveMs;
+    if (cadenceReady && reserveReady) {
+      kept.push({ line: shot.frame.lineNo, time: formatTime(shot.frame.at), projectedStamina5s: Math.round(projectedStamina) });
+      lastKeptAt = shot.frame.at;
+    } else {
+      skipped.push({
+        line: shot.frame.lineNo,
+        time: formatTime(shot.frame.at),
+        reason: cadenceReady ? 'reserve' : 'cadence',
+        projectedStamina5s: Math.round(projectedStamina)
+      });
+      savedStaminaMs += shotCostMs;
+    }
+  }
+  const pressureLoggedStamina = pressureFrame ? stamina5s(pressureFrame) : null;
+  const pressureProjectedStamina = pressureLoggedStamina === null
+    ? null
+    : Math.round(pressureLoggedStamina + savedStaminaMs);
+  return {
+    label: 'opponent-probe opening reserve',
+    hits: pressureProjectedStamina !== null && pressureProjectedStamina >= reserveMs ? 1 : 0,
+    considered: probeShots.length,
+    loggedShots: probeShots.length,
+    simulatedShots: kept.length,
+    skippedShots: skipped.length,
+    savedStaminaMs,
+    shotCostMs,
+    reserveMs,
+    cadenceMs,
+    windowMs,
+    reserveMet: pressureProjectedStamina !== null && pressureProjectedStamina >= reserveMs,
+    kept,
+    skipped,
+    activeStart: startFrame ? {
+      line: startFrame.lineNo,
+      time: formatTime(startFrame.at),
+      distanceCm: startFrame.self && startFrame.nearbyTarget ? Math.round(distance(startFrame.self, startFrame.nearbyTarget)) : null,
+      stamina5s: stamina5s(startFrame)
+    } : null,
+    firstPressure: pressureFrame ? {
+      line: pressureFrame.lineNo,
+      time: formatTime(pressureFrame.at),
+      loggedStamina5s: pressureLoggedStamina,
+      projectedStamina5s: pressureProjectedStamina,
+      selfHp: pressureFrame.selfHp,
+      targetHp: pressureFrame.targetHp
     } : null
   };
 }
@@ -1535,6 +1619,7 @@ function replay(options) {
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
     runPassiveRunnerScenario(frames, shots, targetSamples, options),
     runPassiveRunnerReserveFireScenario(frames, shots, targetSamples, options),
+    runOpponentProbeReserveScenario(frames, shots, options),
     runFinishLowThreatScenario(frames, shots, targetSamples, options),
     runPressureFireScenario(frames, shots, targetSamples, options),
     runSustainedPressureExitScenario(frames, options),
@@ -1624,10 +1709,16 @@ function printReport(result) {
     const approach = Number.isFinite(Number(item.simulatedApproachCm))
       ? ` simulatedEndDistance=${item.simulatedEndDistanceCm}cm approach=${item.simulatedApproachCm}cm`
       : '';
+    const probe = Number.isFinite(Number(item.savedStaminaMs))
+      ? ` simulatedShots=${item.simulatedShots}/${item.loggedShots} skipped=${item.skippedShots} savedStamina=${item.savedStaminaMs}ms reserveMet=${Boolean(item.reserveMet)}`
+      : '';
+    const firstPressure = item.firstPressure
+      ? ` firstPressure=line ${item.firstPressure.line} stamina=${item.firstPressure.loggedStamina5s}->${item.firstPressure.projectedStamina5s}`
+      : '';
     const exit = item.exitFrame
       ? ` exit=line ${item.exitFrame.line} savedMs=${item.savedMs || 0} hp=${item.exitFrame.selfHp}/${item.exitFrame.targetHp} noDamageMs=${item.exitFrame.noDamageMs}`
       : '';
-    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${extra}${baseline}${active}${approach}${exit}`);
+    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${extra}${baseline}${active}${approach}${probe}${firstPressure}${exit}`);
   }
 }
 
@@ -1830,6 +1921,16 @@ function selfTest() {
       targetId: '33607',
       targetName: 'biliee',
       expectOutOfRangeReengageImproved: true
+    },
+    {
+      id: '2026-06-26-biliee-opponent-probe-reserve',
+      file: path.join(__dirname, 'logs/2026-06-26/combat/20260626030537-self-28886-vs-biliee.jsonl'),
+      startLine: 96,
+      endLine: 225,
+      selfId: '28886',
+      targetId: '33607',
+      targetName: 'biliee',
+      expectOpponentProbeReserveImproved: true
     }
   ];
   const skipped = [];
@@ -1848,6 +1949,7 @@ function selfTest() {
     const liveIntercept = result.scenarios.find(scenario => scenario.label === 'live intercept vs live target');
     const passiveRunner = result.scenarios.find(scenario => scenario.label === 'passive-runner close intercept vs live target');
     const passiveRunnerReserve = result.scenarios.find(scenario => scenario.label === 'passive-runner reserve fire vs live target');
+    const opponentProbeReserve = result.scenarios.find(scenario => scenario.label === 'opponent-probe opening reserve');
     const finishLowThreat = result.scenarios.find(scenario => scenario.label === 'finish-low-threat burst vs live target');
     const outOfRangeReengage = result.scenarios.find(scenario => scenario.label === 'out-of-range reengage dynamic vs live target');
     const sustainedPressureExit = result.scenarios.find(scenario => scenario.label === 'sustained pressure no-damage exit');
@@ -1859,13 +1961,14 @@ function selfTest() {
       if ((!item.expectSuppressed || !pressureAuthority || !(pressureAuthority.suppressed > 0) || pressureAuthority.suppressedLoggedHits !== 0)
         && (!item.expectSnapshotOutlierRejected || !(result.snapshotOutlierRejections > 0))
         && (!item.expectPassiveRunnerImproved || !passiveRunner || !(passiveRunner.hits > logged.hits))
+        && (!item.expectOpponentProbeReserveImproved || !opponentProbeReserve || !opponentProbeReserve.reserveMet || !(opponentProbeReserve.skippedShots > 0))
         && (!item.expectFinishLowThreatImproved || !finishLowThreat || !(finishLowThreat.hits > logged.hits))
         && (!item.expectOutOfRangeReengageImproved || !outOfRangeReengage || !(outOfRangeReengage.hits > 0))
         && (!item.expectSustainedPressureExit || !sustainedPressureExit || !(sustainedPressureExit.hits > 0))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }
     }
-    if (!(dynamicGrace.hits > 0)) throw new Error(`${item.id} dynamic replay has no hits before grace exit`);
+    if (!item.expectOpponentProbeReserveImproved && !(dynamicGrace.hits > 0)) throw new Error(`${item.id} dynamic replay has no hits before grace exit`);
     if (item.expectRealBulletPrecisionImproved && (!realBulletPrecision || !(realBulletPrecision.hits > logged.hits))) {
       throw new Error(`${item.id} real-bullet live precision did not improve hits: ${realBulletPrecision?.hits || 0} <= ${logged.hits}`);
     }
@@ -1892,6 +1995,13 @@ function selfTest() {
     if (item.expectPassiveRunnerImproved && (!passiveRunner || !(passiveRunner.hits > logged.hits) || !(passiveRunner.simulatedApproachCm > 0))) {
       throw new Error(`${item.id} passive-runner replay did not improve hits/approach: passiveRunner=${passiveRunner?.hits || 0}, logged=${logged.hits}, approach=${passiveRunner?.simulatedApproachCm || 0}`);
     }
+    if (item.expectOpponentProbeReserveImproved && (!opponentProbeReserve
+      || !opponentProbeReserve.reserveMet
+      || !(opponentProbeReserve.skippedShots > 0)
+      || !(opponentProbeReserve.savedStaminaMs > 0)
+      || !opponentProbeReserve.firstPressure)) {
+      throw new Error(`${item.id} opponent probe did not preserve opening reserve: skipped=${opponentProbeReserve?.skippedShots || 0}, saved=${opponentProbeReserve?.savedStaminaMs || 0}, reserveMet=${Boolean(opponentProbeReserve?.reserveMet)}`);
+    }
     if (item.expectFinishLowThreatImproved && (!finishLowThreat || !(finishLowThreat.hits > logged.hits) || !(finishLowThreat.extraShots > 0))) {
       throw new Error(`${item.id} finish-low-threat replay did not improve hits: finishLowThreat=${finishLowThreat?.hits || 0}, logged=${logged.hits}, extraShots=${finishLowThreat?.extraShots || 0}`);
     }
@@ -1913,6 +2023,9 @@ function selfTest() {
       passiveRunnerHits: passiveRunner?.hits || 0,
       passiveRunnerReserveHits: passiveRunnerReserve?.hits || 0,
       passiveRunnerApproachCm: passiveRunner?.simulatedApproachCm || 0,
+      opponentProbeSkippedShots: opponentProbeReserve?.skippedShots || 0,
+      opponentProbeSavedStaminaMs: opponentProbeReserve?.savedStaminaMs || 0,
+      opponentProbeProjectedStamina5s: opponentProbeReserve?.firstPressure?.projectedStamina5s || 0,
       finishLowThreatHits: finishLowThreat?.hits || 0,
       finishLowThreatExtraShots: finishLowThreat?.extraShots || 0,
       outOfRangeReengageHits: outOfRangeReengage?.hits || 0,
