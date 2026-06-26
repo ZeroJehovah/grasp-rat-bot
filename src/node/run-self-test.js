@@ -1548,9 +1548,10 @@ function runSelfTest() {
     return Math.max(1, Number.isFinite(value) ? value : 50);
   }
 
-  function pickHighValueVisibleCoin(self, coins, activeThreats) {
+  function pickHighValueVisibleCoin(self, coins, activeThreats, options = {}) {
     const maxDistance = Math.max(0, Number(cfg.globalCoinMaxDistance || cfg.opportunityVisibleDistance || cfg.coinMaxDistance || 0));
-    return safeCoins(self, (coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance)
+    const threats = options.ignoreThreats ? [] : activeThreats;
+    return safeCoins(self, (coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), threats, maxDistance)
       .filter(coin => Number(coin.amount || 0) >= highValueCoinPriorityAmount())
       .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
   }
@@ -1564,7 +1565,7 @@ function runSelfTest() {
       isInvulnerable(threat) ? Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) : 0
     );
     if (!Number.isFinite(distance) || distance > radius) return false;
-    if (isInvulnerable(threat)) return true;
+    if (isInvulnerable(threat)) return false;
     if (isLowValueActiveCombatTarget(threat)) return lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming);
     return hasCombatActivitySignalForTest(threat) || isActive(threat) || isFiringEntity(threat);
   }
@@ -1573,10 +1574,10 @@ function runSelfTest() {
     if (!coin) return false;
     const hp = hpValue(self);
     const healthyHp = highValueCoinPriorityHealthyHp();
-    if (context.engagedCombatTarget && hp < healthyHp) return false;
+    if (hp >= healthyHp) return true;
     const incoming = incomingBulletInfo(self, context.bullets || []);
     if (incoming.incoming) return false;
-    if (hp >= healthyHp) return true;
+    if (context.engagedCombatTarget || context.defensiveCombatTarget) return false;
     return !(context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incoming.ownerId, incoming.unknownIncoming));
   }
 
@@ -1584,6 +1585,7 @@ function runSelfTest() {
     if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
     if ((context.avoidanceThreats || []).length) return true;
     const incoming = incomingBulletInfo(self, context.bullets || []);
+    if (incoming.incoming) return true;
     return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incoming.ownerId, incoming.unknownIncoming));
   }
 
@@ -4704,8 +4706,10 @@ function runSelfTest() {
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, attacks, entities);
-    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats);
     const highValuePriorityContext = { recovery, engagedCombatTarget, defensiveCombatTarget, activeThreats, avoidanceThreats, bullets };
+    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats, {
+      ignoreThreats: hpValue(self) >= highValueCoinPriorityHealthyHp()
+    });
     if (!pendingPostAttackWaitTarget
       && highValueVisibleCoinPriorityNeeded(self, highValuePriorityContext)
       && canPrioritizeHighValueVisibleCoin(self, highValuePriorityCoin, highValuePriorityContext)) {
@@ -4868,11 +4872,11 @@ function runSelfTest() {
 
   const cases = [
     {
-      name: 'low-drop active incoming bullet beats coins inside attack range',
+      name: 'low-drop active incoming bullet beats low-value coin inside attack range',
       got: choose({
         local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', firing: true }],
         global: [{ user_id: 3, x: 2000, y: 0, death_reward_preview: 50 }],
-        coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }],
+        coins: [{ drop_id: 1, x: 10, y: 0, amount: 1 }],
         bullets: [{ ownerId: 2 }]
       }).kind,
       want: 'attack'
@@ -4983,6 +4987,55 @@ function runSelfTest() {
         return action.kind + ':' + action.reason;
       })(),
       want: 'coin:high-value-visible-coin-priority'
+    },
+    {
+      name: 'healthy high-value coin beats close invulnerable avoidance',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
+          coins: [{ drop_id: 2, x: 10000, y: 0, amount: 30, native: true }]
+        });
+        return action.kind + ':' + action.reason + ':' + action.id;
+      })(),
+      want: 'coin:high-value-visible-coin-priority:2'
+    },
+    {
+      name: 'healthy high-value coin overrides non-invulnerable close active combat',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', vx: -50, hp: 100, death_reward_preview: 20 }],
+          coins: [{ drop_id: 2, x: 10000, y: 0, amount: 30, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:high-value-visible-coin-priority'
+    },
+    {
+      name: 'healthy high-value coin overrides incoming bullet pressure',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', vx: -50, hp: 100, death_reward_preview: 20 }],
+          bullets: [{ owner_id: 4, x: 9000, y: 0, vx: -500, vy: 0 }],
+          coins: [{ drop_id: 2, x: 10000, y: 0, amount: 30, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:high-value-visible-coin-priority'
+    },
+    {
+      name: 'low hp high-value coin does not override non-invulnerable close active combat',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 40, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', vx: -50, hp: 100, death_reward_preview: 20 }],
+          coins: [{ drop_id: 2, x: 10000, y: 0, amount: 30, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'leave:combat-low-hp-leave'
     },
     {
       name: 'near profitable active combat beats far snapshot cluster by yield',
@@ -7157,7 +7210,7 @@ function runSelfTest() {
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable: true }],
-        coins: [{ drop_id: 2, x: 22000, y: 0, amount: 10 }]
+        coins: [{ drop_id: 2, x: 22000, y: 0, amount: 1 }]
       }).reason,
       want: 'wait-for-snapshot-coin'
     },
