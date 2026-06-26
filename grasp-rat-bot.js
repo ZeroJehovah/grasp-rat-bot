@@ -5657,10 +5657,11 @@ ${importantLogSource()}
     return Math.max(1, Number.isFinite(value) ? value : 50);
   }
 
-  function pickHighValueVisibleCoin(self, coins, activeThreats) {
+  function pickHighValueVisibleCoin(self, coins, activeThreats, options = {}) {
     const minAmount = highValueCoinPriorityAmount();
     const maxDistance = Math.max(0, Number(cfg.globalCoinMaxDistance || cfg.opportunityVisibleDistance || cfg.coinMaxDistance || 0));
-    return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance, self)
+    const threats = options.ignoreThreats ? [] : activeThreats;
+    return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), threats, maxDistance, self)
       .filter(coin => Number(coin.amount || 0) >= minAmount)
       .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
   }
@@ -5674,7 +5675,7 @@ ${importantLogSource()}
       isInvulnerable(threat) ? Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) : 0
     );
     if (!Number.isFinite(distance) || distance > radius) return false;
-    if (isInvulnerable(threat)) return true;
+    if (isInvulnerable(threat)) return false;
     if (isLowValueActiveCombatTarget(threat)) return lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming);
     return hasCombatActivitySignal(threat) || isCurrentlyActive(threat) || isFiringEntity(threat);
   }
@@ -5683,10 +5684,10 @@ ${importantLogSource()}
     if (!coin) return false;
     const hp = hpValue(self);
     const healthyHp = highValueCoinPriorityHealthyHp();
-    if (context.engagedCombatTarget && hp < healthyHp) return false;
+    if (hp >= healthyHp) return true;
     const incoming = incomingBulletThreat(self, null, context.bullets || []);
     if (incoming) return false;
-    if (hp >= healthyHp) return true;
+    if (context.engagedCombatTarget || context.defensiveCombatTarget) return false;
     const incomingOwnerId = incoming?.ownerId;
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
     return !(context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId, unknownIncoming));
@@ -5696,6 +5697,7 @@ ${importantLogSource()}
     if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
     if ((context.avoidanceThreats || []).length) return true;
     const incoming = incomingBulletThreat(self, null, context.bullets || []);
+    if (incoming) return true;
     const incomingOwnerId = incoming?.ownerId;
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
     return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId, unknownIncoming));
@@ -10845,8 +10847,10 @@ ${importantLogSource()}
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
-    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats);
     const highValuePriorityContext = { recovery, engagedCombatTarget, defensiveCombatTarget, activeThreats, avoidanceThreats, bullets };
+    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats, {
+      ignoreThreats: hpValue(self) >= highValueCoinPriorityHealthyHp()
+    });
     if (!pendingPostAttackWaitTarget
       && highValueVisibleCoinPriorityNeeded(self, highValuePriorityContext)
       && canPrioritizeHighValueVisibleCoin(self, highValuePriorityCoin, highValuePriorityContext)) {
