@@ -100,6 +100,9 @@ function runSelfTest() {
     combatPassiveRunnerMinSelfHp: 80,
     combatPassiveRunnerMinDrop: 1,
     combatPassiveRunnerConfirmMs: 2500,
+    combatOpponentProbeMs: 6000,
+    combatOpponentProbeReserveMs: 5600,
+    combatOpponentProbeEveryMs: 520,
     combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerInterceptSpreadScale: 0,
     combatShootHardReserveMs: 1800,
@@ -3573,6 +3576,9 @@ function runSelfTest() {
     const targetPressureFire = options.targetRealBulletPressure !== undefined
       ? Boolean(options.targetRealBulletPressure)
       : Boolean(options.realBulletPressure);
+    const opponentProbeMs = Math.max(0, Number(cfg.combatOpponentProbeMs || 0));
+    const opponentProbeEngagedMs = Math.max(0, Number(options.opponentProbeEngagedMs || 0));
+    const opponentProbeSeenTargetRealBullet = Math.max(0, Number(options.opponentProbeSeenTargetRealBulletMs || 0)) > 0;
     const pressureMinHp = Math.max(0, Number(cfg.combatShootPressureMinHp || 0));
     const pressureRange = Math.max(0, Number(cfg.combatShootPressureRange || 0));
     const pressureMaxHpGap = Math.max(0, Number(cfg.combatShootPressureMaxHpGap || 0));
@@ -3632,9 +3638,21 @@ function runSelfTest() {
       && hpGap <= noDamageDuelMaxHpGap
       && noDamageMs >= noDamageDuelNoDamageMs
       && targetDistance <= noDamageDuelRange;
+    const opponentProbeFireWindow = Boolean(
+      opponentProbeMs > 0
+      && opponentProbeEngagedMs < opponentProbeMs
+      && Boolean(options.targetActive)
+      && !Boolean(options.realBulletPressure)
+      && !targetPressureFire
+      && !opponentProbeSeenTargetRealBullet
+      && !finishLowThreatFireWindow
+      && Number.isFinite(selfHp)
+      && selfHp >= Math.max(0, Number(cfg.combatLowHpLeaveThreshold || 0))
+    );
     let stance = 'normal';
     if (winningPressureFireWindow) stance = 'winning-pressure';
     else if (closePressureFireWindow) stance = 'close-pressure';
+    else if (opponentProbeFireWindow) stance = 'opponent-probe';
     else if (passiveRunnerFireWindow) stance = 'passive-runner';
     else if (finishLowThreatFireWindow) stance = 'finish-low-threat';
     else if (steadyAimFireWindow) stance = 'steady-aim';
@@ -3651,6 +3669,8 @@ function runSelfTest() {
       noDamageMs,
       highHpFireWindow,
       passiveRunnerFireWindow,
+      opponentProbeFireWindow,
+      opponentProbeEngagedMs,
       finishLowThreatFireWindow,
       closePressureFireWindow,
       winningPressureFireWindow,
@@ -3661,6 +3681,7 @@ function runSelfTest() {
       targetActive: Boolean(options.targetActive),
       targetMoving: Boolean(options.targetMoving),
       passiveRunner: Boolean(options.passiveRunner),
+      opponentProbe: opponentProbeFireWindow,
       realBulletPressure: Boolean(options.realBulletPressure),
       targetRealBulletPressure: targetPressureFire,
       steadyAim: Boolean(options.steadyAim),
@@ -3809,6 +3830,7 @@ function runSelfTest() {
     const noDamageMs = Math.max(0, Number(trend.noDamageMs || 0));
     const highHpFireWindow = Boolean(trend.highHpFireWindow);
     const passiveRunnerFireWindow = Boolean(trend.passiveRunnerFireWindow);
+    const opponentProbeFireWindow = Boolean(trend.opponentProbeFireWindow);
     const finishLowThreatFireWindow = Boolean(trend.finishLowThreatFireWindow);
     const closePressureFireWindow = Boolean(trend.closePressureFireWindow);
 	    const winningPressureFireWindow = Boolean(trend.winningPressureFireWindow);
@@ -3822,6 +3844,14 @@ function runSelfTest() {
 	    const lowConfidenceMinDistance = Math.max(0, Number(cfg.combatAimLowConfidenceMinDistance || 0));
 	    const lowConfidenceMotionScale = Math.max(0, Number(cfg.combatAimLowConfidenceMotionScale || 0));
 	    const lowConfidenceEveryMs = Math.max(conserveEveryMs, Number(cfg.combatAimLowConfidenceEveryMs || conserveEveryMs));
+    const opponentProbeReserveMs = Math.max(
+      dodgeReserveMs,
+      Number(cfg.combatOpponentProbeReserveMs || reserveMs)
+    );
+    const opponentProbeEveryMs = Math.max(
+      normalEveryMs,
+      Number(cfg.combatOpponentProbeEveryMs || lowConfidenceEveryMs)
+    );
 	    const lowConfidenceWindow = Boolean(
 	      aimConfidence !== null
 	      && lowConfidenceThreshold > 0
@@ -3832,8 +3862,12 @@ function runSelfTest() {
 	      && !steadyAimFireWindow
 	    );
     let effectiveDodgeReserveMs = dodgeReserveMs;
-    if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
-    if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
+    if (opponentProbeFireWindow) {
+      effectiveDodgeReserveMs = Math.max(effectiveDodgeReserveMs, opponentProbeReserveMs);
+    } else {
+      if (highHpFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, highHpDodgeReserveMs);
+      if (passiveRunnerFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, passiveRunnerDodgeReserveMs);
+    }
     if (finishLowThreatFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, finishLowThreatDodgeReserveMs);
     if (closePressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, pressureDodgeReserveMs);
     if (winningPressureFireWindow) effectiveDodgeReserveMs = Math.min(effectiveDodgeReserveMs, winningPressureDodgeReserveMs);
@@ -3866,6 +3900,9 @@ function runSelfTest() {
       steadyAimFireWindow,
 	      noDamageDuelFireWindow,
 	      farNoDamageCloseFireWindow,
+      opponentProbeFireWindow,
+      opponentProbeReserveMs,
+      opponentProbeEveryMs,
 	      aimConfidence,
 	      lowConfidenceWindow,
 	      noDamageMs,
@@ -3878,6 +3915,8 @@ function runSelfTest() {
         targetActive: Boolean(trend.targetActive),
         targetMoving: Boolean(trend.targetMoving),
         passiveRunner: Boolean(trend.passiveRunner),
+        opponentProbe: Boolean(trend.opponentProbeFireWindow),
+        opponentProbeEngagedMs: Math.round(Math.max(0, Number(trend.opponentProbeEngagedMs || 0))),
         realBulletPressure: Boolean(trend.realBulletPressure),
         steadyAim: Boolean(trend.steadyAim),
         farNoDamageClose: Boolean(trend.farNoDamageCloseFireWindow)
@@ -3888,12 +3927,18 @@ function runSelfTest() {
     if (stamina5s !== null && stamina5s < hardReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'stamina-rebuild', suppressed: true };
     }
+    if (stamina5s !== null && opponentProbeFireWindow && stamina5s < effectiveDodgeReserveMs) {
+      return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
+    }
     if (stamina5s !== null && needsMovement && stamina5s < effectiveDodgeReserveMs) {
       return { ...base, shoot: false, shootEveryMs: recoveryEveryMs, reason: 'reserve-for-dodge', suppressed: true };
     }
 	    if (stamina5s !== null && stamina5s < reserveMs) {
 	      return { ...base, shootEveryMs: conserveEveryMs, reason: 'burst-fire', throttled: true };
 	    }
+    if (opponentProbeFireWindow) {
+      return { ...base, shootEveryMs: opponentProbeEveryMs, reason: 'opponent-probe', throttled: true };
+    }
 	    if (lowConfidenceWindow) {
 	      return { ...base, shootEveryMs: lowConfidenceEveryMs, reason: 'low-confidence-burst', throttled: true };
 	    }
@@ -4169,6 +4214,8 @@ function runSelfTest() {
       engagedCombat: target.combatIntent === 'engaged',
       targetActive: isActive(target),
       passiveRunner: passiveRunner.active,
+      opponentProbeEngagedMs: passiveRunner.engagedMs,
+      opponentProbeSeenTargetRealBulletMs: passiveRunner.seenTargetRealBulletMs,
 	      targetMoving: moving,
 	      noDamageMs,
 	      aimConfidence,
@@ -4187,6 +4234,8 @@ function runSelfTest() {
       engagedCombat: target.combatIntent === 'engaged',
 	      targetActive: isActive(target),
 	      passiveRunner: passiveRunner.active,
+      opponentProbeEngagedMs: passiveRunner.engagedMs,
+      opponentProbeSeenTargetRealBulletMs: passiveRunner.seenTargetRealBulletMs,
 	      targetMoving: moving,
 	      noDamageMs,
 	      aimConfidence,
@@ -4226,7 +4275,7 @@ function runSelfTest() {
       kind: 'attack',
       reason: movementSuppressed
         ? 'combat-stamina-hold'
-        : (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled ? 'combat-burst-fire' : baseReason)))),
+        : (retreatingTarget.suppressFire && !finishPressure.active && !retreatingFighterClose.active ? 'combat-target-retreating' : (shooting.suppressed ? 'combat-stamina-conserve' : (shooting.reason === 'finish-pressure' ? 'combat-finish-pressure' : (shooting.throttled && shooting.reason !== 'opponent-probe' ? 'combat-burst-fire' : baseReason)))),
       combat: true,
       ignoreReturnBlock: true,
       shoot: shooting.shoot,
@@ -6301,7 +6350,7 @@ function runSelfTest() {
       name: 'combat out-of-range snapshot does not suppress fire',
       got: (() => {
         const t = Date.now();
-        bot.combatTarget = { id: 7, at: t, lastDamageAt: t, hp: 100 };
+        bot.combatTarget = { id: 7, at: t - 7000, firstSeenAt: t - 7000, lastDamageAt: t, hp: 100 };
         bot.testNativeEntities = [{ user_id: 7, name: 'target', x: 10000, y: 0, hp: 100, current_join_mode: 'Active', vx: 50, motionObservedSpeed: 50, recentlyMoved: true }];
         bot.testSnapshotEntities = [{ user_id: 7, name: 'target', x: 20000, y: 0, hp: 100, current_join_mode: 'Active', vx: 0, vy: 0 }];
         const action = chooseCombatAction(
@@ -6510,6 +6559,61 @@ function runSelfTest() {
       want: 'combat-burst-fire:1:1:true:burst-fire:true'
     },
     {
+      name: 'combat opponent probe preserves opening dodge reserve',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 4500 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 35, drop: 20 }
+        );
+        return [
+          action.reason,
+          action.shoot,
+          action.combatState?.shooting?.reason,
+          action.combatState?.shooting?.dodgeReserveMs,
+          action.combatState?.shooting?.opponentProbeFireWindow,
+          action.combatState?.shooting?.trend?.stance
+        ].join('|');
+      })(),
+      want: 'combat-stamina-conserve|false|reserve-for-dodge|5600|true|opponent-probe'
+    },
+    {
+      name: 'combat opponent probe point-fires while reserve is full',
+      got: (() => {
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, vx: 35, drop: 20 }
+        );
+        return [
+          action.reason,
+          action.shoot,
+          action.shootEveryMs,
+          action.combatState?.shooting?.reason,
+          action.combatState?.shooting?.opponentProbeFireWindow
+        ].join('|');
+      })(),
+      want: 'combat-attack|true|520|opponent-probe|true'
+    },
+    {
+      name: 'combat opponent probe ends after target real bullet history',
+      got: (() => {
+        const t = Date.now();
+        bot.combatTarget = { id: 7, at: t - 3000, firstSeenAt: t - 3000, seenTargetRealBulletAt: t - 700, hp: 100 };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 3200 },
+          { user_id: 7, x: 10000, y: 0, distance: 10000, current_join_mode: 'Active', hp: 100, firing: true, vx: 35, drop: 20 }
+        );
+        bot.combatTarget = null;
+        return [
+          action.reason,
+          action.shoot,
+          action.combatState?.shooting?.reason,
+          Boolean(action.combatState?.shooting?.opponentProbeFireWindow),
+          action.combatState?.shooting?.trend?.stance
+        ].join('|');
+      })(),
+      want: 'combat-burst-fire|true|burst-fire|false|high-hp-pressure'
+    },
+    {
       name: 'combat low threat finish window keeps burst pressure without bullet risk',
       got: (() => {
         const action = chooseCombatAction(
@@ -6540,7 +6644,7 @@ function runSelfTest() {
         );
         return action.reason + ':' + Boolean(action.shoot) + ':' + action.combatState?.shooting?.reason + ':' + Boolean(action.combatState?.shooting?.finishLowThreatFireWindow);
       })(),
-      want: 'combat-burst-fire:true:burst-fire:false'
+      want: 'combat-stamina-conserve:false:reserve-for-dodge:false'
     },
     {
       name: 'combat mid HP reserve band still preserves dodge stamina',
@@ -6598,7 +6702,7 @@ function runSelfTest() {
       got: (() => {
         const trend = combatTrendState(
           { user_id: 1, hp: 85 },
-          { targetHp: 82, targetDistance: 12275, targetActive: true, targetMoving: true, noDamageMs: 32000 }
+          { targetHp: 82, targetDistance: 12275, targetActive: true, targetMoving: true, noDamageMs: 32000, opponentProbeEngagedMs: 32000 }
         );
         return trend.stance + ':' + Boolean(trend.noDamageDuelFireWindow) + ':' + trend.hpGap;
       })(),
@@ -6623,7 +6727,7 @@ function runSelfTest() {
         const t = Date.now();
         bot.combatTarget = {
           id: 7,
-          at: t - 1200,
+          at: t - 7000,
           lastDamageAt: t - 1200,
           hp: 100,
           motionSamples: [
@@ -7130,7 +7234,7 @@ function runSelfTest() {
           combatIntent: 'profit'
         };
         const t = Date.now();
-        bot.combatTarget = { id: 4, at: t - 3000, firstSeenAt: t - 3000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
+        bot.combatTarget = { id: 4, at: t - 7000, firstSeenAt: t - 7000, lastDamageAt: t - 1000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
         bot.testNativeEntities = [{ ...target }];
         const action = chooseCombatAction(self, target, []);
         bot.testNativeEntities = [];
@@ -7164,7 +7268,7 @@ function runSelfTest() {
           combatIntent: 'profit'
         };
         const t = Date.now();
-        bot.combatTarget = { id: 4, at: t - 3000, firstSeenAt: t - 3000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
+        bot.combatTarget = { id: 4, at: t - 7000, firstSeenAt: t - 7000, lastDamageAt: t - 1000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
         bot.testNativeEntities = [{ ...target }];
         const action = chooseCombatAction(self, target, []);
         bot.testNativeEntities = [];
@@ -7196,7 +7300,7 @@ function runSelfTest() {
           combatIntent: 'profit'
         };
         const t = Date.now();
-        bot.combatTarget = { id: 4, at: t - 3000, firstSeenAt: t - 3000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
+        bot.combatTarget = { id: 4, at: t - 7000, firstSeenAt: t - 7000, lastDamageAt: t - 1000, intent: 'profit', originIntent: 'profit', hp: 100, motionSamples: [{ selfHp: 100 }, { selfHp: 100 }] };
         bot.testNativeEntities = [{ ...target }];
         const action = chooseCombatAction(self, target, []);
         bot.testNativeEntities = [];
