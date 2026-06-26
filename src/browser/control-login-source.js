@@ -1246,6 +1246,114 @@ function controlLoginSource(helpers = {}) {
 	    return pieces.join('，');
 		  }
 
+  function nativeLoginEventControl(event) {
+    const raw = event?.submitter || event?.target || null;
+    const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
+    if (!el) return null;
+    if (el.matches?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]')) return el;
+    const text = controlText(el);
+    if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return null;
+    return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text) ? el : null;
+  }
+
+  function blockNativeLoginEventIfNeeded(event) {
+    const control = nativeLoginEventControl(event);
+    if (!control) return;
+    const gate = snapshotLoginGateStatus();
+    if (loginSnapshotGateAllowsLogin(gate)) return;
+    const point = gate.pointSafety || loginPointSafetyStatus();
+    if (!point?.hasPoint && !point?.missingPoint) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+    const block = {
+      at: Date.now(),
+      reason: loginSnapshotGateBlockReason(gate),
+      control: control.id ? '#' + control.id : controlText(control) || control.tagName?.toLowerCase?.() || '',
+      snapshotGate: gate,
+      displayReason: loginSnapshotGateDisplayReason(gate)
+    };
+    bot.lastLoginResult = {
+      needed: true,
+      attempted: false,
+      reason: 'snapshot-gate',
+      error: '',
+      nativeLoginBlocked: block,
+      snapshotGate: gate
+    };
+    bot.lastDecision = {
+      kind: 'wait',
+      reason: 'login-snapshot-gate',
+      dx: 0,
+      dy: 0,
+      self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
+      currentUserId: getCurrentUserId(),
+      control: summarizeControl(),
+      login: bot.lastLoginResult,
+      displayReason: block.displayReason
+    };
+    updateBotPanel(bot.lastDecision);
+  }
+
+  function installStartLinuxDoLoginGate() {
+    if (window.__graspRatStartLinuxDoLoginGateInstalled) return;
+    if (window.__graspRatBotStartLinuxDoLoginGateVersion === cfg.version) return;
+    const current = window.startLinuxDoLogin;
+    const preservedRaw = window.__graspRatBotRawStartLinuxDoLogin;
+    const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
+    window.__graspRatBotRawStartLinuxDoLogin = previous;
+    const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
+      const gate = snapshotLoginGateStatus();
+      if (!loginSnapshotGateAllowsLogin(gate)) {
+        const point = gate.pointSafety || loginPointSafetyStatus();
+        if (point?.hasPoint || point?.missingPoint) {
+          const block = {
+            at: Date.now(),
+            reason: loginSnapshotGateBlockReason(gate),
+            snapshotGate: gate,
+            displayReason: loginSnapshotGateDisplayReason(gate)
+          };
+          bot.lastLoginResult = {
+            needed: true,
+            attempted: false,
+            reason: 'snapshot-gate',
+            error: '',
+            nativeLoginBlocked: block,
+            snapshotGate: gate
+          };
+          bot.lastDecision = {
+            kind: 'wait',
+            reason: 'login-snapshot-gate',
+            dx: 0,
+            dy: 0,
+            self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
+            currentUserId: getCurrentUserId(),
+            control: summarizeControl(),
+            login: bot.lastLoginResult,
+            displayReason: block.displayReason
+          };
+          updateBotPanel(bot.lastDecision);
+          return false;
+        }
+      }
+      if (typeof previous === 'function') return previous.apply(this, args);
+      return previous;
+    };
+    try {
+      window.startLinuxDoLogin = guardedStartLinuxDoLogin;
+      window.__graspRatBotStartLinuxDoLoginGateVersion = cfg.version;
+    } catch (_) {}
+  }
+
+  function installNativeLoginGateInterceptors() {
+    if (bot.nativeLoginGateInstalled) return;
+    bot.nativeLoginGateInstalled = true;
+    installStartLinuxDoLoginGate();
+    for (const type of ['pointerdown', 'mousedown', 'touchstart', 'click', 'submit']) {
+      document.addEventListener(type, blockNativeLoginEventIfNeeded, true);
+    }
+  }
+
   function reloginCooldownCandidates(t = Date.now()) {
     const suppress = loginSuppressStatus(t);
     const candidates = [];

@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.33';
+  const BOOTSTRAP_VERSION = '0.1.34';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -14,6 +14,7 @@
   const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
   const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
   const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
+  const LOGIN_POINT_SAFETY_KEY = 'graspRatLoginPointSafety';
   const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
   const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
   const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
@@ -97,6 +98,7 @@
     lastLoginAt: 0,
     lastLoginSuppressUntil: 0,
     lastLoginSuppressReason: '',
+    lastLoginGateBlock: null,
     lastAuthorizeAt: 0,
     lastError: '',
     lastManifestStatus: '',
@@ -473,6 +475,138 @@
         lastError: String(point.lastError || '')
       }
     };
+  }
+
+  function readStoredLoginPointSafety() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LOGIN_POINT_SAFETY_KEY) || 'null');
+      return raw && typeof raw === 'object' ? raw : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function bootstrapLoginPointSafetyStatus(status = getBotStatus()) {
+    const gate = reloginGateFromStatus(status);
+    if (Number(gate.loginPointSafety.required || 0) > 0 || gate.loginPointSafety.hasPoint || gate.loginPointSafety.missingPoint) {
+      return {
+        source: 'bot-status',
+        ...gate.loginPointSafety,
+        remaining: Math.max(0, Math.round(Number(gate.loginPointSafety.required || 0) - Number(gate.loginPointSafety.streak || 0)))
+      };
+    }
+    const stored = readStoredLoginPointSafety();
+    if (!stored) return { source: 'none', ok: true, hasPoint: false, missingPoint: false, streak: 0, required: 0, remaining: 0, lastDanger: null, lastError: '' };
+    const required = Math.max(0, Math.round(Number(stored.required ?? 12) || 12));
+    const hasPoint = Boolean(stored.point && Number.isFinite(Number(stored.point.x)) && Number.isFinite(Number(stored.point.y)));
+    const streak = Math.max(0, Math.min(required, Math.round(Number(stored.streak || 0) || 0)));
+    return {
+      source: 'local-storage',
+      ok: required <= 0 || (hasPoint && streak >= required),
+      hasPoint,
+      missingPoint: false,
+      streak,
+      required,
+      remaining: hasPoint ? Math.max(0, required - streak) : required,
+      lastDanger: stored.lastDanger || null,
+      lastError: String(stored.lastError || '')
+    };
+  }
+
+  function bootstrapLoginPointSafetyBlock(status = getBotStatus()) {
+    const point = bootstrapLoginPointSafetyStatus(status);
+    if (point.ok || Number(point.required || 0) <= 0) return null;
+    if (!point.hasPoint && !point.missingPoint) return null;
+    const missing = Boolean(point.missingPoint || !point.hasPoint);
+    const displayReason = missing
+      ? '等待登录点坐标，暂不登录'
+      : '等待登录点安全快照 ' + String(point.streak || 0) + '/' + String(point.required || 0) + '，暂不登录';
+    return {
+      at: Date.now(),
+      reason: missing ? 'login-point-missing' : 'login-point-safety',
+      displayReason,
+      pointSafety: point
+    };
+  }
+
+  function nativeLoginEventControl(event) {
+    const raw = event?.submitter || event?.target || null;
+    const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
+    if (!el || el.id === INLINE_LOGIN_BUTTON_ID) return null;
+    if (el.matches?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]')) return el;
+    const text = controlText(el);
+    if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return null;
+    return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text) ? el : null;
+  }
+
+  function blockNativeLoginEventIfNeeded(event) {
+    const control = nativeLoginEventControl(event);
+    if (!control) return;
+    const block = bootstrapLoginPointSafetyBlock(getBotStatus());
+    if (!block) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+    rememberLoginGateBlock({ ...block, control: control.id ? '#' + control.id : controlText(control) || control.tagName?.toLowerCase?.() || '' }, 'native login ' + String(event.type || 'event'));
+  }
+
+  function installStartLinuxDoLoginGate() {
+    const owner = window;
+    if (owner.__graspRatStartLinuxDoLoginGateInstalled) return;
+    owner.__graspRatStartLinuxDoLoginGateInstalled = true;
+    let rawStartLinuxDoLogin = owner.startLinuxDoLogin;
+    const guardedStartLinuxDoLogin = function graspRatGuardedStartLinuxDoLogin(...args) {
+      const block = bootstrapLoginPointSafetyBlock(getBotStatus());
+      if (block) {
+        rememberLoginGateBlock(block, 'startLinuxDoLogin');
+        return false;
+      }
+      if (typeof rawStartLinuxDoLogin === 'function') return rawStartLinuxDoLogin.apply(this, args);
+      return rawStartLinuxDoLogin;
+    };
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, 'startLinuxDoLogin');
+      if (!descriptor || descriptor.configurable) {
+        if (descriptor && typeof descriptor.value !== 'undefined') rawStartLinuxDoLogin = descriptor.value;
+        Object.defineProperty(owner, 'startLinuxDoLogin', {
+          configurable: true,
+          enumerable: descriptor ? Boolean(descriptor.enumerable) : true,
+          get() {
+            return typeof rawStartLinuxDoLogin === 'function' ? guardedStartLinuxDoLogin : rawStartLinuxDoLogin;
+          },
+          set(value) {
+            rawStartLinuxDoLogin = value;
+          }
+        });
+      } else if (typeof owner.startLinuxDoLogin === 'function' && owner.startLinuxDoLogin !== guardedStartLinuxDoLogin) {
+        rawStartLinuxDoLogin = owner.startLinuxDoLogin;
+        owner.startLinuxDoLogin = guardedStartLinuxDoLogin;
+      }
+    } catch (err) {
+      logBootstrap('startLinuxDoLogin gate install failed', { error: err?.message || String(err) });
+    }
+  }
+
+  function installNativeLoginGateInterceptors() {
+    if (state.nativeLoginGateInstalled) return;
+    state.nativeLoginGateInstalled = true;
+    installStartLinuxDoLoginGate();
+    for (const type of ['pointerdown', 'mousedown', 'touchstart', 'click', 'submit']) {
+      document.addEventListener(type, blockNativeLoginEventIfNeeded, true);
+    }
+  }
+
+  function rememberLoginGateBlock(block, source = 'login gate') {
+    if (!block) return null;
+    state.lastLoginGateBlock = {
+      ...block,
+      source: String(source || 'login gate'),
+      at: Number(block.at || Date.now()) || Date.now()
+    };
+    state.lastInstallStatus = state.lastLoginGateBlock.displayReason || '等待登录点安全快照';
+    logBootstrap('login blocked by local login-point safety gate', state.lastLoginGateBlock);
+    updateBootstrapPanel(true);
+    return state.lastLoginGateBlock;
   }
 
   function reloginGateVisible(status, reloginHold = 0) {
@@ -1435,6 +1569,7 @@
     if (!grid) return;
     let loginButton = document.getElementById(INLINE_LOGIN_BUTTON_ID);
     const reloginHold = reloginHoldRemainingFromStatus(status);
+    const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
     if (state.cloudflareError || !shouldShowInlineLogin(status)) {
       if (loginButton) loginButton.remove();
       return;
@@ -1449,12 +1584,21 @@
       grid.insertBefore(loginButton, anchor);
     }
     loginButton.className = nativeJoin?.className || 'join';
-    loginButton.textContent = loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录';
-    loginButton.title = reloginHold > 0 ? '跳过重连等待并立即登录/加入游戏' : '通过脚本立即登录/加入游戏';
-    loginButton.disabled = loginButton.dataset.graspRatLoginPending === 'true';
+    loginButton.textContent = loginGateBlock
+      ? '等待安全'
+      : (loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录');
+    loginButton.title = loginGateBlock
+      ? loginGateBlock.displayReason
+      : (reloginHold > 0 ? '跳过重连等待并立即登录/加入游戏' : '通过脚本立即登录/加入游戏');
+    loginButton.disabled = Boolean(loginGateBlock || loginButton.dataset.graspRatLoginPending === 'true');
     loginButton.onclick = event => {
       event.preventDefault();
       event.stopPropagation();
+      const currentBlock = bootstrapLoginPointSafetyBlock(getBotStatus());
+      if (currentBlock) {
+        rememberLoginGateBlock(currentBlock, 'sidebar immediate login');
+        return;
+      }
       if (loginButton.dataset.graspRatLoginPending === 'true') return;
       loginButton.dataset.graspRatLoginPending = 'true';
       loginButton.disabled = true;
@@ -2700,6 +2844,11 @@
       return false;
     }
     const status = getBotStatus();
+    const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
+    if (loginGateBlock) {
+      rememberLoginGateBlock(loginGateBlock, reason);
+      return false;
+    }
     const hasToken = Boolean(localStorage.getItem('tmpGameSessionToken') || status?.control?.hasToken);
     const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
     const decisionReason = String(status?.lastDecision?.reason || '');
@@ -2746,9 +2895,25 @@
     const bot = window.__graspRatBot || null;
     if (bot && typeof bot.forceLoginNow === 'function') {
       const result = await bot.forceLoginNow(text);
-      clearCurrentReloginHold(text, { clearBot: false, clearLocal: false, clearPersistent: false });
+      if (result?.login?.attempted) {
+        clearCurrentReloginHold(text, { clearBot: false, clearLocal: false, clearPersistent: false });
+      } else if (result?.login?.reason === 'snapshot-gate') {
+        rememberLoginGateBlock(
+          bootstrapLoginPointSafetyBlock(getBotStatus()) || {
+            at: Date.now(),
+            reason: 'snapshot-gate',
+            displayReason: '等待登录安全快照，暂不登录',
+            snapshotGate: result.login.snapshotGate || null
+          },
+          text
+        );
+      }
       updateBootstrapPanel(true);
       return result;
+    }
+    const loginGateBlock = bootstrapLoginPointSafetyBlock(getBotStatus());
+    if (loginGateBlock) {
+      return { at: Date.now(), reason: text, blocked: rememberLoginGateBlock(loginGateBlock, text), login: false };
     }
     const cleared = clearCurrentReloginHold(text);
     const login = await maybeStartGameLogin(text, {
@@ -2919,6 +3084,7 @@
       checkLoaderVersion,
       maybeStartGameLogin,
       forceLoginNow,
+      bootstrapLoginPointSafetyBlock,
       maybeClickAuthorize,
       isPaused,
       setPaused,
@@ -2964,6 +3130,7 @@
       return;
     }
     if (!isGamePage()) return;
+    installNativeLoginGateInterceptors();
     loginSuppressRemainingMs();
     syncPauseToPage();
     const renderPanelWhenReady = () => updateBootstrapPanel(true);

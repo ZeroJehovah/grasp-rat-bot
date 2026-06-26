@@ -12347,6 +12347,7 @@ ${importantLogSource()}
 	  restorePersistedExitAuditLogs();
 	  restorePersistedCombatLogPendingEntries();
 	  restoreImportantLogsForRemote();
+	  installNativeLoginGateInterceptors();
 
 	  window[BOT_KEY] = bot;
 	  if (previousBot && previousBot !== bot && previousBot.stop) {
