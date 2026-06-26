@@ -3894,12 +3894,13 @@ function runSelfTest() {
       && recentCombatContextMs > 0
       && t - lastCombatFrameAt <= recentCombatContextMs);
     if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
+    const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
     const reentryGap = Boolean(state.reentry && (
       (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
       || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
     ));
     const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
-    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
     if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
     const diagnosis = reentryGap ? 'tick-reentry-gap'
       : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
@@ -3918,6 +3919,7 @@ function runSelfTest() {
       previousCombatActive,
       currentCombatActive,
       combatLogActive,
+      liveCombatContext,
       recentCombatFrameContext,
       recentCombatContextMs,
       lastCombatFrameAt,
@@ -8364,18 +8366,18 @@ function runSelfTest() {
 	      want: 'none'
 	    },
 	    {
-	      name: 'recent combat frame gap survives cleared decision context',
+	      name: 'recent combat frame gap alone does not leave during coin route',
 	      got: (() => {
 	        const state = combatTickGapOfflineStateForTest({
 	          nowMs: 16000,
 	          previousTickAt: 15880,
 	          tickGapMs: 120,
-	          decision: { kind: 'coin', reason: 'best-opportunity-coin' },
+	          decision: { kind: 'coin', reason: 'best-opportunity-coin-route' },
 	          lastCombatFrameAt: 10000
 	        });
 	        return (state?.reason || 'none') + '|' + (state?.diagnosis || '') + '|' + Boolean(state?.recentCombatFrameContext);
 	      })(),
-	      want: 'combat tick gap|combat-log-gap-with-active-tick|true'
+	      want: 'none||false'
 	    },
 	    {
 	      name: 'combat frame gap with active tick records gating diagnosis',

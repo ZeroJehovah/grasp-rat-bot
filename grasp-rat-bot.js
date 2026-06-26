@@ -8007,12 +8007,13 @@ ${importantLogSource()}
       && recentCombatContextMs > 0
       && t - lastCombatFrameAt <= recentCombatContextMs);
     if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
+    const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
     const reentryGap = Boolean(options.reentry && (
       (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
       || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
     ));
     const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
-    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
     if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
     const diagnosis = reentryGap ? 'tick-reentry-gap'
       : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
@@ -8034,6 +8035,7 @@ ${importantLogSource()}
       previousCombatActive,
       currentCombatActive,
       combatLogActive,
+      liveCombatContext,
       recentCombatFrameContext,
       recentCombatContextMs,
       queuedCombatFrameAt,

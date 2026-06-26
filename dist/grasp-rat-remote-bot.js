@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.225"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.226"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -3359,13 +3359,14 @@ function hpDisplay(value) {
           && recentCombatContextMs > 0
           && t - lastCombatFrameAt <= recentCombatContextMs);
         const activeCombatContext = previousCombatActive || currentCombatActive || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
+        const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
         const reentryGapOverThreshold = Boolean(activeCombatContext
           && (recordedDiagnosis === 'tick-reentry-gap' || decision?.tickReentry)
           && thresholdMs > 0
           && ((tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
             || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)));
         const tickGapOverThreshold = Boolean(activeCombatContext && tickGapMs !== null && thresholdMs > 0 && tickGapMs >= thresholdMs);
-        const combatFrameGapOverThreshold = Boolean(activeCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
+        const combatFrameGapOverThreshold = Boolean(liveCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
         const diagnosis = recordedDiagnosis || (reentryGapOverThreshold
           ? 'tick-reentry-gap'
           : (tickGapOverThreshold
@@ -3387,6 +3388,7 @@ function hpDisplay(value) {
           currentCombatActive,
           decisionCombatActive,
           combatLogActive,
+          liveCombatContext,
           recentCombatFrameContext,
           recentCombatContextMs,
           activeCombatContext,
@@ -13747,12 +13749,13 @@ function hpDisplay(value) {
       && recentCombatContextMs > 0
       && t - lastCombatFrameAt <= recentCombatContextMs);
     if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
+    const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
     const reentryGap = Boolean(options.reentry && (
       (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
       || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
     ));
     const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
-    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    const combatFrameGap = !reentryGap && !mainLoopGap && liveCombatContext && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
     if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
     const diagnosis = reentryGap ? 'tick-reentry-gap'
       : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
@@ -13774,6 +13777,7 @@ function hpDisplay(value) {
       previousCombatActive,
       currentCombatActive,
       combatLogActive,
+      liveCombatContext,
       recentCombatFrameContext,
       recentCombatContextMs,
       queuedCombatFrameAt,
