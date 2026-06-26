@@ -1016,13 +1016,14 @@ function combatLogSource(helpers = {}) {
           && recentCombatContextMs > 0
           && t - lastCombatFrameAt <= recentCombatContextMs);
         const activeCombatContext = previousCombatActive || currentCombatActive || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
+        const liveCombatContext = previousCombatActive || currentCombatActive || combatLogActive;
         const reentryGapOverThreshold = Boolean(activeCombatContext
           && (recordedDiagnosis === 'tick-reentry-gap' || decision?.tickReentry)
           && thresholdMs > 0
           && ((tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
             || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)));
         const tickGapOverThreshold = Boolean(activeCombatContext && tickGapMs !== null && thresholdMs > 0 && tickGapMs >= thresholdMs);
-        const combatFrameGapOverThreshold = Boolean(activeCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
+        const combatFrameGapOverThreshold = Boolean(liveCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
         const diagnosis = recordedDiagnosis || (reentryGapOverThreshold
           ? 'tick-reentry-gap'
           : (tickGapOverThreshold
@@ -1044,6 +1045,7 @@ function combatLogSource(helpers = {}) {
           currentCombatActive,
           decisionCombatActive,
           combatLogActive,
+          liveCombatContext,
           recentCombatFrameContext,
           recentCombatContextMs,
           activeCombatContext,
