@@ -968,6 +968,13 @@ function main() {
       const candidateBody = functionBody(text, 'combatTargetCandidateRange');
       assert(candidateBody.includes('Number(cfg.combatAttackRange || 0)'), 'new combat target candidate range is not limited to attack range');
       assert(!candidateBody.includes('isFullHp(self)'), 'new combat target selection still expands outside attack range when damaged');
+      assert(text.includes('function combatDodgeThreatRange'), 'dodge threat range helper not found');
+      assert(expectObjectNumber(defaultConfigSource, 'combatDodgeRangeBuffer', 1000), 'combat dodge range buffer is not configured at 10m');
+      assert(classifyBody.includes('const combatDodgeOnlyTargets = attackableEntities'), 'out-of-range dodge-only target pool not found');
+      assert(classifyBody.includes('e.distance > combatCandidateRange') && classifyBody.includes('e.distance <= combatDodgeOnlyCandidateRangeValue'), 'dodge-only target pool is not limited to the buffered range beyond attack range');
+      assert(body.includes('[...combatTargets, ...combatDodgeOnlyTargets]'), 'defensive combat selection does not include dodge-only targets');
+      assert(text.includes("'combat-out-of-range-dodge'"), 'out-of-range incoming bullet dodge action not found');
+      assert(text.includes('combatDodgeOnly: true'), 'out-of-range dodge action does not mark dodge-only combat');
       assert(text.includes('const activeReengage = Boolean(reengageTarget'), 'engaged active reengage state is not computed');
       assert(text.includes('Math.max(graceMs, Number(cfg.combatEngageStickMs || 0))'), 'active reengage does not extend out-of-range grace to combat stick window');
       assert(text.includes('outOfRangeLimitMs'), 'engaged reengage does not expose/use the active out-of-range limit');
@@ -975,7 +982,7 @@ function main() {
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes("if (action.kind === 'attack' && action.target)"), 'combat attack tracking still requires shoot=true');
       assert(tickBody.includes('if (action.shoot) {'), 'attack shooting is not separated from combat engagement tracking');
-      assert(tickBody.includes('if (action.combat) rememberCombatEngagement(self, action.target, action)'), 'combat engagement is not remembered for non-shooting combat attack frames');
+      assert(tickBody.includes('if (action.combat && !action.combatDodgeOnly) rememberCombatEngagement(self, action.target, action)'), 'dodge-only combat can still refresh ordinary combat engagement');
       assert(tickBody.includes("action.kind === 'wait' && action.combat && action.target"), 'out-of-range combat hold does not refresh engagement tracking');
     });
     check(`${file} uses stamina-aware combat fire discipline`, () => {
@@ -1527,8 +1534,9 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'combat emergency close spacing overrides incoming bullet strafe'"), 'emergency close spacing override self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat low hp close risk exits before losing hp disadvantage'"), 'low-HP close-risk exit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged out-of-range combat target waits instead of chasing'"), 'out-of-range combat hold self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'engaged slight out-of-range bullet pressure reengages instead of holding'"), 'out-of-range pressured reengage self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'target-owned out-of-range pressure reengages with recoverable hp gap'"), 'target-owned pressure HP-gap reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'out-of-range incoming bullet dodges without shooting'"), 'out-of-range incoming bullet dodge self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'engaged slight out-of-range bullet pressure dodges without shooting'"), 'engaged out-of-range pressure dodge self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'target-owned out-of-range pressure dodges before recoverable hp reengage'"), 'target-owned pressure dodge-before-reengage self-test not found');
     assert(nodeSelfTestSource.includes("name: 'non-pressure out-of-range reengage keeps base hp gap guard'"), 'non-pressure reengage HP-gap guard self-test not found');
     assert(nodeSelfTestSource.includes("name: 'retreating slight out-of-range target still holds without pressure'"), 'out-of-range retreat-only hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp out-of-range finish target reengages without shooting'"), 'out-of-range finish reengage self-test not found');

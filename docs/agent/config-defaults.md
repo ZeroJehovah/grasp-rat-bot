@@ -65,6 +65,7 @@
 - `coinPickupAttemptSlowEveryMs = 2500`
 - `coinPickupAttemptSlowMaxCount = 3`
 - `combatAttackRange = 14500`
+- `combatDodgeRangeBuffer = 1000`
 - `combatDisengageRange = 17000`
 - `combatLowValueActiveDropMax = 3`
 - `highValueCoinPriorityAmount = 10`
