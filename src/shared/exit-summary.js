@@ -52,6 +52,7 @@ function offlineLeaveSummaryText(reason, offlineSafety) {
   const text = String(reason || '').toLowerCase();
   if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
   if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
+  if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
   if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
   if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
   if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
@@ -66,7 +67,7 @@ function combatLogExitSummaryFromDecision(decision) {
   const decisionReason = String(decision?.reason || '');
   const pendingExit = decision?.pendingExit && typeof decision.pendingExit === 'object' ? decision.pendingExit : null;
   const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : '';
-  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(decisionReason)
+  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|control-combat|stamina-exhausted/.test(decisionReason)
     ? decisionReason
     : '';
   const reason = canonicalCombatReason

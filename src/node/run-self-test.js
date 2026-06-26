@@ -319,6 +319,8 @@ function runSelfTest() {
     globalSamplingOutageMinErrors: 1,
     globalSamplingOutageMinAgeMs: 0,
     globalSamplingOutageCombatOnly: true,
+    combatTickGapOfflineEnabled: true,
+    combatTickGapOfflineMs: 5000,
     tickMs: 120,
     nativeTickMinMs: 120,
     combatNativeTickMinMs: 80,
@@ -3700,6 +3702,80 @@ function runSelfTest() {
       combatActive,
       snapshotTimedOut: Boolean(outage.snapshotTimedOut),
       minimapTimedOut: Boolean(outage.minimapTimedOut)
+    };
+  }
+
+  function combatTickGapOfflineStateForTest(state = {}) {
+    if (!cfg.combatTickGapOfflineEnabled) return null;
+    const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
+    if (!(thresholdMs > 0)) return null;
+    const t = Number.isFinite(Number(state.nowMs)) ? Number(state.nowMs) : Date.now();
+    const previousTickAt = Number(state.previousTickAt || 0) || 0;
+    const tickGapMs = Number.isFinite(Number(state.tickGapMs))
+      ? Math.max(0, Math.round(Number(state.tickGapMs)))
+      : (previousTickAt ? Math.max(0, Math.round(t - previousTickAt)) : null);
+    const tickInProgressMs = Number.isFinite(Number(state.tickInProgressMs))
+      ? Math.max(0, Math.round(Number(state.tickInProgressMs)))
+      : null;
+    const lastTickCompletedGapMs = Number.isFinite(Number(state.lastTickCompletedGapMs))
+      ? Math.max(0, Math.round(Number(state.lastTickCompletedGapMs)))
+      : null;
+    const combatLogActive = Boolean(state.combatLogActive);
+    const lastCombatFrameAt = Number(state.lastCombatFrameAt || 0) || 0;
+    const combatFrameGapMs = lastCombatFrameAt ? Math.max(0, Math.round(t - lastCombatFrameAt)) : null;
+    const lastBuiltFrameAt = Number(state.lastBuiltFrameAt || 0) || 0;
+    const builtFrameGapMs = lastBuiltFrameAt ? Math.max(0, Math.round(t - lastBuiltFrameAt)) : null;
+    const lastCombatAt = Number(state.lastCombatAt || 0) || 0;
+    const combatLogGapMs = lastCombatAt ? Math.max(0, Math.round(t - lastCombatAt)) : null;
+    const previousCombatActive = Boolean(state.previousCombatActive);
+    const currentCombatActive = combatTickActiveFromState({
+      decision: state.decision,
+      combatTarget: state.combatTarget,
+      pendingExit: state.pendingExit,
+      nowMs: t
+    });
+    const recentCombatContextMs = Math.max(
+      thresholdMs,
+      Number(cfg.combatEngageStickMs || 0),
+      Number(cfg.combatEngageGraceMs || 0),
+      Number(cfg.combatLogPostBufferMs || 0)
+    );
+    const recentCombatFrameContext = Boolean(lastCombatFrameAt
+      && recentCombatContextMs > 0
+      && t - lastCombatFrameAt <= recentCombatContextMs);
+    if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
+    const reentryGap = Boolean(state.reentry && (
+      (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
+      || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
+    ));
+    const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
+    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
+    const diagnosis = reentryGap ? 'tick-reentry-gap'
+      : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
+    const likelyCause = reentryGap ? 'main-loop-stuck-or-awaiting-async'
+      : (mainLoopGap ? 'js-or-main-loop-paused' : 'combat-state-or-log-gating-gap');
+    return {
+      reason: 'combat tick gap',
+      diagnosis,
+      likelyCause,
+      thresholdMs,
+      tickGapMs,
+      tickInProgressMs,
+      lastTickCompletedGapMs,
+      previousTickAt,
+      currentTickAt: t,
+      previousCombatActive,
+      currentCombatActive,
+      combatLogActive,
+      recentCombatFrameContext,
+      recentCombatContextMs,
+      lastCombatFrameAt,
+      combatFrameGapMs,
+      lastBuiltFrameAt,
+      builtFrameGapMs,
+      lastCombatAt,
+      combatLogGapMs
     };
   }
 
@@ -7804,6 +7880,11 @@ function runSelfTest() {
 	      want: '网络采样超时，按网络波动退出等待重连'
 	    },
 	    {
+	      name: 'offline combat tick gap summary is explicit',
+	      got: offlineLeaveSummaryText('combat tick gap', { combatTickGap: { tickGapMs: 37971 } }),
+	      want: '战斗主循环断档，按网络波动退出等待重连'
+	    },
+	    {
 	      name: 'combat sampling outage triggers offline leave gate',
 	      got: globalSamplingOutageOfflineStateForTest({
 	        nowMs: 10000,
@@ -7834,6 +7915,74 @@ function runSelfTest() {
 	        }
 	      })?.reason || 'none',
 	      want: 'none'
+	    },
+	    {
+	      name: 'combat tick gap triggers offline leave gate',
+	      got: combatTickGapOfflineStateForTest({
+	        nowMs: 48000,
+	        previousTickAt: 10000,
+	        previousCombatActive: true,
+	        decision: { combat: true, reason: 'combat-tangent-dodge' },
+	        lastCombatFrameAt: 10000
+	      })?.reason,
+	      want: 'combat tick gap'
+	    },
+	    {
+	      name: 'non-combat tick gap does not trigger by default',
+	      got: combatTickGapOfflineStateForTest({
+	        nowMs: 48000,
+	        previousTickAt: 10000,
+	        decision: { kind: 'coin', reason: 'best-opportunity-coin' },
+	        lastCombatFrameAt: 10000
+	      })?.reason || 'none',
+	      want: 'none'
+	    },
+	    {
+	      name: 'recent combat frame gap survives cleared decision context',
+	      got: (() => {
+	        const state = combatTickGapOfflineStateForTest({
+	          nowMs: 16000,
+	          previousTickAt: 15880,
+	          tickGapMs: 120,
+	          decision: { kind: 'coin', reason: 'best-opportunity-coin' },
+	          lastCombatFrameAt: 10000
+	        });
+	        return (state?.reason || 'none') + '|' + (state?.diagnosis || '') + '|' + Boolean(state?.recentCombatFrameContext);
+	      })(),
+	      want: 'combat tick gap|combat-log-gap-with-active-tick|true'
+	    },
+	    {
+	      name: 'combat frame gap with active tick records gating diagnosis',
+	      got: (() => {
+	        const state = combatTickGapOfflineStateForTest({
+	          nowMs: 48000,
+	          previousTickAt: 47880,
+	          tickGapMs: 120,
+	          combatLogActive: true,
+	          decision: { combat: true, reason: 'combat-tangent-dodge' },
+	          lastCombatFrameAt: 10000
+	        });
+	        return (state?.reason || 'none') + '|' + (state?.diagnosis || '') + '|' + (state?.likelyCause || '');
+	      })(),
+	      want: 'combat tick gap|combat-log-gap-with-active-tick|combat-state-or-log-gating-gap'
+	    },
+	    {
+	      name: 'combat tick reentry gap records stuck async diagnosis',
+	      got: (() => {
+	        const state = combatTickGapOfflineStateForTest({
+	          nowMs: 48000,
+	          previousTickAt: 42000,
+	          tickGapMs: 120,
+	          tickInProgressMs: 6000,
+	          lastTickCompletedGapMs: 6000,
+	          reentry: true,
+	          combatLogActive: true,
+	          decision: { combat: true, reason: 'combat-tangent-dodge' },
+	          lastCombatFrameAt: 47800
+	        });
+	        return (state?.reason || 'none') + '|' + (state?.diagnosis || '') + '|' + (state?.likelyCause || '');
+	      })(),
+	      want: 'combat tick gap|tick-reentry-gap|main-loop-stuck-or-awaiting-async'
 	    },
 	    {
 	      name: 'combat log exit summary ignores non-exit decisions',

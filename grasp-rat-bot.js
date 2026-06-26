@@ -404,6 +404,15 @@ function browserBotSource(config) {
 	    injectedBy: cfg.injectedBy,
 	    startedAt: Date.now(),
     lastTickAt: 0,
+    previousTickAt: 0,
+    previousTickSource: '',
+    previousTickCombatActive: false,
+    lastTickSource: '',
+    lastTickGapMs: null,
+    lastTickCompletedAt: 0,
+    lastTickCombatActive: false,
+    lastCombatTickGap: null,
+    lastTickReentryGapAt: 0,
     lastStatusAt: 0,
 	    lastShotAt: 0,
 	    lastAction: null,
@@ -449,6 +458,8 @@ function browserBotSource(config) {
       active: Boolean(preserved.combatLogging?.active),
       startedAt: Number(preserved.combatLogging?.startedAt || 0),
       lastCombatAt: Number(preserved.combatLogging?.lastCombatAt || 0),
+      lastQueuedFrameAt: Number(preserved.combatLogging?.lastQueuedFrameAt || 0),
+      lastBuiltFrameAt: Number(preserved.combatLogging?.lastBuiltFrameAt || 0),
       lastFlushAt: 0,
       preBuffer: Array.isArray(preserved.combatLogging?.preBuffer) ? preserved.combatLogging.preBuffer : [],
       pending: Array.isArray(preserved.combatLogging?.pending) ? preserved.combatLogging.pending : [],
@@ -707,6 +718,12 @@ function browserBotSource(config) {
         uptimeMs: Date.now() - this.startedAt,
         lastTickAt: this.lastTickAt,
         lastTickAgeMs: this.lastTickAt ? Date.now() - this.lastTickAt : null,
+        lastTickGapMs: this.lastTickGapMs,
+        lastTickSource: this.lastTickSource || '',
+        lastTickCompletedAt: this.lastTickCompletedAt || 0,
+        lastTickCombatActive: Boolean(this.lastTickCombatActive),
+        combatTickGap: this.lastCombatTickGap || null,
+        lastTickReentryGapAt: this.lastTickReentryGapAt || 0,
         lastNativeTickAgeMs: this.lastNativeTickAt ? now() - this.lastNativeTickAt : null,
         lastAction: this.lastAction,
 	        lastDecision: displayLastDecision,
@@ -1394,6 +1411,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 				    const text = String(reason || '').toLowerCase();
 				    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
 				    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
+				    if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
 				    if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
 				    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
 			    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
@@ -1590,9 +1608,9 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 
 	  function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
 	    if (!offlineSafety) return false;
-	    if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage) return true;
+	    if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage || offlineSafety.combatTickGap) return true;
 	    const text = String(reason || '').toLowerCase();
-	    return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina') || text.includes('missing self') || text.includes('sampling outage');
+	    return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina') || text.includes('missing self') || text.includes('sampling outage') || text.includes('combat tick gap');
 	  }
 
 	  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
@@ -7258,6 +7276,152 @@ ${importantLogSource()}
     };
   }
 
+  function combatTickGapOfflineState(self = null, options = {}) {
+    if (!cfg.combatTickGapOfflineEnabled) return null;
+    const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
+    if (!(thresholdMs > 0)) return null;
+    const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+    const previousTickAt = Number(options.previousTickAt ?? bot.previousTickAt ?? 0) || 0;
+    const tickGapMs = Number.isFinite(Number(options.tickGapMs ?? bot.lastTickGapMs))
+      ? Math.max(0, Math.round(Number(options.tickGapMs ?? bot.lastTickGapMs)))
+      : null;
+    const tickInProgressMs = Number.isFinite(Number(options.tickInProgressMs))
+      ? Math.max(0, Math.round(Number(options.tickInProgressMs)))
+      : null;
+    const lastTickCompletedGapMs = Number.isFinite(Number(options.lastTickCompletedGapMs))
+      ? Math.max(0, Math.round(Number(options.lastTickCompletedGapMs)))
+      : null;
+    const combatLogActive = Boolean(bot.combatLogging?.active);
+    const queuedCombatFrameAt = Number(bot.combatLogging?.lastQueuedFrameAt || 0) || 0;
+    const metricCombatFrameAt = Number(bot.lastCombatLogMetric?.at || 0) || 0;
+    const lastCombatFrameAt = queuedCombatFrameAt || (combatLogActive ? metricCombatFrameAt : 0);
+    const combatFrameGapMs = lastCombatFrameAt ? Math.max(0, Math.round(t - lastCombatFrameAt)) : null;
+    const lastBuiltFrameAt = Number(bot.combatLogging?.lastBuiltFrameAt || 0) || 0;
+    const builtFrameGapMs = lastBuiltFrameAt ? Math.max(0, Math.round(t - lastBuiltFrameAt)) : null;
+    const lastCombatAt = Number(bot.combatLogging?.lastCombatAt || 0) || 0;
+    const combatLogGapMs = lastCombatAt ? Math.max(0, Math.round(t - lastCombatAt)) : null;
+    const previousCombatActive = Boolean(options.previousCombatActive ?? bot.previousTickCombatActive ?? bot.lastTickCombatActive);
+    const currentCombatActive = combatTickActiveFromState({
+      decision: bot.lastDecision,
+      combatTarget: bot.combatTarget,
+      pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+      nowMs: t
+    });
+    const recentCombatContextMs = Math.max(
+      thresholdMs,
+      Number(cfg.combatEngageStickMs || 0),
+      Number(cfg.combatEngageGraceMs || 0),
+      Number(cfg.combatLogPostBufferMs || 0)
+    );
+    const recentCombatFrameContext = Boolean(lastCombatFrameAt
+      && recentCombatContextMs > 0
+      && t - lastCombatFrameAt <= recentCombatContextMs);
+    if (!previousCombatActive && !currentCombatActive && !combatLogActive && !recentCombatFrameContext) return null;
+    const reentryGap = Boolean(options.reentry && (
+      (tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
+      || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)
+    ));
+    const mainLoopGap = Boolean(!reentryGap && previousTickAt && tickGapMs !== null && tickGapMs >= thresholdMs);
+    const combatFrameGap = !reentryGap && !mainLoopGap && combatFrameGapMs !== null && combatFrameGapMs >= thresholdMs;
+    if (!reentryGap && !mainLoopGap && !combatFrameGap) return null;
+    const diagnosis = reentryGap ? 'tick-reentry-gap'
+      : (mainLoopGap ? 'main-loop-gap' : 'combat-log-gap-with-active-tick');
+    const likelyCause = reentryGap ? 'main-loop-stuck-or-awaiting-async'
+      : (mainLoopGap ? 'js-or-main-loop-paused' : 'combat-state-or-log-gating-gap');
+    return {
+      active: true,
+      reason: 'combat tick gap',
+      diagnosis,
+      likelyCause,
+      thresholdMs,
+      tickGapMs,
+      tickInProgressMs,
+      lastTickCompletedGapMs,
+      previousTickAt,
+      currentTickAt: t,
+      previousTickSource: options.previousTickSource || bot.previousTickSource || '',
+      currentTickSource: options.source || bot.lastTickSource || '',
+      previousCombatActive,
+      currentCombatActive,
+      combatLogActive,
+      recentCombatFrameContext,
+      recentCombatContextMs,
+      queuedCombatFrameAt,
+      metricCombatFrameAt,
+      lastCombatFrameAt,
+      combatFrameGapMs,
+      lastBuiltFrameAt,
+      builtFrameGapMs,
+      lastCombatAt,
+      combatLogGapMs,
+      self: self ? summarizeSelf(self) : null,
+      lastDecisionReason: bot.lastDecision?.reason || '',
+      visibilityState: document.visibilityState || ''
+    };
+  }
+
+  async function handleTickReentryCombatGap(source = 'timer') {
+    if (!cfg.combatTickGapOfflineEnabled) return null;
+    const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
+    if (!(thresholdMs > 0)) return null;
+    const t = Date.now();
+    const tickInProgressMs = bot.lastTickAt ? Math.max(0, Math.round(t - Number(bot.lastTickAt || t))) : null;
+    const lastTickCompletedGapMs = bot.lastTickCompletedAt ? Math.max(0, Math.round(t - Number(bot.lastTickCompletedAt || t))) : null;
+    if ((tickInProgressMs === null || tickInProgressMs < thresholdMs)
+      && (lastTickCompletedGapMs === null || lastTickCompletedGapMs < thresholdMs)) {
+      return null;
+    }
+    const self = getSelf();
+    if (!self || !isAlive(self)) return null;
+    const combatTickGap = combatTickGapOfflineState(self, {
+      source,
+      nowMs: t,
+      reentry: true,
+      tickInProgressMs,
+      lastTickCompletedGapMs,
+      previousTickAt: bot.lastTickAt || bot.previousTickAt || 0,
+      previousTickSource: bot.lastTickSource || bot.previousTickSource || '',
+      previousCombatActive: Boolean(bot.previousTickCombatActive || bot.lastTickCombatActive)
+    });
+    if (!combatTickGap) return null;
+    bot.lastCombatTickGap = combatTickGap;
+    if (t - Number(bot.lastTickReentryGapAt || 0) < thresholdMs) return combatTickGap;
+    bot.lastTickReentryGapAt = t;
+    const currentSummary = summarizeSelf(self);
+    bot.lastSelf = currentSummary;
+    updateSessionStats(currentSummary);
+    stopMotionSafely('combat-tick-reentry-gap');
+    if (!bot.offlineSince) bot.offlineSince = t;
+    const offlineAgeMs = Math.max(0, Date.now() - Number(bot.offlineSince || Date.now()));
+    const offlineSafety = {
+      ...assessOfflineSafety(self),
+      combatTickGap
+    };
+    bot.lastOfflineSafety = offlineSafety;
+    const leaveResult = !cfg.dryRun && !cfg.once
+      ? await leaveOffline('combat tick gap', currentSummary, offlineSafety)
+      : null;
+    const offlineDetail = activeOfflineLeaveDetail();
+    bot.lastDecision = {
+      kind: 'wait',
+      reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'control-combat-tick-gap',
+      control: summarizeControl(),
+      self: currentSummary,
+      offlineAgeMs,
+      leaveDelayMs: 0,
+      offlineSafety,
+      combatTickGap,
+      displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '战斗主循环断档，正在退出',
+      leave: leaveResult,
+      tickReentry: true
+    };
+    updateBotPanel(bot.lastDecision);
+    if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
+      requestReload('combat tick gap too long');
+    }
+    return combatTickGap;
+  }
+
   function nativeTickMinIntervalMs(state = {}) {
     const normalMs = Math.max(1, Number(cfg.nativeTickMinMs || cfg.tickMs || 120));
     const combatMs = Math.max(1, Number(cfg.combatNativeTickMinMs || normalMs));
@@ -10512,11 +10676,22 @@ ${importantLogSource()}
 
   async function tick(source = 'timer') {
     if (!bot.running) return;
-    if (bot.ticking) return bot.status();
+    if (bot.ticking) {
+      await handleTickReentryCombatGap(source);
+      return bot.status();
+    }
     bot.ticking = true;
     try {
+      const tickStartedAt = Date.now();
+      const previousTickAt = Number(bot.lastTickAt || 0) || 0;
+      bot.previousTickAt = previousTickAt;
+      bot.previousTickSource = bot.lastTickSource || '';
+      bot.previousTickCombatActive = Boolean(bot.lastTickCombatActive);
+      bot.lastTickGapMs = previousTickAt ? Math.max(0, Math.round(tickStartedAt - previousTickAt)) : null;
+      bot.lastTickSource = source;
+      bot.lastTickAt = tickStartedAt;
+      bot.lastCombatTickGap = null;
       bot.tickCount += 1;
-      bot.lastTickAt = Date.now();
       const cloudflare = cloudflareErrorInfo();
       if (cloudflare) {
         bot.lastDecision = {
@@ -10907,25 +11082,30 @@ ${importantLogSource()}
 	        windowMs: Number(bot.control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
 	      } : null;
       const samplingOutage = globalSamplingOutageOfflineState(self);
-      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage);
+      const combatTickGap = combatTickGapOfflineState(self, { source });
+      bot.lastCombatTickGap = combatTickGap;
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
       const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
 		    if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
 		      bot.pursuit = null;
-		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline')));
+		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (combatTickGap ? 'combat-tick-gap' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline'))));
 		      if (!bot.offlineSince) bot.offlineSince = Date.now();
 		      const offlineAgeMs = Date.now() - bot.offlineSince;
         const offlineSafety = {
           ...assessOfflineSafety(self),
           reconnectChurn: reconnectChurnDetail,
-          samplingOutage
+          samplingOutage,
+          combatTickGap
         };
         bot.lastOfflineSafety = offlineSafety;
         const safeLeaveMs = Math.min(3000, Math.max(0, Number(cfg.offlineSafeLeaveMs ?? cfg.offlineLeaveMs ?? 3000)));
         const unsafeLeaveMs = Math.max(0, Number(cfg.offlineUnsafeLeaveMs ?? 0));
-        const leaveDelayMs = reconnectChurn || samplingOutage ? 0 : (offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs);
+        const leaveDelayMs = reconnectChurn || samplingOutage || combatTickGap ? 0 : (offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs);
         const offlineLeaveReason = samplingOutage
           ? 'global sampling outage'
-          : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline'));
+          : (combatTickGap
+            ? 'combat tick gap'
+            : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline')));
         const leaveResult = offlineAgeMs >= leaveDelayMs
 			        ? await leaveOffline(offlineLeaveReason, currentSummary, offlineSafety)
 			        : null;
@@ -10934,11 +11114,13 @@ ${importantLogSource()}
           ? 'offline-leave'
           : (samplingOutage
             ? 'control-global-sampling-outage'
+          : (combatTickGap
+            ? 'control-combat-tick-gap'
           : (serverPositionStallOffline
             ? 'control-ws-server-position-stalled'
             : (reconnectChurn
               ? 'control-ws-reconnect-churn'
-              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait'))));
+              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')))));
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: offlineWaitReason,
@@ -10950,12 +11132,13 @@ ${importantLogSource()}
           reconnectChurn: reconnectChurnDetail,
           serverPositionStall,
           samplingOutage,
-	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (samplingOutage ? '网络采样超时，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : '')),
+          combatTickGap,
+	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
 	        if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
-	          requestReload(samplingOutage ? 'global sampling outage too long' : 'websocket offline too long');
+	          requestReload(samplingOutage ? 'global sampling outage too long' : (combatTickGap ? 'combat tick gap too long' : 'websocket offline too long'));
 	        }
         if (cfg.once) bot.stop('once');
         return;
@@ -11293,6 +11476,17 @@ ${importantLogSource()}
 		          bot.combatLogging.lastError = 'record failed: ' + (logErr?.message || String(logErr));
 		        } catch (_) {}
 		      }
+		      try {
+		        bot.lastTickCombatActive = combatTickActiveFromState({
+		          decision: bot.lastDecision,
+		          combatTarget: bot.combatTarget,
+		          pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+		          nowMs: Date.now()
+		        });
+		      } catch (_) {
+		        bot.lastTickCombatActive = false;
+		      }
+		      bot.lastTickCompletedAt = Date.now();
 		      bot.ticking = false;
 		    }
 		  }

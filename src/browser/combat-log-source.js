@@ -333,6 +333,7 @@ function combatLogSource(helpers = {}) {
           },
           confirmation: extra.confirmation || detail.exitConfirmation || null,
           control: summarizeControl(),
+          runtime: combatLogRuntimeSummary(t),
           globalState: combatLogGlobalStateSummary()
         };
         bot.exitAudit.lastEvent = {
@@ -899,6 +900,97 @@ function combatLogSource(helpers = {}) {
         };
       }
 
+      function combatLogRuntimeSummary(entryAt = Date.now(), decision = null) {
+        const t = Number.isFinite(Number(entryAt)) ? Number(entryAt) : Date.now();
+        const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
+        const tickGapMs = Number.isFinite(Number(bot.lastTickGapMs))
+          ? Math.max(0, Math.round(Number(bot.lastTickGapMs)))
+          : null;
+        const tickInProgressMs = bot.ticking && bot.lastTickAt
+          ? Math.max(0, Math.round(t - Number(bot.lastTickAt || t)))
+          : null;
+        const lastTickCompletedGapMs = bot.lastTickCompletedAt
+          ? Math.max(0, Math.round(t - Number(bot.lastTickCompletedAt || t)))
+          : null;
+        const combatLogActive = Boolean(bot.combatLogging?.active);
+        const queuedCombatFrameAt = Number(bot.combatLogging?.lastQueuedFrameAt || 0) || 0;
+        const metricCombatFrameAt = Number(bot.lastCombatLogMetric?.at || 0) || 0;
+        const lastCombatFrameAt = queuedCombatFrameAt || (combatLogActive ? metricCombatFrameAt : 0);
+        const combatFrameGapMs = lastCombatFrameAt ? Math.max(0, Math.round(t - lastCombatFrameAt)) : null;
+        const lastBuiltFrameAt = Number(bot.combatLogging?.lastBuiltFrameAt || 0) || 0;
+        const builtFrameGapMs = lastBuiltFrameAt ? Math.max(0, Math.round(t - lastBuiltFrameAt)) : null;
+        const lastCombatAt = Number(bot.combatLogging?.lastCombatAt || 0) || 0;
+        const combatTriggerGapMs = lastCombatAt ? Math.max(0, Math.round(t - lastCombatAt)) : null;
+        const recordedCombatTickGap = bot.lastCombatTickGap || decision?.combatTickGap || decision?.offlineSafety?.combatTickGap || null;
+        const recordedDiagnosis = recordedCombatTickGap?.diagnosis || '';
+        const decisionCombatActive = combatTickActiveFromState({
+          decision,
+          combatTarget: bot.combatTarget,
+          pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+          nowMs: t
+        });
+        const previousCombatActive = Boolean(bot.previousTickCombatActive);
+        const currentCombatActive = Boolean(bot.lastTickCombatActive || decisionCombatActive);
+        const recentCombatContextMs = Math.max(
+          thresholdMs,
+          Number(cfg.combatEngageStickMs || 0),
+          Number(cfg.combatEngageGraceMs || 0),
+          Number(cfg.combatLogPostBufferMs || 0)
+        );
+        const recentCombatFrameContext = Boolean(lastCombatFrameAt
+          && recentCombatContextMs > 0
+          && t - lastCombatFrameAt <= recentCombatContextMs);
+        const activeCombatContext = previousCombatActive || currentCombatActive || combatLogActive || recentCombatFrameContext || Boolean(recordedCombatTickGap);
+        const reentryGapOverThreshold = Boolean(activeCombatContext
+          && (recordedDiagnosis === 'tick-reentry-gap' || decision?.tickReentry)
+          && thresholdMs > 0
+          && ((tickInProgressMs !== null && tickInProgressMs >= thresholdMs)
+            || (lastTickCompletedGapMs !== null && lastTickCompletedGapMs >= thresholdMs)));
+        const tickGapOverThreshold = Boolean(activeCombatContext && tickGapMs !== null && thresholdMs > 0 && tickGapMs >= thresholdMs);
+        const combatFrameGapOverThreshold = Boolean(activeCombatContext && combatFrameGapMs !== null && thresholdMs > 0 && combatFrameGapMs >= thresholdMs);
+        const diagnosis = recordedDiagnosis || (reentryGapOverThreshold
+          ? 'tick-reentry-gap'
+          : (tickGapOverThreshold
+            ? 'main-loop-gap'
+            : (combatFrameGapOverThreshold ? 'combat-log-gap-with-active-tick' : 'normal')));
+        return {
+          thresholdMs,
+          tickGapMs,
+          tickInProgressMs,
+          lastTickCompletedGapMs,
+          reentryGapOverThreshold,
+          tickGapOverThreshold,
+          previousTickAt: Number(bot.previousTickAt || 0) || 0,
+          currentTickAt: Number(bot.lastTickAt || 0) || 0,
+          lastTickCompletedAt: Number(bot.lastTickCompletedAt || 0) || 0,
+          previousTickSource: bot.previousTickSource || '',
+          currentTickSource: bot.lastTickSource || '',
+          previousCombatActive,
+          currentCombatActive,
+          decisionCombatActive,
+          combatLogActive,
+          recentCombatFrameContext,
+          recentCombatContextMs,
+          activeCombatContext,
+          queuedCombatFrameAt,
+          metricCombatFrameAt,
+          lastCombatFrameAt,
+          combatFrameGapMs,
+          combatFrameGapOverThreshold,
+          lastBuiltFrameAt,
+          builtFrameGapMs,
+          lastCombatAt,
+          combatTriggerGapMs,
+          diagnosis,
+          likelyCause: recordedCombatTickGap?.likelyCause || (diagnosis === 'tick-reentry-gap'
+            ? 'main-loop-stuck-or-awaiting-async'
+            : diagnosis === 'main-loop-gap'
+            ? 'js-or-main-loop-paused'
+            : (diagnosis === 'combat-log-gap-with-active-tick' ? 'combat-state-or-log-gating-gap' : '')),
+          combatTickGap: recordedCombatTickGap
+        };
+      }
+
       const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};
 
       function combatLogExitSummary(decision) {
@@ -926,6 +1018,8 @@ function combatLogSource(helpers = {}) {
         }
         const exit = combatLogExitSummary(decision || {});
         const login = combatLogLoginSummary(decision || {});
+        const runtime = combatLogRuntimeSummary(entryAt, decision || {});
+        bot.combatLogging.lastBuiltFrameAt = entryAt;
         const combatMetrics = combatLogFrameMetrics(rawSelf, self, decision || {}, nearbyEntities, bullets, incoming, entryAt, perfNow);
         return {
           type: 'combat-frame',
@@ -959,6 +1053,7 @@ function combatLogSource(helpers = {}) {
           combatTarget: bot.combatTarget || null,
           combatAim: bot.combatAim || null,
           control: summarizeControl(),
+          runtime,
           globalState: combatLogGlobalStateSummary(),
           exit,
           login,
@@ -997,7 +1092,7 @@ function combatLogSource(helpers = {}) {
 	        if (!reason) return '';
         if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-recovery|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
-		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
+		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
 	        return '';
 	      }
 
@@ -1055,6 +1150,9 @@ function combatLogSource(helpers = {}) {
           queued.exitAuditLogId = 'critical:' + queued.type + ':' + queued.at + ':' + queued.sequence;
         }
         state.pending.push(queued);
+        if (queued.type === 'combat-frame') {
+          state.lastQueuedFrameAt = Number(queued.at || Date.now()) || Date.now();
+        }
         if (queued.exitAuditLogId) {
           if (!Array.isArray(state.pendingExitAuditIds)) state.pendingExitAuditIds = [];
           if (!state.pendingExitAuditIds.includes(queued.exitAuditLogId)) state.pendingExitAuditIds.push(queued.exitAuditLogId);
@@ -1090,6 +1188,7 @@ function combatLogSource(helpers = {}) {
           self: entry.self,
           target: entry.target || null,
           decision: entry.decision,
+          runtime: entry.runtime || null,
           login: entry.login || null,
           combatMetrics: entry.combatMetrics || null,
           nearbyEntities: entry.nearbyEntities,
@@ -1118,6 +1217,7 @@ function combatLogSource(helpers = {}) {
           injectedBy: cfg.injectedBy,
           self: entry?.self || null,
           decision: entry?.decision || null,
+          runtime: entry?.runtime || null,
           login: entry?.login || null,
           combatMetrics: entry?.combatMetrics || null,
           exit: entry?.exit || null,

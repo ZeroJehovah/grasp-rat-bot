@@ -126,6 +126,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatNativeTickMinMs', value: 80 },
   { key: 'globalSamplingOutageMinErrors', value: 1 },
   { key: 'globalSamplingOutageMinAgeMs', value: 0 },
+  { key: 'combatTickGapOfflineMs', value: 5000 },
   { key: 'directWsVelocityRepeatMs', value: 50 },
   { key: 'directWsVelocityRepeatHoldMs', value: 220 },
   { key: 'directWsStopRepeatCount', value: 3 },
@@ -400,9 +401,10 @@ function main() {
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowNativeReconnect: false'), 'runtime defaults do not keep native reconnect disabled');
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowBotWebSocketFallback: false'), 'runtime defaults do not keep bot websocket fallback disabled');
     });
-    check(`${file} treats combat sampling outage as offline network risk`, () => {
+    check(`${file} treats combat sampling and tick/frame gaps as offline network risk`, () => {
       assert(defaultConfigSource.includes('globalSamplingOutageOfflineEnabled: true'), 'sampling outage offline gate is not enabled by default');
       assert(defaultConfigSource.includes('globalSamplingOutageCombatOnly: true'), 'sampling outage offline gate is not combat-only by default');
+      assert(defaultConfigSource.includes('combatTickGapOfflineEnabled: true'), 'combat tick gap offline gate is not enabled by default');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes('bot.globalState.samplingOutage = outage'), 'sampling outage state is not recorded on global refresh errors');
       assert(refreshBody.includes("triggerNativeTick('global-sampling-outage', false)"), 'sampling outage does not trigger an immediate native tick');
@@ -411,15 +413,41 @@ function main() {
       assert(outageBody.includes("reason: 'global sampling outage'"), 'sampling outage offline state does not expose the canonical reason');
       assert(outageBody.includes('combatTickActiveFromState({'), 'sampling outage gate does not reuse combat activity state');
       assert(outageBody.includes('cfg.globalSamplingOutageCombatOnly && !combatActive'), 'sampling outage gate does not preserve combat-only behavior');
+      const gapBody = functionBody(text, 'combatTickGapOfflineState');
+      assert(gapBody.includes("reason: 'combat tick gap'"), 'combat tick gap offline state does not expose the canonical reason');
+      assert(gapBody.includes("'tick-reentry-gap'") && gapBody.includes("'main-loop-gap'") && gapBody.includes("'combat-log-gap-with-active-tick'"), 'combat tick gap diagnosis does not distinguish reentry, main-loop, and log-gating gaps');
+      assert(gapBody.includes("'main-loop-stuck-or-awaiting-async'") && gapBody.includes("'js-or-main-loop-paused'") && gapBody.includes("'combat-state-or-log-gating-gap'"), 'combat tick gap likely cause does not distinguish stuck async, JS pause, and state/log gating');
+      assert(gapBody.includes('previousCombatActive') && gapBody.includes('currentCombatActive') && gapBody.includes('combatLogActive'), 'combat tick gap state does not preserve combat-context evidence');
+      assert(gapBody.includes('recentCombatFrameContext') && gapBody.includes('recentCombatContextMs'), 'combat tick gap state does not preserve recent combat-frame context after decision clearing');
+      const reentryBody = functionBody(text, 'handleTickReentryCombatGap');
+      assert(reentryBody.includes('combatTickGapOfflineState(self') && reentryBody.includes('reentry: true'), 'tick reentry gap handler does not reuse combat tick gap state');
+      assert(reentryBody.includes("await leaveOffline('combat tick gap'"), 'tick reentry gap handler does not leave through combat tick gap offline path');
       const tickBody = functionBody(text, 'tick');
+      assert(tickBody.includes('await handleTickReentryCombatGap(source)'), 'main tick does not evaluate reentry combat gap while a tick is already running');
       assert(tickBody.includes('const samplingOutage = globalSamplingOutageOfflineState(self)'), 'main tick does not evaluate sampling outage offline state');
-      assert(tickBody.includes('!bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage)'), 'sampling outage is not part of the offline branch gate');
-      assert(tickBody.includes('leaveDelayMs = reconnectChurn || samplingOutage ? 0'), 'sampling outage offline leave is not immediate');
+      assert(tickBody.includes('const combatTickGap = combatTickGapOfflineState(self'), 'main tick does not evaluate combat tick gap offline state');
+      assert(tickBody.includes('!bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap)'), 'sampling outage or combat tick gap is not part of the offline branch gate');
+      assert(tickBody.includes('leaveDelayMs = reconnectChurn || samplingOutage || combatTickGap ? 0'), 'sampling outage / combat tick gap offline leave is not immediate');
       assert(tickBody.includes("offlineLeaveReason = samplingOutage") && tickBody.includes("'global sampling outage'"), 'sampling outage leave reason is not canonical');
+      assert(tickBody.includes("? 'combat tick gap'"), 'combat tick gap leave reason is not canonical');
       assert(tickBody.includes("'control-global-sampling-outage'"), 'sampling outage wait reason is not exposed');
+      assert(tickBody.includes("'control-combat-tick-gap'"), 'combat tick gap wait reason is not exposed');
       assert(text.includes('samplingOutage: this.globalState.samplingOutage || null'), 'status does not expose global sampling outage state');
+      assert(text.includes('combatTickGap: this.lastCombatTickGap || null'), 'status does not expose combat tick gap state');
+      assert(text.includes('lastTickGapMs: this.lastTickGapMs'), 'status does not expose last tick gap');
+      assert(text.includes('lastTickReentryGapAt: this.lastTickReentryGapAt || 0'), 'status does not expose tick reentry gap timestamp');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
+      assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
       assert(functionBody(text, 'offlineExitRequiresUnsafeReloginDelay').includes('offlineSafety.samplingOutage'), 'sampling outage exits do not require unsafe relogin delay');
+      assert(functionBody(text, 'offlineExitRequiresUnsafeReloginDelay').includes('offlineSafety.combatTickGap'), 'combat tick gap exits do not require unsafe relogin delay');
+      assert(text.includes('function combatLogRuntimeSummary'), 'combat log runtime diagnostic summary not found');
+      assert(text.includes('runtime: combatLogRuntimeSummary'), 'exit audit logs do not include runtime diagnostics');
+      assert(functionBody(text, 'buildCombatLogEntry').includes('const runtime = combatLogRuntimeSummary(entryAt, decision || {})'), 'combat frames do not compute runtime diagnostics');
+      assert(functionBody(text, 'buildCombatLogEntry').includes('bot.combatLogging.lastBuiltFrameAt = entryAt'), 'combat frames do not record built-frame timestamps');
+      assert(functionBody(text, 'combatLogRuntimeSummary').includes('reentryGapOverThreshold'), 'combat log runtime diagnostics do not expose tick reentry gaps');
+      assert(functionBody(text, 'combatLogRuntimeSummary').includes('recordedDiagnosis'), 'combat log runtime diagnostics do not preserve the triggering combat tick gap diagnosis');
+      assert(functionBody(text, 'combatLogRuntimeSummary').includes('recentCombatFrameContext'), 'combat log runtime diagnostics do not expose recent combat-frame context');
+      assert(functionBody(text, 'queueCombatLogEntry').includes("queued.type === 'combat-frame'"), 'combat frame queue timestamps are not tracked');
     });
     check(`${file} sends movement and shots through the native page WebSocket`, () => {
       assert(defaultConfigSource.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
@@ -1388,6 +1416,12 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'offline sampling outage summary is explicit'"), 'sampling outage summary self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat sampling outage triggers offline leave gate'"), 'combat sampling outage trigger self-test not found');
     assert(nodeSelfTestSource.includes("name: 'non-combat sampling outage does not trigger by default'"), 'non-combat sampling outage guard self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'offline combat tick gap summary is explicit'"), 'combat tick gap summary self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat tick gap triggers offline leave gate'"), 'combat tick gap trigger self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'non-combat tick gap does not trigger by default'"), 'non-combat tick gap guard self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'recent combat frame gap survives cleared decision context'"), 'recent combat-frame context self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat frame gap with active tick records gating diagnosis'"), 'combat frame gap diagnosis self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat tick reentry gap records stuck async diagnosis'"), 'combat tick reentry diagnosis self-test not found');
   });
 
   const obsoleteReason = ['wait', 'for', 'clear', 'opportunity'].join('-');

@@ -342,6 +342,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     globalSamplingOutageMinErrors: 1,
     globalSamplingOutageMinAgeMs: 0,
     globalSamplingOutageCombatOnly: true,
+    combatTickGapOfflineEnabled: true,
+    combatTickGapOfflineMs: 5000,
     nativeTickMinMs: 120,
     combatNativeTickMinMs: 80,
     attackMinStamina: 0,
