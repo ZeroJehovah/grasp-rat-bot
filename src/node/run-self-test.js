@@ -8731,6 +8731,28 @@ function runSelfTest() {
       want: 'login-point-safety|login-point-safety||false|false'
     },
     {
+      name: 'bootstrap login-point gate blocks fallback relogin only after a learned point',
+      got: (() => {
+        const block = point => {
+          const required = Math.max(0, Math.round(Number(point.required ?? 12) || 12));
+          const hasPoint = Boolean(point.hasPoint);
+          const streak = Math.max(0, Math.min(required, Math.round(Number(point.streak || 0) || 0)));
+          const ok = required <= 0 || (hasPoint && streak >= required);
+          if (ok || required <= 0) return '';
+          if (!hasPoint && !point.missingPoint) return '';
+          const missing = Boolean(point.missingPoint || !hasPoint);
+          return missing ? 'login-point-missing' : 'login-point-safety';
+        };
+        return [
+          block({ hasPoint: false, missingPoint: false, streak: 0, required: 12 }),
+          block({ hasPoint: false, missingPoint: true, streak: 0, required: 12 }),
+          block({ hasPoint: true, missingPoint: false, streak: 0, required: 12 }),
+          block({ hasPoint: true, missingPoint: false, streak: 12, required: 12 })
+        ].join('|');
+      })(),
+      want: '|login-point-missing|login-point-safety|'
+    },
+    {
       name: 'local exit confirmation must not accept active session mismatch',
       got: (() => {
         const tokenCleared = true;
