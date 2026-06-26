@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.212"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.213"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -408,6 +408,10 @@
     opportunisticShootEveryMs: 120,
     opportunisticShotMinScoreRatio: 1,
     globalRefreshMs: 5000,
+    globalSamplingOutageOfflineEnabled: true,
+    globalSamplingOutageMinErrors: 1,
+    globalSamplingOutageMinAgeMs: 0,
+    globalSamplingOutageCombatOnly: true,
     nativeTickMinMs: 120,
     combatNativeTickMinMs: 80,
     attackMinStamina: 0,
@@ -836,7 +840,7 @@
       combatLogFailedBase: Number.isFinite(Number(preserved.session?.combatLogFailedBase)) ? Number(preserved.session.combatLogFailedBase) : null,
       missingSince: Number(preserved.session?.missingSince || 0) || 0
     },
-	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], bullets: [], coinDrops: [], messages: [], minimap: null, error: '' },
+	    globalState: { refreshedAt: 0, snapshotRefreshedAt: 0, tick: 0, entities: [], bullets: [], coinDrops: [], messages: [], minimap: null, error: '', samplingOutage: null },
 	    control: {
 	      ws: null,
 	      wsOpen: false,
@@ -1039,6 +1043,7 @@
 		          coinDrops: arrayCount(this.globalState.coinDrops),
 		          minimapPoints: this.globalState.minimap?.points?.length || 0,
 		          error: this.globalState.error,
+		          samplingOutage: this.globalState.samplingOutage || null,
 		          loginSnapshotGate: snapshotLoginGateStatus()
 		        },
         control: summarizeControl(),
@@ -4780,6 +4785,7 @@ function hpDisplay(value) {
 				    const text = String(reason || '').toLowerCase();
 				    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
 				    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
+				    if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
 				    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
 			    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
 			    if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
@@ -4973,11 +4979,11 @@ function hpDisplay(value) {
     return holds.sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || null;
   }
 
-  function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
+	  function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
 	    if (!offlineSafety) return false;
-	    if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted) return true;
+	    if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage) return true;
 	    const text = String(reason || '').toLowerCase();
-	    return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina') || text.includes('missing self');
+	    return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina') || text.includes('missing self') || text.includes('sampling outage');
 	  }
 
 	  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
@@ -9031,6 +9037,8 @@ function hpDisplay(value) {
 	      fetchJsonNoStore('/minimap')
 	    ]);
 	    const errors = [];
+	    let snapshotError = '';
+	    let minimapError = '';
 	    if (snapshotRes.status === 'fulfilled') {
 	      const snapshot = snapshotRes.value;
 	      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
@@ -9043,6 +9051,7 @@ function hpDisplay(value) {
 		      noteLeave403SnapshotProbe(true, { tick: bot.globalState.tick });
 		    } else {
 		      const message = snapshotRes.reason?.message || String(snapshotRes.reason || '');
+		      snapshotError = message;
 		      errors.push('snapshot: ' + message);
 		      noteLoginSnapshotProbe(false, { error: message });
 		      noteLeave403SnapshotProbe(false, { error: message });
@@ -9050,9 +9059,46 @@ function hpDisplay(value) {
 	    if (minimapRes.status === 'fulfilled') {
 	      bot.globalState.minimap = minimapRes.value || null;
 	    } else {
-	      errors.push('minimap: ' + (minimapRes.reason?.message || String(minimapRes.reason || '')));
+	      minimapError = minimapRes.reason?.message || String(minimapRes.reason || '');
+	      errors.push('minimap: ' + minimapError);
 	    }
 	    bot.globalState.error = errors.join('; ');
+	    const completedAt = Date.now();
+	    if (errors.length) {
+	      const previous = bot.globalState.samplingOutage || null;
+	      const firstAt = previous?.active ? (Number(previous.firstAt || 0) || t) : t;
+	      const errorCount = Math.max(0, Number(previous?.errorCount || 0)) + 1;
+	      const ageMs = Math.max(0, completedAt - firstAt);
+	      const timedOutPattern = /timed out|abort/i;
+	      const outage = {
+	        active: true,
+	        firstAt,
+	        lastAt: completedAt,
+	        ageMs,
+	        errorCount,
+	        error: bot.globalState.error,
+	        snapshotError,
+	        minimapError,
+	        snapshotTimedOut: timedOutPattern.test(snapshotError),
+	        minimapTimedOut: timedOutPattern.test(minimapError),
+	        visibilityState: document.visibilityState || '',
+	        refreshedAt: bot.globalState.refreshedAt,
+	        snapshotRefreshedAt: bot.globalState.snapshotRefreshedAt || 0,
+	        snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, completedAt - bot.globalState.snapshotRefreshedAt) : null
+	      };
+	      outage.combatActive = combatTickActiveFromState({
+	        decision: bot.lastDecision,
+	        combatTarget: bot.combatTarget,
+	        pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+	        nowMs: completedAt
+	      });
+	      bot.globalState.samplingOutage = outage;
+	      if (globalSamplingOutageOfflineState(null, { nowMs: completedAt, outage })) {
+	        setTimeout(() => triggerNativeTick('global-sampling-outage', false), 0);
+	      }
+	    } else {
+	      bot.globalState.samplingOutage = null;
+	    }
 	  }
 
 	  function wsSend(message) {
@@ -12322,6 +12368,47 @@ function hpDisplay(value) {
     if (combatAt && t - combatAt <= recentCombatMs) return true;
     if (state.pendingExit && /^combat-/.test(String(state.pendingExit.reason || state.pendingExit.rootReason || ''))) return true;
     return false;
+  }
+
+  function globalSamplingOutageOfflineState(self = null, options = {}) {
+    if (!cfg.globalSamplingOutageOfflineEnabled) return null;
+    const outage = options.outage || bot.globalState.samplingOutage || null;
+    if (!outage?.active) return null;
+    const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+    const minErrors = Math.max(1, Number(cfg.globalSamplingOutageMinErrors || 1));
+    const errorCount = Math.max(0, Number(outage.errorCount || 0));
+    if (errorCount < minErrors) return null;
+    const firstAt = Number(outage.firstAt || 0) || t;
+    const ageMs = Math.max(Number(outage.ageMs || 0), Math.max(0, t - firstAt));
+    const minAgeMs = Math.max(0, Number(cfg.globalSamplingOutageMinAgeMs || 0));
+    if (ageMs < minAgeMs) return null;
+    const combatActive = Boolean(outage.combatActive) || combatTickActiveFromState({
+      decision: bot.lastDecision,
+      combatTarget: bot.combatTarget,
+      pendingExit: bot.pendingExit || bot.pendingCombatLeave,
+      nowMs: t
+    });
+    if (cfg.globalSamplingOutageCombatOnly && !combatActive) return null;
+    return {
+      active: true,
+      reason: 'global sampling outage',
+      firstAt,
+      lastAt: Number(outage.lastAt || 0) || t,
+      ageMs,
+      errorCount,
+      minErrors,
+      minAgeMs,
+      combatOnly: Boolean(cfg.globalSamplingOutageCombatOnly),
+      combatActive,
+      visibilityState: outage.visibilityState || document.visibilityState || '',
+      self: self ? summarizeSelf(self) : null,
+      error: outage.error || bot.globalState.error || '',
+      snapshotError: outage.snapshotError || '',
+      minimapError: outage.minimapError || '',
+      snapshotTimedOut: Boolean(outage.snapshotTimedOut),
+      minimapTimedOut: Boolean(outage.minimapTimedOut),
+      snapshotAgeMs: Number.isFinite(Number(outage.snapshotAgeMs)) ? Math.max(0, Math.round(Number(outage.snapshotAgeMs))) : null
+    };
   }
 
   function nativeTickMinIntervalMs(state = {}) {
@@ -15968,35 +16055,43 @@ function hpDisplay(value) {
       const serverPositionStall = assessServerPositionStall(self);
       const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
       const reconnectChurn = Boolean(bot.control.nativeReconnectChurn);
-      const reconnectChurnDetail = reconnectChurn ? {
-        count: Number(bot.control.nativeReconnectEventCount || 0),
-        windowMs: Number(bot.control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
-      } : null;
-      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn;
+	      const reconnectChurnDetail = reconnectChurn ? {
+	        count: Number(bot.control.nativeReconnectEventCount || 0),
+	        windowMs: Number(bot.control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0)
+	      } : null;
+      const samplingOutage = globalSamplingOutageOfflineState(self);
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage);
       const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
 		    if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
 		      bot.pursuit = null;
-		      stopMotionSafely(serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline'));
+		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline')));
 		      if (!bot.offlineSince) bot.offlineSince = Date.now();
 		      const offlineAgeMs = Date.now() - bot.offlineSince;
         const offlineSafety = {
           ...assessOfflineSafety(self),
-          reconnectChurn: reconnectChurnDetail
+          reconnectChurn: reconnectChurnDetail,
+          samplingOutage
         };
+        bot.lastOfflineSafety = offlineSafety;
         const safeLeaveMs = Math.min(3000, Math.max(0, Number(cfg.offlineSafeLeaveMs ?? cfg.offlineLeaveMs ?? 3000)));
         const unsafeLeaveMs = Math.max(0, Number(cfg.offlineUnsafeLeaveMs ?? 0));
-        const leaveDelayMs = reconnectChurn ? 0 : (offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs);
+        const leaveDelayMs = reconnectChurn || samplingOutage ? 0 : (offlineSafety.unsafe ? unsafeLeaveMs : safeLeaveMs);
+        const offlineLeaveReason = samplingOutage
+          ? 'global sampling outage'
+          : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline'));
         const leaveResult = offlineAgeMs >= leaveDelayMs
-			        ? await leaveOffline(serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline'), currentSummary, offlineSafety)
+			        ? await leaveOffline(offlineLeaveReason, currentSummary, offlineSafety)
 			        : null;
         const offlineDetail = activeOfflineLeaveDetail();
         const offlineWaitReason = leaveResult?.attempted && !leaveResult?.error
           ? 'offline-leave'
+          : (samplingOutage
+            ? 'control-global-sampling-outage'
           : (serverPositionStallOffline
             ? 'control-ws-server-position-stalled'
             : (reconnectChurn
               ? 'control-ws-reconnect-churn'
-              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')));
+              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait'))));
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: offlineWaitReason,
@@ -16007,12 +16102,13 @@ function hpDisplay(value) {
           offlineSafety,
           reconnectChurn: reconnectChurnDetail,
           serverPositionStall,
-	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (reconnectChurn ? '网络连接反复重连，正在退出' : ''),
+          samplingOutage,
+	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (samplingOutage ? '网络采样超时，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : '')),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
 	        if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
-	          requestReload('websocket offline too long');
+	          requestReload(samplingOutage ? 'global sampling outage too long' : 'websocket offline too long');
 	        }
         if (cfg.once) bot.stop('once');
         return;
