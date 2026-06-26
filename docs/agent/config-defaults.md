@@ -171,6 +171,7 @@
 - `leaveRetryMinMs = 10000`
 - `leaveCommandTimeoutMs = 10000`
 - `leave403ReloginDelayMs = 3600000`
+- `sessionMismatchRecoveryReloadMaxAgeMs = 120000`
 - `cloudflareErrorReloadMs = 5000`
 - `enemyReloginRepeatResetMs = 7200000`
 - `enemyReloginRepeatSecondMaxMs = 1800000`

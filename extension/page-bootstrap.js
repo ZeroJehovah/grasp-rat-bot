@@ -913,6 +913,7 @@
       'target-whitelisted': '目标在白名单内，跳过攻击',
       'login-snapshot-gate': '等待 snapshot 连续成功',
       'login-control-missing': '等待登录控件出现',
+      'session-mismatch-refresh': '界面显示未登录但原生会话仍在线，刷新确认状态',
       'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',
       'game-session-connecting': '已登录，等待游戏连接/自身实体',
       'no-self': '未读到自身实体',

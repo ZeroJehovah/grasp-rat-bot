@@ -259,6 +259,7 @@ function browserBotSource(config) {
 		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
 		  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
 		      const LOGIN_POINT_SAFETY_KEY = 'graspRatLoginPointSafety';
+		      const SESSION_MISMATCH_RECOVERY_KEY = 'graspRatSessionMismatchRecovery';
 		      const EXIT_AUDIT_PENDING_LOGS_KEY = 'graspRatExitAuditPendingLogs';
 		      const COMBAT_LOG_PENDING_ENTRIES_KEY = 'graspRatCombatLogPendingEntries';
 		      const IMPORTANT_LOGS_KEY = 'graspRatImportantLogs';
@@ -638,9 +639,10 @@ function browserBotSource(config) {
 	      localWriteError: String(preserved.importantLogging?.localWriteError || ''),
 	      lastRemoteError: String(preserved.importantLogging?.lastRemoteError || '')
 	    },
-	    loginSnapshotGate: normalizeLoginSnapshotGateState(preserved.loginSnapshotGate),
-	    loginPointSafety: preserved.loginPointSafety && typeof preserved.loginPointSafety === 'object' ? { ...preserved.loginPointSafety } : null,
-	    leave403SnapshotRecovery: {
+		    loginSnapshotGate: normalizeLoginSnapshotGateState(preserved.loginSnapshotGate),
+		    loginPointSafety: preserved.loginPointSafety && typeof preserved.loginPointSafety === 'object' ? { ...preserved.loginPointSafety } : null,
+		    sessionMismatchRecovery: null,
+		    leave403SnapshotRecovery: {
       streak: Math.max(0, Number(preserved.leave403SnapshotRecovery?.streak || 0) || 0),
       required: Math.max(1, Math.round(Number(cfg.leave403SnapshotSuccessRequired || 5) || 5)),
       lastOkAt: Number(preserved.leave403SnapshotRecovery?.lastOkAt || 0) || 0,
@@ -894,8 +896,9 @@ function browserBotSource(config) {
 		        },
 			        opportunityChoice: this.opportunityChoice,
 			        opportunitySwitchLock: this.opportunitySwitchLock,
-	        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
-	        loginSnapshotGate: snapshotLoginGateStatus(),
+		        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
+		        sessionMismatchRecovery: summarizeSessionMismatchRecoveryStatus(),
+		        loginSnapshotGate: snapshotLoginGateStatus(),
 	        reloginGate: summarizeReloginGateStatus(),
 	        postLoginZoom: this.postLoginZoom,
 		        exitMotionStop: {
@@ -11736,6 +11739,42 @@ ${importantLogSource()}
           ? liveSessionMismatchTakeoverState(control, noSelfExit)
           : null;
         if (!cfg.dryRun && liveSessionTakeover?.allowed) {
+          const recoveryReload = sessionMismatchRecoveryReloadSatisfied(control, noSelfExit);
+          if (!recoveryReload) {
+            const reload = requestSessionMismatchRecoveryReload(control, noSelfExit, liveSessionTakeover);
+            const waitReason = reload?.reason === 'exit-log-flush-pending'
+              ? 'exit-log-flush-pending'
+              : 'session-mismatch-refresh';
+            const displayReason = reload?.displayReason
+              || (waitReason === 'exit-log-flush-pending'
+                ? '等待退出日志发送完成，暂不刷新确认会话状态'
+                : (reload?.reason === 'state-persist-failed'
+                  ? '无法记录刷新确认状态，暂不接管'
+                  : '界面显示未登录但原生会话仍在线，先刷新页面确认状态'));
+            refreshGlobalState(false).catch(err => {
+              bot.globalState.error = err.message || String(err);
+            });
+            bot.lastDecision = {
+              kind: 'wait',
+              reason: waitReason,
+              dx: 0,
+              dy: 0,
+              currentUserId: getCurrentUserId(),
+              control,
+              visibleEntities: arrayCount(bot.globalState.entities),
+              self: null,
+              noSelfAgeMs,
+              noSelfGameSession: noSelfExit,
+              liveSessionTakeover,
+              sessionMismatchRecovery: reload?.state || summarizeSessionMismatchRecoveryStatus(),
+              sessionMismatchRecoveryReload: reload || null,
+              exitAuditFlush: reload?.exitAuditFlush || null,
+              displayReason
+            };
+            updateBotPanel(bot.lastDecision);
+            if (cfg.once) bot.stop('once');
+            return;
+          }
           const login = await maybeStartAutoLogin('session-mismatch-recovery', {
             force: true,
             ignoreSuppress: true,
@@ -11777,6 +11816,7 @@ ${importantLogSource()}
             noSelfAgeMs,
             noSelfGameSession: noSelfExit,
             liveSessionTakeover,
+            sessionMismatchRecovery: recoveryReload || summarizeSessionMismatchRecoveryStatus(),
             login,
             displayReason: sessionMismatchDisplayReason
           };
@@ -11786,6 +11826,9 @@ ${importantLogSource()}
           }
           if (cfg.once) bot.stop('once');
           return;
+        }
+        if (!noSelfExit?.sessionMismatch && bot.sessionMismatchRecovery) {
+          clearSessionMismatchRecoveryState('session mismatch resolved');
         }
         if (!cfg.dryRun && noSelfExit?.shouldLeave) {
 	          if (!bot.offlineSince) bot.offlineSince = Date.now();
@@ -11885,6 +11928,7 @@ ${importantLogSource()}
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
       const previousCoins = Number(bot.lastSelf?.coins ?? 0);
       const currentSummary = summarizeSelf(self);
+      if (bot.sessionMismatchRecovery) clearSessionMismatchRecoveryState('self restored');
       updateSessionStats(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       maybeRecordLoginPoint(currentSummary);

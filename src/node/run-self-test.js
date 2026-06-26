@@ -8635,6 +8635,24 @@ function runSelfTest() {
       want: 'false|true|true'
     },
     {
+      name: 'live session mismatch takeover waits for one controlled refresh',
+      got: (() => {
+        const matches = (state, userId) => Boolean(state?.reason === 'session-mismatch-recovery' && Number(state.userId || 0) === userId);
+        const pageReloadedAfter = (state, pageTimeOrigin) => Boolean(state?.requestedAt && pageTimeOrigin >= state.requestedAt - 500);
+        const next = (state, userId, pageTimeOrigin) => {
+          if (!matches(state, userId)) return 'refresh';
+          return pageReloadedAfter(state, pageTimeOrigin) ? 'takeover' : 'refresh';
+        };
+        return [
+          next(null, 28886, 100000),
+          next({ reason: 'session-mismatch-recovery', userId: 28886, requestedAt: 120000 }, 28886, 100000),
+          next({ reason: 'session-mismatch-recovery', userId: 28886, requestedAt: 120000 }, 28886, 121000),
+          next({ reason: 'session-mismatch-recovery', userId: 1, requestedAt: 120000 }, 28886, 121000)
+        ].join('|');
+      })(),
+      want: 'refresh|refresh|takeover|refresh'
+    },
+    {
       name: 'snapshot self can prove live session mismatch takeover evidence',
       got: (() => {
         const nativeWsOpenOrConnecting = false;
