@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.230"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.231"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -852,6 +852,13 @@
 		    };
 		  }
 
+  function recordRuntimeDiagnostics(values = {}) {
+    try {
+      if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== 'object') bot.runtimeDiagnostics = {};
+      Object.assign(bot.runtimeDiagnostics, values);
+    } catch (_) {}
+  }
+
 		  const bot = {
 	    running: true,
 	    version: cfg.version,
@@ -869,6 +876,7 @@
     lastTickCombatActive: false,
     lastCombatTickGap: null,
     lastTickReentryGapAt: 0,
+    runtimeDiagnostics: {},
     lastStatusAt: 0,
 	    lastShotAt: 0,
 	    lastAction: null,
@@ -3320,6 +3328,9 @@ function hpDisplay(value) {
 
       function combatLogRuntimeSummary(entryAt = Date.now(), decision = null) {
         const t = Number.isFinite(Number(entryAt)) ? Number(entryAt) : Date.now();
+        const diagnostics = bot.runtimeDiagnostics && typeof bot.runtimeDiagnostics === 'object'
+          ? bot.runtimeDiagnostics
+          : {};
         const thresholdMs = Math.max(1000, Number(cfg.combatTickGapOfflineMs || 0) || 0);
         const tickGapMs = Number.isFinite(Number(bot.lastTickGapMs))
           ? Math.max(0, Math.round(Number(bot.lastTickGapMs)))
@@ -3372,9 +3383,33 @@ function hpDisplay(value) {
           : (tickGapOverThreshold
             ? 'main-loop-gap'
             : (combatFrameGapOverThreshold ? 'combat-log-gap-with-active-tick' : 'normal')));
+        const lastRefresh = diagnostics.lastRefresh && typeof diagnostics.lastRefresh === 'object'
+          ? diagnostics.lastRefresh
+          : null;
+        const lastRefreshSummary = lastRefresh ? {
+          startedAt: Number(lastRefresh.startedAt || 0) || 0,
+          completedAt: Number(lastRefresh.completedAt || 0) || 0,
+          ageMs: lastRefresh.completedAt ? Math.max(0, Math.round(t - Number(lastRefresh.completedAt || t))) : null,
+          durationMs: Number.isFinite(Number(lastRefresh.durationMs)) ? Math.max(0, Math.round(Number(lastRefresh.durationMs))) : null,
+          force: Boolean(lastRefresh.force),
+          error: lastRefresh.error || '',
+          snapshot: lastRefresh.snapshot ? {
+            ok: Boolean(lastRefresh.snapshot.ok),
+            durationMs: Number.isFinite(Number(lastRefresh.snapshot.durationMs)) ? Math.max(0, Math.round(Number(lastRefresh.snapshot.durationMs))) : null,
+            error: lastRefresh.snapshot.error || ''
+          } : null,
+          minimap: lastRefresh.minimap ? {
+            ok: Boolean(lastRefresh.minimap.ok),
+            durationMs: Number.isFinite(Number(lastRefresh.minimap.durationMs)) ? Math.max(0, Math.round(Number(lastRefresh.minimap.durationMs))) : null,
+            error: lastRefresh.minimap.error || ''
+          } : null
+        } : null;
         return {
           thresholdMs,
           tickGapMs,
+          lastTickDurationMs: Number.isFinite(Number(diagnostics.lastTickDurationMs)) ? Math.max(0, Math.round(Number(diagnostics.lastTickDurationMs))) : null,
+          lastTickStartedAt: Number(diagnostics.lastTickStartedAt || 0) || 0,
+          lastTickDurationSource: diagnostics.lastTickSource || '',
           tickInProgressMs,
           lastTickCompletedGapMs,
           reentryGapOverThreshold,
@@ -3407,8 +3442,27 @@ function hpDisplay(value) {
             : diagnosis === 'main-loop-gap'
             ? 'js-or-main-loop-paused'
             : (diagnosis === 'combat-log-gap-with-active-tick' ? 'combat-state-or-log-gating-gap' : '')),
+          lastRefresh: lastRefreshSummary,
+          lastCombatLogBuildMs: Number.isFinite(Number(diagnostics.lastCombatLogBuildMs)) ? Math.max(0, Math.round(Number(diagnostics.lastCombatLogBuildMs))) : null,
+          lastCombatLogBuildAt: Number(diagnostics.lastCombatLogBuildAt || 0) || 0,
+          lastCombatLogRecordMs: Number.isFinite(Number(diagnostics.lastCombatLogRecordMs)) ? Math.max(0, Math.round(Number(diagnostics.lastCombatLogRecordMs))) : null,
+          lastCombatLogRecordAt: Number(diagnostics.lastCombatLogRecordAt || 0) || 0,
           combatTickGap: recordedCombatTickGap
         };
+      }
+
+      function buildTimedCombatLogEntry(source, decision) {
+        const buildStartedAt = Date.now();
+        const buildStartedPerf = now();
+        try {
+          return buildCombatLogEntry(source, decision);
+        } finally {
+          recordRuntimeDiagnostics({
+            lastCombatLogBuildAt: Date.now(),
+            lastCombatLogBuildStartedAt: buildStartedAt,
+            lastCombatLogBuildMs: Math.max(0, Math.round(now() - buildStartedPerf))
+          });
+        }
       }
 
       const combatLogExitSummaryFromDecision = function combatLogExitSummaryFromDecision(decision) {
@@ -3834,23 +3888,26 @@ function hpDisplay(value) {
       }
 
       function recordCombatLogTick(source, decision = bot.lastDecision) {
+        const recordStartedAt = Date.now();
+        const recordStartedPerf = now();
         const state = bot.combatLogging;
         if (!state?.enabled) return;
-        state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
-        if (!state.endpoint) return;
-        recordCoinDiagnosticsLog(source, decision || {});
-        const suspendedReason = combatLogSuspendReason(decision || {});
-        if (suspendedReason) {
-          if (state.active) {
-            const entry = buildCombatLogEntry(source, decision || {});
-            endCombatLogSession(entry, 'suspended:' + suspendedReason);
+        try {
+          state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
+          if (!state.endpoint) return;
+          recordCoinDiagnosticsLog(source, decision || {});
+          const suspendedReason = combatLogSuspendReason(decision || {});
+          if (suspendedReason) {
+            if (state.active) {
+              const entry = buildTimedCombatLogEntry(source, decision || {});
+              endCombatLogSession(entry, 'suspended:' + suspendedReason);
+            }
+            state.lastSkipReason = suspendedReason;
+            flushCombatLogs(false);
+            return;
           }
-          state.lastSkipReason = suspendedReason;
-          flushCombatLogs(false);
-          return;
-        }
-        state.lastSkipReason = '';
-        const entry = buildCombatLogEntry(source, decision || {});
+          state.lastSkipReason = '';
+          const entry = buildTimedCombatLogEntry(source, decision || {});
 	        const triggerReason = combatLogTriggerReason(entry, decision || {});
 	        const triggered = Boolean(triggerReason);
 	        const afkFrame = combatLogIsAfkAttack(entry, decision || {});
@@ -3882,6 +3939,13 @@ function hpDisplay(value) {
           }
         }
         flushCombatLogs(false);
+        } finally {
+          recordRuntimeDiagnostics({
+            lastCombatLogRecordAt: Date.now(),
+            lastCombatLogRecordStartedAt: recordStartedAt,
+            lastCombatLogRecordMs: Math.max(0, Math.round(now() - recordStartedPerf))
+          });
+        }
       }
 
 
@@ -3904,10 +3968,23 @@ function hpDisplay(value) {
       }
 
       function runTickSafely(source = 'timer') {
+        const tickStartedAt = Date.now();
+        const tickStartedPerf = now();
+        recordRuntimeDiagnostics({
+          lastTickStartedAt: tickStartedAt,
+          lastTickSource: source
+        });
         return Promise.resolve()
           .then(() => tick(source))
           .catch(err => {
             recordUnhandledTickError(source, err);
+          })
+          .finally(() => {
+            recordRuntimeDiagnostics({
+              lastTickCompletedAt: Date.now(),
+              lastTickDurationMs: Math.max(0, Math.round(now() - tickStartedPerf)),
+              lastTickSource: source
+            });
           });
       }
 
@@ -10221,9 +10298,22 @@ function hpDisplay(value) {
 	    const t = Date.now();
 	    if (!force && t - bot.globalState.refreshedAt < cfg.globalRefreshMs) return;
 	    bot.globalState.refreshedAt = t;
+	    const refreshStartedPerf = now();
+	    const requestTimings = {};
+	    const timedFetchJsonNoStore = (label, url) => {
+	      const requestStartedAt = Date.now();
+	      const requestStartedPerf = now();
+	      return fetchJsonNoStore(url).finally(() => {
+	        requestTimings[label] = {
+	          startedAt: requestStartedAt,
+	          completedAt: Date.now(),
+	          durationMs: Math.max(0, Math.round(now() - requestStartedPerf))
+	        };
+	      });
+	    };
 	    const [snapshotRes, minimapRes] = await Promise.allSettled([
-	      fetchJsonNoStore('/snapshot'),
-	      fetchJsonNoStore('/minimap')
+	      timedFetchJsonNoStore('snapshot', '/snapshot'),
+	      timedFetchJsonNoStore('minimap', '/minimap')
 	    ]);
 	    const errors = [];
 	    let snapshotError = '';
@@ -10253,6 +10343,24 @@ function hpDisplay(value) {
 	    }
 	    bot.globalState.error = errors.join('; ');
 	    const completedAt = Date.now();
+	    const refreshDiagnostic = {
+	      startedAt: t,
+	      completedAt,
+	      durationMs: Math.max(0, Math.round(now() - refreshStartedPerf)),
+	      force: Boolean(force),
+	      snapshot: {
+	        ...(requestTimings.snapshot || {}),
+	        ok: snapshotRes.status === 'fulfilled',
+	        error: snapshotError
+	      },
+	      minimap: {
+	        ...(requestTimings.minimap || {}),
+	        ok: minimapRes.status === 'fulfilled',
+	        error: minimapError
+	      },
+	      error: bot.globalState.error
+	    };
+	    recordRuntimeDiagnostics({ lastRefresh: refreshDiagnostic });
 	    if (errors.length) {
 	      const previous = bot.globalState.samplingOutage || null;
 	      const firstAt = previous?.active ? (Number(previous.firstAt || 0) || t) : t;
@@ -10273,7 +10381,14 @@ function hpDisplay(value) {
 	        visibilityState: document.visibilityState || '',
 	        refreshedAt: bot.globalState.refreshedAt,
 	        snapshotRefreshedAt: bot.globalState.snapshotRefreshedAt || 0,
-	        snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, completedAt - bot.globalState.snapshotRefreshedAt) : null
+	        snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, completedAt - bot.globalState.snapshotRefreshedAt) : null,
+	        refreshDurationMs: refreshDiagnostic.durationMs,
+	        snapshotDurationMs: Number.isFinite(Number(refreshDiagnostic.snapshot.durationMs)) ? refreshDiagnostic.snapshot.durationMs : null,
+	        minimapDurationMs: Number.isFinite(Number(refreshDiagnostic.minimap.durationMs)) ? refreshDiagnostic.minimap.durationMs : null,
+	        lastTickDurationMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastTickDurationMs)) ? bot.runtimeDiagnostics.lastTickDurationMs : null,
+	        lastTickSource: bot.runtimeDiagnostics?.lastTickSource || '',
+	        lastCombatLogBuildMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastCombatLogBuildMs)) ? bot.runtimeDiagnostics.lastCombatLogBuildMs : null,
+	        lastCombatLogRecordMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastCombatLogRecordMs)) ? bot.runtimeDiagnostics.lastCombatLogRecordMs : null
 	      };
 	      outage.combatActive = combatTickActiveFromState({
 	        decision: bot.lastDecision,
@@ -13889,7 +14004,14 @@ function hpDisplay(value) {
       minimapError: outage.minimapError || '',
       snapshotTimedOut: Boolean(outage.snapshotTimedOut),
       minimapTimedOut: Boolean(outage.minimapTimedOut),
-      snapshotAgeMs: Number.isFinite(Number(outage.snapshotAgeMs)) ? Math.max(0, Math.round(Number(outage.snapshotAgeMs))) : null
+      snapshotAgeMs: Number.isFinite(Number(outage.snapshotAgeMs)) ? Math.max(0, Math.round(Number(outage.snapshotAgeMs))) : null,
+      refreshDurationMs: Number.isFinite(Number(outage.refreshDurationMs)) ? Math.max(0, Math.round(Number(outage.refreshDurationMs))) : null,
+      snapshotDurationMs: Number.isFinite(Number(outage.snapshotDurationMs)) ? Math.max(0, Math.round(Number(outage.snapshotDurationMs))) : null,
+      minimapDurationMs: Number.isFinite(Number(outage.minimapDurationMs)) ? Math.max(0, Math.round(Number(outage.minimapDurationMs))) : null,
+      lastTickDurationMs: Number.isFinite(Number(outage.lastTickDurationMs ?? bot.runtimeDiagnostics?.lastTickDurationMs)) ? Math.max(0, Math.round(Number(outage.lastTickDurationMs ?? bot.runtimeDiagnostics?.lastTickDurationMs))) : null,
+      lastTickSource: outage.lastTickSource || bot.runtimeDiagnostics?.lastTickSource || '',
+      lastCombatLogBuildMs: Number.isFinite(Number(outage.lastCombatLogBuildMs ?? bot.runtimeDiagnostics?.lastCombatLogBuildMs)) ? Math.max(0, Math.round(Number(outage.lastCombatLogBuildMs ?? bot.runtimeDiagnostics?.lastCombatLogBuildMs))) : null,
+      lastCombatLogRecordMs: Number.isFinite(Number(outage.lastCombatLogRecordMs ?? bot.runtimeDiagnostics?.lastCombatLogRecordMs)) ? Math.max(0, Math.round(Number(outage.lastCombatLogRecordMs ?? bot.runtimeDiagnostics?.lastCombatLogRecordMs))) : null
     };
   }
 
