@@ -1,12 +1,13 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `272`.
+- Latest bot self-test count: `279`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `19`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
+  - leave-success exit confirmation now has bot self-tests for refreshing before confirmation, marking restored pending-exit state as reloaded, retrying the original pending exit when refreshed state is still online, and confirming only when refreshed state is offline. Static verification requires durable pending-exit storage, durable ordinary pending combat-log storage, startup restore, no direct plain `leave-success` confirmation, no normal leave-success session-end important log before confirmation, and clear/update paths for persisted pending exits;
   - session-mismatch recovery now has bot self-tests for explicit live-session takeover bypass state, fresh snapshot-self live evidence, and post-exit blockers including pending exit, login suppress, exit-reset snapshot gate, reconnect churn, and offline-ish WebSocket state;
   - persistent login-point safety now has bot self-test coverage for preserving `lastLoginAt` across hot updates, and static verification requires localStorage login-point coordinates to win over empty/stale memory, missing login points to block the safety gate explicitly, OAuth/callback/session timestamp inference to feed login-point recording, and reset paths to clear only the safety streak without clearing the persisted point;
   - combat/recent-combat global sampling outage now has bot self-tests for explicit offline summary text, combat-triggered offline leave gating, the default non-combat guard, and top-level `exit` summary fallback for `control-global-sampling-outage` frames without `leave` detail;

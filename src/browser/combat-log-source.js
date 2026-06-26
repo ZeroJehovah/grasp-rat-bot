@@ -57,6 +57,60 @@ function combatLogSource(helpers = {}) {
         return normalizeCombatLogFailedState(state);
       }
 
+      function combatLogPersistentEntryKey(entry) {
+        return combatLogEntryFailureKey(entry);
+      }
+
+      function shouldPersistCombatLogPendingEntry(entry) {
+        return Boolean(entry && typeof entry === 'object'
+          && !entry.criticalLog
+          && !entry.exitAuditLogId
+          && !entry.importantLog
+          && entry.type !== 'important-log');
+      }
+
+      function readPersistedCombatLogPendingEntries() {
+        try {
+          const raw = localStorage.getItem(COMBAT_LOG_PENDING_ENTRIES_KEY) || '[]';
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object') : [];
+        } catch (_) {
+          return [];
+        }
+      }
+
+      function writePersistedCombatLogPendingEntries(entries) {
+        try {
+          const list = Array.isArray(entries)
+            ? entries.filter(shouldPersistCombatLogPendingEntry)
+            : [];
+          const byKey = new Map();
+          for (const entry of list) {
+            const key = combatLogPersistentEntryKey(entry);
+            if (key) byKey.set(key, safeJsonClone(entry) || entry);
+          }
+          localStorage.setItem(COMBAT_LOG_PENDING_ENTRIES_KEY, safeStringify(Array.from(byKey.values()).slice(-1000)));
+        } catch (_) {}
+      }
+
+      function persistCombatLogPendingEntries() {
+        const state = bot.combatLogging || {};
+        const existing = readPersistedCombatLogPendingEntries();
+        const pending = Array.isArray(state.pending) ? state.pending : [];
+        writePersistedCombatLogPendingEntries(existing.concat(pending));
+        return readPersistedCombatLogPendingEntries().length;
+      }
+
+      function removePersistedCombatLogPendingEntries(entries) {
+        const keys = new Set((Array.isArray(entries) ? entries : [entries])
+          .map(combatLogPersistentEntryKey)
+          .filter(Boolean));
+        if (!keys.size) return;
+        const remaining = readPersistedCombatLogPendingEntries()
+          .filter(entry => !keys.has(combatLogPersistentEntryKey(entry)));
+        writePersistedCombatLogPendingEntries(remaining);
+      }
+
       function configureCombatLogging(options = {}) {
         const next = options && typeof options === 'object' ? options : {};
         if (Object.prototype.hasOwnProperty.call(next, 'endpoint')) {
@@ -75,6 +129,7 @@ function combatLogSource(helpers = {}) {
           bot.combatLogging.active = false;
           bot.combatLogging.combatId = '';
         }
+        restorePersistedCombatLogPendingEntries();
         restoreImportantLogsForRemote();
         if (Array.isArray(bot.combatLogging?.pending) && bot.combatLogging.pending.length) {
           flushCombatLogs(true);
@@ -97,6 +152,7 @@ function combatLogSource(helpers = {}) {
           activeAgeMs: state.startedAt ? Math.max(0, Math.round(t - Number(state.startedAt || t))) : 0,
           lastCombatAgeMs: state.lastCombatAt ? Math.max(0, Math.round(t - Number(state.lastCombatAt || t))) : null,
           pending: Array.isArray(state.pending) ? state.pending.length : 0,
+          persistedPending: readPersistedCombatLogPendingEntries().length,
           preBuffer: Array.isArray(state.preBuffer) ? state.preBuffer.length : 0,
           exitAuditPending,
           exitAuditBlocking: exitAuditPending > 0,
@@ -251,6 +307,25 @@ function combatLogSource(helpers = {}) {
           }
         }
         bot.exitAudit.restored = added;
+        if (added) flushCombatLogs(true);
+        return added;
+      }
+
+      function restorePersistedCombatLogPendingEntries() {
+        const state = bot.combatLogging;
+        if (!state || !state.endpoint) return 0;
+        if (!Array.isArray(state.pending)) state.pending = [];
+        const restored = readPersistedCombatLogPendingEntries();
+        let added = 0;
+        const existing = new Set(state.pending.map(combatLogPersistentEntryKey).filter(Boolean));
+        for (const entry of restored) {
+          const key = combatLogPersistentEntryKey(entry);
+          if (!key || existing.has(key)) continue;
+          state.pending.unshift(entry);
+          existing.add(key);
+          added += 1;
+        }
+        state.restoredPending = added;
         if (added) flushCombatLogs(true);
         return added;
       }
@@ -1165,6 +1240,7 @@ function combatLogSource(helpers = {}) {
           state.pending.splice(dropIndex, 1);
           state.dropped += 1;
         }
+        if (shouldPersistCombatLogPendingEntry(queued)) persistCombatLogPendingEntries();
         return true;
       }
 
@@ -1287,6 +1363,7 @@ function combatLogSource(helpers = {}) {
             state.lastError = '';
             markCombatLogEntriesSent(entries);
             if (exitAuditIds.length) removePersistedExitAuditLogs(exitAuditIds);
+            removePersistedCombatLogPendingEntries(entries);
             if (importantLogIds.length) markImportantLogsRemoteSent(importantLogIds, state.lastOkAt);
           })
           .catch(err => {
@@ -1307,6 +1384,7 @@ function combatLogSource(helpers = {}) {
               state.pending.splice(dropIndex, 1);
               state.dropped += 1;
             }
+            persistCombatLogPendingEntries();
           })
           .finally(() => {
             if (exitAuditIds.length && Array.isArray(state.sendingExitAuditIds)) {

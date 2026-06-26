@@ -37,6 +37,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'loginSnapshotSuccessRequired', value: 3 },
+  { key: 'pendingExitPersistMaxMs', value: 3600000 },
+  { key: 'leaveSuccessReloadUnknownGraceMs', value: 12000 },
   { key: 'loginPointSafetySuccessRequired', value: 12 },
   { key: 'loginPointSafetyRadius', value: 60000 },
   { key: 'loginPointSafetyMoveThreshold', value: 500 },
@@ -822,6 +824,49 @@ function main() {
       assert(text.includes('等待会话结束日志发送完成'), 'session-end flush wait is not exposed with a Chinese display reason');
       assert(text.includes('下一次登录时发现上一局已结束，按下一次登录时间收口'), 'next-login inferred session closure still uses the old missing-exit wording');
     });
+    check(`${file} confirms leave success through reload and durable pending state`, () => {
+      assert(text.includes("const COMBAT_LOG_PENDING_ENTRIES_KEY = 'graspRatCombatLogPendingEntries'"), 'ordinary combat pending log storage key not found');
+      assert(text.includes("const PENDING_EXIT_STATE_KEY = 'graspRatPendingExitState'"), 'pending exit storage key not found');
+      assert(text.includes('function normalizePendingExitStateForStorage'), 'pending exit storage normalizer not found');
+      assert(text.includes('function readPersistedPendingExitState'), 'pending exit storage reader not found');
+      assert(text.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot })'), 'pending exit state is not restored with reload marker on cold page load');
+      assert(text.includes('pendingExit: initialPendingExitState'), 'bot startup does not use restored pending exit state');
+      assert(text.includes('restorePersistedCombatLogPendingEntries();'), 'ordinary pending combat logs are not restored at startup');
+      const queueBody = functionBody(text, 'queueCombatLogEntry');
+      assert(queueBody.includes('shouldPersistCombatLogPendingEntry(queued)') && queueBody.includes('persistCombatLogPendingEntries()'), 'ordinary combat log entries are not persisted when queued');
+      const flushBody = functionBody(text, 'flushCombatLogs');
+      assert(flushBody.includes('removePersistedCombatLogPendingEntries(entries)'), 'persisted ordinary combat logs are not cleared after successful flush');
+      assert(flushBody.includes('persistCombatLogPendingEntries()'), 'failed combat log flushes do not keep pending entries durable');
+      const reloadBody = functionBody(text, 'requestLeaveConfirmationReload');
+      assert(reloadBody.includes('persistCombatLogPendingEntries()'), 'leave-success confirmation reload does not persist ordinary pending logs before refresh');
+      assert(!reloadBody.includes('closeCurrentImportantSessionBeforeReload'), 'leave-success confirmation reload can prematurely close the important session');
+      assert(reloadBody.includes('writePersistentPendingExitState(pending)'), 'leave-success confirmation reload does not persist pending exit before refresh');
+      assert(reloadBody.includes("reason: 'leave-success-refresh-confirmation'"), 'leave-success confirmation reload reason not exposed');
+      const pendingBody = functionBody(text, 'handlePendingExit');
+      assert(pendingBody.includes('leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)'), 'pending exit handler does not require leave-success reload marker');
+      assert(pendingBody.includes("requestLeaveConfirmationReload('leave-success', pending)"), 'pending exit handler does not request confirmation reload for successful leave');
+      assert(pendingBody.includes("source: 'leave-success-refresh-confirmed'"), 'pending exit handler does not confirm from refreshed offline state');
+      assert(pendingBody.includes("source: 'leave-success-refresh-still-online'"), 'pending exit handler does not retry when refreshed state is still online');
+      assert(pendingBody.includes("source: 'leave-success-refresh-unknown-timeout'"), 'pending exit handler does not retry after unknown refreshed state');
+      assert(!pendingBody.includes("source: 'leave-success',"), 'pending exit handler still directly confirms plain leave success');
+      const maybeBody = functionBody(text, 'maybeConfirmPendingExitFromLeaveDetail');
+      assert(maybeBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'leave success completion does not route to confirmation reload');
+      assert(!/leaveDetailSucceeded\(detail\)[\s\S]{0,180}confirmPendingExit/.test(maybeBody), 'leave success completion still directly confirms pending exit');
+      const completeBody = functionBody(text, 'completeLeaveRequest');
+      assert(completeBody.includes("if (leaveDetailHasHttp403(detail))"), 'leave completion does not isolate HTTP 403 session-end logging');
+      assert(!completeBody.includes("noteImportantSessionExit((leaveDetailHasHttp403(detail) ? 'leave-http-403:' : 'leave-success:')"), 'normal leave success still writes session-end important log before reload confirmation');
+      assert(completeBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'async leave completion does not request confirmation reload');
+      const rememberBody = functionBody(text, 'rememberPendingExit');
+      assert(rememberBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'sync leave pending creation does not request confirmation reload');
+      const updateBody = functionBody(text, 'updatePendingExitLastResult');
+      assert(updateBody.includes('writePersistentPendingExitState(bot.pendingExit)'), 'pending exit last result updates are not durable');
+      const retryBody = functionBody(text, 'retryPendingExit');
+      assert(retryBody.includes('writePersistentPendingExitState(bot.pendingExit)') && retryBody.includes('writePersistentPendingExitState(next)'), 'pending exit retry state is not durable');
+      const confirmBody = functionBody(text, 'confirmPendingExit');
+      assert(confirmBody.includes('clearPersistentPendingExitState()'), 'confirmed pending exit does not clear persisted pending exit state');
+      const clearBody = functionBody(text, 'clearCurrentReloginHold');
+      assert(clearBody.includes('clearPersistentPendingExitState()'), 'manual relogin hold clear does not clear persisted pending exit state');
+    });
     check(`${file} keeps failed leave attempts pending until confirmed`, () => {
       assert(countMatches(text, /if \(detail\.attempted \|\| detail\.exitAuditId\)/g) >= 4, 'failed/non-attempted exit audit leaves are not remembered as pending exits');
       const pendingBody = functionBody(text, 'handlePendingExit');
@@ -1494,6 +1539,10 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'retreat ignored target is not reselected without incoming bullet'"), 'retreat-ignore target selection self-test not found');
     assert(nodeSelfTestSource.includes("name: 'incoming bullet can reengage retreat ignored target'"), 'retreat-ignore incoming override self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'leave success requests refresh before confirmation'"), 'leave-success refresh request self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'restored leave success pending exit marks reload confirmation'"), 'restored pending exit reload marker self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'refreshed leave success still online retries original pending exit'"), 'refreshed still-online retry self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'refreshed leave success offline confirms exit'"), 'refreshed offline confirmation self-test not found');
     assert(nodeSelfTestSource.includes("name: 'offline sampling outage summary is explicit'"), 'sampling outage summary self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat sampling outage triggers offline leave gate'"), 'combat sampling outage trigger self-test not found');
     assert(nodeSelfTestSource.includes("name: 'non-combat sampling outage does not trigger by default'"), 'non-combat sampling outage guard self-test not found');
