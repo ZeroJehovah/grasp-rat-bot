@@ -50,6 +50,7 @@ function runSelfTest() {
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
+    combatDodgeRangeBuffer: 1000,
     combatDisengageRange: 17000,
     combatLowValueActiveDropMax: 3,
     highValueCoinPriorityAmount: 10,
@@ -2503,6 +2504,10 @@ function runSelfTest() {
     if (isActive(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
   }
+  function combatDodgeThreatRange() {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    return attackRange + Math.max(0, Number(cfg.combatDodgeRangeBuffer || 0));
+  }
   function isProfitableCombatTarget(target) {
     return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isActive(target) && Number(target.drop || 0) > lowValueActiveDropMax());
   }
@@ -2522,7 +2527,8 @@ function runSelfTest() {
       || combatHpGapDisadvantaged(self, target);
   }
   function pickCombatTarget(self, entities, bullets = [], options = {}) {
-    const candidateRange = Number(cfg.combatAttackRange || 0);
+    const attackRange = Number(cfg.combatAttackRange || 0);
+    const candidateRange = options.mode === 'defensive' ? combatDodgeThreatRange() : attackRange;
     const candidates = entities
       .filter(e => Number(e.user_id) !== Number(self.user_id))
       .filter(isAlive)
@@ -2537,6 +2543,7 @@ function runSelfTest() {
     }
     const eligibleTargets = candidates
       .filter(e => !isAfkProfitTarget(e))
+      .filter(e => !(Number(e.distance || 0) > attackRange) || incomingOwnerMatchesTarget(e, incomingOwnerId) || (unknownIncoming && isFiringEntity(e)))
       .filter(e => !combatRetreatIgnoreActive(e));
     const defensiveTargets = eligibleTargets
       .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
@@ -4039,6 +4046,50 @@ function runSelfTest() {
       targetRealBulletPressure
     );
     if (Number(target.distance || 0) > Number(cfg.combatAttackRange || 0)) {
+      if (anyThreat && !anyThreat.synthetic && Number(target.distance || 0) <= combatDodgeThreatRange()) {
+        const preciseSign = combatPreciseStrafeSign(anyThreat);
+        const threatFieldBase = combatStrafeVectorForTest(self, target, anyThreat, preciseSign || 1, { preferClosing: false });
+        const threatField = combatBulletThreatFieldForTest(self, anyThreat.threats || [anyThreat], {
+          preferred: threatFieldBase,
+          target,
+          preferClosing: false
+        });
+        const dx = threatField ? threatField.dx : threatFieldBase.dx;
+        const dy = threatField ? threatField.dy : threatFieldBase.dy;
+        return {
+          kind: 'attack',
+          reason: 'combat-out-of-range-dodge',
+          combat: true,
+          combatDodgeOnly: true,
+          shoot: false,
+          forceShoot: false,
+          dx,
+          dy,
+          target: {
+            id: target.user_id,
+            distance: Math.round(Number(target.distance || 0)),
+            combatDodgeOnly: true
+          },
+          combatState: {
+            dodgeOnly: {
+              distance: Math.round(Number(target.distance || 0)),
+              attackRange: Math.round(Number(cfg.combatAttackRange || 0)),
+              dodgeRange: Math.round(combatDodgeThreatRange()),
+              buffer: Math.max(0, Math.round(combatDodgeThreatRange() - Number(cfg.combatAttackRange || 0))),
+              reason: 'incoming-bullet-outside-attack-range'
+            },
+            incomingBullet: {
+              ownerId: anyThreat.ownerId,
+              distance: Math.round(Number(anyThreat.distance || 0))
+            },
+            threatField: threatField ? {
+              dx: threatField.dx,
+              dy: threatField.dy,
+              directHitCount: threatField.directHitCount
+            } : null
+          }
+        };
+      }
       if (outOfRangeFinishPressure.active) {
         return {
           kind: 'attack',
@@ -4596,13 +4647,18 @@ function runSelfTest() {
   }
 
   function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
-    const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const dodgeRange = combatDodgeThreatRange();
     const { ownerId: incomingOwnerId, unknownIncoming } = incomingBulletInfo(self, bullets);
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
       .filter(threat => hasCombatActivitySignalForTest(threat))
       .filter(threat => !isLowValueActiveCombatTarget(threat) || lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming))
-      .filter(threat => Number(threat.distance || 0) <= range)
+      .filter(threat => {
+        const distance = Number(threat.distance || 0);
+        if (!(distance > attackRange)) return distance <= attackRange;
+        return distance <= dodgeRange && (incomingOwnerMatchesTarget(threat, incomingOwnerId) || (unknownIncoming && isFiringEntity(threat)));
+      })
       .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity))[0] || null;
   }
 
@@ -5728,6 +5784,18 @@ function runSelfTest() {
       want: 'recover:false:'
     },
     {
+      name: 'out-of-range incoming bullet dodges without shooting',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 90, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 4, x: 15100, y: 0, current_join_mode: 'Active', hp: 100, vx: 0, death_reward_preview: 1 }],
+          bullets: [{ owner_id: 4, x: 12000, y: 0, vx: -500, vy: 0 }]
+        });
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + Boolean(action.combatDodgeOnly) + ':' + action.combatState?.dodgeOnly?.dodgeRange;
+      })(),
+      want: 'attack:combat-out-of-range-dodge:true:false:true:15500'
+    },
+    {
       name: 'engaged out-of-range combat target waits instead of chasing',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 1000, lastInRangeAt: Date.now() - 1000, distance: 14000, hp: 100 };
@@ -5743,7 +5811,7 @@ function runSelfTest() {
       want: 'wait:combat-out-of-range-hold:true:false:0:0:false'
     },
     {
-      name: 'engaged slight out-of-range bullet pressure reengages instead of holding',
+      name: 'engaged slight out-of-range bullet pressure dodges without shooting',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 72, intent: 'engaged' };
         const action = chooseCombatAction(
@@ -5753,12 +5821,12 @@ function runSelfTest() {
         );
         bot.combatTarget = null;
         bot.combatRetreatIgnore.clear();
-        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + action.dx + ':' + action.dy + ':' + action.combatState?.outOfRangeReengage?.reason;
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + Boolean(action.combatDodgeOnly) + ':' + action.combatState?.dodgeOnly?.dodgeRange;
       })(),
-      want: 'attack:combat-out-of-range-reengage:true:false:1:0:target-real-bullet-pressure'
+      want: 'attack:combat-out-of-range-dodge:true:false:true:15500'
     },
     {
-      name: 'target-owned out-of-range pressure reengages with recoverable hp gap',
+      name: 'target-owned out-of-range pressure dodges before recoverable hp reengage',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 91, intent: 'engaged' };
         const action = chooseCombatAction(
@@ -5771,12 +5839,12 @@ function runSelfTest() {
         return [
           action.kind,
           action.reason,
-          action.combatState?.outOfRangeReengage?.hpGap,
-          action.combatState?.outOfRangeReengage?.maxHpGap,
-          action.combatState?.outOfRangeReengage?.baseMaxHpGap
+          Boolean(action.shoot),
+          Boolean(action.combatDodgeOnly),
+          action.combatState?.dodgeOnly?.buffer
         ].join(':');
       })(),
-      want: 'attack:combat-out-of-range-reengage:18:20:10'
+      want: 'attack:combat-out-of-range-dodge:false:true:1000'
     },
     {
       name: 'non-pressure out-of-range reengage keeps base hp gap guard',

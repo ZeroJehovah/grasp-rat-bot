@@ -40,6 +40,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     nativeEntityAuthoritativeRadius: 42000,
     nativeCoinAuthoritativeRadius: 50000,
     combatAttackRange: 14500,
+    combatDodgeRangeBuffer: 1000,
     combatDisengageRange: 17000,
     combatLowValueActiveDropMax: 3,
     highValueCoinPriorityAmount: 10,

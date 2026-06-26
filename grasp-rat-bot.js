@@ -5365,6 +5365,15 @@ ${importantLogSource()}
         if (isCurrentlyActive(a) !== isCurrentlyActive(b)) return isCurrentlyActive(a) ? -1 : 1;
         return a.distance - b.distance;
       });
+    const combatDodgeOnlyCandidateRangeValue = combatDodgeOnlyCandidateRange(self);
+    const combatDodgeOnlyTargets = attackableEntities
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e), knownHp: knownHpValue(e) }))
+      .filter(e => !isInvulnerable(e))
+      .filter(e => e.native)
+      .filter(e => e.distance > combatCandidateRange)
+      .filter(e => e.distance <= combatDodgeOnlyCandidateRangeValue)
+      .map(e => ({ ...e, combatDodgeOnlyCandidate: true }))
+      .sort((a, b) => a.distance - b.distance);
 	    const snapshotCoins = allCoins.filter(c => isSnapshotOnlyCoin(c) && c.distance <= cfg.snapshotCoinMaxDistance);
 	    return {
       entities,
@@ -5386,10 +5395,11 @@ ${importantLogSource()}
       realtimePatrolCoins,
       scanCoins,
       realtimeScanCoins,
-      nearbyHumans,
-      combatTargets,
-      bullets
-    };
+	      nearbyHumans,
+	      combatTargets,
+      combatDodgeOnlyTargets,
+	      bullets
+	    };
 	  }
 
   function summarizeOfflineThreat(entity) {
@@ -5448,7 +5458,8 @@ ${importantLogSource()}
   }
 
   function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
-    const range = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    const dodgeRange = combatDodgeThreatRange();
     const incoming = incomingBulletThreat(self, null, bullets);
     const incomingOwnerId = incoming?.ownerId;
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
@@ -5456,7 +5467,11 @@ ${importantLogSource()}
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
       .filter(threat => hasCombatActivitySignal(threat))
       .filter(threat => !isLowValueActiveCombatTarget(threat) || lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming))
-      .filter(threat => Number(threat.distance || 0) <= range)
+      .filter(threat => {
+        const distance = Number(threat.distance || 0);
+        if (!(distance > attackRange)) return distance <= attackRange;
+        return distance <= dodgeRange && (incomingOwnerMatchesTarget(threat, incomingOwnerId) || (unknownIncoming && isFiringEntity(threat)));
+      })
       .sort((a, b) => {
         if (hasCombatActivitySignal(a) !== hasCombatActivitySignal(b)) return hasCombatActivitySignal(a) ? -1 : 1;
         if (isFiringEntity(a) !== isFiringEntity(b)) return isFiringEntity(a) ? -1 : 1;
@@ -5714,6 +5729,11 @@ ${importantLogSource()}
     return Boolean(recentCombatInjuryActive() && (isFiringEntity(target) || isCurrentlyActive(target)));
   }
 
+  function combatDodgeThreatRange() {
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
+    return attackRange + Math.max(0, Number(cfg.combatDodgeRangeBuffer || 0));
+  }
+
   function combatTargetPriority(target, incomingOwnerId = null, unknownIncoming = false) {
     const incomingMatch = incomingOwnerId !== null && incomingOwnerId !== undefined && String(target.user_id) === String(incomingOwnerId);
     return (incomingMatch ? 1000000000 : 0)
@@ -5766,6 +5786,7 @@ ${importantLogSource()}
     }
     const eligibleTargets = combatTargets
       .filter(target => !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target))
+      .filter(target => !target.combatDodgeOnlyCandidate || incomingOwnerMatchesTarget(target, incomingOwnerId) || (unknownIncoming && isFiringEntity(target)))
       .filter(target => !combatRetreatIgnoreActive(target));
     if (!eligibleTargets.length) return null;
     const defensiveTargets = eligibleTargets
@@ -5801,6 +5822,10 @@ ${importantLogSource()}
 
   function combatTargetCandidateRange(self) {
     return Number(cfg.combatAttackRange || 0);
+  }
+
+  function combatDodgeOnlyCandidateRange(self) {
+    return combatDodgeThreatRange();
   }
 
   function combatEngagedCandidate(self, raw) {
@@ -6886,6 +6911,99 @@ ${importantLogSource()}
       laneDistance: 0,
       synthetic: true,
       reason: recentlyInjured ? 'recent-injury' : 'target-pressure'
+    };
+  }
+
+  function combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget = null) {
+    if (!pressure || pressure.synthetic) return null;
+    const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
+    const dodgeRange = combatDodgeThreatRange();
+    const targetDistance = Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target);
+    if (!attackRange || !(targetDistance > attackRange) || !(targetDistance <= dodgeRange)) return null;
+    const spacing = combatSpacingVector(self, target, targetDistance);
+    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: false });
+    const spacingOverride = combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
+    let combatMove = mergeCombatMove(strafe, spacing, spacingOverride);
+    const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
+      ? {
+        reason: 'stamina-5s-exhausted',
+        stamina5s: staminaRemaining(self, '5s'),
+        thresholdMs: staminaExhaustedThreshold(),
+        requestedDx: combatMove.dx,
+        requestedDy: combatMove.dy
+      }
+      : null;
+    if (movementSuppressed) combatMove = { ...combatMove, dx: 0, dy: 0, movementSuppressed: true };
+    const spacingActive = Boolean(spacing.active && (combatMove.dx || combatMove.dy));
+    return {
+      kind: 'attack',
+      reason: movementSuppressed ? 'combat-stamina-hold' : (spacingOverride ? 'combat-spacing-dodge' : 'combat-out-of-range-dodge'),
+      combat: true,
+      combatDodgeOnly: true,
+      ignoreReturnBlock: true,
+      shoot: false,
+      forceShoot: false,
+      dx: combatMove.dx,
+      dy: combatMove.dy,
+      target: {
+        ...baseTarget,
+        combatDodgeOnly: true
+      },
+      incomingBullet: {
+        id: pressure.id,
+        ownerId: pressure.ownerId,
+        distance: Math.round(Number(pressure.distance || 0)),
+        laneDistance: Math.round(Number(pressure.laneDistance || 0)),
+        signedLaneDistance: Number.isFinite(Number(pressure.signedLaneDistance)) ? Math.round(Number(pressure.signedLaneDistance)) : null,
+        timeToImpactMs: Number.isFinite(Number(pressure.timeToImpactMs)) ? Math.round(Number(pressure.timeToImpactMs)) : null,
+        threatCount: Number(pressure.threatCount || (Array.isArray(pressure.threats) ? pressure.threats.length : 1)),
+        synthetic: false,
+        reason: pressure.reason || 'incoming-bullet'
+      },
+      combatState: {
+        selfHp,
+        targetHp,
+        dodgeOnly: {
+          distance: Math.round(targetDistance),
+          attackRange: Math.round(attackRange),
+          dodgeRange: Math.round(dodgeRange),
+          buffer: Math.max(0, Math.round(dodgeRange - attackRange)),
+          reason: 'incoming-bullet-outside-attack-range'
+        },
+        strafe: {
+          dx: combatMove.dx,
+          dy: combatMove.dy,
+          sign: strafe.sign,
+          precise: Boolean(strafe.precise),
+          locked: Boolean(strafe.locked),
+          lockOverridden: Boolean(strafe.lockOverridden),
+          closingBiased: Boolean(strafe.closingBiased),
+          carried: Boolean(strafe.carried),
+          holdRemainingMs: strafe.holdRemainingMs || 0,
+          carryRemainingMs: strafe.carryRemainingMs || 0,
+          spacingMerged: Boolean(combatMove.spacingMerged),
+          threatField: strafe.threatField ? {
+            dx: strafe.threatField.dx,
+            dy: strafe.threatField.dy,
+            directHitCount: strafe.threatField.directHitCount,
+            minCpaDistance: Number.isFinite(Number(strafe.threatField.minCpaDistance)) ? Math.round(Number(strafe.threatField.minCpaDistance)) : null,
+            minTimeToImpactMs: Number.isFinite(Number(strafe.threatField.minTimeToImpactMs)) ? Math.round(Number(strafe.threatField.minTimeToImpactMs)) : null
+          } : null
+        },
+        spacing: spacingActive ? {
+          dx: spacing.dx,
+          dy: spacing.dy,
+          reason: spacing.reason,
+          distance: Math.round(spacing.distance),
+          minRange: Math.round(spacing.minRange),
+          preferredRange: Math.round(spacing.preferredRange),
+          radialSpeed: Number.isFinite(Number(spacing.radialSpeed)) ? Math.round(Number(spacing.radialSpeed)) : null,
+          merged: Boolean(combatMove.spacingMerged),
+          overrideBullet: Boolean(spacingOverride)
+        } : null,
+        movementSuppressed,
+        retreatingTarget: retreatingTarget?.active ? retreatingTarget : null
+      }
     };
   }
 
@@ -8769,6 +8887,8 @@ ${importantLogSource()}
       targetRealBulletPressure
     );
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
+      const outOfRangeDodge = combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget);
+      if (outOfRangeDodge) return outOfRangeDodge;
       if (outOfRangeFinishPressure.active) {
         return {
           kind: 'attack',
@@ -10667,6 +10787,7 @@ ${importantLogSource()}
       realtimeScanCoins,
       nearbyHumans,
       combatTargets,
+      combatDodgeOnlyTargets,
       bullets
     } = classify(self);
     bot.lastActionEntities = entities;
@@ -10679,7 +10800,7 @@ ${importantLogSource()}
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities, bullets);
-    const defensiveCombatTarget = pickCombatTarget(self, combatTargets, bullets, { mode: 'defensive' });
+    const defensiveCombatTarget = pickCombatTarget(self, [...combatTargets, ...combatDodgeOnlyTargets], bullets, { mode: 'defensive' });
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -11814,7 +11935,7 @@ ${importantLogSource()}
           rememberAttack(self, action.target, action.kind, action);
         }
         setLastTarget('enemy', action.target.id);
-        if (action.combat) rememberCombatEngagement(self, action.target, action);
+        if (action.combat && !action.combatDodgeOnly) rememberCombatEngagement(self, action.target, action);
       } else if (action.kind === 'wait' && action.combat && action.target) {
         setLastTarget('enemy', action.target.id);
         rememberCombatEngagement(self, action.target, action);
@@ -11822,7 +11943,7 @@ ${importantLogSource()}
         setLastTarget('coin', action.target.id);
       } else if ((action.kind === 'seek-enemy' || action.kind === 'seek-drop') && action.target) {
         setLastTarget('enemy', action.target.id);
-        if (action.combat) rememberCombatEngagement(self, action.target, action);
+        if (action.combat && !action.combatDodgeOnly) rememberCombatEngagement(self, action.target, action);
         else rememberAttack(self, action.target, action.kind, action);
       } else if (action.kind === 'flee') {
         bot.lastTarget = null;
