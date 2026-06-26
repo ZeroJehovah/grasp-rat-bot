@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.214"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.215"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -3091,7 +3091,7 @@ function hpDisplay(value) {
   const decisionReason = String(decision?.reason || '');
   const pendingExit = decision?.pendingExit && typeof decision.pendingExit === 'object' ? decision.pendingExit : null;
   const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : '';
-  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|control-combat|stamina-exhausted/.test(decisionReason)
+  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat)|stamina-exhausted/.test(decisionReason)
     ? decisionReason
     : '';
   const reason = canonicalCombatReason
@@ -3103,7 +3103,7 @@ function hpDisplay(value) {
   const isExit = Boolean(leave)
     || Boolean(pendingExit)
     || decision?.kind === 'leave'
-    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-ws|stamina-exhausted/.test(reason);
+    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat)|stamina-exhausted/.test(reason);
   if (!isExit) return null;
   return {
     reason,

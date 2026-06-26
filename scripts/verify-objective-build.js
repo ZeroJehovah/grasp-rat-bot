@@ -651,6 +651,7 @@ function main() {
         : functionBody(text, 'combatLogExitSummaryFromDecision');
       assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
       assert(body.includes('exitishDecisionReason'), 'decision exit reason fallback not found for cooldown leave detail');
+      assert(body.includes('control-(?:ws|global|combat)'), 'control outage decision reasons are not all treated as exit summaries');
       assert(body.includes("pendingExit ? 'pending-exit-active'"), 'pending exit fallback not found for active pending exit frames');
       assert(body.includes('safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed)'), 'safe relogin marker not included in top-level exit summary');
       assert(body.includes('offlineSafety: detail.offlineSafety || decision?.offlineSafety || null'), 'offline safety not included in top-level exit summary');
