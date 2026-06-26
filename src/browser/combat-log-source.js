@@ -1129,6 +1129,7 @@ function combatLogSource(helpers = {}) {
           combatAim: bot.combatAim || null,
           control: summarizeControl(),
           runtime,
+          coinDiagnostics: decision?.coinDiagnostics || bot.coinDiagnostics || null,
           globalState: combatLogGlobalStateSummary(),
           exit,
           login,
@@ -1162,14 +1163,64 @@ function combatLogSource(helpers = {}) {
 	          || /挂机/.test(reason);
 	      }
 
-	      function combatLogSuspendReason(decision) {
-	        const reason = String(decision?.reason || '');
-	        if (!reason) return '';
+      function combatLogSuspendReason(decision) {
+        const reason = String(decision?.reason || '');
+        if (!reason) return '';
         if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-recovery|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
 		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
-	        return '';
-	      }
+        return '';
+      }
+
+      function coinDiagnosticsHasLoggableEntry(diag) {
+        return Boolean(diag && (
+          (Array.isArray(diag.filteredNearCoins) && diag.filteredNearCoins.length)
+          || (Array.isArray(diag.ignoredNearCoins) && diag.ignoredNearCoins.length)
+          || (Array.isArray(diag.snapshotOnlyNearCoins) && diag.snapshotOnlyNearCoins.length)
+        ));
+      }
+
+      function coinDiagnosticsSignature(diag) {
+        if (!diag) return '';
+        const compact = {
+          filtered: (diag.filteredNearCoins || []).map(item => [item.id, item.reason, item.distance, item.threat?.id]).slice(0, 8),
+          ignored: (diag.ignoredNearCoins || []).map(item => [item.id, item.distance]).slice(0, 8),
+          snapshot: (diag.snapshotOnlyNearCoins || []).map(item => [item.id, item.distance]).slice(0, 8)
+        };
+        return safeStringify(compact);
+      }
+
+      function recordCoinDiagnosticsLog(source, decision = bot.lastDecision) {
+        const state = bot.combatLogging;
+        if (!state?.enabled || !state.endpoint) return false;
+        const diag = decision?.coinDiagnostics || bot.coinDiagnostics || null;
+        if (!coinDiagnosticsHasLoggableEntry(diag)) return false;
+        const signature = coinDiagnosticsSignature(diag);
+        const t = Date.now();
+        const minIntervalMs = 5000;
+        if (signature && signature === state.lastCoinDiagnosticsSignature && t - Number(state.lastCoinDiagnosticsAt || 0) < minIntervalMs) return false;
+        state.lastCoinDiagnosticsSignature = signature;
+        state.lastCoinDiagnosticsAt = t;
+        queueCombatLogEntry({
+          type: 'coin-diagnostics',
+          at: t,
+          perfNow: Math.round(now()),
+          tickCount: bot.tickCount,
+          source,
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          url: location.href,
+          visibilityState: document.visibilityState || '',
+          decision: combatLogDecisionSummary(decision || {}),
+          target: decision?.target || null,
+          coinDiagnostics: diag,
+          safety: bot.lastSafety || null,
+          control: summarizeControl(),
+          globalState: combatLogGlobalStateSummary()
+        });
+        return true;
+      }
 
       function combatLogTargetLabel(entry, decision) {
         const candidates = [
@@ -1403,6 +1454,7 @@ function combatLogSource(helpers = {}) {
         if (!state?.enabled) return;
         state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
         if (!state.endpoint) return;
+        recordCoinDiagnosticsLog(source, decision || {});
         const suspendedReason = combatLogSuspendReason(decision || {});
         if (suspendedReason) {
           if (state.active) {

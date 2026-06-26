@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.52
+// @version      0.4.53
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.52';
+  const BOOTSTRAP_VERSION = '0.4.53';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -503,6 +503,13 @@
     return t ? formatDuration(Date.now() - t) : '-';
   }
 
+  function formatClockTime(t = Date.now()) {
+    const d = new Date(Number(t) || Date.now());
+    return String(d.getHours()).padStart(2, '0') + ':'
+      + String(d.getMinutes()).padStart(2, '0') + ':'
+      + String(d.getSeconds()).padStart(2, '0');
+  }
+
   function reasonText(reason) {
     const map = {
       'active-threat-before-bullet-range': 'Active 玩家进入危险圈',
@@ -510,11 +517,21 @@
       'active-threat-return-block': '阻止回头靠近 Active 玩家',
       'return-block-lateral-scan': 'Active 返程冷却：横向扫描',
       'passive-panic-distance': '玩家距离过近',
+      'avoid-invulnerable-target': '避开无敌/危险目标',
       'recovery-avoid-humans': '回血时避开附近玩家',
       'recovery-foot-coin': '回血时顺手拾取脚下金币',
       'foot-coin-priority': '贴身金币优先拾取',
+      'foot-coin-before-active-caution': '预警区内只拾取贴身金币',
+      'near-coin-priority': '近处安全金币优先',
+      'near-coin-before-active-caution': '预警区内只拾取近处安全金币',
+      'safe-coin-before-drop-target': '安全金币优先于攻击',
+      'safe-global-coin-before-drop-target': '前往可见安全金币',
+      'safe-patrol-coin': '巡航拾取安全金币',
+      'safe-distant-coin': '前往远处安全金币',
       'post-attack-drop-coin': '战斗后优先拾取掉落',
+      'high-value-visible-coin-priority': '高价值可见金币优先',
       'best-opportunity-coin': '综合收益最高：拾取金币',
+      'best-opportunity-coin-route': '综合收益最高：金币路线',
       'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
       'best-opportunity-drop-target': '综合收益最高：攻击 Drop 目标',
       'best-opportunity-afk-drop-target': '综合收益最高：攻击挂机 Drop 目标',
@@ -522,16 +539,42 @@
       'approach-afk-drop-target': '综合收益最高：靠近挂机 Drop 目标',
       'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
       'migrate-to-known-field': '迁移到金币密集区域',
+      'scan-toward-distant-coin': '扫描远处金币',
       'snapshot-coin-field': '快照金币区域导航',
       'snapshot-coin-target': '快照金币导航',
       'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
       'wait-for-stamina-budget': '长期体力预算不足',
+      'stamina-budget-coin-leave': '一小时体力预算不足，退出等待恢复',
+      'stamina-budget-coin-leave-retry': '一小时体力预算不足，重试退出',
       'wait-for-snapshot-coin': '等待快照金币',
+      'login-suppressed': '等待重连',
+      'exit-log-flush-pending': '等待退出日志发送完成',
+      'important-log-flush-pending': '等待会话结束日志发送完成',
+      'maintain-safe-spacing': '避开附近玩家',
+      'ignore-stale-coin-no-progress': '金币长时间无进展，临时脱离',
+      'leave-stale-coin': '离开疑似卡住金币',
       'wait-for-full-stamina-and-hp': '等待恢复到安全状态',
+      'conserve-stamina-before-chasing': '兼容旧逻辑：保存体力',
+      'save-stamina-for-profitable-coin': '兼容旧逻辑：等待目标',
       'combat-attack': '战斗：持续开火',
       'combat-tangent-dodge': '战斗：切线规避并开火',
       'combat-stamina-hold': '战斗：短体力不足，停止移动并开火',
+      'combat-stamina-conserve': '战斗：保留体力躲避，暂停开火',
+      'combat-burst-fire': '战斗：保留体力，降频开火',
       'combat-pressure-close': '战斗：久攻未中，压近开火',
+      'combat-far-pressure-close': '战斗：远距久攻未中，压近开火',
+      'combat-retreating-fighter-close': '战斗：退边反击目标，压近开火',
+      'combat-finish-pressure': '战斗：残血目标退边，压近补枪',
+      'combat-finish-reengage': '战斗：残血目标出圈，重新靠近',
+      'combat-spacing': '战斗：保持安全间距并开火',
+      'combat-spacing-dodge': '战斗：规避贴近并开火',
+      'combat-out-of-range-dodge': '战斗：超距来弹，只规避',
+      'combat-out-of-range-hold': '战斗：目标超出射程，暂停追击',
+      'combat-out-of-range-reengage': '战斗：目标轻微出圈，重新靠近',
+      'combat-target-retreating': '战斗：目标退边，暂停开火',
+      'combat-active-threat-wait': '战斗：等待 Active 威胁明确',
+      'combat-reengage': '战斗：重新靠近目标',
+      'combat-disengage-range': '战斗：目标远离，脱离观察',
       'combat-critical-hp-leave': '战斗血量低于 20，立即退出',
       'combat-low-hp-leave': '战斗低血劣势，立即退出',
       'combat-low-hp-no-damage-leave': '战斗低血且久攻未中，立即退出',
@@ -550,14 +593,25 @@
       'control-ws-offline-unsafe': 'WebSocket 离线且周围危险，立即退出',
       'control-ws-offline-safe-wait': 'WebSocket 离线，安全区短暂等待重连',
       'control-ws-reconnect-churn': 'WebSocket 反复重连，立即退出',
+      'control-ws-no-self-game-session': '已登录但自身实体不可见，立即退出',
       'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
+      'control-global-sampling-outage': '网络采样超时，按 WebSocket 离线处理',
+      'control-combat-tick-gap': '战斗主循环断档，按 WebSocket 离线处理',
       'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
       'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
       'offline-leave': 'WebSocket 离线，正在退出',
       'offline-leave-wait': 'WebSocket 离线退出后等待重连',
       'cloudflare-error-refresh': 'Cloudflare 错误页，等待刷新',
+      'leave-success-refresh-confirmation': '退出成功后刷新确认',
+      'post-attack-drop-wait-position': '战斗后等待掉落刷新',
+      'target-whitelisted': '目标在白名单内，跳过攻击',
+      'login-snapshot-gate': '等待 snapshot 连续成功',
+      'login-control-missing': '等待登录控件出现',
+      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',
+      'game-session-connecting': '已登录，等待游戏连接/自身实体',
       'no-self': '未读到自身实体',
       'not-alive': '不在存活状态',
+      'startup-error': '脚本启动异常',
       'bot-error': '脚本异常'
     };
     return map[reason] || reason || '-';
@@ -1627,6 +1681,7 @@
       { text: '远程脚本 ', style: 'color:#94a3b8' },
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
     ], 'font-size:10.5px;margin:4px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
+    appendLine('当前时间：' + formatClockTime(), 'font-size:10.5px;margin:2px 0 0;color:#94a3b8');
     appendSection();
     const hold = reloginHold;
     appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''));

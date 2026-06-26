@@ -297,6 +297,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     coinPickupExactTolerance: 0,
     targetStickMs: 5000,
     coinStickMs: 2500,
+    coinDiagnosticsNearDistance: 50000,
+    coinDiagnosticsMaxEntries: 8,
     coinNoProgressMs: 18000,
     coinProgressMinGain: 250,
     coinIgnoreMs: 20000,

@@ -51,6 +51,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'attackApproachRange', value: 50000 },
   { key: 'globalAttackMaxDistance', value: 50000 },
   { key: 'globalCoinMaxDistance', value: 50000 },
+  { key: 'coinDiagnosticsNearDistance', value: 50000 },
+  { key: 'coinDiagnosticsMaxEntries', value: 8 },
   { key: 'postAttackRecoveryDropMaxDistance', value: 50000 },
   { key: 'postAttackRecoveryDropMinScore', value: 60000 },
   { key: 'postAttackDropWaitMs', value: 1000 },
@@ -1506,6 +1508,20 @@ function main() {
     assert(targetOverlaySourceModule.includes('for (const point of routePoints) ctx.lineTo(point.x, point.y);'), 'target overlay does not connect route points');
   });
 
+  check('coin diagnostics expose filtered visible coin candidates', () => {
+    assert(sourceBot.includes('function buildCoinDiagnostics'), 'coin diagnostics builder not found');
+    assert(sourceBot.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
+    assert(sourceBot.includes("recordCoinFilterDiagnostic(c, 'ignored'"), 'ignored coin diagnostics not recorded');
+    assert(sourceBot.includes("recordCoinFilterDiagnostic(c, 'threat-blocked'"), 'threat-blocked coin diagnostics not recorded');
+    assert(sourceBot.includes("reason = 'stamina-unaffordable'") && sourceBot.includes('coinStaminaAffordableWithDiagnostic'), 'stamina-unaffordable coin diagnostics not recorded');
+    assert(sourceBot.includes("reason: 'snapshot-only'"), 'snapshot-only coin diagnostics not exposed');
+    assert(sourceBot.includes('coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics)'), 'last decision does not carry coin diagnostics');
+    assert(combatLogSourceModule.includes('coinDiagnostics: decision?.coinDiagnostics || bot.coinDiagnostics || null'), 'combat logs do not expose coin diagnostics');
+    assert(combatLogSourceModule.includes("type: 'coin-diagnostics'"), 'standalone coin diagnostic log entry not found');
+    assert(combatLogSourceModule.includes('recordCoinDiagnosticsLog(source, decision || {})'), 'coin diagnostics are not recorded on each log tick');
+    assert(combatLogSourceModule.includes('coinDiagnosticsHasLoggableEntry'), 'coin diagnostics log gate not found');
+  });
+
   check('run-self-test module covers combat fire discipline self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
     assert(nodeSelfTestSource.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');
@@ -1657,6 +1673,26 @@ function main() {
       assert(text.includes("appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''))"), 'relogin countdown is not inline with current behavior');
       assert(!text.includes("appendLine('等待重连：' + formatDuration(hold))"), 'standalone relogin countdown line is still present');
     });
+    check(`${file} displays current clock and distinct action reason labels`, () => {
+      assert(text.includes('function formatClockTime'), 'clock formatter not found');
+      assert(text.includes("appendLine('当前时间：' + formatClockTime()"), 'current clock line not rendered');
+      const requiredMappings = {
+        'best-opportunity-coin-route': '综合收益最高：金币路线',
+        'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
+        'near-coin-priority': '近处安全金币优先',
+        'safe-distant-coin': '前往远处安全金币',
+        'high-value-visible-coin-priority': '高价值可见金币优先',
+        'avoid-invulnerable-target': '避开无敌/危险目标',
+        'post-attack-drop-wait-position': '战斗后等待掉落刷新',
+        'combat-disengage-range': '战斗：目标远离，脱离观察',
+        'target-whitelisted': '目标在白名单内，跳过攻击',
+        'control-combat-tick-gap': '战斗主循环断档，按 WebSocket 离线处理'
+      };
+      for (const [reason, label] of Object.entries(requiredMappings)) {
+        assert(text.includes(`'${reason}': '${label}'`), `${reason} mapping missing`);
+      }
+      assert(requiredMappings['best-opportunity-coin-route'] !== requiredMappings['best-opportunity-visible-coin'], 'route and visible coin labels are not distinct');
+    });
     check(`${file} renders combat HP as a full-width fight panel`, () => {
       const body = functionBody(text, 'appendCombatHpPanel');
       assert(body.includes("'width:100%'"), 'combat HP panel is not full width');
@@ -1677,6 +1713,24 @@ function main() {
       assert(!text.includes('加载器 扩展 v'), 'extension visible version still has v prefix');
     });
   }
+
+  check('status-panel source carries distinct action reason labels', () => {
+    const requiredMappings = {
+      'best-opportunity-coin-route': '综合收益最高：金币路线',
+      'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
+      'near-coin-priority': '近处安全金币优先',
+      'safe-distant-coin': '前往远处安全金币',
+      'high-value-visible-coin-priority': '高价值可见金币优先',
+      'avoid-invulnerable-target': '避开无敌/危险目标',
+      'post-attack-drop-wait-position': '战斗后等待掉落刷新',
+      'combat-disengage-range': '战斗：目标远离，脱离观察',
+      'target-whitelisted': '目标在白名单内，跳过攻击'
+    };
+    for (const [reason, label] of Object.entries(requiredMappings)) {
+      assert(statusPanelSourceModule.includes(`'${reason}': '${label}'`), `${reason} mapping missing`);
+    }
+    assert(requiredMappings['best-opportunity-coin-route'] !== requiredMappings['best-opportunity-visible-coin'], 'route and visible coin labels are not distinct');
+  });
 
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   check('userscript metadata version matches runtime constant', () => {

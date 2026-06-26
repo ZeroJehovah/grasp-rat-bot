@@ -597,6 +597,8 @@ function browserBotSource(config) {
       lastCombatAt: Number(preserved.combatLogging?.lastCombatAt || 0),
       lastQueuedFrameAt: Number(preserved.combatLogging?.lastQueuedFrameAt || 0),
       lastBuiltFrameAt: Number(preserved.combatLogging?.lastBuiltFrameAt || 0),
+      lastCoinDiagnosticsAt: Number(preserved.combatLogging?.lastCoinDiagnosticsAt || 0),
+      lastCoinDiagnosticsSignature: String(preserved.combatLogging?.lastCoinDiagnosticsSignature || ''),
       lastFlushAt: 0,
       preBuffer: Array.isArray(preserved.combatLogging?.preBuffer) ? preserved.combatLogging.preBuffer : [],
       pending: Array.isArray(preserved.combatLogging?.pending) ? preserved.combatLogging.pending : [],
@@ -657,6 +659,7 @@ function browserBotSource(config) {
 	    snapshotCoinWaitSince: Number(previousBot?.snapshotCoinWaitSince || 0) || 0,
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
+	    coinDiagnostics: null,
 	    lastSelf: null,
 		    lastSafety: null,
 			    actionThreats: [],
@@ -922,6 +925,7 @@ function browserBotSource(config) {
 	          remainingMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0) - Number(this.lastSnapshotCoinWaitAgeMs || 0)))
 	        },
 	        coinSources: this.lastCoinSourceSummary,
+	        coinDiagnostics: this.coinDiagnostics,
 			        globalState: {
 			          refreshedAt: this.globalState.refreshedAt,
 		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
@@ -5546,6 +5550,130 @@ ${importantLogSource()}
 	    return coinHeadingBlockedByInvulnerableThreat(self, coin, threat);
 	  }
 
+	  function coinDiagnosticsNearDistance() {
+	    return Math.max(0, Number(cfg.coinDiagnosticsNearDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || cfg.nearCoinPriorityDistance || cfg.coinMaxDistance || 0));
+	  }
+
+	  function coinDiagnosticsLimit() {
+	    return Math.max(1, Math.round(Number(cfg.coinDiagnosticsMaxEntries || 8) || 8));
+	  }
+
+	  function coinDiagnosticsSummary(coin, extra = {}) {
+	    if (!coin) return null;
+	    return {
+	      id: coin.drop_id ?? coin.id ?? null,
+	      amount: Number.isFinite(Number(coin.amount)) ? Number(coin.amount) : null,
+	      distance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
+	      x: Number.isFinite(Number(coin.x)) ? Math.round(Number(coin.x)) : null,
+	      y: Number.isFinite(Number(coin.y)) ? Math.round(Number(coin.y)) : null,
+	      native: Boolean(coin.native),
+	      snapshot: Boolean(coin.snapshot),
+	      nativeSource: coin.nativeSource || '',
+	      ...extra
+	    };
+	  }
+
+	  function coinThreatDiagnostics(threat) {
+	    if (!threat) return null;
+	    return {
+	      id: threat.user_id ?? threat.id ?? null,
+	      name: threat.name || '',
+	      distance: Number.isFinite(Number(threat.distance)) ? Math.round(Number(threat.distance)) : null,
+	      radius: Math.round(coinThreatDangerRadius(threat)),
+	      invulnerable: isInvulnerable(threat),
+	      active: isCurrentlyActive(threat)
+	    };
+	  }
+
+	  function recordCoinFilterDiagnostic(coin, reason, detail = {}) {
+	    const distance = Number(coin?.distance);
+	    const nearDistance = coinDiagnosticsNearDistance();
+	    if (!(nearDistance > 0) || !Number.isFinite(distance) || distance > nearDistance) return;
+	    if (!bot.coinDiagnostics || typeof bot.coinDiagnostics !== 'object') return;
+	    const filtered = Array.isArray(bot.coinDiagnostics.filteredNearCoins) ? bot.coinDiagnostics.filteredNearCoins : [];
+	    const entry = coinDiagnosticsSummary(coin, { reason, ...detail });
+	    if (!entry) return;
+	    const key = String(entry.id ?? '') + ':' + reason;
+	    const existing = filtered.find(item => String(item.id ?? '') + ':' + String(item.reason || '') === key);
+	    if (existing) {
+	      if (entry.distance !== null && (existing.distance === null || entry.distance < existing.distance)) Object.assign(existing, entry);
+	    } else if (filtered.length < coinDiagnosticsLimit()) {
+	      filtered.push(entry);
+	    }
+	    bot.coinDiagnostics.filteredNearCoins = filtered;
+	  }
+
+	  function coinStaminaAffordableWithDiagnostic(self, coin, staminaCost = opportunityCoinStaminaCost(coin), reason = 'stamina-unaffordable') {
+	    const affordable = opportunityStaminaAffordable(self, staminaCost);
+	    if (!affordable) recordCoinFilterDiagnostic(coin, reason, { staminaCost: Math.round(Number(staminaCost) || 0) });
+	    return affordable;
+	  }
+
+	  function summarizeCoinDiagnosticsList(coins, maxDistance, limit = coinDiagnosticsLimit()) {
+	    return (coins || [])
+	      .filter(coin => Number(coin?.distance) <= maxDistance)
+	      .slice()
+	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+	        || Number(b.amount || 0) - Number(a.amount || 0))
+	      .slice(0, limit)
+	      .map(coin => coinDiagnosticsSummary(coin))
+	      .filter(Boolean);
+	  }
+
+	  function buildCoinDiagnostics(self, groups = {}) {
+	    const nearDistance = coinDiagnosticsNearDistance();
+	    const limit = coinDiagnosticsLimit();
+	    const realtimeCoins = groups.realtimeCoins || [];
+	    const snapshotCoins = groups.snapshotCoins || [];
+	    const ignoredNearCoins = [];
+	    const snapshotOnlyNearCoins = [];
+	    const t = now();
+	    for (const coin of realtimeCoins || []) {
+	      const distance = Number(coin?.distance);
+	      if (!Number.isFinite(distance) || !(distance <= nearDistance)) continue;
+	      const ignoredUntil = bot.ignoredCoins.get(String(coin.drop_id));
+	      if (!ignoredUntil) continue;
+	      const summary = coinDiagnosticsSummary(coin, {
+	        reason: 'ignored',
+	        remainingMs: Math.max(0, Math.round(Number(ignoredUntil || 0) - t))
+	      });
+	      if (summary) ignoredNearCoins.push(summary);
+	      if (ignoredNearCoins.length >= limit) break;
+	    }
+	    for (const coin of snapshotCoins || []) {
+	      const distance = Number(coin?.distance);
+	      if (!Number.isFinite(distance) || !(distance <= nearDistance)) continue;
+	      const summary = coinDiagnosticsSummary(coin, { reason: 'snapshot-only' });
+	      if (summary) snapshotOnlyNearCoins.push(summary);
+	      if (snapshotOnlyNearCoins.length >= limit) break;
+	    }
+	    return {
+	      at: Date.now(),
+	      self: self ? {
+	        x: Number.isFinite(Number(self.x)) ? Math.round(Number(self.x)) : null,
+	        y: Number.isFinite(Number(self.y)) ? Math.round(Number(self.y)) : null
+	      } : null,
+	      nearDistance: Math.round(nearDistance),
+	      realtimeNearCount: arrayCount(groups.realtimeNearCoins),
+	      realtimeCount: arrayCount(realtimeCoins),
+	      realtimeGlobalCount: arrayCount(groups.realtimeGlobalCoins),
+	      realtimePatrolCount: arrayCount(groups.realtimePatrolCoins),
+	      snapshotCount: arrayCount(groups.snapshotCoins),
+	      nearestRealtimeCoins: summarizeCoinDiagnosticsList(realtimeCoins, nearDistance, limit),
+	      ignoredNearCoins,
+	      snapshotOnlyNearCoins,
+	      filteredNearCoins: []
+	    };
+	  }
+
+	  function attachCoinDiagnostics(action) {
+	    if (!action || !bot.coinDiagnostics) return action;
+	    return {
+	      ...action,
+	      coinDiagnostics: safeJsonClone(bot.coinDiagnostics) || bot.coinDiagnostics
+	    };
+	  }
+
 	  function safeCoinCandidates(coins, activeThreats, maxDistance, self = null) {
 	    const t = now();
 	    for (const [id, until] of bot.ignoredCoins.entries()) {
@@ -5554,9 +5682,25 @@ ${importantLogSource()}
 	    return (coins || []).map(c => ({
 	      ...c,
 	      distance: Number.isFinite(Number(c?.distance)) ? Number(c.distance) : (self ? dist(self, c) : Number(c?.distance))
-	    })).filter(c => c.distance <= maxDistance
-	      && !bot.ignoredCoins.has(String(c.drop_id))
-	      && !activeThreats.some(t => coinBlockedByThreat(self, c, t)))
+	    })).filter(c => {
+	      if (!(c.distance <= maxDistance)) {
+	        if (Number(maxDistance || 0) >= coinDiagnosticsNearDistance()) {
+	          recordCoinFilterDiagnostic(c, 'max-distance', { maxDistance: Math.round(Number(maxDistance || 0)) });
+	        }
+	        return false;
+	      }
+	      const ignoredUntil = bot.ignoredCoins.get(String(c.drop_id));
+	      if (ignoredUntil) {
+	        recordCoinFilterDiagnostic(c, 'ignored', { remainingMs: Math.max(0, Math.round(Number(ignoredUntil || 0) - t)) });
+	        return false;
+	      }
+	      const blockingThreat = (activeThreats || []).find(threat => coinBlockedByThreat(self, c, threat));
+	      if (blockingThreat) {
+	        recordCoinFilterDiagnostic(c, 'threat-blocked', { threat: coinThreatDiagnostics(blockingThreat) });
+	        return false;
+	      }
+	      return true;
+	    })
 	      .sort(compareCoinOpportunity);
 	  }
 
@@ -5564,14 +5708,14 @@ ${importantLogSource()}
 	    const radius = snapshotCoinLocalSuppressRadius();
 	    if (!(radius > 0)) return null;
 	    return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, radius, self)
-	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+	      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin))[0] || null;
 	  }
 
 	  function nearestRealtimeCoinWithin(self, allCoins, activeThreats, maxDistance) {
 	    if (!(Number(maxDistance) > 0)) return null;
 	    return safeCoinCandidates((allCoins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance, self)
 	      .filter(coin => Number(coin.amount || 0) > 0)
-	      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))
+	      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin))
 	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
 	        || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
 	  }
@@ -5602,10 +5746,10 @@ ${importantLogSource()}
     return candidates[0];
   }
 
-  function pickCoinField(self, allCoins, activeThreats) {
+	  function pickCoinField(self, allCoins, activeThreats) {
 	    const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.fieldMigrationMaxDistance, self)
       .filter(c => c.distance >= cfg.fieldMigrationMinDistance)
-      .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
+      .filter(c => coinStaminaAffordableWithDiagnostic(self, c));
     if (!candidates.length) return null;
     const buildFieldItem = coin => {
       const members = candidates.filter(other => dist(coin, other) <= cfg.fieldMigrationClusterRadius);
@@ -5642,7 +5786,7 @@ ${importantLogSource()}
   function pickDistantCoin(self, allCoins, activeThreats) {
 	    const candidates = safeCoinCandidates(allCoins, activeThreats, cfg.distantCoinMaxDistance, self)
       .filter(c => c.distance >= cfg.distantCoinMinDistance)
-      .filter(c => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(c)));
+      .filter(c => coinStaminaAffordableWithDiagnostic(self, c));
     if (!candidates.length) return null;
     return candidates[0];
   }
@@ -5663,7 +5807,7 @@ ${importantLogSource()}
     const threats = options.ignoreThreats ? [] : activeThreats;
     return safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), threats, maxDistance, self)
       .filter(coin => Number(coin.amount || 0) >= minAmount)
-      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))[0] || null;
+      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin))[0] || null;
   }
 
   function nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId = null, unknownIncoming = false) {
@@ -9258,7 +9402,7 @@ ${importantLogSource()}
 	      const sticky = candidates.find(c => String(c.drop_id) === String(bot.lastTarget.id));
 	      if (sticky) {
 	        const stickyItem = buildSnapshotItem(sticky);
-	        if (opportunityStaminaAffordable(self, stickyItem.opportunityStaminaCost)
+	        if (coinStaminaAffordableWithDiagnostic(self, sticky, stickyItem.opportunityStaminaCost)
 	          && snapshotCoinWorthLongTravel(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount)) return asOpportunity(stickyItem);
 	        if (allowIdleFallback) stickyFallback = stickyItem;
 	      }
@@ -9280,7 +9424,7 @@ ${importantLogSource()}
 	        opportunityStaminaCost: staminaCost,
 	        snapshotAgeMs: ageMs
 	      };
-	      const affordable = opportunityStaminaAffordable(self, staminaCost);
+	      const affordable = coinStaminaAffordableWithDiagnostic(self, coin, staminaCost);
 	      if (affordable && snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
 	        if (!best
 	          || item.snapshotScore > best.snapshotScore
@@ -9504,7 +9648,10 @@ ${importantLogSource()}
     let currentStaminaCost = coinRouteLegStaminaCost(self, anchor);
     let bestRoute = null;
     let bestScore = -Infinity;
-    if (!opportunityStaminaAffordable(self, currentStaminaCost)) return null;
+    if (!opportunityStaminaAffordable(self, currentStaminaCost)) {
+      recordCoinFilterDiagnostic(anchor, 'route-stamina-unaffordable', { staminaCost: Math.round(currentStaminaCost) });
+      return null;
+    }
     const pointLimit = coinRoutePointLimit(anchor, candidates);
     const linkDistance = Math.max(0, Number(cfg.coinRouteLinkDistance || 0));
     const maxLinkDistance = Math.max(linkDistance, Number(cfg.coinRouteMaxLinkDistance || linkDistance || 0));
@@ -9526,7 +9673,10 @@ ${importantLogSource()}
         .filter(item => Number.isFinite(item.score))
         .sort((a, b) => b.score - a.score || Number(b.coin.amount || 0) - Number(a.coin.amount || 0) || a.coin.routeLegDistance - b.coin.routeLegDistance)[0] || null;
       if (!next) break;
-      if (!opportunityStaminaAffordable(self, currentStaminaCost + next.legCost)) break;
+      if (!opportunityStaminaAffordable(self, currentStaminaCost + next.legCost)) {
+        recordCoinFilterDiagnostic(next.coin, 'route-stamina-unaffordable', { staminaCost: Math.round(currentStaminaCost + next.legCost) });
+        break;
+      }
       route.push(next.coin);
       used.add(coinRouteKey(next.coin));
       current = next.coin;
@@ -9542,7 +9692,10 @@ ${importantLogSource()}
     }
     if (!bestRoute) return null;
     const summary = coinRouteSummary(bestRoute, self);
-    if (!opportunityStaminaAffordable(self, summary.totalStaminaCost)) return null;
+    if (!opportunityStaminaAffordable(self, summary.totalStaminaCost)) {
+      recordCoinFilterDiagnostic(bestRoute[0], 'route-stamina-unaffordable', { staminaCost: Math.round(summary.totalStaminaCost) });
+      return null;
+    }
     const score = opportunityValueScore(summary.totalValue, summary.totalStaminaCost, cfg.coinOpportunityValue);
     if (!Number.isFinite(score)) return null;
     const first = bestRoute[0];
@@ -9703,7 +9856,7 @@ ${importantLogSource()}
     let best = -Infinity;
     for (const { coins: groupCoins, maxDistance } of coinGroups) {
 	      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
-        if (!opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin))) continue;
+        if (!coinStaminaAffordableWithDiagnostic(self, coin)) continue;
         const score = scoreCoinOpportunity(coin);
         if (score > best) best = score;
       }
@@ -9779,7 +9932,7 @@ ${importantLogSource()}
     for (const coin of safeCoinCandidates(coins, activeThreats, maxDistance, self)
       .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)))
-      .filter(coin => opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin)))) {
+      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin))) {
       const attack = resolvedAttacks
         .filter(item => dist(coin, item) <= cfg.postAttackDropCoinRadius)
         .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(b.at || 0) - Number(a.at || 0))[0] || null;
@@ -10128,9 +10281,13 @@ ${importantLogSource()}
 		      Number(cfg.coinMaxDistance || 0)
 		    );
 		    if (Number.isFinite(coin.distance) && maxDistance && coin.distance > maxDistance) return null;
-		    if ((activeThreats || []).some(threat => coinBlockedByThreat(self, coin, threat))) return null;
+		    if ((activeThreats || []).some(threat => {
+		      const blocked = coinBlockedByThreat(self, coin, threat);
+		      if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
+		      return blocked;
+		    })) return null;
 		    const staminaCost = opportunityCoinStaminaCost(coin);
-		    if (!opportunityStaminaAffordable(self, staminaCost)) return null;
+		    if (!coinStaminaAffordableWithDiagnostic(self, coin, staminaCost)) return null;
 		    const actionKind = coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin';
 		    const reason = current.reason || (actionKind === 'coin' ? 'best-opportunity-coin' : 'best-opportunity-visible-coin');
 		    return {
@@ -10240,7 +10397,7 @@ ${importantLogSource()}
         const id = String(coin.drop_id);
         const previous = coinById.get(id);
         const staminaCost = opportunityCoinStaminaCost(coin);
-        if (!opportunityStaminaAffordable(self, staminaCost)) continue;
+        if (!coinStaminaAffordableWithDiagnostic(self, coin, staminaCost)) continue;
         const score = scoreCoinOpportunity(coin);
         if (!previous
           || score > Number(previous.opportunitySortScore || -Infinity)
@@ -10792,6 +10949,13 @@ ${importantLogSource()}
       combatDodgeOnlyTargets,
       bullets
     } = classify(self);
+    bot.coinDiagnostics = buildCoinDiagnostics(self, {
+      realtimeNearCoins,
+      realtimeCoins,
+      realtimeGlobalCoins,
+      realtimePatrolCoins,
+      snapshotCoins
+    });
     bot.lastActionEntities = entities;
     updateOpportunityAfkStaminaObservations(realtimeEntities);
     const fullHp = isFullHp(self);
@@ -11716,7 +11880,7 @@ ${importantLogSource()}
         return;
       }
 
-      let action = chooseAction(self);
+      let action = attachCoinDiagnostics(chooseAction(self));
 	      action = blockThreatReturnAction(self, bot.actionThreats || [], action);
       if (bot.pendingInjuryLeave && isCombatStateForInjuryLeave(action)) {
         action = {
@@ -11846,7 +12010,7 @@ ${importantLogSource()}
 	            }
 	        };
 	      }
-	      action = trackCoinProgress(action, self);
+	      action = attachCoinDiagnostics(trackCoinProgress(action, self));
       const escape = bot.staleCoinEscape;
       const escapeActive = escape && now() < Number(escape.until || 0) && (escape.dx || escape.dy);
       if (escapeActive && action.kind !== 'flee') {
@@ -11958,6 +12122,7 @@ ${importantLogSource()}
         ...action,
         source,
         pendingExit: summarizePendingExit(),
+        coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics) || bot.coinDiagnostics || null,
         self: {
           ...summarizeSelf(self),
           canMove,
