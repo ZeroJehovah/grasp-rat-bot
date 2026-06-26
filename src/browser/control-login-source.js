@@ -1117,16 +1117,24 @@ function controlLoginSource(helpers = {}) {
 	    return snapshotLoginGateStatus(t);
 	  }
 
-  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
-    let status = snapshotLoginGateStatus();
-    if (status.satisfied) return status;
-    if (options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed) {
-      status.blockReason = String(reason || 'login');
-      status.liveSessionTakeoverBypass = true;
-      status.liveSessionTakeover = options.liveSessionTakeover;
-      return status;
-    }
-    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
+	  function loginSnapshotGateAllowsLogin(gate) {
+	    if (!gate) return false;
+	    if (gate.satisfied) return true;
+	    return Boolean(gate.liveSessionTakeoverBypass
+	      && gate.pointSafety?.satisfied);
+	  }
+
+	  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
+	    let status = snapshotLoginGateStatus();
+	    if (status.satisfied) return status;
+	    const allowTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed);
+	    if (allowTakeoverBypass && status.pointSafety?.satisfied) {
+	      status.blockReason = String(reason || 'login');
+	      status.liveSessionTakeoverBypass = true;
+	      status.liveSessionTakeover = options.liveSessionTakeover;
+	      return status;
+	    }
+	    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
 	      try {
@@ -1139,6 +1147,10 @@ function controlLoginSource(helpers = {}) {
 	      status = snapshotLoginGateStatus();
 	    }
 	    status.blockReason = String(reason || 'login');
+	    if (!status.satisfied && allowTakeoverBypass && status.pointSafety?.satisfied) {
+	      status.liveSessionTakeoverBypass = true;
+	      status.liveSessionTakeover = options.liveSessionTakeover;
+	    }
 	    return status;
 	  }
 
