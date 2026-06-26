@@ -1,9 +1,9 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `279`.
+- Latest bot self-test count: `284`.
 - Latest combat-log analyzer self-test count: `84`.
-- Latest combat replay self-test count: `19`.
+- Latest combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
@@ -51,6 +51,7 @@
   - native visible coin routes beat isolated single coins when route-level stamina ROI is better, while weaker routes still lose to higher-yield visible AFK Drop targets;
   - visible coin route metadata, including per-coin route points for overlay drawing, is exposed on actions; same-first-coin routes keep that overlay metadata even when the first coin's single-coin ROI is higher than the whole route score; held routes keep their first coin through near-tie replans and still switch when a competing route score is clearly better; near realtime coins remain the first route target when a route continues toward a farther field, routes cannot skip a much closer safe local coin as their first target, route legs through active danger are rejected, and whole routes are skipped when the 1h/1d stamina budget cannot afford the full route;
   - snapshot-only coins remain valid only as a fallback when no visible/realtime profit exists;
+  - static verification covers coin candidate diagnostics for ignored/threat-blocked/stamina-blocked/snapshot-only nearby coins, standalone `coin-diagnostics` misc logging, distinct `best-opportunity-coin-route` vs `best-opportunity-visible-coin` Chinese labels, and loader panel current-time rendering;
   - already engaged out-of-range combat targets hold position instead of chasing until `combatDisengageRange`;
   - recently damaged low-HP out-of-range finish targets within 160m reengage without firing out of range;
   - targets beyond `combatDisengageRange` clear combat state without installing a retreat-ignore cooldown, so they can re-enter if they later come back inside `combatAttackRange`;
