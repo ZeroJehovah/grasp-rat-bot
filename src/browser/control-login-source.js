@@ -1141,53 +1141,6 @@ function controlLoginSource(helpers = {}) {
 	    return 'snapshot-gate';
 	  }
 
-	  function unsafeReloginEntryGateStatus(selfSummary = null, t = Date.now()) {
-	    const gate = snapshotLoginGateStatus(t);
-	    const pointSafety = gate.pointSafety || loginPointSafetyStatus(t);
-	    const combinedBlockReason = loginSnapshotGateBlockReason(gate);
-	    if (!combinedBlockReason) return null;
-	    const blockReason = !pointSafety.hasPoint && Number(pointSafety.required || 0) > 0
-	      ? 'login-point-missing'
-	      : (!pointSafety.satisfied ? 'login-point-safety' : '');
-	    if (!blockReason) return null;
-	    const userId = selfSummary?.id ?? selfSummary?.user_id ?? getCurrentUserId() ?? null;
-	    const session = bot.session || {};
-	    const sameUser = userId === null || session.userId === null || session.userId === undefined || String(session.userId) === String(userId);
-	    const activeSession = Boolean(session.startedAt && sameUser && !session.missingSince && !session.exitAt);
-	    const resetReason = String(pointSafety.resetReason || gate.resetReason || '');
-	    const exitReset = /exit-trigger:|exit-confirmed:/.test(resetReason);
-	    const waitReason = String(bot.lastDecision?.reason || '');
-	    const waitingForLogin = Boolean(
-	      bot.waitSince
-	        || session.missingSince
-	        || bot.pendingExit
-	        || /^no-self|not-alive|login-|auto-login|manual-login|session-mismatch-recovery|game-session-connecting|offline-leave|enemy-leave|combat-leave|stamina-exhausted/.test(waitReason)
-	    );
-	    const loginFlowWait = /^login-|auto-login|manual-login|session-mismatch-recovery/.test(waitReason);
-	    const reloginHoldActive = Boolean(enemyReloginHoldRemainingMs() > 0 || offlineReloginHoldRemainingMs() > 0 || loginSuppressRemainingMs() > 0);
-	    const recentLoginAttempt = Boolean(Number(bot.lastLoginAt || 0) && t - Number(bot.lastLoginAt || 0) <= Math.max(60000, Number(cfg.postLoginGraceMs || 45000) * 2));
-	    const pendingExitActive = Boolean(bot.pendingExit);
-	    const entryGateContext = Boolean(exitReset || reloginHoldActive || pendingExitActive || recentLoginAttempt || loginFlowWait);
-	    if (activeSession && !entryGateContext) return null;
-	    if (!entryGateContext) return null;
-	    return {
-	      blocked: true,
-	      reason: blockReason,
-	      combinedBlockReason,
-	      gate,
-	      loginPointSafety: pointSafety,
-	      resetReason,
-	      exitReset,
-	      waitingForLogin,
-	      loginFlowWait,
-	      pendingExitActive,
-	      reloginHoldActive,
-	      recentLoginAttempt,
-	      entryGateContext,
-	      activeSession
-	    };
-	  }
-
 	  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
 	    let status = snapshotLoginGateStatus();
 	    if (status.satisfied) return status;

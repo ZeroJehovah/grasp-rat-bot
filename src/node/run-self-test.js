@@ -8689,46 +8689,15 @@ function runSelfTest() {
       want: 'true|true|true|true|true|false'
     },
     {
-      name: 'unsafe relogin entry gate blocks only relogin contexts',
+      name: 'login-point safety gate is pre-login only',
       got: (() => {
-        const shouldBlock = state => {
-          const pointSafety = state.pointSafety || {};
-          const gateAllowed = Boolean(state.gateSatisfied || (state.liveSessionTakeoverBypass && pointSafety.satisfied));
-          if (gateAllowed) return false;
-          const combinedBlockReason = !pointSafety.hasPoint && Number(pointSafety.required || 0) > 0
-            ? 'login-point-missing'
-            : (!pointSafety.satisfied ? 'login-point-safety' : 'snapshot-connectivity');
-          const blockReason = combinedBlockReason === 'snapshot-connectivity' ? '' : combinedBlockReason;
-          if (!blockReason) return false;
-          const exitReset = /exit-trigger:|exit-confirmed:/.test(String(state.resetReason || ''));
-          const loginFlowWait = /^login-|auto-login|manual-login|session-mismatch-recovery/.test(String(state.waitReason || ''));
-          const entryGateContext = Boolean(exitReset || state.reloginHoldActive || state.pendingExitActive || state.recentLoginAttempt || loginFlowWait);
-          return entryGateContext ? blockReason : '';
-        };
-        return [
-          shouldBlock({
-            resetReason: 'exit-confirmed:global sampling outage',
-            pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
-          }),
-          shouldBlock({
-            waitReason: 'login-snapshot-gate',
-            pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
-          }),
-          shouldBlock({
-            pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
-          }),
-          String(Boolean(shouldBlock({
-            resetReason: 'exit-confirmed:websocket offline',
-            pointSafety: { hasPoint: true, satisfied: true, streak: 12, required: 12 }
-          }))),
-          String(Boolean(shouldBlock({
-            resetReason: 'exit-confirmed:websocket offline',
-            pointSafety: { hasPoint: true, satisfied: true, streak: 12, required: 12 },
-            gateSatisfied: true
-          })))
-        ].join('|');
+        const postLoginHasSelf = true;
+        const pointSafety = { hasPoint: true, satisfied: false, streak: 0, required: 12 };
+        const preLoginBlock = pointSafety.hasPoint && !pointSafety.satisfied ? 'login-point-safety' : '';
+        const postLoginBlock = postLoginHasSelf ? '' : preLoginBlock;
+        return [preLoginBlock, postLoginBlock].join('|');
       })(),
-      want: 'login-point-safety|login-point-safety||false|false'
+      want: 'login-point-safety|'
     },
     {
       name: 'bootstrap login-point gate blocks fallback relogin only after a learned point',

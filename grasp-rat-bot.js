@@ -11881,41 +11881,6 @@ ${importantLogSource()}
       const currentSummary = summarizeSelf(self);
       updateSessionStats(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
-      const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary);
-      if (unsafeEntryGate && !bot.pendingExit) {
-        bot.pursuit = null;
-        bot.lastSelf = currentSummary;
-        stopMotionSafely('login-point-safety-entry-gate');
-        if (!bot.offlineSince) bot.offlineSince = Date.now();
-        const offlineAgeMs = Date.now() - bot.offlineSince;
-        const offlineSafety = {
-          ...assessOfflineSafety(self),
-          unsafe: true,
-          loginPointSafetyGate: unsafeEntryGate,
-          passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0))
-        };
-        bot.lastOfflineSafety = offlineSafety;
-        const leaveResult = await leaveOffline('login point safety gate', currentSummary, offlineSafety);
-        const offlineDetail = activeOfflineLeaveDetail();
-        bot.lastDecision = {
-          kind: 'wait',
-          reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'login-snapshot-gate',
-          dx: 0,
-          dy: 0,
-          control: summarizeControl(),
-          self: currentSummary,
-          offlineAgeMs,
-          leaveDelayMs: 0,
-          offlineSafety,
-          snapshotGate: unsafeEntryGate.gate,
-          loginPointSafety: unsafeEntryGate.loginPointSafety,
-          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || loginSnapshotGateDisplayReason(unsafeEntryGate.gate),
-          leave: leaveResult
-        };
-        updateBotPanel(bot.lastDecision);
-        if (cfg.once) bot.stop('once');
-        return;
-      }
       maybeRecordLoginPoint(currentSummary);
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {

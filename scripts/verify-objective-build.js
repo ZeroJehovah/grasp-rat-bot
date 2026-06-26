@@ -1256,12 +1256,7 @@ function main() {
       assert(manualBody.includes('await ensureLoginSnapshotGate(manualReason)'), 'manual login does not check snapshot gate');
       assert(manualBody.includes('!loginSnapshotGateAllowsLogin(snapshotGate)'), 'manual login does not use the combined snapshot/login-point gate helper');
       assert(manualBody.includes("skipReason: 'snapshot-gate'"), 'manual login can clear holds before snapshot gate');
-      const entryGateBody = functionBody(text, 'unsafeReloginEntryGateStatus');
-      assert(entryGateBody.includes('loginSnapshotGateBlockReason(gate)'), 'unsafe relogin entry gate does not reuse the combined login gate block reason');
-      assert(entryGateBody.includes("!pointSafety.satisfied ? 'login-point-safety' : ''"), 'unsafe relogin entry gate can block on snapshot connectivity instead of login-point safety');
-      assert(entryGateBody.includes('exit-trigger:|exit-confirmed:'), 'unsafe relogin entry gate does not recognize post-exit reset context');
-      assert(entryGateBody.includes('recentLoginAttempt') && entryGateBody.includes('loginFlowWait'), 'unsafe relogin entry gate does not cover login-flow entry contexts');
-      assert(text.includes('登录点安全快照未满足，退出等待安全重连'), 'login-point entry gate leave summary not found');
+      assert(!text.includes('function unsafeReloginEntryGateStatus'), 'post-login login-point safety entry gate is still present');
       assert(functionBody(text, 'loginSnapshotGateDisplayReason').includes('等待登录点坐标'), 'missing login point is not displayed explicitly');
       assert(text.includes('function installNativeLoginGateInterceptors'), 'remote bot native login event interceptors not found');
       assert(text.includes('function installStartLinuxDoLoginGate'), 'remote bot startLinuxDoLogin gate not found');
@@ -1307,14 +1302,10 @@ function main() {
       assert(noSelfBody.includes('mismatchTimedOut'), 'no-self session detection does not produce mismatch timeout');
       assert(noSelfBody.includes('shouldLeave'), 'no-self helper does not return leave decision');
       const tickBody = functionBody(text, 'tick');
-      assert(tickBody.includes('const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary)'), 'main loop does not check login-point safety again after alive-self entry');
-      assert(
-        tickBody.indexOf('const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary)') >= 0
-          && tickBody.indexOf('maybeRecordLoginPoint(currentSummary)') > tickBody.indexOf('const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary)'),
-        'alive-self entry gate must run before recording a fresh login point'
-      );
-      assert(tickBody.includes("await leaveOffline('login point safety gate', currentSummary, offlineSafety)"), 'unsafe alive-self entry does not leave through offline flow');
-      assert(tickBody.includes("stopMotionSafely('login-point-safety-entry-gate')"), 'unsafe alive-self entry does not stop motion before leaving');
+      assert(!tickBody.includes('unsafeReloginEntryGateStatus'), 'main loop still checks login-point safety after alive-self entry');
+      assert(!tickBody.includes("leaveOffline('login point safety gate'"), 'alive-self entry can still leave through login-point safety gate');
+      assert(!tickBody.includes('login-point-safety-entry-gate'), 'alive-self entry can still stop motion for login-point safety');
+      assert(tickBody.includes('maybeRecordLoginPoint(currentSummary)'), 'main loop no longer records the post-login point');
       assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
       assert(tickBody.includes('liveSessionMismatchTakeoverState(control, noSelfExit)'), 'main loop does not evaluate guarded live-session takeover state');
       assert(tickBody.includes('if (!cfg.dryRun && liveSessionTakeover?.allowed)'), 'main loop does not require allowed takeover state before fast recovery');
