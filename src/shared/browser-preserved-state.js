@@ -16,6 +16,7 @@ function buildBrowserPreservedState(previousBot) {
     opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
     opportunityAfkStamina: previousBot?.opportunityAfkStamina instanceof Map ? new Map(previousBot.opportunityAfkStamina) : new Map(),
     pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
+    lastLoginAt: Number(previousBot?.lastLoginAt || 0) || 0,
     lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
     lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === 'object' ? { ...previousBot.lastManualLoginResult } : null,
     exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === 'object' ? { ...previousBot.exitAudit } : null,

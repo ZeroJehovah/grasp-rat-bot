@@ -16,6 +16,9 @@ const {
   actorLabel,
   hpDisplay
 } = require('../shared/display-format');
+const {
+  buildBrowserPreservedState
+} = require('../shared/browser-preserved-state');
 
 function runSelfTest() {
   const cfg = {
@@ -8075,6 +8078,11 @@ function runSelfTest() {
 	        ].join('|');
       })(),
       want: 'pending-exit-active|pending hostile exit|pending hostile exit wait|retry later'
+    },
+    {
+      name: 'browser preserved state keeps last login timestamp across hot update',
+      got: buildBrowserPreservedState({ lastLoginAt: 123456, lastLoginResult: { at: 123456 } }).lastLoginAt,
+      want: 123456
     },
     {
       name: 'live session mismatch takeover uses explicit bypass state',

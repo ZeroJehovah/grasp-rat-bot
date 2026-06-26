@@ -418,7 +418,7 @@ function browserBotSource(config) {
 	    lastAction: null,
 	    waitSince: 0,
 	    offlineSince: 0,
-	    lastLoginAt: 0,
+	    lastLoginAt: Number(preserved.lastLoginAt || 0) || 0,
 	    lastLoginResult: preserved.lastLoginResult,
 	    lastManualLoginResult: preserved.lastManualLoginResult,
 	    pendingExit: preserved.pendingExit,
@@ -10996,6 +10996,7 @@ ${importantLogSource()}
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
 	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
 	      const currentSummary = summarizeSelf(self);
+      updateSessionStats(currentSummary);
       maybeRecordLoginPoint(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
@@ -11017,7 +11018,6 @@ ${importantLogSource()}
         return;
       }
       schedulePostLoginZoomOut(currentSummary);
-      updateSessionStats(currentSummary);
 		      const currentHp = Number(currentSummary.hp ?? NaN);
       if (staminaState.mustLeave && !bot.pendingExit) {
         bot.pursuit = null;
