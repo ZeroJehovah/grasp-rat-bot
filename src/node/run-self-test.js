@@ -357,7 +357,36 @@ function runSelfTest() {
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
   const speed = e => Math.hypot(Number(e.vx) || 0, Number(e.vy) || 0);
   const truthyFlag = value => value === true || value === 1 || value === '1' || value === 'true';
-  const isInvulnerable = e => Number(e?.invulnerable_remaining_ticks ?? e?.invincible_remaining_ticks ?? e?.invulnerability_remaining_ticks ?? e?.invulnerableTicks ?? 0) > 0
+  const anyPositiveNumber = (...values) => values.some(value => Number(value) > 0);
+  const isInvulnerable = e => anyPositiveNumber(
+      e?.invulnerable_remaining_ticks,
+      e?.invincible_remaining_ticks,
+      e?.invulnerability_remaining_ticks,
+      e?.invulnerableTicks,
+      e?.invulnerableRemainingTicks,
+      e?.invincibleRemainingTicks,
+      e?.invulnerabilityRemainingTicks,
+      e?.invulnerable_ticks,
+      e?.invincible_ticks,
+      e?.invulnerability_ticks,
+      e?.invulnerable_remaining_ms,
+      e?.invincible_remaining_ms,
+      e?.invulnerability_remaining_ms,
+      e?.invulnerableRemainingMs,
+      e?.invincibleRemainingMs,
+      e?.invulnerabilityRemainingMs,
+      e?.invulnerable_ms,
+      e?.invincible_ms,
+      e?.invulnerability_ms,
+      e?.immune_remaining_ms,
+      e?.immuneRemainingMs,
+      e?.invulnerable_remaining,
+      e?.invincible_remaining,
+      e?.invulnerability_remaining,
+      e?.invulnerableRemaining,
+      e?.invincibleRemaining,
+      e?.invulnerabilityRemaining
+    )
     || truthyFlag(e?.invulnerable)
     || truthyFlag(e?.is_invulnerable)
     || truthyFlag(e?.isInvulnerable)
@@ -1648,6 +1677,24 @@ function runSelfTest() {
       }
     }
     return best || (idleBest ? { ...idleBest, snapshotIdleFallback: true, opportunityScore: idleBest.snapshotScore } : null);
+  }
+
+  function mergeThreatLists(...lists) {
+    const merged = [];
+    const seen = new Set();
+    for (const list of lists) {
+      for (const threat of list || []) {
+        if (!threat) continue;
+        const id = threat?.user_id ?? threat?.id;
+        const key = id !== undefined && id !== null && id !== ''
+          ? String(id)
+          : ('xy:' + Math.round(Number(threat.x) || 0) + ':' + Math.round(Number(threat.y) || 0));
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(threat);
+      }
+    }
+    return merged.sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity));
   }
 
   function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
@@ -4693,10 +4740,25 @@ function runSelfTest() {
       .map(e => decorateThreat(self, e))
       .sort((a, b) => a.distance - b.distance);
     const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
+    const nearbyAvoidanceRadius = Math.max(
+      Number(cfg.dangerRadius || 0) || 0,
+      Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
+      Number(cfg.recoveryAvoidRadius || 0) || 0
+    );
+    const nearbyAvoidanceThreats = entities
+      .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
+      .sort((a, b) => a.distance - b.distance)
+      .filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const recovery = !fullHp && isRecovering(self);
-    const coinThreats = avoidanceThreats;
+    const coinThreats = mergeThreatLists(
+      avoidanceThreats,
+      entities
+        .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
+        .filter(e => e.native)
+        .filter(isAvoidanceThreat)
+    );
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const realtimeCoins = usableCoins.filter(coin => !isSnapshotOnlyCoin(coin));
     const snapshotCoins = usableCoins.filter(isSnapshotOnlyCoin);
@@ -4745,13 +4807,13 @@ function runSelfTest() {
       .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
       .filter(c => c.amount > 0
         && c.distance <= nearCoinLimit
-        && !coinThreats.some(t => dist(c, t) <= t.coinDangerRadius))
+        && !coinThreats.some(t => coinBlockedByThreat(self, c, t)))
       .sort((a, b) => (a.distance - b.distance) || (b.amount - a.amount))[0];
     const footCoin = realtimeCoins
       .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
       .filter(c => c.amount > 0
         && c.distance <= cfg.footCoinPriorityDistance
-        && !coinThreats.some(t => dist(c, t) <= t.coinDangerRadius))
+        && !coinThreats.some(t => coinBlockedByThreat(self, c, t)))
       .sort((a, b) => (a.distance - b.distance) || (b.amount - a.amount))[0];
     const postAttackCoin = pickPostAttackDropCoin(self, realtimeCoins, coinThreats, attacks, entities, {
       includeSingle: !recovery,
@@ -4767,14 +4829,6 @@ function runSelfTest() {
     );
     if (staminaBudgetExit) return staminaBudgetCoinLeaveAction(staminaBudgetExit);
     if (recovery && nearCoin) return { kind: 'coin', id: nearCoin.drop_id, amount: nearCoin.amount };
-    const nearbyAvoidanceRadius = Math.max(
-      Number(cfg.dangerRadius || 0) || 0,
-      Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
-      Number(cfg.recoveryAvoidRadius || 0) || 0
-    );
-    const nearbyAvoidanceThreats = entities
-      .map(e => ({ ...e, distance: dist(self, e) }))
-      .filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
     if (nearbyAvoidanceThreats.length) return { kind: 'flee', reason: 'avoid-invulnerable-target' };
     if (recovery) return { kind: 'recover' };
     if (!fullHp && closeThreats.length) return { kind: 'flee' };
@@ -7197,6 +7251,11 @@ function runSelfTest() {
       want: 'coin'
     },
     {
+      name: 'invulnerable aliases detect positive field despite earlier zero alias',
+      got: isInvulnerable({ invulnerable_remaining_ticks: 0, invulnerableRemainingMs: 5000 }),
+      want: true
+    },
+    {
       name: 'full hp avoids invulnerable active in caution range',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -7204,6 +7263,24 @@ function runSelfTest() {
         coins: [{ drop_id: 2, x: -18000, y: 0, amount: 1 }]
       }).kind,
       want: 'flee'
+    },
+    {
+      name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 25500, y: 0, native: true, current_join_mode: 'Passive', invulnerableRemainingMs: 5000 }],
+        coins: [{ drop_id: 2, x: 12300, y: 0, amount: 1, native: true }]
+      }).reason,
+      want: 'wait-for-snapshot-coin'
+    },
+    {
+      name: 'snapshot-only invulnerable player does not block visible ordinary coin',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        global: [{ user_id: 4, x: 25500, y: 0, current_join_mode: 'Passive', invulnerableRemainingMs: 5000 }],
+        coins: [{ drop_id: 2, x: 12300, y: 0, amount: 1, native: true }]
+      }).kind,
+      want: 'coin'
     },
     {
       name: 'invulnerable active blocks coin route in same direction',
