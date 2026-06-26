@@ -8565,6 +8565,7 @@ function runSelfTest() {
     {
       name: 'live session mismatch takeover uses explicit bypass state',
       got: (() => {
+        const allowsLogin = gate => Boolean(gate?.satisfied || (gate?.liveSessionTakeoverBypass && gate?.pointSafety?.satisfied));
         const status = {
           satisfied: false,
           streak: 0,
@@ -8587,10 +8588,41 @@ function runSelfTest() {
           bypassed.blockReason,
           String(Boolean(bypassed.liveSessionTakeoverBypass)),
           bypassed.liveSessionTakeover.reason,
-          String(Boolean(bypassed.pointSafety?.satisfied))
+          String(Boolean(bypassed.pointSafety?.satisfied)),
+          String(allowsLogin(bypassed))
         ].join('|');
       })(),
-      want: 'false|session-mismatch-recovery|true|live-session-mismatch-takeover|false'
+      want: 'false|session-mismatch-recovery|true|live-session-mismatch-takeover|false|false'
+    },
+    {
+      name: 'live session mismatch takeover bypass still requires login point safety',
+      got: (() => {
+        const allowsLogin = gate => Boolean(gate?.satisfied || (gate?.liveSessionTakeoverBypass && gate?.pointSafety?.satisfied));
+        return [
+          allowsLogin({
+            satisfied: false,
+            liveSessionTakeoverBypass: true,
+            streak: 3,
+            required: 3,
+            pointSafety: { satisfied: false, streak: 0, required: 12 }
+          }),
+          allowsLogin({
+            satisfied: false,
+            liveSessionTakeoverBypass: true,
+            streak: 2,
+            required: 3,
+            pointSafety: { satisfied: true, streak: 12, required: 12 }
+          }),
+          allowsLogin({
+            satisfied: false,
+            liveSessionTakeoverBypass: true,
+            streak: 3,
+            required: 3,
+            pointSafety: { satisfied: true, streak: 12, required: 12 }
+          })
+        ].map(String).join('|');
+      })(),
+      want: 'false|true|true'
     },
     {
       name: 'snapshot self can prove live session mismatch takeover evidence',

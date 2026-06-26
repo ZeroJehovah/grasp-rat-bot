@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.226"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.227"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5103,16 +5103,24 @@ function hpDisplay(value) {
 	    return snapshotLoginGateStatus(t);
 	  }
 
-  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
-    let status = snapshotLoginGateStatus();
-    if (status.satisfied) return status;
-    if (options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed) {
-      status.blockReason = String(reason || 'login');
-      status.liveSessionTakeoverBypass = true;
-      status.liveSessionTakeover = options.liveSessionTakeover;
-      return status;
-    }
-    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
+	  function loginSnapshotGateAllowsLogin(gate) {
+	    if (!gate) return false;
+	    if (gate.satisfied) return true;
+	    return Boolean(gate.liveSessionTakeoverBypass
+	      && gate.pointSafety?.satisfied);
+	  }
+
+	  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
+	    let status = snapshotLoginGateStatus();
+	    if (status.satisfied) return status;
+	    const allowTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed);
+	    if (allowTakeoverBypass && status.pointSafety?.satisfied) {
+	      status.blockReason = String(reason || 'login');
+	      status.liveSessionTakeoverBypass = true;
+	      status.liveSessionTakeover = options.liveSessionTakeover;
+	      return status;
+	    }
+	    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
 	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
 	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
 	      try {
@@ -5125,6 +5133,10 @@ function hpDisplay(value) {
 	      status = snapshotLoginGateStatus();
 	    }
 	    status.blockReason = String(reason || 'login');
+	    if (!status.satisfied && allowTakeoverBypass && status.pointSafety?.satisfied) {
+	      status.liveSessionTakeoverBypass = true;
+	      status.liveSessionTakeover = options.liveSessionTakeover;
+	    }
 	    return status;
 	  }
 
@@ -7384,7 +7396,7 @@ function hpDisplay(value) {
 	      allowLiveSessionTakeoverBypass,
 	      liveSessionTakeover
 	    });
-	    if (!snapshotGate.satisfied && !snapshotGate.liveSessionTakeoverBypass) {
+	    if (!loginSnapshotGateAllowsLogin(snapshotGate)) {
 	      return {
 	        needed: true,
 	        attempted: false,
@@ -7442,7 +7454,7 @@ function hpDisplay(value) {
 		  async function forceLoginNow(reason = 'panel immediate login') {
 		    const manualReason = String(reason || 'panel immediate login');
 		    const snapshotGate = await ensureLoginSnapshotGate(manualReason);
-		    const snapshotBlocked = !snapshotGate.satisfied;
+		    const snapshotBlocked = !loginSnapshotGateAllowsLogin(snapshotGate);
 		    const currentSelf = getSelf();
 		    if (!snapshotBlocked && !(currentSelf && isAlive(currentSelf))) {
 		      closeCurrentImportantSessionBeforeLogin('manual-login-before-session-end:' + manualReason);

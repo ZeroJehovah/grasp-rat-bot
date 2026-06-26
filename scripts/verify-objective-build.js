@@ -1200,6 +1200,9 @@ function main() {
       assert(gateBody.includes('options.allowLiveSessionTakeoverBypass'), 'login snapshot gate does not require an explicit live-session takeover bypass option');
       assert(gateBody.includes('options.liveSessionTakeover?.allowed'), 'login snapshot gate bypass is not tied to allowed live-session takeover state');
       assert(gateBody.includes('status.liveSessionTakeoverBypass = true'), 'login snapshot gate does not mark explicit live-session takeover bypasses');
+      assert(gateBody.includes('allowTakeoverBypass && status.pointSafety?.satisfied'), 'login snapshot gate can mark takeover bypass before login-point safety is satisfied');
+      const allowLoginBody = functionBody(text, 'loginSnapshotGateAllowsLogin');
+      assert(allowLoginBody.includes('gate.pointSafety?.satisfied'), 'login gate bypass can skip login-point safety');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not advance login gate');
       assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
@@ -1238,10 +1241,12 @@ function main() {
       const loginBody = functionBody(text, 'maybeStartAutoLogin');
       assert(loginBody.includes('await ensureLoginSnapshotGate(reason, {'), 'auto login does not pass explicit options to snapshot gate');
       assert(loginBody.includes('allowLiveSessionTakeoverBypass'), 'auto login does not thread live-session takeover bypass state');
-      assert(loginBody.includes('!snapshotGate.liveSessionTakeoverBypass'), 'auto login still blocks explicit live-session takeover bypasses');
+      assert(loginBody.includes('!loginSnapshotGateAllowsLogin(snapshotGate)'), 'auto login does not use the combined snapshot/login-point gate helper');
+      assert(!loginBody.includes('!snapshotGate.satisfied && !snapshotGate.liveSessionTakeoverBypass'), 'auto login can still bypass login-point safety directly');
       assert(loginBody.includes("reason: 'snapshot-gate'"), 'snapshot gate block reason not reported');
       const manualBody = functionBody(text, 'forceLoginNow');
       assert(manualBody.includes('await ensureLoginSnapshotGate(manualReason)'), 'manual login does not check snapshot gate');
+      assert(manualBody.includes('!loginSnapshotGateAllowsLogin(snapshotGate)'), 'manual login does not use the combined snapshot/login-point gate helper');
       assert(manualBody.includes("skipReason: 'snapshot-gate'"), 'manual login can clear holds before snapshot gate');
       assert(functionBody(text, 'loginSnapshotGateDisplayReason').includes('等待登录点坐标'), 'missing login point is not displayed explicitly');
       const triggerBody = functionBody(text, 'startExitAudit');

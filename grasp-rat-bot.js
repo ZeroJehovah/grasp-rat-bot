@@ -3404,7 +3404,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	      allowLiveSessionTakeoverBypass,
 	      liveSessionTakeover
 	    });
-	    if (!snapshotGate.satisfied && !snapshotGate.liveSessionTakeoverBypass) {
+	    if (!loginSnapshotGateAllowsLogin(snapshotGate)) {
 	      return {
 	        needed: true,
 	        attempted: false,
@@ -3462,7 +3462,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 		  async function forceLoginNow(reason = 'panel immediate login') {
 		    const manualReason = String(reason || 'panel immediate login');
 		    const snapshotGate = await ensureLoginSnapshotGate(manualReason);
-		    const snapshotBlocked = !snapshotGate.satisfied;
+		    const snapshotBlocked = !loginSnapshotGateAllowsLogin(snapshotGate);
 		    const currentSelf = getSelf();
 		    if (!snapshotBlocked && !(currentSelf && isAlive(currentSelf))) {
 		      closeCurrentImportantSessionBeforeLogin('manual-login-before-session-end:' + manualReason);
