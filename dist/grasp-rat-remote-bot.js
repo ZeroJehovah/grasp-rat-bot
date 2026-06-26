@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.231"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.232"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5202,53 +5202,6 @@ function hpDisplay(value) {
 	    if (!pointSafety.satisfied) return 'login-point-safety';
 	    if (!status.snapshotConnectivitySatisfied) return 'snapshot-connectivity';
 	    return 'snapshot-gate';
-	  }
-
-	  function unsafeReloginEntryGateStatus(selfSummary = null, t = Date.now()) {
-	    const gate = snapshotLoginGateStatus(t);
-	    const pointSafety = gate.pointSafety || loginPointSafetyStatus(t);
-	    const combinedBlockReason = loginSnapshotGateBlockReason(gate);
-	    if (!combinedBlockReason) return null;
-	    const blockReason = !pointSafety.hasPoint && Number(pointSafety.required || 0) > 0
-	      ? 'login-point-missing'
-	      : (!pointSafety.satisfied ? 'login-point-safety' : '');
-	    if (!blockReason) return null;
-	    const userId = selfSummary?.id ?? selfSummary?.user_id ?? getCurrentUserId() ?? null;
-	    const session = bot.session || {};
-	    const sameUser = userId === null || session.userId === null || session.userId === undefined || String(session.userId) === String(userId);
-	    const activeSession = Boolean(session.startedAt && sameUser && !session.missingSince && !session.exitAt);
-	    const resetReason = String(pointSafety.resetReason || gate.resetReason || '');
-	    const exitReset = /exit-trigger:|exit-confirmed:/.test(resetReason);
-	    const waitReason = String(bot.lastDecision?.reason || '');
-	    const waitingForLogin = Boolean(
-	      bot.waitSince
-	        || session.missingSince
-	        || bot.pendingExit
-	        || /^no-self|not-alive|login-|auto-login|manual-login|session-mismatch-recovery|game-session-connecting|offline-leave|enemy-leave|combat-leave|stamina-exhausted/.test(waitReason)
-	    );
-	    const loginFlowWait = /^login-|auto-login|manual-login|session-mismatch-recovery/.test(waitReason);
-	    const reloginHoldActive = Boolean(enemyReloginHoldRemainingMs() > 0 || offlineReloginHoldRemainingMs() > 0 || loginSuppressRemainingMs() > 0);
-	    const recentLoginAttempt = Boolean(Number(bot.lastLoginAt || 0) && t - Number(bot.lastLoginAt || 0) <= Math.max(60000, Number(cfg.postLoginGraceMs || 45000) * 2));
-	    const pendingExitActive = Boolean(bot.pendingExit);
-	    const entryGateContext = Boolean(exitReset || reloginHoldActive || pendingExitActive || recentLoginAttempt || loginFlowWait);
-	    if (activeSession && !entryGateContext) return null;
-	    if (!entryGateContext) return null;
-	    return {
-	      blocked: true,
-	      reason: blockReason,
-	      combinedBlockReason,
-	      gate,
-	      loginPointSafety: pointSafety,
-	      resetReason,
-	      exitReset,
-	      waitingForLogin,
-	      loginFlowWait,
-	      pendingExitActive,
-	      reloginHoldActive,
-	      recentLoginAttempt,
-	      entryGateContext,
-	      activeSession
-	    };
 	  }
 
 	  async function ensureLoginSnapshotGate(reason = 'login', options = {}) {
@@ -17863,41 +17816,6 @@ function hpDisplay(value) {
       const currentSummary = summarizeSelf(self);
       updateSessionStats(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
-      const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary);
-      if (unsafeEntryGate && !bot.pendingExit) {
-        bot.pursuit = null;
-        bot.lastSelf = currentSummary;
-        stopMotionSafely('login-point-safety-entry-gate');
-        if (!bot.offlineSince) bot.offlineSince = Date.now();
-        const offlineAgeMs = Date.now() - bot.offlineSince;
-        const offlineSafety = {
-          ...assessOfflineSafety(self),
-          unsafe: true,
-          loginPointSafetyGate: unsafeEntryGate,
-          passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0))
-        };
-        bot.lastOfflineSafety = offlineSafety;
-        const leaveResult = await leaveOffline('login point safety gate', currentSummary, offlineSafety);
-        const offlineDetail = activeOfflineLeaveDetail();
-        bot.lastDecision = {
-          kind: 'wait',
-          reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'login-snapshot-gate',
-          dx: 0,
-          dy: 0,
-          control: summarizeControl(),
-          self: currentSummary,
-          offlineAgeMs,
-          leaveDelayMs: 0,
-          offlineSafety,
-          snapshotGate: unsafeEntryGate.gate,
-          loginPointSafety: unsafeEntryGate.loginPointSafety,
-          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || loginSnapshotGateDisplayReason(unsafeEntryGate.gate),
-          leave: leaveResult
-        };
-        updateBotPanel(bot.lastDecision);
-        if (cfg.once) bot.stop('once');
-        return;
-      }
       maybeRecordLoginPoint(currentSummary);
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {
