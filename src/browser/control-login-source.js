@@ -39,12 +39,79 @@ function controlLoginSource(helpers = {}) {
 		      return false;
 		    }
 		    bot.reloadRequestedAt = Date.now();
-	    logStatus('reload: ' + reason);
-	    location.reload();
-	    return true;
-	  }
+		    logStatus('reload: ' + reason);
+		    location.reload();
+		    return true;
+		  }
 
-	  function cloudflareErrorInfo() {
+		  function requestLeaveConfirmationReload(reason, pending = bot.pendingExit) {
+		    if (cfg.dryRun || cfg.once) return false;
+		    if (!pending) return false;
+		    if (bot.reloadRequestedAt) return false;
+		    if (exitAuditFlushPending()) {
+		      const blocked = exitAuditFlushBlockDetail('leave-confirmation-reload:' + (reason || ''));
+		      bot.exitAudit.lastBlockedReload = blocked;
+		      const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, Date.now());
+		      if (reloadConfirmation) {
+		        reloadConfirmation.lastBlocked = blocked;
+		        pending.reloadConfirmation = reloadConfirmation;
+		        if (pending.lastResult && typeof pending.lastResult === 'object') pending.lastResult.reloadConfirmation = reloadConfirmation;
+		        writePersistentPendingExitState(pending);
+		      }
+		      flushCombatLogs(true);
+		      logStatus('leave confirmation reload blocked until exit audit logs flush: ' + (reason || ''), {
+		        kind: 'wait',
+		        reason: 'exit-log-flush-pending',
+		        dx: 0,
+		        dy: 0,
+		        self: bot.lastSelf,
+		        pendingExit: summarizePendingExit(pending),
+		        exitAuditFlush: blocked,
+		        displayReason: '等待退出日志发送完成，暂不刷新确认退出'
+		      });
+		      return false;
+		    }
+		    try {
+		      persistCombatLogPendingEntries();
+		      flushCombatLogs(true);
+		    } catch (_) {}
+		    const t = Date.now();
+		    const previousRequestedAt = Number(pending.reloadConfirmation?.requestedAt || 0) || 0;
+		    const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t) || {
+		      required: true,
+		      reason: String(reason || 'leave-success'),
+		      leaveSucceededAt: Number(pending.lastResult?.lastLeaveRequest?.completedAt || pending.lastResult?.at || t) || t,
+		      requestId: String(pending.lastResult?.lastLeaveRequest?.requestId || ''),
+		      requestedAt: 0,
+		      reloadedAt: 0,
+		      restoredAfterReload: false,
+		      count: 0,
+		      lastResult: null,
+		      lastBlocked: null
+		    };
+		    reloadConfirmation.requestedAt = reloadConfirmation.requestedAt || t;
+		    reloadConfirmation.count = Math.max(1, Math.round(Number(reloadConfirmation.count || 0) || 0) + (previousRequestedAt ? 0 : 1));
+		    pending.reloadConfirmation = reloadConfirmation;
+		    pending.updatedAt = t;
+		    if (pending.lastResult && typeof pending.lastResult === 'object') {
+		      pending.lastResult.reloadConfirmation = reloadConfirmation;
+		      pending.lastResult.exitPending = true;
+		      pending.lastResult.exitConfirmed = false;
+		    }
+		    writePersistentPendingExitState(pending);
+		    bot.reloadRequestedAt = t;
+		    logStatus('leave confirmation reload: ' + reason, {
+		      kind: 'wait',
+		      reason: 'leave-success-refresh-confirmation',
+		      pendingExit: summarizePendingExit(pending),
+		      reloadConfirmation,
+		      displayReason: 'leave接口已返回成功，刷新页面确认服务端在线状态'
+		    });
+		    location.reload();
+		    return true;
+		  }
+
+		  function cloudflareErrorInfo() {
 	    if (location.origin !== 'https://grasp-rat-game.h-e.top') return null;
 	    const title = String(document.title || '');
 	    const text = String(document.body?.innerText || '').slice(0, 5000);
@@ -1140,6 +1207,7 @@ function controlLoginSource(helpers = {}) {
     bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
     bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
     bot.pendingExit = null;
+    clearPersistentPendingExitState();
     clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
     clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
     return cleared;

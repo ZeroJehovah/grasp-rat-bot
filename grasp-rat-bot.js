@@ -258,10 +258,12 @@ function browserBotSource(config) {
 		  const PAUSE_REASON_KEY = 'graspRatBotPauseReason';
 		  const LOGIN_SUPPRESS_KEY = 'graspRatLoginSuppressUntil';
 		  const LOGIN_SUPPRESS_REASON_KEY = 'graspRatLoginSuppressReason';
-	      const LOGIN_POINT_SAFETY_KEY = 'graspRatLoginPointSafety';
-	      const EXIT_AUDIT_PENDING_LOGS_KEY = 'graspRatExitAuditPendingLogs';
-	      const IMPORTANT_LOGS_KEY = 'graspRatImportantLogs';
-	      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
+		      const LOGIN_POINT_SAFETY_KEY = 'graspRatLoginPointSafety';
+		      const EXIT_AUDIT_PENDING_LOGS_KEY = 'graspRatExitAuditPendingLogs';
+		      const COMBAT_LOG_PENDING_ENTRIES_KEY = 'graspRatCombatLogPendingEntries';
+		      const IMPORTANT_LOGS_KEY = 'graspRatImportantLogs';
+		      const PENDING_EXIT_STATE_KEY = 'graspRatPendingExitState';
+		      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
 	      const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
@@ -360,13 +362,117 @@ function browserBotSource(config) {
 	    } catch (_) {}
 	  }
 
-	  function clearPersistentExitState(key) {
-	    try {
-	      localStorage.removeItem(key);
-	    } catch (_) {}
-	  }
+		  function clearPersistentExitState(key) {
+		    try {
+		      localStorage.removeItem(key);
+		    } catch (_) {}
+		  }
 
-	  function refreshExitDetail(detail, t = Date.now()) {
+		  function clearPersistentPendingExitState() {
+		    try {
+		      localStorage.removeItem(PENDING_EXIT_STATE_KEY);
+		    } catch (_) {}
+		  }
+
+		  function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
+		    const raw = value && typeof value === 'object'
+		      ? value
+		      : (pending?.lastResult?.reloadConfirmation && typeof pending.lastResult.reloadConfirmation === 'object' ? pending.lastResult.reloadConfirmation : null);
+		    if (!raw?.required) return null;
+		    const requestedAt = Number(raw.requestedAt || raw.reloadRequestedAt || 0) || 0;
+		    let reloadedAt = Number(raw.reloadedAt || raw.restoredAt || 0) || 0;
+		    const restoredAfterReload = Boolean(raw.restoredAfterReload || (options.markReloaded && requestedAt));
+		    if (restoredAfterReload && requestedAt && !reloadedAt) reloadedAt = t;
+		    return {
+		      required: true,
+		      reason: String(raw.reason || 'leave-success'),
+		      leaveSucceededAt: Number(raw.leaveSucceededAt || raw.succeededAt || pending?.lastResult?.lastLeaveRequest?.completedAt || pending?.lastResult?.at || 0) || 0,
+		      requestId: String(raw.requestId || pending?.lastResult?.lastLeaveRequest?.requestId || ''),
+		      requestedAt,
+		      reloadedAt,
+		      restoredAfterReload,
+		      count: Math.max(0, Math.round(Number(raw.count || raw.reloadCount || 0) || 0)),
+		      lastResult: raw.lastResult || null,
+		      lastBlocked: raw.lastBlocked || null
+		    };
+		  }
+
+		  function normalizePendingExitStateForStorage(value, t = Date.now(), options = {}) {
+		    if (!value || typeof value !== 'object') return null;
+		    const at = Number(value.at || value.lastAttemptAt || value.updatedAt || 0) || 0;
+		    const maxAgeMs = Math.max(60000, Number(cfg.pendingExitPersistMaxMs || 3600000) || 3600000);
+		    if (at && t - at > maxAgeMs) return null;
+		    const summary = String(value.summary || value.lastResult?.summary || value.reason || '').trim();
+		    const normalized = {
+		      schemaVersion: 1,
+		      scope: String(value.scope || ''),
+		      source: String(value.source || ''),
+		      reason: String(value.reason || value.lastResult?.reason || ''),
+		      summary,
+		      displayReason: String(value.displayReason || (summary ? pendingExitDisplayReason(summary) : '')),
+		      at: at || t,
+		      updatedAt: Number(value.updatedAt || t) || t,
+		      lastAttemptAt: Number(value.lastAttemptAt || value.lastResult?.at || at || 0) || 0,
+		      retryCount: Math.max(0, Math.round(Number(value.retryCount || 0) || 0)),
+		      retryMs: Math.max(0, Math.round(Number(value.retryMs || 0) || 0)),
+		      userId: value.userId || value.lastResult?.userId || null,
+		      self: cloneForPendingExit(value.self || value.lastResult?.self || null),
+		      offlineSafety: cloneForPendingExit(value.offlineSafety || value.lastResult?.offlineSafety || null),
+		      target: cloneForPendingExit(value.target || value.lastResult?.target || null),
+		      pursuit: cloneForPendingExit(value.pursuit || value.lastResult?.pursuit || null),
+		      injury: cloneForPendingExit(value.injury || value.lastResult?.injury || null),
+		      combat: cloneForPendingExit(value.combat || value.lastResult?.combat || null),
+		      combatCover: cloneForPendingExit(value.combatCover || value.lastResult?.combatCover || value.lastResult?.combat?.leaveCover || null),
+		      lastResult: cloneForPendingExit(value.lastResult || null)
+		    };
+		    const reloadConfirmation = normalizePendingExitReloadConfirmation(value.reloadConfirmation || normalized.lastResult?.reloadConfirmation, normalized, t, options);
+		    if (reloadConfirmation) {
+		      normalized.reloadConfirmation = reloadConfirmation;
+		      if (normalized.lastResult && typeof normalized.lastResult === 'object') {
+		        normalized.lastResult.reloadConfirmation = reloadConfirmation;
+		        normalized.lastResult.exitPending = true;
+		        normalized.lastResult.exitConfirmed = false;
+		      }
+		    }
+		    if (!normalized.retryMs) normalized.retryMs = pendingExitRetryMs(normalized);
+		    return normalized;
+		  }
+
+		  function readPersistedPendingExitState(t = Date.now(), options = {}) {
+		    let raw = null;
+		    try {
+		      raw = JSON.parse(localStorage.getItem(PENDING_EXIT_STATE_KEY) || 'null');
+		    } catch (_) {
+		      raw = null;
+		    }
+		    const normalized = normalizePendingExitStateForStorage(raw, t, options);
+		    if (!normalized && raw) clearPersistentPendingExitState();
+		    return normalized;
+		  }
+
+		  function writePersistentPendingExitState(pending = null) {
+		    const normalized = normalizePendingExitStateForStorage(pending || bot.pendingExit, Date.now());
+		    if (!normalized) {
+		      clearPersistentPendingExitState();
+		      return null;
+		    }
+		    try {
+		      localStorage.setItem(PENDING_EXIT_STATE_KEY, safeStringify(normalized));
+		    } catch (_) {}
+		    return normalized;
+		  }
+
+		  function chooseInitialPendingExitState(memoryState, storedState, t = Date.now(), options = {}) {
+		    const memory = normalizePendingExitStateForStorage(memoryState, t);
+		    const stored = normalizePendingExitStateForStorage(storedState, t, options);
+		    if (!memory) return stored;
+		    if (!stored) return memory;
+		    const memoryStamp = Math.max(Number(memory.updatedAt || 0), Number(memory.lastAttemptAt || 0), Number(memory.at || 0));
+		    const storedStamp = Math.max(Number(stored.updatedAt || 0), Number(stored.lastAttemptAt || 0), Number(stored.at || 0));
+		    return storedStamp > memoryStamp ? stored : memory;
+		  }
+
+		  function refreshExitDetail(detail, t = Date.now()) {
 	    if (!detail || typeof detail !== 'object') return detail;
 	    const reloginUntil = Number(detail.reloginUntil || 0);
 	    if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
@@ -401,9 +507,11 @@ function browserBotSource(config) {
     }).filter(Boolean);
   }
 
-		  const restoredFailures = restoredCoinFailures();
-		  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-		  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+			  const restoredFailures = restoredCoinFailures();
+			  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+			  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
+			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
 
 		  function loginSnapshotSuccessRequired() {
 		    const raw = Number(cfg.loginSnapshotSuccessRequired ?? 3);
@@ -450,7 +558,7 @@ function browserBotSource(config) {
 	    lastLoginAt: Number(preserved.lastLoginAt || 0) || 0,
 	    lastLoginResult: preserved.lastLoginResult,
 	    lastManualLoginResult: preserved.lastManualLoginResult,
-	    pendingExit: preserved.pendingExit,
+		    pendingExit: initialPendingExitState,
 	    lastOfflineLeaveAt: 0,
 		    lastOfflineLeaveResult: restoredOfflineLeaveState,
 	    offlineReloginUntil: Math.max(0, Number(restoredOfflineLeaveState?.reloginUntil || 0)),
@@ -1837,9 +1945,11 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	      bot.lastCombatLeaveResult,
 	      bot.lastInjuryLeaveResult
 	    ].filter(Boolean);
-	    bot.pursuitReloginUntil = 0;
-	    bot.lastEnemyLeaveWaitMs = 0;
-	    bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;
+		    bot.pursuitReloginUntil = 0;
+		    bot.lastEnemyLeaveWaitMs = 0;
+		    bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;
+		    if (bot.pendingExit) writePersistentPendingExitState(bot.pendingExit);
+		    else clearPersistentPendingExitState();
 	    for (const detail of details) {
 	      if (!detail || typeof detail !== 'object') continue;
 	      detail.onlineRecoveryAt = t;
@@ -1857,8 +1967,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	  function clearOfflineReloginHold(reason = 'online self restored') {
 	    const t = Date.now();
 	    bot.offlineReloginUntil = 0;
-    bot.lastOfflineLeaveWaitMs = 0;
-    bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;
+	    bot.lastOfflineLeaveWaitMs = 0;
+	    bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;
+	    if (bot.pendingExit) writePersistentPendingExitState(bot.pendingExit);
+	    else clearPersistentPendingExitState();
     if (bot.lastOfflineLeaveResult && typeof bot.lastOfflineLeaveResult === 'object') {
       bot.lastOfflineLeaveResult.onlineRecoveryAt = t;
       bot.lastOfflineLeaveResult.onlineRecoveryReason = String(reason || 'online self restored');
@@ -1920,27 +2032,37 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     return base + '，等待退出确认，未退出会继续补发';
   }
 
-  function summarizePendingExit(pending = bot.pendingExit) {
-    if (!pending) return null;
-    const t = Date.now();
-    const retryMs = pendingExitRetryMs(pending);
-    const lastAttemptAt = Number(pending.lastAttemptAt || 0);
-    return {
-      scope: pending.scope || '',
-      source: pending.source || '',
-      reason: pending.reason || '',
-      summary: pending.summary || '',
+	  function summarizePendingExit(pending = bot.pendingExit) {
+	    if (!pending) return null;
+	    const t = Date.now();
+	    const retryMs = pendingExitRetryMs(pending);
+	    const lastAttemptAt = Number(pending.lastAttemptAt || 0);
+	    const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t);
+	    return {
+	      scope: pending.scope || '',
+	      source: pending.source || '',
+	      reason: pending.reason || '',
+	      summary: pending.summary || '',
       displayReason: pending.displayReason || '',
       at: Number(pending.at || 0),
       ageMs: pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0,
       lastAttemptAt,
       lastAttemptAgeMs: lastAttemptAt ? Math.max(0, Math.round(t - lastAttemptAt)) : null,
-      retryMs,
-      retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
-      retryCount: Number(pending.retryCount || 0),
-      leaveRequestPending: Boolean(pending.lastResult?.leaveRequestPending),
-      userId: pending.userId || null,
-      combatCover: pending.combatCover ? {
+	      retryMs,
+	      retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
+	      retryCount: Number(pending.retryCount || 0),
+	      leaveRequestPending: Boolean(pending.lastResult?.leaveRequestPending),
+	      reloadConfirmation: reloadConfirmation ? {
+	        required: Boolean(reloadConfirmation.required),
+	        requestedAt: Number(reloadConfirmation.requestedAt || 0),
+	        reloadedAt: Number(reloadConfirmation.reloadedAt || 0),
+	        restoredAfterReload: Boolean(reloadConfirmation.restoredAfterReload),
+	        ageAfterReloadMs: reloadConfirmation.reloadedAt ? Math.max(0, Math.round(t - Number(reloadConfirmation.reloadedAt || t))) : null,
+	        count: Number(reloadConfirmation.count || 0),
+	        reason: reloadConfirmation.reason || ''
+	      } : null,
+	      userId: pending.userId || null,
+	      combatCover: pending.combatCover ? {
         reason: pending.combatCover.reason || '',
         dx: clamp(Math.round(Number(pending.combatCover.dx) || 0), -1, 1),
         dy: clamp(Math.round(Number(pending.combatCover.dy) || 0), -1, 1),
@@ -2022,13 +2144,17 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       combatCover: cloneForPendingExit(detail.combatCover || detail.combat?.leaveCover || previous?.combatCover || null),
       lastResult: cloneForPendingExit(detail)
     };
-    bot.pendingExit = pending;
-    detail.exitPending = true;
-    detail.exitConfirmed = false;
-    detail.pendingExit = summarizePendingExit(pending);
-    detail.displayReason = pending.displayReason;
-    return pending;
-  }
+	    bot.pendingExit = pending;
+	    detail.exitPending = true;
+	    detail.exitConfirmed = false;
+	    detail.pendingExit = summarizePendingExit(pending);
+	    detail.displayReason = pending.displayReason;
+	    writePersistentPendingExitState(pending);
+	    if (leaveDetailSucceeded(detail) && !leaveDetailHasHttp403(detail)) {
+	      requestPendingExitLeaveSuccessReload(detail, 'leave-success');
+	    }
+	    return pending;
+	  }
 
   function pendingExitSelfState(self) {
     const userId = getCurrentUserId();
@@ -2195,12 +2321,80 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     return Array.isArray(detail.leaveRequests) && detail.leaveRequests.some(leaveRequestHasHttp403);
   }
 
-  function leaveDetailSucceeded(detail) {
-    if (!detail || typeof detail !== 'object') return false;
-    if (!detail.attempted || detail.leaveRequestPending || detail.error || leaveDetailHasHttp403(detail)) return false;
-    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
-    return !request || Boolean(request.completedAt || request.method || detail.method);
-  }
+	  function leaveDetailSucceeded(detail) {
+	    if (!detail || typeof detail !== 'object') return false;
+	    if (!detail.attempted || detail.leaveRequestPending || detail.error || leaveDetailHasHttp403(detail)) return false;
+	    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
+	    return !request || Boolean(request.completedAt || request.method || detail.method);
+	  }
+
+	  function leaveSuccessReloadConfirmationForDetail(detail, pending = null, t = Date.now()) {
+	    if (!leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return normalizePendingExitReloadConfirmation(pending?.reloadConfirmation, pending, t);
+	    const existing = normalizePendingExitReloadConfirmation(detail.reloadConfirmation || pending?.reloadConfirmation, pending, t);
+	    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
+	    return {
+	      required: true,
+	      reason: 'leave-success',
+	      leaveSucceededAt: Number(existing?.leaveSucceededAt || request?.completedAt || detail.at || t) || t,
+	      requestId: String(existing?.requestId || request?.requestId || ''),
+	      requestedAt: Number(existing?.requestedAt || 0) || 0,
+	      reloadedAt: Number(existing?.reloadedAt || 0) || 0,
+	      restoredAfterReload: Boolean(existing?.restoredAfterReload),
+	      count: Math.max(0, Math.round(Number(existing?.count || 0) || 0)),
+	      lastResult: existing?.lastResult || null,
+	      lastBlocked: existing?.lastBlocked || null
+	    };
+	  }
+
+	  function attachLeaveSuccessReloadConfirmation(pending, detail, t = Date.now()) {
+	    if (!pending || !leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return null;
+	    const reloadConfirmation = leaveSuccessReloadConfirmationForDetail(detail, pending, t);
+	    pending.reloadConfirmation = reloadConfirmation;
+	    pending.updatedAt = t;
+	    if (pending.lastResult && typeof pending.lastResult === 'object') {
+	      pending.lastResult.reloadConfirmation = reloadConfirmation;
+	      pending.lastResult.exitPending = true;
+	      pending.lastResult.exitConfirmed = false;
+	    }
+	    detail.reloadConfirmation = reloadConfirmation;
+	    detail.exitPending = true;
+	    detail.exitConfirmed = false;
+	    detail.pendingExit = summarizePendingExit(pending);
+	    writePersistentPendingExitState(pending);
+	    return reloadConfirmation;
+	  }
+
+	  function pendingExitLeaveSuccessReloadWaitDetail(pending, detail, state, reason, displayReason) {
+	    const wait = cloneForPendingExit(detail || pending?.lastResult || {}) || {};
+	    wait.attempted = Boolean(wait.attempted);
+	    wait.error = '';
+	    wait.exitPending = true;
+	    wait.exitConfirmed = false;
+	    wait.reason = reason || wait.reason || pending?.reason || 'leave-success';
+	    wait.summary = wait.summary || pending?.summary || wait.reason || '';
+	    wait.displayReason = displayReason || wait.displayReason || 'leave接口已返回成功，刷新页面确认服务端在线状态';
+	    wait.pendingExit = summarizePendingExit(pending);
+	    wait.exitConfirmation = state || null;
+	    return wait;
+	  }
+
+	  function requestPendingExitLeaveSuccessReload(detail, label = 'leave-success') {
+	    const pending = bot.pendingExit;
+	    if (!pending || !detail?.exitAuditId) return false;
+	    const pendingAuditId = pending.lastResult?.exitAuditId || '';
+	    if (pendingAuditId && pendingAuditId !== detail.exitAuditId) return false;
+	    const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, detail);
+	    if (!reloadConfirmation) return false;
+	    return requestLeaveConfirmationReload(label, pending);
+	  }
+
+	  function leaveSuccessReloadConfirmationSatisfied(reloadConfirmation) {
+	    return Boolean(reloadConfirmation?.restoredAfterReload || Number(reloadConfirmation?.reloadedAt || 0) > 0);
+	  }
+
+	  function leaveSuccessReloadUnknownGraceMs() {
+	    return Math.max(0, Number(cfg.leaveSuccessReloadUnknownGraceMs || 12000) || 0);
+	  }
 
   function leave403ReloginDelayMs() {
     return Math.max(3600000, Number(cfg.leave403ReloginDelayMs || 0) || 0);
@@ -2390,6 +2584,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	      if (pending.source === 'injury') bot.lastInjuryLeaveResult = detail;
 	    }
     bot.pendingExit = null;
+    clearPersistentPendingExitState();
     recordExitAuditEvent('exit-confirmed', detail, {
       at: t,
       confirmedAt: t,
@@ -2496,6 +2691,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       lastAttemptAt: t,
       lastResult: cloneForPendingExit(detail)
     };
+    writePersistentPendingExitState(bot.pendingExit);
     detail.pendingExit = summarizePendingExit(bot.pendingExit);
     recordPendingExitResult(pending.source, detail, t);
     await issueLeaveCommand(detail);
@@ -2510,6 +2706,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
         lastResult: cloneForPendingExit(detail)
       };
       bot.pendingExit = next;
+      writePersistentPendingExitState(next);
       detail.pendingExit = summarizePendingExit(next);
       detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReason(detail.summary || pending.summary || detail.reason);
     }
@@ -2535,6 +2732,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     const existingHoldMs = pending.scope === 'offline' ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs();
     if (existingHoldMs > 0) {
       bot.pendingExit = null;
+      clearPersistentPendingExitState();
       return null;
     }
     const state = pendingExitSelfState(self);
@@ -2551,14 +2749,78 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
     }
     if (leaveDetailSucceeded(lastDetail)) {
-      const detail = confirmPendingExit(pending, {
+      const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, lastDetail) || normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending);
+      if (!leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)) {
+        requestLeaveConfirmationReload('leave-success', pending);
+        const detail = pendingExitLeaveSuccessReloadWaitDetail(
+          pending,
+          lastDetail,
+          {
+            ...state,
+            leaveSuccessReloadConfirmation: reloadConfirmation || null,
+            awaitingReload: true
+          },
+          'leave-success-refresh-confirmation',
+          'leave接口已返回成功，刷新页面确认服务端在线状态'
+        );
+        return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, false);
+      }
+      const localState = pendingExitLocalConfirmationState(pending, self, state);
+      if (localState.confirmed) {
+        const detail = confirmPendingExit(pending, {
+          ...localState,
+          source: 'leave-success-refresh-local-confirmed',
+          leaveSuccessReloadConfirmation: reloadConfirmation || null
+        });
+        return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
+      }
+      if (state.known && !state.alive) {
+        const detail = confirmPendingExit(pending, {
+          ...state,
+          known: true,
+          alive: false,
+          source: 'leave-success-refresh-confirmed',
+          self: null,
+          leaveSuccessReloadConfirmation: reloadConfirmation || null
+        });
+        return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
+      }
+      if (state.known && state.alive) {
+        schedulePendingExitRetry(pending, self, {
+          ...state,
+          source: 'leave-success-refresh-still-online',
+          leaveSuccessReloadConfirmation: reloadConfirmation || null
+        });
+        return null;
+      }
+      const reloadAgeMs = reloadConfirmation?.reloadedAt ? Math.max(0, Math.round(Date.now() - Number(reloadConfirmation.reloadedAt || Date.now()))) : 0;
+      if (reloadAgeMs < leaveSuccessReloadUnknownGraceMs()) {
+        bot.pursuit = null;
+        if (!applyCombatExitCover(pending, self)) stopMotionSafely('pending-exit-refresh-confirmation');
+        const detail = pendingExitLeaveSuccessReloadWaitDetail(
+          pending,
+          lastDetail,
+          {
+            ...state,
+            source: 'leave-success-refresh-unknown',
+            leaveSuccessReloadConfirmation: reloadConfirmation || null,
+            reloadAgeMs,
+            graceMs: leaveSuccessReloadUnknownGraceMs()
+          },
+          'leave-success-refresh-confirmation',
+          '刷新后正在确认服务端在线状态'
+        );
+        return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, false);
+      }
+      bot.pursuit = null;
+      if (!applyCombatExitCover(pending, self)) stopMotionSafely('pending-exit-refresh-retry');
+      const detail = await retryPendingExit(pending, self, {
         ...state,
-        known: true,
-        alive: false,
-        source: 'leave-success',
-        self: null
+        source: 'leave-success-refresh-unknown-timeout',
+        leaveSuccessReloadConfirmation: reloadConfirmation || null,
+        reloadAgeMs
       });
-      return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
+      return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, false);
     }
     const localState = pendingExitLocalConfirmationState(pending, self, state);
     if (localState.confirmed) {
@@ -2847,6 +3109,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       lastAttemptAt: Number(detail.at || detail.lastLeaveRequest?.sentAt || pending.lastAttemptAt || Date.now()),
       lastResult: cloneForPendingExit(detail)
     };
+    writePersistentPendingExitState(bot.pendingExit);
   }
 
   function maybeConfirmPendingExitFromLeaveDetail(detail) {
@@ -2867,13 +3130,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       });
     }
     if (leaveDetailSucceeded(detail)) {
-      return confirmPendingExit(pending, {
-        ...baseState,
-        known: true,
-        alive: false,
-        source: 'leave-success',
-        self: null
-      });
+      requestPendingExitLeaveSuccessReload(detail, 'leave-success');
+      return null;
     }
     const localState = pendingExitLocalConfirmationState(pending, self, baseState);
     if (localState.confirmed) return confirmPendingExit(pending, localState);
@@ -2898,7 +3156,9 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	    detail.lastLeaveRequest = request;
 	    if (leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) {
 	      stopMotionAfterExit(leaveDetailHasHttp403(detail) ? 'leave-http-403' : 'leave-success');
-	      noteImportantSessionExit((leaveDetailHasHttp403(detail) ? 'leave-http-403:' : 'leave-success:') + (detail.reason || ''), detail.self || bot.lastSelf, request.completedAt, { exit: detail });
+	      if (leaveDetailHasHttp403(detail)) {
+	        noteImportantSessionExit('leave-http-403:' + (detail.reason || ''), detail.self || bot.lastSelf, request.completedAt, { exit: detail });
+	      }
 	    }
 	    updatePendingExitLastResult(detail);
 	    recordExitAuditEvent('leave-request', detail, {
@@ -2907,6 +3167,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       source: detail.exitAuditSource || detail.reason || 'leave-command',
       scope: detail.exitAuditScope || ''
     });
+    if (leaveDetailSucceeded(detail)) requestPendingExitLeaveSuccessReload(detail, 'leave-success');
     maybeConfirmPendingExitFromLeaveDetail(detail);
     return detail;
   }
@@ -11640,6 +11901,7 @@ ${importantLogSource()}
 		  }
 
 	  restorePersistedExitAuditLogs();
+	  restorePersistedCombatLogPendingEntries();
 	  restoreImportantLogsForRemote();
 
 	  window[BOT_KEY] = bot;

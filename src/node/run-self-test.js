@@ -8201,6 +8201,59 @@ function runSelfTest() {
       want: 123456
     },
     {
+      name: 'leave success requests refresh before confirmation',
+      got: (() => {
+        const leaveSucceeded = true;
+        const reloadSatisfied = false;
+        const state = { known: true, alive: false };
+        const next = leaveSucceeded && !reloadSatisfied
+          ? 'request-refresh'
+          : (state.known && !state.alive ? 'confirm' : 'retry');
+        return [next, String(reloadSatisfied)].join('|');
+      })(),
+      want: 'request-refresh|false'
+    },
+    {
+      name: 'restored leave success pending exit marks reload confirmation',
+      got: (() => {
+        const raw = {
+          required: true,
+          requestedAt: 123000,
+          reloadedAt: 0,
+          restoredAfterReload: false
+        };
+        const markReloaded = true;
+        const restoredAfterReload = Boolean(raw.restoredAfterReload || (markReloaded && raw.requestedAt));
+        const reloadedAt = restoredAfterReload && raw.requestedAt && !raw.reloadedAt ? 124000 : raw.reloadedAt;
+        return [String(restoredAfterReload), String(reloadedAt > raw.requestedAt)].join('|');
+      })(),
+      want: 'true|true'
+    },
+    {
+      name: 'refreshed leave success still online retries original pending exit',
+      got: (() => {
+        const reloadSatisfied = true;
+        const state = { known: true, alive: true };
+        const next = reloadSatisfied && state.known && state.alive
+          ? 'schedule-retry'
+          : 'confirm';
+        return next;
+      })(),
+      want: 'schedule-retry'
+    },
+    {
+      name: 'refreshed leave success offline confirms exit',
+      got: (() => {
+        const reloadSatisfied = true;
+        const state = { known: true, alive: false };
+        const next = reloadSatisfied && state.known && !state.alive
+          ? 'confirm'
+          : 'retry';
+        return next;
+      })(),
+      want: 'confirm'
+    },
+    {
       name: 'live session mismatch takeover uses explicit bypass state',
       got: (() => {
         const status = {
