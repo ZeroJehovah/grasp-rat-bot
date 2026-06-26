@@ -8012,6 +8012,28 @@ function runSelfTest() {
 	      want: 'combat-leave-retry|leave retry cooldown|false'
 	    },
 	    {
+	      name: 'combat log exit summary treats control outage reasons as exitish without leave detail',
+	      got: (() => {
+	        const combatGap = combatLogExitSummaryFromDecision({
+	          kind: 'wait',
+	          reason: 'control-combat-tick-gap',
+	          displayReason: 'combat gap pending'
+	        });
+	        const sampling = combatLogExitSummaryFromDecision({
+	          kind: 'wait',
+	          reason: 'control-global-sampling-outage',
+	          displayReason: 'sampling outage pending'
+	        });
+	        return [
+	          combatGap?.reason,
+	          combatGap?.summary,
+	          sampling?.reason,
+	          sampling?.summary
+	        ].join('|');
+	      })(),
+	      want: 'control-combat-tick-gap|combat gap pending|control-global-sampling-outage|sampling outage pending'
+	    },
+	    {
 	      name: 'combat log exit summary prefers canonical combat leave reason',
 	      got: (() => {
 	        const exit = combatLogExitSummaryFromDecision({

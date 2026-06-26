@@ -1,15 +1,15 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `267`.
+- Latest bot self-test count: `268`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `18`.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
   - session-mismatch recovery now has bot self-tests for explicit live-session takeover bypass state, fresh snapshot-self live evidence, and post-exit blockers including pending exit, login suppress, exit-reset snapshot gate, reconnect churn, and offline-ish WebSocket state;
-  - combat/recent-combat global sampling outage now has bot self-tests for explicit offline summary text, combat-triggered offline leave gating, and the default non-combat guard;
-  - combat/recent-combat tick/frame gaps now have bot self-tests for explicit offline summary text, combat-triggered offline leave gating, non-combat guard behavior, recent combat-frame context after decision clearing, the `tick-reentry-gap` diagnosis when a new tick arrives while the previous tick is still stuck, and the `combat-log-gap-with-active-tick` diagnosis when ticks continue but combat frames stop;
+  - combat/recent-combat global sampling outage now has bot self-tests for explicit offline summary text, combat-triggered offline leave gating, the default non-combat guard, and top-level `exit` summary fallback for `control-global-sampling-outage` frames without `leave` detail;
+  - combat/recent-combat tick/frame gaps now have bot self-tests for explicit offline summary text, combat-triggered offline leave gating, non-combat guard behavior, recent combat-frame context after decision clearing, the `tick-reentry-gap` diagnosis when a new tick arrives while the previous tick is still stuck, the `combat-log-gap-with-active-tick` diagnosis when ticks continue but combat frames stop, and top-level `exit` summary fallback for `control-combat-tick-gap` frames without `leave` detail;
   - local snapshot coin at `185m` cannot beat visible/native coin;
   - local snapshot-only coin is not chased;
   - nearby native coin with stale snapshot metadata still reports visible coin reason;
