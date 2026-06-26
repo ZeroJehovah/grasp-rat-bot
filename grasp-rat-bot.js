@@ -11814,7 +11814,6 @@ ${importantLogSource()}
       const previousCoins = Number(bot.lastSelf?.coins ?? 0);
       const currentSummary = summarizeSelf(self);
       updateSessionStats(currentSummary);
-      maybeRecordLoginPoint(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary);
       if (unsafeEntryGate && !bot.pendingExit) {
@@ -11851,6 +11850,7 @@ ${importantLogSource()}
         if (cfg.once) bot.stop('once');
         return;
       }
+      maybeRecordLoginPoint(currentSummary);
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {
         stopMotionSafely('stamina-sample-wait');

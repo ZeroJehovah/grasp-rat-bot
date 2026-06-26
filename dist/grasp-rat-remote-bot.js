@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.228"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.229"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -17632,7 +17632,6 @@ function hpDisplay(value) {
       const previousCoins = Number(bot.lastSelf?.coins ?? 0);
       const currentSummary = summarizeSelf(self);
       updateSessionStats(currentSummary);
-      maybeRecordLoginPoint(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
       const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary);
       if (unsafeEntryGate && !bot.pendingExit) {
@@ -17669,6 +17668,7 @@ function hpDisplay(value) {
         if (cfg.once) bot.stop('once');
         return;
       }
+      maybeRecordLoginPoint(currentSummary);
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {
         stopMotionSafely('stamina-sample-wait');

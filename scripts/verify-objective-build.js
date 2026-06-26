@@ -1298,6 +1298,11 @@ function main() {
       assert(noSelfBody.includes('shouldLeave'), 'no-self helper does not return leave decision');
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes('const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary)'), 'main loop does not check login-point safety again after alive-self entry');
+      assert(
+        tickBody.indexOf('const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary)') >= 0
+          && tickBody.indexOf('maybeRecordLoginPoint(currentSummary)') > tickBody.indexOf('const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary)'),
+        'alive-self entry gate must run before recording a fresh login point'
+      );
       assert(tickBody.includes("await leaveOffline('login point safety gate', currentSummary, offlineSafety)"), 'unsafe alive-self entry does not leave through offline flow');
       assert(tickBody.includes("stopMotionSafely('login-point-safety-entry-gate')"), 'unsafe alive-self entry does not stop motion before leaving');
       assert(tickBody.includes('noSelfGameSessionExitState(control, noSelfAgeMs)'), 'main loop does not evaluate no-self session exit');
