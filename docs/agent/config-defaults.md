@@ -2,6 +2,10 @@
 
 
 - `globalRefreshMs = 5000`
+- `globalSamplingOutageOfflineEnabled = true`
+- `globalSamplingOutageMinErrors = 1`
+- `globalSamplingOutageMinAgeMs = 0`
+- `globalSamplingOutageCombatOnly = true`
 - `loginSnapshotSuccessRequired = 3`
 - `loginSnapshotProbeMinMs = 5000`
 - `loginPointSafetySuccessRequired = 12`

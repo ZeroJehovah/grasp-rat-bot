@@ -124,6 +124,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'combatShootConserveEveryMs', value: 360 },
   { key: 'combatShootRecoveryEveryMs', value: 700 },
   { key: 'combatNativeTickMinMs', value: 80 },
+  { key: 'globalSamplingOutageMinErrors', value: 1 },
+  { key: 'globalSamplingOutageMinAgeMs', value: 0 },
   { key: 'directWsVelocityRepeatMs', value: 50 },
   { key: 'directWsVelocityRepeatHoldMs', value: 220 },
   { key: 'directWsStopRepeatCount', value: 3 },
@@ -397,6 +399,27 @@ function main() {
       assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('preBuffer: Array.isArray'), 'preserved-state helper does not bound combat prebuffer');
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowNativeReconnect: false'), 'runtime defaults do not keep native reconnect disabled');
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowBotWebSocketFallback: false'), 'runtime defaults do not keep bot websocket fallback disabled');
+    });
+    check(`${file} treats combat sampling outage as offline network risk`, () => {
+      assert(defaultConfigSource.includes('globalSamplingOutageOfflineEnabled: true'), 'sampling outage offline gate is not enabled by default');
+      assert(defaultConfigSource.includes('globalSamplingOutageCombatOnly: true'), 'sampling outage offline gate is not combat-only by default');
+      const refreshBody = functionBody(text, 'refreshGlobalState');
+      assert(refreshBody.includes('bot.globalState.samplingOutage = outage'), 'sampling outage state is not recorded on global refresh errors');
+      assert(refreshBody.includes("triggerNativeTick('global-sampling-outage', false)"), 'sampling outage does not trigger an immediate native tick');
+      assert(refreshBody.includes('snapshotTimedOut') && refreshBody.includes('minimapTimedOut'), 'sampling outage timeout evidence is not recorded');
+      const outageBody = functionBody(text, 'globalSamplingOutageOfflineState');
+      assert(outageBody.includes("reason: 'global sampling outage'"), 'sampling outage offline state does not expose the canonical reason');
+      assert(outageBody.includes('combatTickActiveFromState({'), 'sampling outage gate does not reuse combat activity state');
+      assert(outageBody.includes('cfg.globalSamplingOutageCombatOnly && !combatActive'), 'sampling outage gate does not preserve combat-only behavior');
+      const tickBody = functionBody(text, 'tick');
+      assert(tickBody.includes('const samplingOutage = globalSamplingOutageOfflineState(self)'), 'main tick does not evaluate sampling outage offline state');
+      assert(tickBody.includes('!bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage)'), 'sampling outage is not part of the offline branch gate');
+      assert(tickBody.includes('leaveDelayMs = reconnectChurn || samplingOutage ? 0'), 'sampling outage offline leave is not immediate');
+      assert(tickBody.includes("offlineLeaveReason = samplingOutage") && tickBody.includes("'global sampling outage'"), 'sampling outage leave reason is not canonical');
+      assert(tickBody.includes("'control-global-sampling-outage'"), 'sampling outage wait reason is not exposed');
+      assert(text.includes('samplingOutage: this.globalState.samplingOutage || null'), 'status does not expose global sampling outage state');
+      assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
+      assert(functionBody(text, 'offlineExitRequiresUnsafeReloginDelay').includes('offlineSafety.samplingOutage'), 'sampling outage exits do not require unsafe relogin delay');
     });
     check(`${file} sends movement and shots through the native page WebSocket`, () => {
       assert(defaultConfigSource.includes('directWsControlEnabled: true'), 'direct WebSocket control is not enabled by default');
@@ -1362,6 +1385,9 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'retreat ignored target is not reselected without incoming bullet'"), 'retreat-ignore target selection self-test not found');
     assert(nodeSelfTestSource.includes("name: 'incoming bullet can reengage retreat ignored target'"), 'retreat-ignore incoming override self-test not found');
     assert(nodeSelfTestSource.includes("name: 'combat log exit summary covers pending exit decisions'"), 'pending-exit log summary self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'offline sampling outage summary is explicit'"), 'sampling outage summary self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'combat sampling outage triggers offline leave gate'"), 'combat sampling outage trigger self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'non-combat sampling outage does not trigger by default'"), 'non-combat sampling outage guard self-test not found');
   });
 
   const obsoleteReason = ['wait', 'for', 'clear', 'opportunity'].join('-');

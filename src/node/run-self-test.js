@@ -315,6 +315,10 @@ function runSelfTest() {
     coinPickupFailureMinPulseMs: 35,
     coinPickupAttemptSlowEveryMs: 2500,
     coinPickupAttemptSlowMaxCount: 3,
+    globalSamplingOutageOfflineEnabled: true,
+    globalSamplingOutageMinErrors: 1,
+    globalSamplingOutageMinAgeMs: 0,
+    globalSamplingOutageCombatOnly: true,
     tickMs: 120,
     nativeTickMinMs: 120,
     combatNativeTickMinMs: 80,
@@ -3668,6 +3672,35 @@ function runSelfTest() {
     if (combatAt && t - combatAt <= recentCombatMs) return true;
     if (state.pendingExit && /^combat-/.test(String(state.pendingExit.reason || state.pendingExit.rootReason || ''))) return true;
     return false;
+  }
+
+  function globalSamplingOutageOfflineStateForTest(state = {}) {
+    if (!cfg.globalSamplingOutageOfflineEnabled) return null;
+    const outage = state.outage || null;
+    if (!outage?.active) return null;
+    const t = Number.isFinite(Number(state.nowMs)) ? Number(state.nowMs) : Date.now();
+    const minErrors = Math.max(1, Number(cfg.globalSamplingOutageMinErrors || 1));
+    const errorCount = Math.max(0, Number(outage.errorCount || 0));
+    if (errorCount < minErrors) return null;
+    const firstAt = Number(outage.firstAt || 0) || t;
+    const ageMs = Math.max(Number(outage.ageMs || 0), Math.max(0, t - firstAt));
+    const minAgeMs = Math.max(0, Number(cfg.globalSamplingOutageMinAgeMs || 0));
+    if (ageMs < minAgeMs) return null;
+    const combatActive = Boolean(outage.combatActive) || combatTickActiveFromState({
+      decision: state.decision,
+      combatTarget: state.combatTarget,
+      pendingExit: state.pendingExit,
+      nowMs: t
+    });
+    if (cfg.globalSamplingOutageCombatOnly && !combatActive) return null;
+    return {
+      reason: 'global sampling outage',
+      ageMs,
+      errorCount,
+      combatActive,
+      snapshotTimedOut: Boolean(outage.snapshotTimedOut),
+      minimapTimedOut: Boolean(outage.minimapTimedOut)
+    };
   }
 
   function nativeTickMinIntervalMs(state = {}) {
@@ -7765,6 +7798,43 @@ function runSelfTest() {
 	      got: offlineLeaveSummaryText('websocket reconnect churn', { reconnectChurn: { count: 3, windowMs: 10000 } }),
 		      want: '网络连接反复重连，退出等待重连'
 		    },
+	    {
+	      name: 'offline sampling outage summary is explicit',
+	      got: offlineLeaveSummaryText('global sampling outage', { samplingOutage: { errorCount: 1 } }),
+	      want: '网络采样超时，按网络波动退出等待重连'
+	    },
+	    {
+	      name: 'combat sampling outage triggers offline leave gate',
+	      got: globalSamplingOutageOfflineStateForTest({
+	        nowMs: 10000,
+	        decision: { combat: true, reason: 'combat-pressure-close' },
+	        outage: {
+	          active: true,
+	          firstAt: 9000,
+	          ageMs: 1000,
+	          errorCount: 1,
+	          snapshotTimedOut: true,
+	          minimapTimedOut: true
+	        }
+	      })?.reason,
+	      want: 'global sampling outage'
+	    },
+	    {
+	      name: 'non-combat sampling outage does not trigger by default',
+	      got: globalSamplingOutageOfflineStateForTest({
+	        nowMs: 10000,
+	        decision: { kind: 'coin', reason: 'best-opportunity-coin' },
+	        outage: {
+	          active: true,
+	          firstAt: 9000,
+	          ageMs: 1000,
+	          errorCount: 1,
+	          snapshotTimedOut: true,
+	          minimapTimedOut: true
+	        }
+	      })?.reason || 'none',
+	      want: 'none'
+	    },
 	    {
 	      name: 'combat log exit summary ignores non-exit decisions',
 	      got: combatLogExitSummaryFromDecision({ kind: 'wait', reason: 'combat-spacing' }),
