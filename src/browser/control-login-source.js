@@ -676,6 +676,36 @@ function controlLoginSource(helpers = {}) {
     };
   }
 
+  function loginPointHasPoint(state) {
+    return Boolean(
+      state?.point
+        && Number.isFinite(Number(state.point.x))
+        && Number.isFinite(Number(state.point.y))
+    );
+  }
+
+  function loginPointPointStamp(state) {
+    if (!loginPointHasPoint(state)) return 0;
+    return Math.max(Number(state.point.at || 0) || 0, Number(state.point.loginAt || 0) || 0);
+  }
+
+  function mergeLoginPointSafetyState(memoryState, storedState, t = Date.now()) {
+    const memory = memoryState && typeof memoryState === 'object'
+      ? normalizeLoginPointSafetyState(memoryState, t)
+      : null;
+    const stored = storedState && typeof storedState === 'object'
+      ? normalizeLoginPointSafetyState(storedState, t)
+      : null;
+    if (!memory) return stored || normalizeLoginPointSafetyState(null, t);
+    if (!stored) return memory;
+    const memoryHasPoint = loginPointHasPoint(memory);
+    const storedHasPoint = loginPointHasPoint(stored);
+    if (storedHasPoint && (!memoryHasPoint || loginPointPointStamp(stored) > loginPointPointStamp(memory))) {
+      return stored;
+    }
+    return memory;
+  }
+
   function readLoginPointSafetyState(t = Date.now()) {
     let stored = null;
     try {
@@ -683,7 +713,7 @@ function controlLoginSource(helpers = {}) {
     } catch (_) {
       stored = null;
     }
-    const state = normalizeLoginPointSafetyState(bot.loginPointSafety || stored, t);
+    const state = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
     bot.loginPointSafety = state;
     return state;
   }
@@ -790,6 +820,19 @@ function controlLoginSource(helpers = {}) {
     state.radius = loginPointSafetyRadius();
     state.lastSampleAt = t;
     state.lastTick = Number(detail.tick || state.lastTick || 0) || 0;
+    if (!loginPointHasPoint(state)) {
+      state.streak = 0;
+      state.lastDanger = null;
+      if (success) {
+        state.lastOkAt = 0;
+        state.lastError = '';
+      } else {
+        state.lastErrorAt = t;
+        state.lastError = String(detail.error || detail.message || 'snapshot failed');
+      }
+      writeLoginPointSafetyState(state);
+      return loginPointSafetyStatus(t);
+    }
     let ok = Boolean(success);
     let safety = { safe: ok, reason: ok ? 'safe' : 'snapshot-error', danger: null };
     if (ok) {
@@ -830,8 +873,9 @@ function controlLoginSource(helpers = {}) {
       required,
       radius: loginPointSafetyRadius(),
       hasPoint,
-      satisfied: !hasPoint || required <= 0 || state.streak >= required,
-      remaining: hasPoint ? Math.max(0, required - state.streak) : 0,
+      missingPoint: !hasPoint && required > 0,
+      satisfied: required <= 0 || (hasPoint && state.streak >= required),
+      remaining: hasPoint ? Math.max(0, required - state.streak) : required,
       lastSampleAt,
       lastOkAgeMs: state.lastOkAt ? Math.max(0, Math.round(t - Number(state.lastOkAt || t))) : null,
       lastUnsafeAgeMs: state.lastUnsafeAt ? Math.max(0, Math.round(t - Number(state.lastUnsafeAt || t))) : null,
@@ -877,13 +921,14 @@ function controlLoginSource(helpers = {}) {
 
   function maybeRecordLoginPoint(currentSummary) {
     if (!currentSummary || !Number.isFinite(Number(currentSummary.x)) || !Number.isFinite(Number(currentSummary.y))) return null;
-    const loginAt = Number(bot.lastLoginAt || 0);
-    if (!loginAt) return null;
     const t = Date.now();
+    const loginAt = inferLoginPointLoginAt(t);
+    if (!loginAt) return null;
     const maxAge = Math.max(Number(cfg.postLoginGraceMs || 45000) * 2, 60000);
     if (t - loginAt > maxAge) return null;
     const state = readLoginPointSafetyState(t);
     if (Number(state.point?.loginAt || 0) >= loginAt) return state;
+    bot.lastLoginAt = loginAt;
     state.point = {
       x: Number(currentSummary.x),
       y: Number(currentSummary.y),
@@ -894,11 +939,35 @@ function controlLoginSource(helpers = {}) {
       source: 'post-login-self'
     };
     state.streak = 0;
+    state.lastSampleAt = 0;
+    state.lastOkAt = 0;
+    state.lastUnsafeAt = 0;
+    state.lastErrorAt = 0;
+    state.lastTick = 0;
     state.lastDanger = null;
     state.lastError = '';
     state.movement = {};
     writeLoginPointSafetyState(state);
     return state;
+  }
+
+  function inferLoginPointLoginAt(t = Date.now()) {
+    const candidates = [
+      bot.lastLoginAt,
+      bot.lastLoginResult?.at,
+      bot.lastManualLoginResult?.at,
+      bot.session?.startedAt
+    ].map(value => Number(value || 0)).filter(value => Number.isFinite(value) && value > 0 && value <= t);
+    try {
+      const suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+      const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
+      if (suppressUntil > t && /oauth|callback|login/i.test(suppressReason)) {
+        const inferredAt = Math.max(0, suppressUntil - Math.max(1000, Number(cfg.postLoginGraceMs) || 45000));
+        if (inferredAt > 0 && inferredAt <= t) candidates.push(inferredAt);
+      }
+    } catch (_) {}
+    if (candidates.length) return Math.max(...candidates);
+    return 0;
   }
 
 	  function snapshotLoginGateStatus(t = Date.now()) {
@@ -987,6 +1056,9 @@ function controlLoginSource(helpers = {}) {
 	    const gate = snapshotGate || snapshotLoginGateStatus();
 	    if (gate.satisfied) return '';
 	    const pointSafety = gate.pointSafety || loginPointSafetyStatus();
+	    if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) {
+	      return '等待登录点坐标，需先在游戏内读取自身坐标';
+	    }
 	    if (pointSafety.hasPoint && !pointSafety.satisfied) {
 	      const pieces = [
 	        '等待登录点安全快照',
