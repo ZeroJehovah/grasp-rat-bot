@@ -41,6 +41,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'leaveSuccessReloadUnknownGraceMs', value: 12000 },
   { key: 'loginPointSafetySuccessRequired', value: 12 },
   { key: 'loginPointSafetyRadius', value: 60000 },
+  { key: 'loginPointSafetyHealthyRadius', value: 20000 },
+  { key: 'loginPointSafetyHealthyHpThreshold', value: 80 },
   { key: 'loginPointSafetyMoveThreshold', value: 500 },
   { key: 'loginPointSafetyDangerDropMin', value: 2 },
   { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
@@ -1214,10 +1216,13 @@ function main() {
       assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
       assert(text.includes('function loginPointSafetyStatus'), 'login-point safety status helper not found');
       assert(text.includes('function evaluateLoginPointSafety'), 'login-point safety evaluator not found');
+      assert(text.includes('function loginPointSafetyRadiusInfo'), 'login-point safety dynamic radius helper not found');
+      assert(text.includes('function loginPointSafetyExitSelfHpFrom'), 'login-point safety exit HP extractor not found');
       assert(text.includes('function maybeRecordLoginPoint'), 'post-login point recorder not found');
       assert(text.includes('LOGIN_POINT_SAFETY_KEY'), 'login-point safety persistence key not found');
       const pointMergeBody = functionBody(text, 'mergeLoginPointSafetyState');
       assert(pointMergeBody.includes('storedHasPoint && (!memoryHasPoint || loginPointPointStamp(stored) > loginPointPointStamp(memory))'), 'persisted login point can be overwritten by empty/stale memory state');
+      assert(pointMergeBody.includes('stored.lastExitSelfHpAt') && pointMergeBody.includes('lastExitSelfHp: stored.lastExitSelfHp'), 'persisted login-point exit HP can be overwritten by stale memory state');
       const pointReadBody = functionBody(text, 'readLoginPointSafetyState');
       assert(pointReadBody.includes('mergeLoginPointSafetyState(bot.loginPointSafety, stored, t)'), 'login-point safety state does not merge localStorage with memory');
       const pointProbeBody = functionBody(text, 'noteLoginPointSafetyProbe');
@@ -1229,6 +1234,10 @@ function main() {
       assert(pointStatusBody.includes('satisfied: required <= 0 || (hasPoint && state.streak >= required)'), 'missing login point can satisfy safety gate');
       const pointNormalizeBody = functionBody(text, 'normalizeLoginPointSafetyState');
       assert(pointNormalizeBody.includes('resetAt: Number(source.resetAt || 0)') && pointNormalizeBody.includes("resetReason: String(source.resetReason || '')"), 'login-point safety reset context is not persisted through reload');
+      assert(pointNormalizeBody.includes('lastExitSelfHp') && pointNormalizeBody.includes('healthyHpThreshold'), 'login-point safety does not persist last exit HP/radius context');
+      const pointRadiusBody = functionBody(text, 'loginPointSafetyRadiusInfo');
+      assert(pointRadiusBody.includes('lastExitSelfHp >= healthyHpThreshold'), 'login-point safety radius is not reduced only for healthy last-exit HP');
+      assert(pointRadiusBody.includes('healthyRadius') && pointRadiusBody.includes('lowHpRadius'), 'login-point safety radius helper does not expose healthy/low HP radii');
       const recordPointBody = functionBody(text, 'maybeRecordLoginPoint');
       assert(recordPointBody.includes('const loginAt = inferLoginPointLoginAt(t)'), 'login point recorder still requires only tracked bot login time');
       assert(recordPointBody.includes('bot.lastLoginAt = loginAt'), 'login point recorder does not repair missing login time after OAuth/callback recovery');
@@ -1237,8 +1246,9 @@ function main() {
       assert(inferLoginPointBody.includes("localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY)") && inferLoginPointBody.includes('/oauth|callback|login/i'), 'login point timestamp inference does not handle OAuth/callback login suppress evidence');
       assert(inferLoginPointBody.includes('return 0'), 'login point timestamp inference can update without login/session evidence');
       const resetGateBody = functionBody(text, 'resetLoginSnapshotGate');
-      assert(resetGateBody.includes('resetLoginPointSafetyGate(reason)'), 'exit snapshot gate reset does not reset login-point safety streak');
+      assert(resetGateBody.includes('resetLoginPointSafetyGate(reason, exitSelfLike)'), 'exit snapshot gate reset does not reset login-point safety streak with exit HP context');
       assert(!functionBody(text, 'resetLoginPointSafetyGate').includes('point = null'), 'login-point reset clears persisted point');
+      assert(functionBody(text, 'resetLoginPointSafetyGate').includes('state.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null'), 'login-point reset does not record unknown exit HP as unknown');
       const pointDangerBody = functionBody(text, 'loginPointDangerReason');
       assert(pointDangerBody.includes("'damaged-self-today'"), 'login-point safety does not block known same-day damage actors');
       assert(pointDangerBody.includes("dropValue(entity) >= minDrop"), 'login-point safety does not hard-block Drop danger');
@@ -1263,9 +1273,11 @@ function main() {
       assert(text.includes('blockNativeLoginEventIfNeeded'), 'remote bot native login event blocker not found');
       assert(text.includes('installNativeLoginGateInterceptors();'), 'remote bot does not install native login gate interceptors on startup');
       const triggerBody = functionBody(text, 'startExitAudit');
-      assert(triggerBody.includes("resetLoginSnapshotGate('exit-trigger:'"), 'exit trigger does not reset login snapshot gate');
+      assert(triggerBody.includes('resetLoginSnapshotGate') && triggerBody.includes("'exit-trigger:'"), 'exit trigger does not reset login snapshot gate');
+      assert(triggerBody.includes('loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)'), 'exit trigger does not pass self HP into login-point safety reset');
       const confirmBody = functionBody(text, 'confirmPendingExit');
-      assert(confirmBody.includes("resetLoginSnapshotGate('exit-confirmed:'"), 'exit confirmation does not reset login snapshot gate');
+      assert(confirmBody.includes('resetLoginSnapshotGate') && confirmBody.includes("'exit-confirmed:'"), 'exit confirmation does not reset login snapshot gate');
+      assert(confirmBody.includes('loginPointSafetyExitSelfForDetail(detail, { self: pending.self || state?.self || null }, bot.lastSelf)'), 'exit confirmation does not pass self HP into login-point safety reset');
       assert(text.includes('loginSnapshotGate: snapshotLoginGateStatus()'), 'status/logs do not expose login snapshot gate');
       assert(text.includes('reloginGate: summarizeReloginGateStatus()'), 'status does not expose relogin gate summary');
       const reloginGateBody = functionBody(text, 'summarizeReloginGateStatus');

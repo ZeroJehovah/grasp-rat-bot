@@ -1813,7 +1813,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 
 	  function startExitAudit(detail, meta = {}) {
 	    if (!detail || typeof detail !== 'object') return null;
-	    detail.loginSnapshotGateReset = resetLoginSnapshotGate('exit-trigger:' + (meta.reason || detail.reason || ''));
+	    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
+	      'exit-trigger:' + (meta.reason || detail.reason || ''),
+	      loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)
+	    );
 	    ensureExitAuditDetail(detail, meta);
 	    recordExitAuditEvent('exit-trigger', detail, {
       ...meta,
@@ -2612,7 +2615,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	    detail.exitConfirmed = true;
 	    detail.exitConfirmedAt = t;
 	    detail.exitConfirmation = state || null;
-	    detail.loginSnapshotGateReset = resetLoginSnapshotGate('exit-confirmed:' + (detail.reason || pending.reason || ''));
+	    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
+	      'exit-confirmed:' + (detail.reason || pending.reason || ''),
+	      loginPointSafetyExitSelfForDetail(detail, { self: pending.self || state?.self || null }, bot.lastSelf)
+	    );
 	    detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
     detail.pendingExitRetryCount = Number(pending.retryCount || 0);
     const http403 = Boolean(state?.http403 || leaveDetailHasHttp403(detail));
