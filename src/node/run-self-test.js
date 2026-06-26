@@ -351,7 +351,7 @@ function runSelfTest() {
     targetStickMs: 5000,
     coinStickMs: 2500,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map() };
+  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map(), ignoredCoins: new Map(), coinAttempts: new Map(), coinProgress: null, coinApproachLock: null, currentVisibleCoins: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -2220,6 +2220,75 @@ function runSelfTest() {
     return until > t ? until : 0;
   }
 
+  function coinMatchesTrackedTarget(coin, target) {
+    const targetId = target?.id ?? target?.drop_id ?? target?.coin_id;
+    const coinId = coin?.drop_id ?? coin?.id ?? coin?.coin_id;
+    if (targetId !== undefined && targetId !== null && targetId !== '' && coinId !== undefined && coinId !== null && coinId !== '') {
+      if (String(targetId) === String(coinId)) return true;
+    }
+    const targetPoint = { x: Number(target?.x), y: Number(target?.y) };
+    const coinPoint = { x: Number(coin?.x), y: Number(coin?.y) };
+    if (!Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y) || !Number.isFinite(coinPoint.x) || !Number.isFinite(coinPoint.y)) return false;
+    return dist(targetPoint, coinPoint) <= Number(cfg.coinCollectedPruneRadius || 0);
+  }
+
+  function currentVisibleCoinListForMissingHold() {
+    return Array.isArray(bot.currentVisibleCoins) ? bot.currentVisibleCoins : null;
+  }
+
+  function visibleCoinSourcesConfirmTargetMissing(target) {
+    const visibleCoins = currentVisibleCoinListForMissingHold();
+    if (!Array.isArray(visibleCoins)) return false;
+    return !visibleCoins.some(coin => coinMatchesTrackedTarget(coin, target));
+  }
+
+  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
+    const reason = String(choice?.reason || '');
+    if (reason.startsWith('snapshot-coin')) return false;
+    const distance = Number(coin?.distance ?? choice?.distance);
+    const radius = Math.max(0, Number(cfg.nativeCoinAuthoritativeRadius || 0));
+    return !Number.isFinite(distance) || !(radius > 0) || distance <= radius + opportunitySameCoinRadius();
+  }
+
+  function clearOpportunityChoiceFor(type, id = null) {
+    const choice = bot.opportunityChoice;
+    if (!choice || opportunityChoiceType(choice) !== String(type || '')) return;
+    if (id === null || id === undefined || id === '') {
+      bot.opportunityChoice = null;
+      resetOpportunitySwitchLock();
+      return;
+    }
+    const choiceId = opportunityChoiceId(choice);
+    if (String(choiceId) === String(id)) {
+      bot.opportunityChoice = null;
+      resetOpportunitySwitchLock();
+    }
+  }
+
+  function clearMissingVisibleCoinTarget(choice, coin, reason, t) {
+    const id = opportunityChoiceId(choice);
+    const idText = id || id === '0' ? String(id) : '';
+    if (idText) {
+      bot.ignoredCoins.set(idText, t + Math.max(0, Number(cfg.coinCollectedIgnoreMs || 0)));
+      bot.coinAttempts.delete(idText);
+    }
+    if (!idText || (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === idText)) {
+      bot.lastTarget = null;
+      bot.lastTargetAt = 0;
+    }
+    if (!idText || (bot.coinProgress?.id && String(bot.coinProgress.id) === idText)) bot.coinProgress = null;
+    if (!idText || bot.coinApproachLock?.id === idText) bot.coinApproachLock = null;
+    clearOpportunityChoiceFor('coin', idText || null);
+    bot.lastCoinClearReason = reason;
+    bot.lastMissingVisibleCoin = {
+      id: idText,
+      reason,
+      amount: Number.isFinite(Number(coin?.amount)) ? Math.round(Number(coin.amount)) : null,
+      distance: Number.isFinite(Number(coin?.distance)) ? Math.round(Number(coin.distance)) : null,
+      at: t
+    };
+  }
+
   function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
     const current = bot.opportunityChoice;
     const t = Date.now();
@@ -2228,7 +2297,6 @@ function runSelfTest() {
     if ((opportunities || []).some(item => opportunityMatchesChoice(item, current))) return null;
     const id = opportunityChoiceId(current);
     if (!id && id !== '0') return null;
-    if (bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))) return null;
     const x = Number(current.x);
     const y = Number(current.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -2240,6 +2308,11 @@ function runSelfTest() {
       amount,
       distance: self ? dist(self, { x, y }) : Number(current.distance || Infinity)
     };
+    if (missingHeldCoinCoveredByVisibleAuthority(current, coin) && visibleCoinSourcesConfirmTargetMissing(current)) {
+      clearMissingVisibleCoinTarget(current, coin, 'visible-coin-disappeared', t);
+      return null;
+    }
+    if (bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))) return null;
     const maxDistance = Math.max(
       0,
       Number(current.maxDistance || 0),
@@ -4731,7 +4804,7 @@ function runSelfTest() {
     };
   }
 
-  function choose({ local = [], global = [], coins = [], bullets = [], attacks = [], snapshotWaitAgeMs = 0, self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 } }) {
+  function choose({ local = [], global = [], coins = [], bullets = [], attacks = [], snapshotWaitAgeMs = 0, visibleCoinsAvailable = true, self = { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 } }) {
     const entities = [...global, ...local];
     updateOpportunityAfkStaminaObservations(entities);
     const fullHp = isFullHp(self);
@@ -4761,6 +4834,7 @@ function runSelfTest() {
     );
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const realtimeCoins = usableCoins.filter(coin => !isSnapshotOnlyCoin(coin));
+    bot.currentVisibleCoins = visibleCoinsAvailable ? realtimeCoins : null;
     const snapshotCoins = usableCoins.filter(isSnapshotOnlyCoin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, entities, bullets);
     const defensiveCombatTarget = pickCombatTarget(self, entities, bullets, { mode: 'defensive' });
@@ -5261,19 +5335,54 @@ function runSelfTest() {
 	          lastSeenAt: t - 300,
 	          until: t + cfg.opportunitySwitchHoldMs
 	        };
-	        const action = choose({
-	          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-	          coins: [
-	            { drop_id: 2, x: 15100, y: 0, amount: 1 }
-	          ]
-	        });
-	        bot.opportunityChoice = null;
-	        return String(action.id) + ':' + Boolean(action.missingHold);
-	      })(),
-	      want: '1:true'
-	    },
-	    {
-	      name: 'closer same-value coin beats sticky older far coin',
+		        const action = choose({
+		          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+		          coins: [
+		            { drop_id: 2, x: 15100, y: 0, amount: 1 }
+		          ],
+		          visibleCoinsAvailable: false
+		        });
+		        bot.opportunityChoice = null;
+		        return String(action.id) + ':' + Boolean(action.missingHold);
+		      })(),
+		      want: '1:true'
+		    },
+		    {
+		      name: 'visible missing held coin switches to current visible coin',
+		      got: (() => {
+		        const t = Date.now();
+		        bot.opportunityChoice = {
+		          key: 'coin:1',
+		          type: 'coin',
+		          id: 1,
+		          x: 5400,
+		          y: 0,
+		          amount: 42,
+		          distance: 5400,
+		          score: 466667,
+		          staminaCost: 5400,
+		          reason: 'best-opportunity-coin',
+		          actionKind: 'coin',
+		          priorityTier: 1,
+		          lastSeenAt: t - 300,
+		          until: t + cfg.opportunitySwitchHoldMs
+		        };
+		        const action = choose({
+		          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+		          coins: [
+		            { drop_id: 2, x: 15100, y: 0, amount: 1, native: true }
+		          ]
+		        });
+		        const result = String(action.id) + ':' + Boolean(action.missingHold) + ':' + bot.lastCoinClearReason + ':' + String(bot.ignoredCoins.has('1'));
+		        bot.opportunityChoice = null;
+		        bot.ignoredCoins.delete('1');
+		        bot.lastCoinClearReason = '';
+		        return result;
+		      })(),
+		      want: '2:false:visible-coin-disappeared:true'
+		    },
+		    {
+		      name: 'closer same-value coin beats sticky older far coin',
       got: (() => {
         bot.lastTarget = { kind: 'coin', id: 2 };
         bot.lastTargetAt = Date.now();
