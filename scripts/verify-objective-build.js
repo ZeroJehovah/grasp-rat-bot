@@ -30,7 +30,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomStartDelayMs', value: 350 },
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
-  { key: 'unsafeExitReloginMinDelayMs', value: 60000 },
+  { key: 'unsafeExitReloginMinDelayMs', value: 0 },
   { key: 'staminaBudgetReloginDelayMs', value: 1800000 },
   { key: 'leaveRetryMinMs', value: 10000 },
   { key: 'leaveCommandTimeoutMs', value: 10000 },
@@ -512,8 +512,7 @@ function main() {
       assert(text.includes('lastTickReentryGapAt: this.lastTickReentryGapAt || 0'), 'status does not expose tick reentry gap timestamp');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
-      assert(functionBody(text, 'offlineExitRequiresUnsafeReloginDelay').includes('offlineSafety.samplingOutage'), 'sampling outage exits do not require unsafe relogin delay');
-      assert(functionBody(text, 'offlineExitRequiresUnsafeReloginDelay').includes('offlineSafety.combatTickGap'), 'combat tick gap exits do not require unsafe relogin delay');
+      assert(functionBody(text, 'setOfflineLeaveSuppress').includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))'), 'ordinary unsafe offline exits still require a defensive relogin delay');
       assert(text.includes('function combatLogRuntimeSummary'), 'combat log runtime diagnostic summary not found');
       assert(text.includes('runtime: combatLogRuntimeSummary'), 'exit audit logs do not include runtime diagnostics');
       assert(functionBody(text, 'buildCombatLogEntry').includes('const runtime = combatLogRuntimeSummary(entryAt, decision || {})'), 'combat frames do not compute runtime diagnostics');
@@ -743,6 +742,10 @@ function main() {
       assert(
         pendingBody.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'),
         'pending unsafe exit suppress does not take max(delay, minimum)'
+      );
+      assert(
+        functionBody(text, 'setExitReloginSuppress').includes('detail.defensiveReloginDelaySkipped = true'),
+        'zero defensive relogin delay path is not recorded'
       );
     });
     check(`${file} records exit audit events and blocks login/reload until flushed`, () => {
@@ -1388,13 +1391,15 @@ function main() {
       assert(functionBody(text, 'startCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-start does not include sourceHash');
       assert(functionBody(text, 'endCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-end does not include sourceHash');
     });
-    check(`${file} allows immediate relogin after safe offline exit`, () => {
+    check(`${file} allows immediate relogin after safe or ordinary unsafe offline exits`, () => {
       const body = functionBody(text, 'setOfflineLeaveSuppress');
       assert(
-        body.includes('!(Number(options.minimumUntil || 0) > Date.now()) && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'),
-        'safe offline exit does not bypass offline relogin suppress'
+        body.includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))'),
+        'offline zero-hold path still depends on unsafe-delay classification'
       );
-      assert(body.includes('detail.safeReloginAllowed = true'), 'safe offline relogin marker not recorded');
+      assert(body.includes('const unsafeOfflineExit = offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'offline zero-hold path does not preserve unsafe classification');
+      assert(body.includes('detail.safeReloginAllowed = !unsafeOfflineExit'), 'safe offline relogin marker is not limited to safe exits');
+      assert(body.includes('if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true'), 'unsafe offline zero-hold path is not marked');
       assert(body.includes('clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'safe offline path does not clear persistent hold state');
       assert(body.includes('return 0'), 'safe offline path does not return without suppress');
     });

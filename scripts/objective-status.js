@@ -148,9 +148,12 @@ function buildStatus(options) {
     && !hasEvidenceIssue(liveReport, LOG_IDENTITY_EVIDENCE_ISSUES);
   const currentEntriesOk = logIdentityOk && liveReport.entries > 0;
   const unsafeOrRequiredDelayExitEvents = liveReport.exitEvents
-    .filter(event => requiredExitHoldMs(event, liveReport.minUnsafeDelayMs) > 0);
+    .filter(event => event.unsafe || requiredExitHoldMs(event, liveReport.minUnsafeDelayMs) > 0);
   const unsafeOrRequiredDelayExitOk = unsafeOrRequiredDelayExitEvents
-    .some(event => Number(event.delayMs || 0) >= requiredExitHoldMs(event, liveReport.minUnsafeDelayMs));
+    .some(event => {
+      const requiredHoldMs = requiredExitHoldMs(event, liveReport.minUnsafeDelayMs);
+      return requiredHoldMs <= 0 || Number(event.delayMs || 0) >= requiredHoldMs;
+    });
   const exitReloginOk = staticCheck.ok
     && currentEntriesOk
     && liveReport.exitEvents.length > 0
@@ -167,7 +170,7 @@ function buildStatus(options) {
     {
       key: 'exit-reasons-and-relogin-delay',
       ok: exitReloginOk,
-      evidence: 'current-version unsafe or reason-required-delay exit evidence plus no missing/generic exit reason, delay, or login-during-hold audit issues'
+      evidence: 'current-version unsafe exit or reason-required-delay exit evidence plus no missing/generic exit reason, required-delay, or login-during-hold audit issues'
     },
     {
       key: 'similar-roi-no-ambiguous-wait',

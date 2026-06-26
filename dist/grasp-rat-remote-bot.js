@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.235"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.236"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -276,13 +276,13 @@
     combatPressureNoDamageExitTargetHpMin: 75,
     combatPressureNoDamageExitRange: 14500,
     combatLeaveRetryMs: 1000,
-    enemyReloginMinDelayMs: 60000,
-    enemyReloginMaxDelayMs: 600000,
-    enemyReloginJitterMs: 15000,
+    enemyReloginMinDelayMs: 0,
+    enemyReloginMaxDelayMs: 0,
+    enemyReloginJitterMs: 0,
     enemyReloginRepeatResetMs: 7200000,
-    enemyReloginRepeatSecondMaxMs: 1800000,
-    enemyReloginRepeatThirdMaxMs: 3600000,
-    unsafeExitReloginMinDelayMs: 60000,
+    enemyReloginRepeatSecondMaxMs: 0,
+    enemyReloginRepeatThirdMaxMs: 0,
+    unsafeExitReloginMinDelayMs: 0,
     attackMinDrop: 8,
     attackMinAfkDrop: 3,
     attackApproachMinDrop: 12,
@@ -6217,9 +6217,9 @@ function hpDisplay(value) {
 
 	  function reloginDelayForHp(selfLike, detail) {
 	    const info = hpInfoForRelogin(selfLike, detail);
-	    const minMs = Math.max(1000, Number(cfg.enemyReloginMinDelayMs) || 60000);
+	    const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
     const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);
-    const baseMaxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs) || minMs);
+    const baseMaxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs ?? minMs) || 0);
 	    const maxMs = Math.max(baseMaxMs, repeatMinMs);
 	    const dangerFactor = Math.pow(1 - info.ratio, 1.35);
 	    const jitterMs = Math.max(0, Number(cfg.enemyReloginJitterMs) || 0);
@@ -6249,7 +6249,22 @@ function hpDisplay(value) {
       }
     } catch (_) {}
     const t = Date.now();
-	    if (existingUntil > t && existingUntil >= minimumUntil) {
+	    const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
+	    const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1000, Math.round(fixedDelayRaw)) : 0;
+	    const delay = fixedDelayMs
+	      ? {
+	        delayMs: fixedDelayMs,
+	        hpDelayMs: fixedDelayMs,
+	        minMs: fixedDelayMs,
+	        maxMs: fixedDelayMs,
+	        baseMaxMs: fixedDelayMs,
+	        repeatMinMs: 0,
+	        hp: hpInfoForRelogin(selfLike, detail)
+	      }
+	      : reloginDelayForHp(selfLike, detail);
+	    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
+	    const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
+	    if (existingUntil > t && existingUntil >= minimumUntil && reloginDelayMs > 0) {
 	      const holdReason = existingReason || storageReason;
 	      if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
 	      if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
@@ -6273,21 +6288,39 @@ function hpDisplay(value) {
 		      return existingUntil;
 		    }
 	    if (storageReason === 'enemy leave') updateEnemyLeaveStreak(detail, t);
-	    const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
-	    const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1000, Math.round(fixedDelayRaw)) : 0;
-	    const delay = fixedDelayMs
-	      ? {
-	        delayMs: fixedDelayMs,
-	        hpDelayMs: fixedDelayMs,
-	        minMs: fixedDelayMs,
-	        maxMs: fixedDelayMs,
-	        baseMaxMs: fixedDelayMs,
-	        repeatMinMs: 0,
-	        hp: hpInfoForRelogin(selfLike, detail)
+	    if (!(reloginDelayMs > 0)) {
+	      if (storageReason === 'enemy leave') {
+	        bot.pursuitReloginUntil = 0;
+	        bot.lastEnemyLeaveWaitMs = 0;
+	        clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+	        clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
+	      } else if (storageReason === 'offline leave') {
+	        bot.offlineReloginUntil = 0;
+	        bot.lastOfflineLeaveWaitMs = 0;
+	        clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+	        clearLoginSuppressMatching(/offline.*leave/i);
 	      }
-	      : reloginDelayForHp(selfLike, detail);
-	    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
-	    const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
+	      if (detail) {
+	        detail.reloginDelayMs = 0;
+	        detail.reloginHpDelayMs = delay.hpDelayMs || 0;
+	        detail.reloginDelayRangeMs = {
+	          min: delay.minMs || 0,
+	          max: delay.maxMs || 0,
+	          baseMax: delay.baseMaxMs || 0,
+	          repeatMin: delay.repeatMinMs || 0
+	        };
+	        detail.reloginHp = delay.hp;
+	        detail.reloginUntil = 0;
+	        detail.holdRemainingMs = 0;
+	        detail.enemyLeaveReason = reason;
+	        detail.loginSuppressReason = '';
+	        detail.defensiveReloginDelaySkipped = true;
+	        finalizeLeaveDisplayReason(detail);
+	        if (storageReason === 'enemy leave') bot.lastEnemyLeaveResult = detail;
+	        else if (storageReason === 'offline leave') bot.lastOfflineLeaveResult = detail;
+	      }
+	      return 0;
+	    }
 	    const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
     if (storageReason === 'enemy leave') {
       bot.pursuitReloginUntil = reloginUntil;
@@ -6329,7 +6362,7 @@ function hpDisplay(value) {
   }
 
   function unsafeExitReloginMinDelayMs() {
-    return Math.max(0, Number(cfg.unsafeExitReloginMinDelayMs ?? cfg.enemyReloginMinDelayMs ?? 60000) || 0);
+    return Math.max(0, Number(cfg.unsafeExitReloginMinDelayMs ?? 0) || 0);
   }
 
   function pendingExitSuppressReason(storageReason) {
@@ -6418,14 +6451,16 @@ function hpDisplay(value) {
 		      if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
 		      else detail.staminaReset = staminaHold;
 		    }
-		    if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()) && !offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)) {
+		    if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now())) {
+		      const unsafeOfflineExit = offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null);
 		      bot.offlineReloginUntil = 0;
 		      bot.lastOfflineLeaveWaitMs = 0;
 		      if (detail) {
 		        detail.reloginUntil = 0;
 		        detail.holdRemainingMs = 0;
 		        detail.reloginDelayMs = 0;
-		        detail.safeReloginAllowed = true;
+		        detail.safeReloginAllowed = !unsafeOfflineExit;
+		        if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true;
 		        detail.loginSuppressReason = '';
 		        finalizeLeaveDisplayReason(detail);
 		        bot.lastOfflineLeaveResult = detail;
