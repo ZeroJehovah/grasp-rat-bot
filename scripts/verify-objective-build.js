@@ -476,10 +476,13 @@ function main() {
       assert(refreshBody.includes('bot.globalState.samplingOutage = outage'), 'sampling outage state is not recorded on global refresh errors');
       assert(refreshBody.includes("triggerNativeTick('global-sampling-outage', false)"), 'sampling outage does not trigger an immediate native tick');
       assert(refreshBody.includes('snapshotTimedOut') && refreshBody.includes('minimapTimedOut'), 'sampling outage timeout evidence is not recorded');
+      assert(refreshBody.includes('refreshDurationMs') && refreshBody.includes('snapshotDurationMs') && refreshBody.includes('minimapDurationMs'), 'sampling outage does not record refresh/request timing diagnostics');
+      assert(refreshBody.includes('lastTickDurationMs') && refreshBody.includes('lastCombatLogBuildMs') && refreshBody.includes('lastCombatLogRecordMs'), 'sampling outage does not include recent runtime timing diagnostics');
       const outageBody = functionBody(text, 'globalSamplingOutageOfflineState');
       assert(outageBody.includes("reason: 'global sampling outage'"), 'sampling outage offline state does not expose the canonical reason');
       assert(outageBody.includes('combatTickActiveFromState({'), 'sampling outage gate does not reuse combat activity state');
       assert(outageBody.includes('cfg.globalSamplingOutageCombatOnly && !combatActive'), 'sampling outage gate does not preserve combat-only behavior');
+      assert(outageBody.includes('refreshDurationMs') && outageBody.includes('lastCombatLogBuildMs'), 'sampling outage offline state does not expose timing diagnostics');
       const gapBody = functionBody(text, 'combatTickGapOfflineState');
       assert(gapBody.includes("reason: 'combat tick gap'"), 'combat tick gap offline state does not expose the canonical reason');
       assert(gapBody.includes("'tick-reentry-gap'") && gapBody.includes("'main-loop-gap'") && gapBody.includes("'combat-log-gap-with-active-tick'"), 'combat tick gap diagnosis does not distinguish reentry, main-loop, and log-gating gaps');
@@ -515,6 +518,9 @@ function main() {
       assert(functionBody(text, 'combatLogRuntimeSummary').includes('reentryGapOverThreshold'), 'combat log runtime diagnostics do not expose tick reentry gaps');
       assert(functionBody(text, 'combatLogRuntimeSummary').includes('recordedDiagnosis'), 'combat log runtime diagnostics do not preserve the triggering combat tick gap diagnosis');
       assert(functionBody(text, 'combatLogRuntimeSummary').includes('recentCombatFrameContext'), 'combat log runtime diagnostics do not expose recent combat-frame context');
+      assert(functionBody(text, 'combatLogRuntimeSummary').includes('lastRefreshSummary'), 'combat log runtime diagnostics do not expose refresh timing');
+      assert(functionBody(text, 'combatLogRuntimeSummary').includes('lastTickDurationMs') && functionBody(text, 'combatLogRuntimeSummary').includes('lastCombatLogRecordMs'), 'combat log runtime diagnostics do not expose tick/log timing');
+      assert(functionBody(text, 'recordCombatLogTick').includes('buildTimedCombatLogEntry'), 'combat log frame builds are not timed');
       assert(functionBody(text, 'queueCombatLogEntry').includes("queued.type === 'combat-frame'"), 'combat frame queue timestamps are not tracked');
     });
     check(`${file} sends movement and shots through the native page WebSocket`, () => {
@@ -1182,7 +1188,7 @@ function main() {
       const pendingBody = functionBody(text, 'handlePendingExit');
       assert(pendingBody.includes("source: 'leave-http-403'"), 'pending exit does not confirm on leave HTTP 403');
       const refreshBody = functionBody(text, 'refreshGlobalState');
-      assert(refreshBody.includes("fetchJsonNoStore('/snapshot')"), 'snapshot refresh request not found');
+      assert(refreshBody.includes("timedFetchJsonNoStore('snapshot', '/snapshot')") || refreshBody.includes("fetchJsonNoStore('/snapshot')"), 'snapshot refresh request not found');
       assert(refreshBody.includes('noteLeave403SnapshotProbe(true'), 'snapshot success does not update 403 recovery probe');
       assert(refreshBody.includes('noteLeave403SnapshotProbe(false'), 'snapshot failure does not reset 403 recovery probe');
       const probeBody = functionBody(text, 'noteLeave403SnapshotProbe');

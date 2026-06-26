@@ -533,6 +533,13 @@ function browserBotSource(config) {
 		    };
 		  }
 
+  function recordRuntimeDiagnostics(values = {}) {
+    try {
+      if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== 'object') bot.runtimeDiagnostics = {};
+      Object.assign(bot.runtimeDiagnostics, values);
+    } catch (_) {}
+  }
+
 		  const bot = {
 	    running: true,
 	    version: cfg.version,
@@ -550,6 +557,7 @@ function browserBotSource(config) {
     lastTickCombatActive: false,
     lastCombatTickGap: null,
     lastTickReentryGapAt: 0,
+    runtimeDiagnostics: {},
     lastStatusAt: 0,
 	    lastShotAt: 0,
 	    lastAction: null,
@@ -1338,10 +1346,23 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       }
 
       function runTickSafely(source = 'timer') {
+        const tickStartedAt = Date.now();
+        const tickStartedPerf = now();
+        recordRuntimeDiagnostics({
+          lastTickStartedAt: tickStartedAt,
+          lastTickSource: source
+        });
         return Promise.resolve()
           .then(() => tick(source))
           .catch(err => {
             recordUnhandledTickError(source, err);
+          })
+          .finally(() => {
+            recordRuntimeDiagnostics({
+              lastTickCompletedAt: Date.now(),
+              lastTickDurationMs: Math.max(0, Math.round(now() - tickStartedPerf)),
+              lastTickSource: source
+            });
           });
       }
 
@@ -4295,9 +4316,22 @@ ${importantLogSource()}
 	    const t = Date.now();
 	    if (!force && t - bot.globalState.refreshedAt < cfg.globalRefreshMs) return;
 	    bot.globalState.refreshedAt = t;
+	    const refreshStartedPerf = now();
+	    const requestTimings = {};
+	    const timedFetchJsonNoStore = (label, url) => {
+	      const requestStartedAt = Date.now();
+	      const requestStartedPerf = now();
+	      return fetchJsonNoStore(url).finally(() => {
+	        requestTimings[label] = {
+	          startedAt: requestStartedAt,
+	          completedAt: Date.now(),
+	          durationMs: Math.max(0, Math.round(now() - requestStartedPerf))
+	        };
+	      });
+	    };
 	    const [snapshotRes, minimapRes] = await Promise.allSettled([
-	      fetchJsonNoStore('/snapshot'),
-	      fetchJsonNoStore('/minimap')
+	      timedFetchJsonNoStore('snapshot', '/snapshot'),
+	      timedFetchJsonNoStore('minimap', '/minimap')
 	    ]);
 	    const errors = [];
 	    let snapshotError = '';
@@ -4327,6 +4361,24 @@ ${importantLogSource()}
 	    }
 	    bot.globalState.error = errors.join('; ');
 	    const completedAt = Date.now();
+	    const refreshDiagnostic = {
+	      startedAt: t,
+	      completedAt,
+	      durationMs: Math.max(0, Math.round(now() - refreshStartedPerf)),
+	      force: Boolean(force),
+	      snapshot: {
+	        ...(requestTimings.snapshot || {}),
+	        ok: snapshotRes.status === 'fulfilled',
+	        error: snapshotError
+	      },
+	      minimap: {
+	        ...(requestTimings.minimap || {}),
+	        ok: minimapRes.status === 'fulfilled',
+	        error: minimapError
+	      },
+	      error: bot.globalState.error
+	    };
+	    recordRuntimeDiagnostics({ lastRefresh: refreshDiagnostic });
 	    if (errors.length) {
 	      const previous = bot.globalState.samplingOutage || null;
 	      const firstAt = previous?.active ? (Number(previous.firstAt || 0) || t) : t;
@@ -4347,7 +4399,14 @@ ${importantLogSource()}
 	        visibilityState: document.visibilityState || '',
 	        refreshedAt: bot.globalState.refreshedAt,
 	        snapshotRefreshedAt: bot.globalState.snapshotRefreshedAt || 0,
-	        snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, completedAt - bot.globalState.snapshotRefreshedAt) : null
+	        snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, completedAt - bot.globalState.snapshotRefreshedAt) : null,
+	        refreshDurationMs: refreshDiagnostic.durationMs,
+	        snapshotDurationMs: Number.isFinite(Number(refreshDiagnostic.snapshot.durationMs)) ? refreshDiagnostic.snapshot.durationMs : null,
+	        minimapDurationMs: Number.isFinite(Number(refreshDiagnostic.minimap.durationMs)) ? refreshDiagnostic.minimap.durationMs : null,
+	        lastTickDurationMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastTickDurationMs)) ? bot.runtimeDiagnostics.lastTickDurationMs : null,
+	        lastTickSource: bot.runtimeDiagnostics?.lastTickSource || '',
+	        lastCombatLogBuildMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastCombatLogBuildMs)) ? bot.runtimeDiagnostics.lastCombatLogBuildMs : null,
+	        lastCombatLogRecordMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastCombatLogRecordMs)) ? bot.runtimeDiagnostics.lastCombatLogRecordMs : null
 	      };
 	      outage.combatActive = combatTickActiveFromState({
 	        decision: bot.lastDecision,
@@ -7963,7 +8022,14 @@ ${importantLogSource()}
       minimapError: outage.minimapError || '',
       snapshotTimedOut: Boolean(outage.snapshotTimedOut),
       minimapTimedOut: Boolean(outage.minimapTimedOut),
-      snapshotAgeMs: Number.isFinite(Number(outage.snapshotAgeMs)) ? Math.max(0, Math.round(Number(outage.snapshotAgeMs))) : null
+      snapshotAgeMs: Number.isFinite(Number(outage.snapshotAgeMs)) ? Math.max(0, Math.round(Number(outage.snapshotAgeMs))) : null,
+      refreshDurationMs: Number.isFinite(Number(outage.refreshDurationMs)) ? Math.max(0, Math.round(Number(outage.refreshDurationMs))) : null,
+      snapshotDurationMs: Number.isFinite(Number(outage.snapshotDurationMs)) ? Math.max(0, Math.round(Number(outage.snapshotDurationMs))) : null,
+      minimapDurationMs: Number.isFinite(Number(outage.minimapDurationMs)) ? Math.max(0, Math.round(Number(outage.minimapDurationMs))) : null,
+      lastTickDurationMs: Number.isFinite(Number(outage.lastTickDurationMs ?? bot.runtimeDiagnostics?.lastTickDurationMs)) ? Math.max(0, Math.round(Number(outage.lastTickDurationMs ?? bot.runtimeDiagnostics?.lastTickDurationMs))) : null,
+      lastTickSource: outage.lastTickSource || bot.runtimeDiagnostics?.lastTickSource || '',
+      lastCombatLogBuildMs: Number.isFinite(Number(outage.lastCombatLogBuildMs ?? bot.runtimeDiagnostics?.lastCombatLogBuildMs)) ? Math.max(0, Math.round(Number(outage.lastCombatLogBuildMs ?? bot.runtimeDiagnostics?.lastCombatLogBuildMs))) : null,
+      lastCombatLogRecordMs: Number.isFinite(Number(outage.lastCombatLogRecordMs ?? bot.runtimeDiagnostics?.lastCombatLogRecordMs)) ? Math.max(0, Math.round(Number(outage.lastCombatLogRecordMs ?? bot.runtimeDiagnostics?.lastCombatLogRecordMs))) : null
     };
   }
 
