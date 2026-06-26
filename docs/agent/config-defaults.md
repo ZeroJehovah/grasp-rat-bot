@@ -177,6 +177,10 @@
 - `directWsVelocityRepeatHoldMs = 220`
 - `directWsStopRepeatCount = 3`
 - `attackMinAfkDrop = 3`
+- `targetWhitelistUrl = ""` by default; when empty, the runtime derives `target-whitelist.json` from the remote script URL directory.
+- `targetWhitelistPollMs = 10000`
+- `targetWhitelistTimeoutMs = 7000`
+- `targetWhitelistMaxNames = 100`
 - `opportunityStickBonus = 0`
 - `opportunitySwitchMargin = 3000`
 - `opportunitySwitchRelativeMargin = 0.1`

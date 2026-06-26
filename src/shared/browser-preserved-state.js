@@ -35,6 +35,13 @@ function buildBrowserPreservedState(previousBot) {
     loginPointSafety: previousBot?.loginPointSafety && typeof previousBot.loginPointSafety === 'object' ? { ...previousBot.loginPointSafety } : null,
     leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
     postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
+    targetWhitelist: previousBot?.targetWhitelist && typeof previousBot.targetWhitelist === 'object'
+      ? {
+        url: String(previousBot.targetWhitelist.url || ''),
+        names: Array.isArray(previousBot.targetWhitelist.names) ? previousBot.targetWhitelist.names.slice(-100) : [],
+        lastOkAt: Number(previousBot.targetWhitelist.lastOkAt || 0) || 0
+      }
+      : null,
     combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === 'object'
       ? {
         ...previousBot.combatLogging,

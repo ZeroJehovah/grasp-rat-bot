@@ -125,6 +125,6 @@
 - combat log entity merging preserves realtime/native/render coordinates when later snapshot entries describe the same player; snapshot data may still fill missing HP/drop metadata but no longer overwrites the coordinates used for combat review.
 - The local combat-log collector writes split JSONL files by default under `logs/YYYY-MM-DD/combat/`, `important/`, `audit/`, or `misc/`; analysis and daily-summary tools recurse through those day subdirectories. Use `node server.js --flat-files` only when the legacy `logs/YYYY-MM-DD/<combatId>.jsonl` layout is needed.
 - Targeting:
-  - whitelisted target names/ids must not be attacked;
+  - remote whitelisted target usernames must not be attacked. The whitelist is loaded from `dist/target-whitelist.json` by default, is polled every 10 seconds, matches only exact trimmed usernames, and ignores user IDs. A failed poll keeps the last successfully loaded whitelist; before the first successful load, the effective whitelist is empty;
   - invulnerable targets are not valid opportunity/combat targets;
   - AFK Drop targets compete by stamina ROI, not raw drop alone.
