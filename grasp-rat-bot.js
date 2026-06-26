@@ -1654,6 +1654,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 				    if (staminaLabel === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
 				    const text = String(reason || '').toLowerCase();
 				    if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+				    if (offlineSafety?.loginPointSafetyGate || text.includes('login point safety')) return '登录点安全快照未满足，退出等待安全重连';
 				    if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
 				    if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
 				    if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
@@ -11810,11 +11811,46 @@ ${importantLogSource()}
 	      const hadPreviousSelf = Boolean(bot.lastSelf);
 	      const previousHp = Number(bot.lastSelf?.hp ?? NaN);
 	      const previousDrop = Number(bot.lastSelf?.drop ?? 0);
-	      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
-	      const currentSummary = summarizeSelf(self);
+      const previousCoins = Number(bot.lastSelf?.coins ?? 0);
+      const currentSummary = summarizeSelf(self);
       updateSessionStats(currentSummary);
       maybeRecordLoginPoint(currentSummary);
       const staminaState = currentSummary.stamina || summarizeStamina(self);
+      const unsafeEntryGate = unsafeReloginEntryGateStatus(currentSummary);
+      if (unsafeEntryGate && !bot.pendingExit) {
+        bot.pursuit = null;
+        bot.lastSelf = currentSummary;
+        stopMotionSafely('login-point-safety-entry-gate');
+        if (!bot.offlineSince) bot.offlineSince = Date.now();
+        const offlineAgeMs = Date.now() - bot.offlineSince;
+        const offlineSafety = {
+          ...assessOfflineSafety(self),
+          unsafe: true,
+          loginPointSafetyGate: unsafeEntryGate,
+          passiveDangerRadius: Math.max(0, Number(cfg.offlinePassiveDangerRadius || cfg.passivePanicRadius || 0))
+        };
+        bot.lastOfflineSafety = offlineSafety;
+        const leaveResult = await leaveOffline('login point safety gate', currentSummary, offlineSafety);
+        const offlineDetail = activeOfflineLeaveDetail();
+        bot.lastDecision = {
+          kind: 'wait',
+          reason: leaveResult?.attempted && !leaveResult?.error ? 'offline-leave' : 'login-snapshot-gate',
+          dx: 0,
+          dy: 0,
+          control: summarizeControl(),
+          self: currentSummary,
+          offlineAgeMs,
+          leaveDelayMs: 0,
+          offlineSafety,
+          snapshotGate: unsafeEntryGate.gate,
+          loginPointSafety: unsafeEntryGate.loginPointSafety,
+          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || loginSnapshotGateDisplayReason(unsafeEntryGate.gate),
+          leave: leaveResult
+        };
+        updateBotPanel(bot.lastDecision);
+        if (cfg.once) bot.stop('once');
+        return;
+      }
       const deferredStaminaLeave = deferredStaminaExhaustionLeave(staminaState);
       if (deferredStaminaLeave) {
         stopMotionSafely('stamina-sample-wait');

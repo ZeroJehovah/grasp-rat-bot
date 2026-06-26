@@ -51,6 +51,7 @@ function offlineLeaveSummaryText(reason, offlineSafety) {
   if (staminaLabel === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
   const text = String(reason || '').toLowerCase();
   if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+  if (offlineSafety?.loginPointSafetyGate || text.includes('login point safety')) return '登录点安全快照未满足，退出等待安全重连';
   if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
   if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
   if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
