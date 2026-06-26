@@ -1001,7 +1001,36 @@ function browserBotSource(config) {
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const truthyFlag = value => value === true || value === 1 || value === '1' || value === 'true';
-  const isInvulnerable = e => Number(e?.invulnerable_remaining_ticks ?? e?.invincible_remaining_ticks ?? e?.invulnerability_remaining_ticks ?? e?.invulnerableTicks ?? 0) > 0
+  const anyPositiveNumber = (...values) => values.some(value => Number(value) > 0);
+  const isInvulnerable = e => anyPositiveNumber(
+      e?.invulnerable_remaining_ticks,
+      e?.invincible_remaining_ticks,
+      e?.invulnerability_remaining_ticks,
+      e?.invulnerableTicks,
+      e?.invulnerableRemainingTicks,
+      e?.invincibleRemainingTicks,
+      e?.invulnerabilityRemainingTicks,
+      e?.invulnerable_ticks,
+      e?.invincible_ticks,
+      e?.invulnerability_ticks,
+      e?.invulnerable_remaining_ms,
+      e?.invincible_remaining_ms,
+      e?.invulnerability_remaining_ms,
+      e?.invulnerableRemainingMs,
+      e?.invincibleRemainingMs,
+      e?.invulnerabilityRemainingMs,
+      e?.invulnerable_ms,
+      e?.invincible_ms,
+      e?.invulnerability_ms,
+      e?.immune_remaining_ms,
+      e?.immuneRemainingMs,
+      e?.invulnerable_remaining,
+      e?.invincible_remaining,
+      e?.invulnerability_remaining,
+      e?.invulnerableRemaining,
+      e?.invincibleRemaining,
+      e?.invulnerabilityRemaining
+    )
     || truthyFlag(e?.invulnerable)
     || truthyFlag(e?.is_invulnerable)
     || truthyFlag(e?.isInvulnerable)
@@ -5129,6 +5158,21 @@ ${importantLogSource()}
 
   function threatKey(threat) {
     return String(threat?.user_id ?? threat?.id ?? '');
+  }
+
+  function mergeThreatLists(...lists) {
+    const merged = [];
+    const seen = new Set();
+    for (const list of lists) {
+      for (const threat of list || []) {
+        if (!threat) continue;
+        const key = threatKey(threat) || ('xy:' + Math.round(Number(threat.x) || 0) + ':' + Math.round(Number(threat.y) || 0));
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(threat);
+      }
+    }
+    return merged.sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity));
   }
 
   function pickReturnBlockThreat(self, activeThreats, action) {
@@ -10960,9 +11004,15 @@ ${importantLogSource()}
     updateOpportunityAfkStaminaObservations(realtimeEntities);
     const fullHp = isFullHp(self);
     const avoidanceThreats = activeThreats.filter(isAvoidanceThreat);
-    bot.actionThreats = avoidanceThreats;
+    const nearbyAvoidanceRadius = Math.max(
+      Number(cfg.dangerRadius || 0) || 0,
+      Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
+      Number(cfg.recoveryAvoidRadius || 0) || 0
+    );
+    const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
+    const coinThreats = mergeThreatLists(avoidanceThreats, nearbyHumans.filter(e => e.native && isAvoidanceThreat(e)));
+    bot.actionThreats = coinThreats;
     const recovery = !fullHp && isRecovering(self);
-    const coinThreats = avoidanceThreats;
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities, bullets);
@@ -10998,12 +11048,14 @@ ${importantLogSource()}
         mode: nearbyHumans[0].current_join_mode
       } : null,
       recovery,
-      avoidanceThreats: avoidanceThreats.length,
-      nearestAvoidance: avoidanceThreats[0] ? {
-        id: avoidanceThreats[0].user_id,
-        name: avoidanceThreats[0].name,
-        distance: Math.round(avoidanceThreats[0].distance),
-        invulnerable: isInvulnerable(avoidanceThreats[0])
+      avoidanceThreats: coinThreats.length,
+      activeAvoidanceThreats: avoidanceThreats.length,
+      nearbyAvoidanceThreats: nearbyAvoidanceThreats.length,
+      nearestAvoidance: coinThreats[0] ? {
+        id: coinThreats[0].user_id,
+        name: coinThreats[0].name,
+        distance: Math.round(coinThreats[0].distance),
+        invulnerable: isInvulnerable(coinThreats[0])
       } : null,
       conservingStamina: isConservingStamina(self)
     };
@@ -11137,12 +11189,6 @@ ${importantLogSource()}
 	      bot.fleeLock = null;
 	      return staminaBudgetCoinLeaveAction(staminaBudgetExit);
 	    }
-    const nearbyAvoidanceRadius = Math.max(
-      Number(cfg.dangerRadius || 0) || 0,
-      Number(cfg.activeAvoidMaxDistance || cfg.activeCautionRadius || 0) || 0,
-      Number(cfg.recoveryAvoidRadius || 0) || 0
-    );
-    const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
     if (nearbyAvoidanceThreats.length) {
       const reason = 'avoid-invulnerable-target';
       const flee = lockedFleeDirection(self, nearbyAvoidanceThreats, reason);

@@ -958,6 +958,14 @@ function main() {
       assert(body.includes('const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'recovery combat action is not built in chooseAction');
       assert(body.includes('const avoidanceThreats = activeThreats.filter(isAvoidanceThreat)'), 'ordinary active threats can still enter the avoidance set');
       assert(text.includes('const isAvoidanceThreat = e => isInvulnerable(e)'), 'avoidance threat helper is not limited to invulnerable players');
+      assert(text.includes('const anyPositiveNumber = (...values) => values.some(value => Number(value) > 0);'), 'invulnerable numeric aliases are not checked independently');
+      assert(text.includes('invulnerableRemainingMs') && text.includes('invulnerable_remaining_ms'), 'invulnerable millisecond aliases are not recognized');
+      assert(text.includes('function mergeThreatLists'), 'threat-list merge helper not found');
+      assert(body.includes('const coinThreats = mergeThreatLists(avoidanceThreats, nearbyHumans.filter(e => e.native && isAvoidanceThreat(e)))'), 'ordinary coin safety does not include native visible invulnerable players');
+      assert(body.includes('bot.actionThreats = coinThreats'), 'action threat diagnostics do not use merged coin threats');
+      assert(body.includes('activeAvoidanceThreats: avoidanceThreats.length'), 'active avoidance threat count is not exposed separately');
+      assert(body.includes('nearbyAvoidanceThreats: nearbyAvoidanceThreats.length'), 'nearby invulnerable avoidance count is not exposed');
+      assert(!body.includes('const coinThreats = avoidanceThreats;'), 'ordinary coin safety still uses only active avoidance threats');
       assert(body.includes('if (recoveryCombatAction) {'), 'recovery combat can still fall through to non-combat avoidance');
       assert(body.includes('const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e))'), 'nearby safety avoidance is not limited to invulnerable players');
       assert(body.includes("const reason = 'avoid-invulnerable-target'"), 'nearby invulnerable avoidance does not use the non-combat safety reason');
@@ -1454,6 +1462,18 @@ function main() {
       /name: 'stationary full-stamina active with drop is non-combat profit attack'[\s\S]*current_join_mode: 'Active'[\s\S]*death_reward_preview: 20[\s\S]*want: 'attack:false:best-opportunity-afk-drop-target'/.test(nodeSelfTestSource),
       'stationary full-stamina Active profit attack non-combat self-test not found'
     );
+  });
+
+  check('run-self-test module covers visible invulnerable coin blocking self-tests', () => {
+    assert(nodeSelfTestSource.includes("name: 'invulnerable aliases detect positive field despite earlier zero alias'"), 'invulnerable alias precedence self-test not found');
+    assert(nodeSelfTestSource.includes('invulnerableRemainingMs: 5000'), 'invulnerableRemainingMs self-test field not found');
+    assert(nodeSelfTestSource.includes("name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'"), 'visible invulnerable coin block self-test not found');
+    assert(
+      /name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'[\s\S]*x: 25500[\s\S]*native: true[\s\S]*invulnerableRemainingMs: 5000[\s\S]*x: 12300[\s\S]*amount: 1[\s\S]*want: 'wait-for-snapshot-coin'/.test(nodeSelfTestSource),
+      'visible invulnerable coin block self-test does not model the screenshot distance'
+    );
+    assert(nodeSelfTestSource.includes("name: 'snapshot-only invulnerable player does not block visible ordinary coin'"), 'snapshot-only invulnerable non-blocking self-test not found');
+    assert(nodeSelfTestSource.includes('.filter(e => e.native)\n        .filter(isAvoidanceThreat)'), 'coin threat self-test path does not require native visible invulnerable players');
   });
 
   check('run-self-test module covers low-value active and high-value coin priority self-tests', () => {

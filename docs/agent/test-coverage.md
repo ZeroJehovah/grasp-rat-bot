@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `284`.
+- Latest bot self-test count: `287`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -51,7 +51,8 @@
   - native visible coin routes beat isolated single coins when route-level stamina ROI is better, while weaker routes still lose to higher-yield visible AFK Drop targets;
   - visible coin route metadata, including per-coin route points for overlay drawing, is exposed on actions; same-first-coin routes keep that overlay metadata even when the first coin's single-coin ROI is higher than the whole route score; held routes keep their first coin through near-tie replans and still switch when a competing route score is clearly better; near realtime coins remain the first route target when a route continues toward a farther field, routes cannot skip a much closer safe local coin as their first target, route legs through active danger are rejected, and whole routes are skipped when the 1h/1d stamina budget cannot afford the full route;
   - snapshot-only coins remain valid only as a fallback when no visible/realtime profit exists;
-  - static verification covers coin candidate diagnostics for ignored/threat-blocked/stamina-blocked/snapshot-only nearby coins, standalone `coin-diagnostics` misc logging, distinct `best-opportunity-coin-route` vs `best-opportunity-visible-coin` Chinese labels, and loader panel current-time rendering;
+  - visible/native ordinary 1-coin selection near a native/realtime visible invulnerable player is blocked before the later avoidance-flee branch, even when that player is not in the Active threat set; a snapshot-only invulnerable player does not block visible coin pickup. Invulnerability alias self-tests cover positive millisecond aliases such as `invulnerableRemainingMs` even when an earlier tick alias is zero;
+  - static verification covers coin candidate diagnostics for ignored/threat-blocked/stamina-blocked/snapshot-only nearby coins, standalone `coin-diagnostics` misc logging, distinct `best-opportunity-coin-route` vs `best-opportunity-visible-coin` Chinese labels, loader panel current-time rendering, merged visible-invulnerable coin threat filtering, and the related self-tests;
   - already engaged out-of-range combat targets hold position instead of chasing until `combatDisengageRange`;
   - recently damaged low-HP out-of-range finish targets within 160m reengage without firing out of range;
   - targets beyond `combatDisengageRange` clear combat state without installing a retreat-ignore cooldown, so they can re-enter if they later come back inside `combatAttackRange`;
