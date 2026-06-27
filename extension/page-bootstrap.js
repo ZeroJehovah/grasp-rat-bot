@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.36';
+  const BOOTSTRAP_VERSION = '0.1.37';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -2060,10 +2060,10 @@
       label: 'WS'
     }));
     actions.appendChild(createDot(networkQualityLatencyTitle(networkQuality), latencyColor, metricGlow(latencyColor, '13'), metricGlow(latencyColor, '45'), {
-      label: '延迟 ' + networkQualityLatencyText(networkQuality)
+      label: networkQualityLatencyText(networkQuality)
     }));
     actions.appendChild(createDot(networkQualityLossTitle(networkQuality), lossColor, metricGlow(lossColor, '13'), metricGlow(lossColor, '45'), {
-      label: '丢包 ' + networkQualityLossText(networkQuality),
+      label: networkQualityLossText(networkQuality),
       pending: Boolean(networkQuality?.stalled)
     }));
     if (remoteLogVisible) {
