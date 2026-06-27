@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.56
+// @version      0.4.57
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.56';
+  const BOOTSTRAP_VERSION = '0.4.57';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -929,6 +929,64 @@
     return '#fca5a5';
   }
 
+  function metricGlow(color, alpha = '13') {
+    if (color === '#86efac') return 'rgba(52,211,153,.' + alpha + ')';
+    if (color === '#fde68a') return 'rgba(251,191,36,.' + alpha + ')';
+    if (color === '#fca5a5') return 'rgba(251,113,133,.' + alpha + ')';
+    return 'rgba(148,163,184,.' + alpha + ')';
+  }
+
+  function networkQualityLatencyText(summary) {
+    const n = Number(summary?.displayLatencyMs);
+    return Number.isFinite(n) ? Math.max(0, Math.round(n)) + 'ms' : '-';
+  }
+
+  function networkQualityLossText(summary) {
+    const n = Number(summary?.lossPercent);
+    return Number.isFinite(n) ? Math.max(0, n).toFixed(1) + '%' : '-';
+  }
+
+  function networkQualityLatencyColor(summary) {
+    if (!summary?.enabled) return '#cbd5e1';
+    if (summary.stalled) return '#fca5a5';
+    const n = Number(summary.displayLatencyMs);
+    if (!Number.isFinite(n)) return '#cbd5e1';
+    if (n <= 150) return '#86efac';
+    if (n <= 300) return '#fde68a';
+    return '#fca5a5';
+  }
+
+  function networkQualityLossColor(summary) {
+    if (!summary?.enabled) return '#cbd5e1';
+    if (summary.stalled) return '#fca5a5';
+    const n = Number(summary.lossPercent);
+    if (!Number.isFinite(n)) return '#cbd5e1';
+    if (n <= 1) return '#86efac';
+    if (n <= 3) return '#fde68a';
+    return '#fca5a5';
+  }
+
+  function networkQualityLatencyTitle(summary) {
+    if (!summary?.enabled) return '延迟：暂无运行时网络质量样本';
+    if (!Number.isFinite(Number(summary.displayLatencyMs))) return '延迟：等待运行时网络质量样本';
+    const source = summary.latencySource === 'movement' ? '移动动作确认' : 'WS状态帧';
+    return '延迟 ' + networkQualityLatencyText(summary)
+      + '，近似普通网游 ping，来源：' + source
+      + '；预期帧间隔 ' + (summary.expectedFrameMs ?? '-') + 'ms'
+      + '，抖动 ' + (summary.jitterEmaMs ?? '-') + 'ms'
+      + '，最近帧 ' + (summary.lastFrameAgeMs ?? '-') + 'ms 前';
+  }
+
+  function networkQualityLossTitle(summary) {
+    if (!summary?.enabled) return '丢包：暂无运行时网络质量样本';
+    if (!Number.isFinite(Number(summary.lossPercent))) return '丢包：等待 WS 状态帧样本';
+    return '丢包 ' + networkQualityLossText(summary)
+      + '，按近 ' + Math.round(Number(summary.windowMs || 0) / 1000) + ' 秒 WS 状态帧长间隔推断'
+      + '；估算丢帧 ' + (summary.estimatedLostFrames ?? '-')
+      + ' / 预期帧 ' + (summary.expectedFrames ?? '-')
+      + (summary.stalled ? '，当前状态帧停滞' : '');
+  }
+
   function targetSummaryParts(decision, status) {
     const target = decision?.target || null;
     const kind = decision?.kind || '';
@@ -1720,6 +1778,9 @@
     const wsLabel = control.wsOpen ? 'online' : (control.connecting ? 'connecting' : 'offline');
     const wsColor = control.wsOpen ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
     const wsTitle = 'WS ' + wsLabel;
+    const networkQuality = status?.networkQuality || {};
+    const latencyColor = networkQualityLatencyColor(networkQuality);
+    const lossColor = networkQualityLossColor(networkQuality);
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
@@ -1906,7 +1967,7 @@
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:flex-start;gap:7px;margin-bottom:0;min-width:0;overflow:hidden';
     const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;align-items:center;gap:7px;flex:0 1 auto;min-width:0;overflow:hidden';
+    actions.style.cssText = 'display:flex;align-items:center;gap:5px;row-gap:5px;flex:0 1 auto;min-width:0;overflow:visible;flex-wrap:wrap';
     const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow, {
       label: 'BOT',
       onClick: () => setPaused(!isPaused(), 'panel bot dot')
@@ -1915,6 +1976,13 @@
     actions.appendChild(statusDot);
     actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)'), {
       label: 'WS'
+    }));
+    actions.appendChild(createDot(networkQualityLatencyTitle(networkQuality), latencyColor, metricGlow(latencyColor, '13'), metricGlow(latencyColor, '45'), {
+      label: '延迟 ' + networkQualityLatencyText(networkQuality)
+    }));
+    actions.appendChild(createDot(networkQualityLossTitle(networkQuality), lossColor, metricGlow(lossColor, '13'), metricGlow(lossColor, '45'), {
+      label: '丢包 ' + networkQualityLossText(networkQuality),
+      pending: Boolean(networkQuality?.stalled)
     }));
     if (remoteLogVisible) {
       const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {

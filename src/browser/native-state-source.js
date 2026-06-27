@@ -104,15 +104,16 @@ function nativeStateSource() {
 	    if (!native?.ws) return false;
 	    if (bot.nativeMessageWs === native.ws && bot.nativeMessageHandler) return true;
 	    detachNativeMessagePump();
-	    bot.nativeMessageWs = native.ws;
-	    bot.nativeMessageHandler = runCallbackSafely('native-ws-message', () => {
-	      triggerNativeTick('native-ws', true);
-	    });
-	    bot.nativeOpenHandler = runCallbackSafely('native-ws-open', () => {
-	      bot.control.lastOpenAt = Date.now();
-	      bot.control.lastError = '';
-	      triggerNativeTick('native-ws-open', false);
-	    });
+    bot.nativeMessageWs = native.ws;
+    bot.nativeMessageHandler = runCallbackSafely('native-ws-message', () => {
+      observeNativeWsFrame('native-ws');
+      triggerNativeTick('native-ws', true);
+    });
+    bot.nativeOpenHandler = runCallbackSafely('native-ws-open', () => {
+      bot.control.lastOpenAt = Date.now();
+      bot.control.lastError = '';
+      triggerNativeTick('native-ws-open', false);
+    });
 	    bot.nativeCloseHandler = runCallbackSafely('native-ws-close', () => {
 	      bot.control.wsOpen = false;
 	      bot.control.nativeWsOpen = false;

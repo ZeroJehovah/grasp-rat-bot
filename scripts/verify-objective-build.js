@@ -1761,6 +1761,17 @@ function main() {
       assert(text.includes('onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })'), 'remote-log dot toggle not found');
       assert(text.includes("logDot.setAttribute('aria-pressed', String(remoteLogEnabled))"), 'remote-log dot aria-pressed not found');
     });
+    check(`${file} displays network quality latency/loss dots`, () => {
+      assert(text.includes('const networkQuality = status?.networkQuality || {}'), 'status.networkQuality source not found');
+      assert(text.includes('function networkQualityLatencyText'), 'network latency formatter not found');
+      assert(text.includes('function networkQualityLossText'), 'network loss formatter not found');
+      assert(text.includes('function networkQualityLatencyTitle'), 'network latency tooltip not found');
+      assert(text.includes('function networkQualityLossTitle'), 'network loss tooltip not found');
+      assert(text.includes("label: '延迟 ' + networkQualityLatencyText(networkQuality)"), 'network latency dot label not found');
+      assert(text.includes("label: '丢包 ' + networkQualityLossText(networkQuality)"), 'network loss dot label not found');
+      assert(text.includes('等待运行时网络质量样本'), 'latency no-sample tooltip not found');
+      assert(text.includes('等待 WS 状态帧样本'), 'loss no-sample tooltip not found');
+    });
     check(`${file} suppresses routine bootstrap console noise`, () => {
       assert(text.includes('function shouldLogBootstrap'), 'bootstrap log filter not found');
       assert(text.includes('debugBootstrapLogging'), 'bootstrap verbose logging switch not found');

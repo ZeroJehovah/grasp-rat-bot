@@ -1110,6 +1110,7 @@ function combatLogSource(helpers = {}) {
             ? 'js-or-main-loop-paused'
             : (diagnosis === 'combat-log-gap-with-active-tick' ? 'combat-state-or-log-gating-gap' : '')),
           lastRefresh: lastRefreshSummary,
+          networkQuality: typeof summarizeNetworkQuality === 'function' ? summarizeNetworkQuality(t) : null,
           lastCombatLogBuildMs: Number.isFinite(Number(diagnostics.lastCombatLogBuildMs)) ? Math.max(0, Math.round(Number(diagnostics.lastCombatLogBuildMs))) : null,
           lastCombatLogBuildAt: Number(diagnostics.lastCombatLogBuildAt || 0) || 0,
           lastCombatLogRecordMs: Number.isFinite(Number(diagnostics.lastCombatLogRecordMs)) ? Math.max(0, Math.round(Number(diagnostics.lastCombatLogRecordMs))) : null,
@@ -1282,6 +1283,62 @@ function combatLogSource(helpers = {}) {
           target: decision?.target || null,
           coinDiagnostics: diag,
           safety: bot.lastSafety || null,
+          control: summarizeControl(),
+          globalState: combatLogGlobalStateSummary()
+        });
+        return true;
+      }
+
+      function networkQualityDiagnosticSignature(summary) {
+        if (!summary || typeof summary !== 'object') return '';
+        const latency = Number(summary.displayLatencyMs);
+        const loss = Number(summary.lossPercent);
+        const stall = summary.stalled ? 'stall' : 'ok';
+        const latencyBucket = Number.isFinite(latency) ? Math.floor(latency / 100) * 100 : 'na';
+        const lossBucket = Number.isFinite(loss) ? Math.floor(loss / 5) * 5 : 'na';
+        return [stall, latencyBucket, lossBucket, summary.latencySource || '', summary.lossSource || ''].join('|');
+      }
+
+      function networkQualityShouldLog(summary) {
+        if (!summary?.enabled) return false;
+        const latency = Number(summary.displayLatencyMs);
+        const loss = Number(summary.lossPercent);
+        const latencyLimit = Math.max(50, Number(cfg.networkQualityLogLatencyMs || 350) || 350);
+        const lossLimit = Math.max(0.1, Number(cfg.networkQualityLogLossPercent || 5) || 5);
+        return Boolean(summary.stalled)
+          || (Number.isFinite(latency) && latency >= latencyLimit)
+          || (Number.isFinite(loss) && loss >= lossLimit);
+      }
+
+      function recordNetworkQualityLog(source, decision = bot.lastDecision) {
+        const state = bot.combatLogging;
+        if (!state?.enabled || !state.endpoint || typeof summarizeNetworkQuality !== 'function') return false;
+        const t = Date.now();
+        const summary = summarizeNetworkQuality(t);
+        if (!networkQualityShouldLog(summary)) return false;
+        const signature = networkQualityDiagnosticSignature(summary);
+        const minIntervalMs = Math.max(1000, Number(cfg.networkQualityLogIntervalMs || 10000) || 10000);
+        if (signature && signature === state.lastNetworkQualityDiagnosticsSignature && t - Number(state.lastNetworkQualityDiagnosticsAt || 0) < minIntervalMs) return false;
+        state.lastNetworkQualityDiagnosticsSignature = signature;
+        state.lastNetworkQualityDiagnosticsAt = t;
+        queueCombatLogEntry({
+          type: 'network-quality',
+          at: t,
+          perfNow: Math.round(now()),
+          tickCount: bot.tickCount,
+          source,
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          url: location.href,
+          visibilityState: document.visibilityState || '',
+          decision: combatLogDecisionSummary(decision || {}),
+          networkQuality: summary,
+          runtime: {
+            networkQuality: summary,
+            lastTickDurationMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastTickDurationMs)) ? Math.max(0, Math.round(Number(bot.runtimeDiagnostics.lastTickDurationMs))) : null,
+            lastTickSource: bot.runtimeDiagnostics?.lastTickSource || ''
+          },
           control: summarizeControl(),
           globalState: combatLogGlobalStateSummary()
         });
@@ -1528,6 +1585,7 @@ function combatLogSource(helpers = {}) {
           state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
           if (!state.endpoint) return;
           recordCoinDiagnosticsLog(source, decision || {});
+          recordNetworkQualityLog(source, decision || {});
           const suspendedReason = combatLogSuspendReason(decision || {});
           if (suspendedReason) {
             if (state.active) {
