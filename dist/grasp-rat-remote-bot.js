@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.240"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.241"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -309,6 +309,7 @@
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
+    afkRecentActivityCooldownMs: 12000,
     opportunityAfkStaminaCooldownMs: 60000,
     opportunityAfkStaminaDropThresholdMs: 100,
     coinMaxDistance: 18000,
@@ -1428,8 +1429,18 @@
     || truthyFlag(e?.engagedCombat)
     || String(e?.combatIntent || '') === 'engaged';
   const isAvoidanceThreat = e => isInvulnerable(e);
-  const isAfkTarget = e => !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
-  const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
+  function entityRecentActivityAgeMs(e) {
+    const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  function recentlyActionedForAfk(e) {
+    const cooldownMs = Math.max(0, Number(cfg.afkRecentActivityCooldownMs || 0) || 0);
+    if (!(cooldownMs > 0)) return false;
+    const ageMs = entityRecentActivityAgeMs(e);
+    return Boolean(e?.recentlyActive || (ageMs !== null && ageMs <= cooldownMs));
+  }
+  const isAfkTarget = e => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
+  const isAfkProfitTarget = e => !recentlyActionedForAfk(e) && (isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e)));
   function isWhitelistedTarget(e) {
     if (!e) return false;
     const name = normalizeTargetWhitelistName(e.name);
@@ -11047,8 +11058,14 @@ function hpDisplay(value) {
       const y = Number(entity.y);
       const previous = bot.seenEntities.get(id);
       let movedAt = previous?.movedAt || 0;
+      let activityAt = previous?.activityAt || 0;
       let motionSampleSpeed = 0;
       let motionObservedSpeed = 0;
+      const currentSpeed = speed(entity);
+      const firing = isFiringEntity(entity);
+      const stamina5s = Number(entity?.stamina_5s_remaining_milli ?? entity?.stamina5s ?? entity?.stamina_5s ?? NaN);
+      const previousStamina = Number(previous?.stamina5s);
+      const staminaDropThreshold = Math.max(0, Number(cfg.opportunityAfkStaminaDropThresholdMs || 100) || 100);
       if (previous
         && Number.isFinite(x)
         && Number.isFinite(y)
@@ -11059,20 +11076,40 @@ function hpDisplay(value) {
         motionSampleSpeed = delta * sampleMs / elapsedMs;
         const retained = Math.max(0, Number(previous.motionObservedSpeed || 0)) * Math.max(0, 1 - elapsedMs / decayMs);
         motionObservedSpeed = Math.max(motionSampleSpeed, retained);
-        if (delta >= cfg.activeMoveMin) movedAt = t;
+        if (delta >= cfg.activeMoveMin) {
+          movedAt = t;
+          activityAt = t;
+        }
       }
       if (!previous && (Math.abs(Number(entity.vx) || 0) || Math.abs(Number(entity.vy) || 0))) {
         movedAt = t;
+        activityAt = t;
       }
+      if (currentSpeed >= cfg.activeSpeedMin || firing) activityAt = t;
+      if (Number.isFinite(stamina5s) && Number.isFinite(previousStamina) && stamina5s + staminaDropThreshold < previousStamina) activityAt = t;
       const motionAgeMs = movedAt ? Math.max(0, t - movedAt) : null;
+      const recentActivityAgeMs = activityAt ? Math.max(0, t - activityAt) : null;
+      const afkCooldownMs = Math.max(0, Number(cfg.afkRecentActivityCooldownMs || 0) || 0);
       entity.motionSampleSpeed = motionSampleSpeed;
       entity.motionObservedSpeed = motionObservedSpeed;
       entity.motionAgeMs = motionAgeMs;
+      entity.recentActivityAgeMs = recentActivityAgeMs;
+      entity.recentlyActive = Boolean(recentActivityAgeMs !== null && recentActivityAgeMs <= afkCooldownMs);
       entity.recentlyMoved = Boolean(movedAt && t - movedAt <= cfg.activeSeenMs);
-      bot.seenEntities.set(id, { x, y, seenAt: t, movedAt, motionSampleSpeed, motionObservedSpeed });
+      bot.seenEntities.set(id, {
+        x,
+        y,
+        seenAt: t,
+        movedAt,
+        activityAt,
+        motionSampleSpeed,
+        motionObservedSpeed,
+        stamina5s: Number.isFinite(stamina5s) ? stamina5s : (Number.isFinite(previousStamina) ? previousStamina : null)
+      });
     }
+    const seenTtlMs = Math.max(10000, Math.max(0, Number(cfg.afkRecentActivityCooldownMs || 0) || 0) + 2000);
     for (const [id, seen] of bot.seenEntities.entries()) {
-      if (t - seen.seenAt > 10000) bot.seenEntities.delete(id);
+      if (t - seen.seenAt > seenTtlMs) bot.seenEntities.delete(id);
     }
   }
 
@@ -17305,6 +17342,7 @@ function hpDisplay(value) {
 	        score: bot.opportunityChoice.score,
 	        staminaCost: bot.opportunityChoice.staminaCost,
 	        held: Boolean(item.held),
+	        highValueCoinHold: Boolean(item.highValueCoinHold),
 	        missingHold,
 		        competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
 		        holdRemainingMs: Math.max(0, Math.round(Number(bot.opportunityChoice.until || 0) - t)),
@@ -17319,6 +17357,14 @@ function hpDisplay(value) {
 	    };
 	  }
 
+	  function isHighValueCoinOpportunity(item) {
+	    return String(item?.type || '') === 'coin' && Number(item?.amount || 0) >= highValueCoinPriorityAmount();
+	  }
+
+	  function highValueCoinHoldBlocksEnemySwitch(held, best) {
+	    return Boolean(isHighValueCoinOpportunity(held) && String(best?.type || '') === 'enemy');
+	  }
+
 	  function chooseStableOpportunity(opportunities) {
 	    const sorted = opportunities
 	      .slice()
@@ -17330,7 +17376,9 @@ function hpDisplay(value) {
 	    if (current?.key && now() < Number(current.until || 0)) {
 	      const held = sorted.find(item => opportunityMatchesChoice(item, current));
 	      if (held && !opportunityMatchesChoice(best, current)) {
-	        if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
+	        if (highValueCoinHoldBlocksEnemySwitch(held, best)) {
+	          chosen = { ...held, held: true, highValueCoinHold: true, competingScore: best.score };
+	        } else if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
 	          const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
           const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
           const heldScore = Number(held.score || 0);
