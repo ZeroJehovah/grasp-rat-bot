@@ -2,6 +2,7 @@
 
 
 - `globalRefreshMs = 5000`
+- `globalRefreshTimeoutMs = 3000`
 - `globalSamplingOutageOfflineEnabled = true`
 - `globalSamplingOutageMinErrors = 1`
 - `globalSamplingOutageMinAgeMs = 0`

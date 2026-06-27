@@ -422,7 +422,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     reloadAfterOfflineMs: 20000,
     cloudflareErrorReloadMs: 5000,
     page403ErrorReloadMs: 600000,
-    globalRefreshTimeoutMs: 1500,
+    globalRefreshTimeoutMs: 3000,
     combatLoggingEnabled: Boolean(config.combatLoggingEnabled && combatLogEndpointConfigured),
     combatLogEndpoint: combatLogEndpointConfigured ? String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log') : '',
     combatLogEndpointConfigured,

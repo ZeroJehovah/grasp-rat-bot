@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.236"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.237"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -503,7 +503,7 @@
     reloadAfterOfflineMs: 20000,
     cloudflareErrorReloadMs: 5000,
     page403ErrorReloadMs: 600000,
-    globalRefreshTimeoutMs: 1500,
+    globalRefreshTimeoutMs: 3000,
     combatLoggingEnabled: Boolean(config.combatLoggingEnabled && combatLogEndpointConfigured),
     combatLogEndpoint: combatLogEndpointConfigured ? String(config.combatLogEndpoint || 'http://127.0.0.1:18765/combat-log') : '',
     combatLogEndpointConfigured,

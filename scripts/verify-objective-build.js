@@ -474,6 +474,7 @@ function main() {
     check(`${file} treats combat sampling and tick/frame gaps as offline network risk`, () => {
       assert(defaultConfigSource.includes('globalSamplingOutageOfflineEnabled: true'), 'sampling outage offline gate is not enabled by default');
       assert(defaultConfigSource.includes('globalSamplingOutageCombatOnly: true'), 'sampling outage offline gate is not combat-only by default');
+      assert(expectObjectNumber(defaultConfigSource, 'globalRefreshTimeoutMs', 3000), 'global refresh timeout is not configured at 3000ms');
       assert(defaultConfigSource.includes('combatTickGapOfflineEnabled: true'), 'combat tick gap offline gate is not enabled by default');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes('bot.globalState.samplingOutage = outage'), 'sampling outage state is not recorded on global refresh errors');
