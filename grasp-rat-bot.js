@@ -1096,6 +1096,16 @@ function browserBotSource(config) {
     const name = normalizeTargetWhitelistName(e.name);
     return Boolean(name && bot.targetWhitelist?.nameSet?.has(name));
   }
+  function isRealtimeVisibleThreat(e) {
+    return Boolean(e?.native || e?.render || e?.renderVisible || e?.nativeSource === 'render');
+  }
+  function isOrdinaryCoinActiveThreat(e) {
+    return Boolean(e
+      && !isWhitelistedTarget(e)
+      && !isInvulnerable(e)
+      && isRealtimeVisibleThreat(e)
+      && hasCombatActivitySignal(e));
+  }
   function summarizeTargetWhitelistStatus() {
     const state = bot.targetWhitelist || targetWhitelistState;
     return {
@@ -5989,6 +5999,10 @@ ${importantLogSource()}
   function highValueVisibleCoinPriorityNeeded(self, context = {}) {
     if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
     if ((context.avoidanceThreats || []).length) return true;
+    if (context.highValuePriorityCoin
+      && (context.ordinaryCoinThreats || []).some(threat => coinBlockedByThreat(self, context.highValuePriorityCoin, threat))) {
+      return true;
+    }
     const incoming = incomingBulletThreat(self, null, context.bullets || []);
     if (incoming) return true;
     const incomingOwnerId = incoming?.ownerId;
@@ -11193,7 +11207,15 @@ ${importantLogSource()}
       Number(cfg.recoveryAvoidRadius || 0) || 0
     );
     const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e));
-    const coinThreats = mergeThreatLists(avoidanceThreats, nearbyHumans.filter(e => e.native && isAvoidanceThreat(e)));
+    const highValueCoinThreats = mergeThreatLists(
+      avoidanceThreats,
+      nearbyHumans.filter(e => e.native && isAvoidanceThreat(e))
+    );
+    const ordinaryActiveCoinThreats = activeThreats.filter(isOrdinaryCoinActiveThreat);
+    const coinThreats = mergeThreatLists(
+      highValueCoinThreats,
+      ordinaryActiveCoinThreats
+    );
     bot.actionThreats = coinThreats;
     const recovery = !fullHp && isRecovering(self);
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
@@ -11246,10 +11268,19 @@ ${importantLogSource()}
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
-    const highValuePriorityContext = { recovery, engagedCombatTarget, defensiveCombatTarget, activeThreats, avoidanceThreats, bullets };
-    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats, {
+    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, highValueCoinThreats, {
       ignoreThreats: hpValue(self) >= highValueCoinPriorityHealthyHp()
     });
+    const highValuePriorityContext = {
+      recovery,
+      engagedCombatTarget,
+      defensiveCombatTarget,
+      activeThreats,
+      avoidanceThreats,
+      bullets,
+      ordinaryCoinThreats: ordinaryActiveCoinThreats,
+      highValuePriorityCoin
+    };
     if (!pendingPostAttackWaitTarget
       && highValueVisibleCoinPriorityNeeded(self, highValuePriorityContext)
       && canPrioritizeHighValueVisibleCoin(self, highValuePriorityCoin, highValuePriorityContext)) {
