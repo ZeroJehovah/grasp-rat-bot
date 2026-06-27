@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.34';
+  const BOOTSTRAP_VERSION = '0.1.35';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -529,6 +529,21 @@
     };
   }
 
+  function markManualLoginBypass(reason = 'manual login', durationMs = 5000) {
+    try {
+      window.__graspRatManualLoginBypassUntil = Date.now() + Math.max(1000, Number(durationMs) || 5000);
+      window.__graspRatManualLoginBypassReason = String(reason || 'manual login');
+    } catch (_) {}
+  }
+
+  function manualLoginBypassActive() {
+    try {
+      return Number(window.__graspRatManualLoginBypassUntil || 0) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
   function nativeLoginEventControl(event) {
     const raw = event?.submitter || event?.target || null;
     const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
@@ -542,6 +557,11 @@
   function blockNativeLoginEventIfNeeded(event) {
     const control = nativeLoginEventControl(event);
     if (!control) return;
+    if (event?.isTrusted) {
+      markManualLoginBypass('trusted native login ' + String(event.type || 'event'));
+      return;
+    }
+    if (manualLoginBypassActive()) return;
     const block = bootstrapLoginPointSafetyBlock(getBotStatus());
     if (!block) return;
     event.preventDefault();
@@ -556,6 +576,10 @@
     owner.__graspRatStartLinuxDoLoginGateInstalled = true;
     let rawStartLinuxDoLogin = owner.startLinuxDoLogin;
     const guardedStartLinuxDoLogin = function graspRatGuardedStartLinuxDoLogin(...args) {
+      if (manualLoginBypassActive()) {
+        if (typeof rawStartLinuxDoLogin === 'function') return rawStartLinuxDoLogin.apply(this, args);
+        return rawStartLinuxDoLogin;
+      }
       const block = bootstrapLoginPointSafetyBlock(getBotStatus());
       if (block) {
         rememberLoginGateBlock(block, 'startLinuxDoLogin');
@@ -1585,25 +1609,23 @@
       grid.insertBefore(loginButton, anchor);
     }
     loginButton.className = nativeJoin?.className || 'join';
-    loginButton.textContent = loginGateBlock
-      ? '等待安全'
-      : (loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录');
+    loginButton.textContent = loginButton.dataset.graspRatLoginPending === 'true' ? '登录中' : '立即登录';
     loginButton.title = loginGateBlock
-      ? loginGateBlock.displayReason
+      ? '手动登录优先：' + loginGateBlock.displayReason + '，仍将立即登录/加入游戏'
       : (reloginHold > 0 ? '跳过重连等待并立即登录/加入游戏' : '通过脚本立即登录/加入游戏');
-    loginButton.disabled = Boolean(loginGateBlock || loginButton.dataset.graspRatLoginPending === 'true');
+    loginButton.disabled = loginButton.dataset.graspRatLoginPending === 'true';
     loginButton.onclick = event => {
       event.preventDefault();
       event.stopPropagation();
       const currentBlock = bootstrapLoginPointSafetyBlock(getBotStatus());
       if (currentBlock) {
-        rememberLoginGateBlock(currentBlock, 'sidebar immediate login');
-        return;
+        rememberLoginGateBlock({ ...currentBlock, manualBypassed: true }, 'sidebar immediate login bypass');
       }
       if (loginButton.dataset.graspRatLoginPending === 'true') return;
       loginButton.dataset.graspRatLoginPending = 'true';
       loginButton.disabled = true;
       loginButton.textContent = '登录中';
+      markManualLoginBypass('sidebar immediate login');
       forceLoginNow('sidebar immediate login')
         .catch(err => noteBootstrapError('sidebar force login failed', err))
         .finally(() => {
@@ -2830,7 +2852,8 @@
     const ignoreSuppress = Boolean(options.ignoreSuppress || force);
     const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
     if (!cfg.autoLogin || !isGamePage() || !ensureNotBlocked()) return false;
-    if (isPaused()) {
+    const paused = isPaused();
+    if (paused && !force) {
       syncPauseToPage();
       return false;
     }
@@ -2846,16 +2869,23 @@
     }
     const status = getBotStatus();
     const loginGateBlock = bootstrapLoginPointSafetyBlock(status);
-    if (loginGateBlock) {
+    if (loginGateBlock && !force) {
       rememberLoginGateBlock(loginGateBlock, reason);
       return false;
+    }
+    if (loginGateBlock && force) {
+      rememberLoginGateBlock({ ...loginGateBlock, manualBypassed: true }, reason);
     }
     const hasToken = Boolean(localStorage.getItem('tmpGameSessionToken') || status?.control?.hasToken);
     const hasSelf = Boolean(status?.self || status?.lastDecision?.self);
     const decisionReason = String(status?.lastDecision?.reason || '');
     const loginControl = findGameLoginControl();
     const loginRequired = hasLoginRequiredText();
-    const canStartLogin = Boolean(loginControl || typeof window.startLinuxDoLogin === 'function');
+    const rawStartLinuxDoLogin = force && typeof window.__graspRatBotRawStartLinuxDoLogin === 'function'
+      ? window.__graspRatBotRawStartLinuxDoLogin
+      : null;
+    const startLoginFn = rawStartLinuxDoLogin || (typeof window.startLinuxDoLogin === 'function' ? window.startLinuxDoLogin : null);
+    const canStartLogin = Boolean(loginControl || typeof startLoginFn === 'function');
     const shouldLogin = force
       ? canStartLogin
       : (!hasToken || (!hasSelf && /login|required/i.test(decisionReason) && loginRequired));
@@ -2874,11 +2904,13 @@
       error: ''
     };
     try {
-      if (typeof window.startLinuxDoLogin === 'function') {
-        const result = window.startLinuxDoLogin();
+      if (force) markManualLoginBypass(reason);
+      if (typeof startLoginFn === 'function') {
+        const result = startLoginFn.call(window);
         if (result && typeof result.then === 'function') await result;
-        detail.method = 'startLinuxDoLogin';
+        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
       } else if (loginControl) {
+        if (force) markManualLoginBypass(reason);
         loginControl.click();
         detail.method = loginControl.id ? `#${loginControl.id}` : controlText(loginControl) || loginControl.tagName.toLowerCase();
       } else {
@@ -2893,32 +2925,39 @@
 
   async function forceLoginNow(reason = 'panel immediate login') {
     const text = String(reason || 'panel immediate login');
+    markManualLoginBypass(text);
     const bot = window.__graspRatBot || null;
     if (bot && typeof bot.forceLoginNow === 'function') {
       const result = await bot.forceLoginNow(text);
       if (result?.login?.attempted) {
         clearCurrentReloginHold(text, { clearBot: false, clearLocal: false, clearPersistent: false });
       } else if (result?.login?.reason === 'snapshot-gate') {
-        rememberLoginGateBlock(
-          bootstrapLoginPointSafetyBlock(getBotStatus()) || {
+        const gateBlock = bootstrapLoginPointSafetyBlock(getBotStatus()) || {
             at: Date.now(),
             reason: 'snapshot-gate',
-            displayReason: '等待登录安全快照，暂不登录',
+            displayReason: '等待登录安全快照',
             snapshotGate: result.login.snapshotGate || null
-          },
-          text
-        );
+          };
+        rememberLoginGateBlock({ ...gateBlock, manualBypassed: true }, text);
+        const fallbackLogin = await maybeStartGameLogin(text, {
+          force: true,
+          manual: true,
+          ignoreSuppress: true,
+          ignoreLoginCooldown: true
+        });
+        result.manualFallbackLogin = fallbackLogin;
       }
       updateBootstrapPanel(true);
       return result;
     }
     const loginGateBlock = bootstrapLoginPointSafetyBlock(getBotStatus());
     if (loginGateBlock) {
-      return { at: Date.now(), reason: text, blocked: rememberLoginGateBlock(loginGateBlock, text), login: false };
+      rememberLoginGateBlock({ ...loginGateBlock, manualBypassed: true }, text);
     }
     const cleared = clearCurrentReloginHold(text);
     const login = await maybeStartGameLogin(text, {
       force: true,
+      manual: true,
       ignoreSuppress: true,
       ignoreLoginCooldown: true
     });

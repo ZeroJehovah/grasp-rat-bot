@@ -1525,6 +1525,21 @@ function controlLoginSource(helpers = {}) {
 	    return pieces.join('，');
 		  }
 
+  function markManualLoginBypass(reason = 'manual login', durationMs = 5000) {
+    try {
+      window.__graspRatManualLoginBypassUntil = Date.now() + Math.max(1000, Number(durationMs) || 5000);
+      window.__graspRatManualLoginBypassReason = String(reason || 'manual login');
+    } catch (_) {}
+  }
+
+  function manualLoginBypassActive() {
+    try {
+      return Number(window.__graspRatManualLoginBypassUntil || 0) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
   function nativeLoginEventControl(event) {
     const raw = event?.submitter || event?.target || null;
     const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
@@ -1538,6 +1553,11 @@ function controlLoginSource(helpers = {}) {
   function blockNativeLoginEventIfNeeded(event) {
     const control = nativeLoginEventControl(event);
     if (!control) return;
+    if (event?.isTrusted) {
+      markManualLoginBypass('trusted native login ' + String(event.type || 'event'));
+      return;
+    }
+    if (manualLoginBypassActive()) return;
     const gate = snapshotLoginGateStatus();
     if (loginSnapshotGateAllowsLogin(gate)) return;
     const point = gate.pointSafety || loginPointSafetyStatus();
@@ -1582,6 +1602,10 @@ function controlLoginSource(helpers = {}) {
     const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
     window.__graspRatBotRawStartLinuxDoLogin = previous;
     const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
+      if (manualLoginBypassActive()) {
+        if (typeof previous === 'function') return previous.apply(this, args);
+        return previous;
+      }
       const gate = snapshotLoginGateStatus();
       if (!loginSnapshotGateAllowsLogin(gate)) {
         const point = gate.pointSafety || loginPointSafetyStatus();
