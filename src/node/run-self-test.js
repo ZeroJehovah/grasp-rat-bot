@@ -240,6 +240,7 @@ function runSelfTest() {
     opportunitySameCoinRadius: 1200,
     opportunityVisibleDistance: 50000,
     opportunityNearbyPriorityDistance: 50000,
+    afkRecentActivityCooldownMs: 12000,
     opportunityAfkStaminaCooldownMs: 60000,
     opportunityAfkStaminaDropThresholdMs: 100,
     coinMaxDistance: 18000,
@@ -425,8 +426,18 @@ function runSelfTest() {
     || truthyFlag(e?.engagedCombat)
     || String(e?.combatIntent || '') === 'engaged';
   const isAvoidanceThreat = e => isInvulnerable(e);
-  const isAfkTarget = e => !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
-  const isAfkProfitTarget = e => isAfkTarget(e) || (isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
+  function entityRecentActivityAgeMs(e) {
+    const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  function recentlyActionedForAfk(e) {
+    const cooldownMs = Math.max(0, Number(cfg.afkRecentActivityCooldownMs || 0) || 0);
+    if (!(cooldownMs > 0)) return false;
+    const ageMs = entityRecentActivityAgeMs(e);
+    return Boolean(e?.recentlyActive || (ageMs !== null && ageMs <= cooldownMs));
+  }
+  const isAfkTarget = e => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
+  const isAfkProfitTarget = e => !recentlyActionedForAfk(e) && (isAfkTarget(e) || (isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e) && !isFiringEntity(e)));
   const targetWhitelistNames = parseTargetWhitelistNames({ names: ['文月', 'Firefox'] }, cfg.targetWhitelistMaxNames);
   const targetWhitelistNameSet = new Set(targetWhitelistNames);
   const isWhitelistedTarget = e => {
@@ -2201,6 +2212,14 @@ function runSelfTest() {
     return chosen;
   }
 
+  function isHighValueCoinOpportunity(item) {
+    return String(item?.type || '') === 'coin' && Number(item?.amount || 0) >= highValueCoinPriorityAmount();
+  }
+
+  function highValueCoinHoldBlocksEnemySwitch(held, best) {
+    return Boolean(isHighValueCoinOpportunity(held) && String(best?.type || '') === 'enemy');
+  }
+
   function opportunitySameCoinRadius() {
     return Math.max(0, Number(cfg.opportunitySameCoinRadius || cfg.coinCollectedPruneRadius || 900));
   }
@@ -2366,7 +2385,9 @@ function runSelfTest() {
     if (current?.key && t < Number(current.until || 0)) {
       const held = sorted.find(item => opportunityMatchesChoice(item, current));
       if (held && !opportunityMatchesChoice(best, current)) {
-        if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
+        if (highValueCoinHoldBlocksEnemySwitch(held, best)) {
+          chosen = { ...held, held: true, highValueCoinHold: true, competingScore: best.score };
+        } else if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
           const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
           const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
           const heldScore = Number(held.score || 0);
@@ -7928,6 +7949,17 @@ function runSelfTest() {
       want: 'attack:false'
     },
     {
+      name: 'recently active idle target is not treated as afk profit',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 7, x: 12000, y: 0, current_join_mode: 'Passive', death_reward_preview: 100, recentActivityAgeMs: 5000 }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'wait:wait-for-snapshot-coin'
+    },
+    {
       name: 'low value afk target in range is skipped',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -7995,6 +8027,35 @@ function runSelfTest() {
         return action.kind + ':' + action.reason;
       })(),
       want: 'coin:best-opportunity-coin'
+    },
+    {
+      name: 'held high value coin resists afk drop target switch',
+      got: (() => {
+        const t = Date.now();
+        bot.opportunityChoice = {
+          key: 'coin:1',
+          type: 'coin',
+          id: 1,
+          reason: 'best-opportunity-visible-coin',
+          x: 30000,
+          y: 0,
+          amount: 10,
+          score: 200000,
+          at: t - 500,
+          lastSeenAt: t - 100,
+          until: t + cfg.opportunitySwitchHoldMs
+        };
+        const action = pickBestOpportunity(
+          { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', death_reward_preview: 100, distance: 10000, drop: 100 }],
+          [{ drop_id: 1, x: 30000, y: 0, amount: 10, native: true, distance: 30000 }],
+          []
+        );
+        const remembered = bot.opportunityChoice?.type + ':' + bot.opportunityChoice?.id;
+        bot.opportunityChoice = null;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + remembered;
+      })(),
+      want: 'seek-coin:best-opportunity-visible-coin:1:coin:1'
     },
     {
       name: 'visible coin route beats closer single coin by route roi',

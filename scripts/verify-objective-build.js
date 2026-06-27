@@ -50,6 +50,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
   { key: 'opportunityVisibleDistance', value: 50000 },
   { key: 'opportunityNearbyPriorityDistance', value: 50000 },
+  { key: 'afkRecentActivityCooldownMs', value: 12000 },
   { key: 'opportunityOscillationSwitchLimit', value: 5 },
   { key: 'attackApproachRange', value: 50000 },
   { key: 'globalAttackMaxDistance', value: 50000 },
@@ -684,12 +685,18 @@ function main() {
         'join-mode Active helper not found'
       );
       assert(
-        countMatches(text, /const isAfkTarget = e => !isJoinModeActive\(e\) && !is(?:Currently)?Active\(e\) && !isMovingThreat\(e\);/g) >= expectedMin,
-        'AFK target filter does not exclude join-mode Active'
+        countMatches(text, /const isAfkTarget = e => !recentlyActionedForAfk\(e\) && !isJoinModeActive\(e\) && !is(?:Currently)?Active\(e\) && !isMovingThreat\(e\);/g) >= expectedMin,
+        'AFK target filter does not exclude recent activity or join-mode Active'
       );
       assert(
-        countMatches(text, /const isAfkProfitTarget = e => isAfkTarget\(e\) \|\| \(isJoinModeActive\(e\) && !is(?:Currently)?Active\(e\) && !isMovingThreat\(e\) && !isFiringEntity\(e\)\);/g) >= expectedMin,
-        'passive Active profit target helper not found'
+        countMatches(text, /const isAfkProfitTarget = e => !recentlyActionedForAfk\(e\) && \(isAfkTarget\(e\) \|\| \(isJoinModeActive\(e\) && !is(?:Currently)?Active\(e\) && !isMovingThreat\(e\) && !isFiringEntity\(e\)\)\);/g) >= expectedMin,
+        'recent-activity gated passive Active profit target helper not found'
+      );
+      assert(
+        countMatches(text, /function recentlyActionedForAfk\(e\)/g) >= expectedMin
+          && countMatches(text, /cfg\.afkRecentActivityCooldownMs/g) >= expectedMin
+          && countMatches(text, /recentActivityAgeMs/g) >= expectedMin,
+        'AFK recent activity cooldown helper not found'
       );
       assert(
         countMatches(text, /if \(isJoinModeActive\(target\)\) return true;/g) === 0,
@@ -715,6 +722,13 @@ function main() {
         countMatches(text, /filter\(isAfkProfitTarget\)/g) >= expectedMin,
         'ordinary profit opportunities do not include passive Active targets'
       );
+    });
+    check(`${file} protects held high-value coins from AFK drop target switches`, () => {
+      assert(text.includes('function isHighValueCoinOpportunity(item)'), 'high-value opportunity helper not found');
+      assert(text.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'high-value coin hold switch blocker not found');
+      assert(text.includes("isHighValueCoinOpportunity(held) && String(best?.type || '') === 'enemy'"), 'high-value hold does not specifically block enemy switches');
+      assert(text.includes('highValueCoinHold: true'), 'held high-value coin decision marker not found');
+      assert(text.includes('opportunityChoice.highValueCoinHold') || text.includes('highValueCoinHold: Boolean(item.highValueCoinHold)'), 'high-value hold metadata is not exposed');
     });
 	    check(`${file} ends combat logs on relogin wait/manual states`, () => {
 	      const body = functionBody(text, 'combatLogSuspendReason');

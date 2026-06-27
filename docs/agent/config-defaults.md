@@ -205,6 +205,7 @@
 - `opportunitySwitchMargin = 3000`
 - `opportunitySwitchRelativeMargin = 0.1`
 - `opportunityNearbyPriorityDistance = 50000`
+- `afkRecentActivityCooldownMs = 12000`
 - `opportunityAfkStaminaCooldownMs = 60000`
 - `opportunityAfkStaminaDropThresholdMs = 100`
 - `pursuitLeaveMs = 300000`
