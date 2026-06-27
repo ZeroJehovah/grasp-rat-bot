@@ -434,6 +434,12 @@ function runSelfTest() {
     const name = normalizeTargetWhitelistName(e.name);
     return Boolean(name && targetWhitelistNameSet.has(name));
   };
+  const isRealtimeVisibleThreat = e => Boolean(e?.native || e?.render || e?.renderVisible || e?.nativeSource === 'render');
+  const isOrdinaryCoinActiveThreat = e => Boolean(e
+    && !isWhitelistedTarget(e)
+    && !isInvulnerable(e)
+    && isRealtimeVisibleThreat(e)
+    && hasCombatActivitySignalForTest(e));
   const decorateThreat = (self, e) => {
     const moving = isMovingThreat(e);
     return {
@@ -1613,6 +1619,10 @@ function runSelfTest() {
   function highValueVisibleCoinPriorityNeeded(self, context = {}) {
     if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
     if ((context.avoidanceThreats || []).length) return true;
+    if (context.highValuePriorityCoin
+      && (context.ordinaryCoinThreats || []).some(threat => coinBlockedByThreat(self, context.highValuePriorityCoin, threat))) {
+      return true;
+    }
     const incoming = incomingBulletInfo(self, context.bullets || []);
     if (incoming.incoming) return true;
     return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incoming.ownerId, incoming.unknownIncoming));
@@ -4827,12 +4837,17 @@ function runSelfTest() {
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const recovery = !fullHp && isRecovering(self);
-    const coinThreats = mergeThreatLists(
+    const highValueCoinThreats = mergeThreatLists(
       avoidanceThreats,
       entities
         .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e) }))
         .filter(e => e.native)
         .filter(isAvoidanceThreat)
+    );
+    const ordinaryActiveCoinThreats = activeThreats.filter(isOrdinaryCoinActiveThreat);
+    const coinThreats = mergeThreatLists(
+      highValueCoinThreats,
+      ordinaryActiveCoinThreats
     );
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const realtimeCoins = usableCoins.filter(coin => !isSnapshotOnlyCoin(coin));
@@ -4844,10 +4859,19 @@ function runSelfTest() {
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
     const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, attacks, entities);
-    const highValuePriorityContext = { recovery, engagedCombatTarget, defensiveCombatTarget, activeThreats, avoidanceThreats, bullets };
-    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, coinThreats, {
+    const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, highValueCoinThreats, {
       ignoreThreats: hpValue(self) >= highValueCoinPriorityHealthyHp()
     });
+    const highValuePriorityContext = {
+      recovery,
+      engagedCombatTarget,
+      defensiveCombatTarget,
+      activeThreats,
+      avoidanceThreats,
+      bullets,
+      ordinaryCoinThreats: ordinaryActiveCoinThreats,
+      highValuePriorityCoin
+    };
     if (!pendingPostAttackWaitTarget
       && highValueVisibleCoinPriorityNeeded(self, highValuePriorityContext)
       && canPrioritizeHighValueVisibleCoin(self, highValuePriorityCoin, highValuePriorityContext)) {
@@ -5019,6 +5043,30 @@ function runSelfTest() {
         coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
       }).kind,
       want: 'coin'
+    },
+    {
+      name: 'ordinary one coin is blocked by realtime active coin threat',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 2, x: 11120, y: 0, native: true, current_join_mode: 'Active', vx: 30, hp: 100 }],
+          coins: [{ drop_id: 1, x: 21731, y: 0, amount: 1, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'wait:wait-for-snapshot-coin'
+    },
+    {
+      name: 'healthy high-value coin bypasses ordinary active coin threat',
+      got: (() => {
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          local: [{ user_id: 2, x: 11120, y: 0, native: true, current_join_mode: 'Active', vx: 30, hp: 100 }],
+          coins: [{ drop_id: 1, x: 21731, y: 0, amount: 10, native: true }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'seek-coin:high-value-visible-coin-priority'
     },
     {
       name: 'low-drop retreat ignored active threat does not wait over foot coin',
