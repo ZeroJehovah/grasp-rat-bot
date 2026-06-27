@@ -1767,8 +1767,10 @@ function main() {
       assert(text.includes('function networkQualityLossText'), 'network loss formatter not found');
       assert(text.includes('function networkQualityLatencyTitle'), 'network latency tooltip not found');
       assert(text.includes('function networkQualityLossTitle'), 'network loss tooltip not found');
-      assert(text.includes("label: '延迟 ' + networkQualityLatencyText(networkQuality)"), 'network latency dot label not found');
-      assert(text.includes("label: '丢包 ' + networkQualityLossText(networkQuality)"), 'network loss dot label not found');
+      assert(text.includes('label: networkQualityLatencyText(networkQuality)'), 'network latency numeric dot label not found');
+      assert(text.includes('label: networkQualityLossText(networkQuality)'), 'network loss numeric dot label not found');
+      assert(!text.includes("label: '延迟 ' + networkQualityLatencyText(networkQuality)"), 'network latency visible label still includes text prefix');
+      assert(!text.includes("label: '丢包 ' + networkQualityLossText(networkQuality)"), 'network loss visible label still includes text prefix');
       assert(text.includes('等待运行时网络质量样本'), 'latency no-sample tooltip not found');
       assert(text.includes('等待 WS 状态帧样本'), 'loss no-sample tooltip not found');
     });

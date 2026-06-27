@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.57
+// @version      0.4.58
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.57';
+  const BOOTSTRAP_VERSION = '0.4.58';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -1978,10 +1978,10 @@
       label: 'WS'
     }));
     actions.appendChild(createDot(networkQualityLatencyTitle(networkQuality), latencyColor, metricGlow(latencyColor, '13'), metricGlow(latencyColor, '45'), {
-      label: '延迟 ' + networkQualityLatencyText(networkQuality)
+      label: networkQualityLatencyText(networkQuality)
     }));
     actions.appendChild(createDot(networkQualityLossTitle(networkQuality), lossColor, metricGlow(lossColor, '13'), metricGlow(lossColor, '45'), {
-      label: '丢包 ' + networkQualityLossText(networkQuality),
+      label: networkQualityLossText(networkQuality),
       pending: Boolean(networkQuality?.stalled)
     }));
     if (remoteLogVisible) {
