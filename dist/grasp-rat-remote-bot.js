@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.237"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.238"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5619,6 +5619,21 @@ function hpDisplay(value) {
 	    return pieces.join('，');
 		  }
 
+  function markManualLoginBypass(reason = 'manual login', durationMs = 5000) {
+    try {
+      window.__graspRatManualLoginBypassUntil = Date.now() + Math.max(1000, Number(durationMs) || 5000);
+      window.__graspRatManualLoginBypassReason = String(reason || 'manual login');
+    } catch (_) {}
+  }
+
+  function manualLoginBypassActive() {
+    try {
+      return Number(window.__graspRatManualLoginBypassUntil || 0) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
   function nativeLoginEventControl(event) {
     const raw = event?.submitter || event?.target || null;
     const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
@@ -5632,6 +5647,11 @@ function hpDisplay(value) {
   function blockNativeLoginEventIfNeeded(event) {
     const control = nativeLoginEventControl(event);
     if (!control) return;
+    if (event?.isTrusted) {
+      markManualLoginBypass('trusted native login ' + String(event.type || 'event'));
+      return;
+    }
+    if (manualLoginBypassActive()) return;
     const gate = snapshotLoginGateStatus();
     if (loginSnapshotGateAllowsLogin(gate)) return;
     const point = gate.pointSafety || loginPointSafetyStatus();
@@ -5676,6 +5696,10 @@ function hpDisplay(value) {
     const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
     window.__graspRatBotRawStartLinuxDoLogin = previous;
     const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
+      if (manualLoginBypassActive()) {
+        if (typeof previous === 'function') return previous.apply(this, args);
+        return previous;
+      }
       const gate = snapshotLoginGateStatus();
       if (!loginSnapshotGateAllowsLogin(gate)) {
         const point = gate.pointSafety || loginPointSafetyStatus();
@@ -7875,11 +7899,12 @@ function hpDisplay(value) {
 
   async function maybeStartAutoLogin(reason, options = {}) {
     const force = Boolean(options.force || options.immediate || options.manual);
+    const manualOverride = Boolean(options.manualOverride || options.manual);
     const ignoreSuppress = Boolean(options.ignoreSuppress || force);
     const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
     const liveSessionTakeover = options.liveSessionTakeover || null;
     const allowLiveSessionTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && liveSessionTakeover?.allowed);
-    if (syncPausedFromPage()) {
+    if (syncPausedFromPage() && !manualOverride) {
       return {
         needed: false,
         attempted: false,
@@ -7892,7 +7917,7 @@ function hpDisplay(value) {
     }
     if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
     const t = Date.now();
-    if (exitAuditFlushPending()) {
+    if (exitAuditFlushPending() && !manualOverride) {
       const blocked = exitAuditFlushBlockDetail('login:' + (reason || ''));
       bot.exitAudit.lastBlockedLogin = blocked;
       flushCombatLogs(true);
@@ -7909,6 +7934,10 @@ function hpDisplay(value) {
 	        currentUserId: getCurrentUserId(),
 	        snapshotGate: snapshotLoginGateStatus()
 	      };
+    }
+    if (manualOverride && exitAuditFlushPending()) {
+      bot.exitAudit.lastManualLoginBypass = exitAuditFlushBlockDetail('manual-login:' + (reason || ''));
+      flushCombatLogs(true);
     }
     const userId = getCurrentUserId();
     const hasToken = Boolean(getSessionToken());
@@ -7942,7 +7971,7 @@ function hpDisplay(value) {
 	      } : null;
 	    }
 	    closeCurrentImportantSessionBeforeLogin('login-before-session-end:' + String(reason || 'login'));
-	    if (importantSessionEndFlushPending()) {
+	    if (importantSessionEndFlushPending() && !manualOverride) {
 	      const blocked = importantSessionEndFlushBlockDetail('login:' + (reason || ''));
 	      bot.importantLogging.lastBlockedLogin = blocked;
 	      return {
@@ -7959,6 +7988,9 @@ function hpDisplay(value) {
 	        snapshotGate: snapshotLoginGateStatus(),
 	        liveSessionTakeover
 	      };
+	    }
+	    if (manualOverride && importantSessionEndFlushPending()) {
+	      bot.importantLogging.lastManualLoginBypass = importantSessionEndFlushBlockDetail('manual-login:' + (reason || ''));
 	    }
 	    const suppressRemainingMs = loginSuppressRemainingMs();
     if (suppressRemainingMs > 0 && !ignoreSuppress) {
@@ -7993,11 +8025,17 @@ function hpDisplay(value) {
 	        liveSessionTakeover
 	      };
 	    }
-	    const snapshotGate = await ensureLoginSnapshotGate(reason, {
-	      allowLiveSessionTakeoverBypass,
-	      liveSessionTakeover
-	    });
-	    if (!loginSnapshotGateAllowsLogin(snapshotGate)) {
+	    const snapshotGate = manualOverride
+	      ? {
+	        ...snapshotLoginGateStatus(),
+	        blockReason: String(reason || 'manual login'),
+	        manualLoginBypass: true
+	      }
+	      : await ensureLoginSnapshotGate(reason, {
+	        allowLiveSessionTakeoverBypass,
+	        liveSessionTakeover
+	      });
+	    if (!manualOverride && !loginSnapshotGateAllowsLogin(snapshotGate)) {
 	      return {
 	        needed: true,
 	        attempted: false,
@@ -8022,6 +8060,7 @@ function hpDisplay(value) {
       currentUserId: userId,
 	      loginRequired,
 	      forced: force,
+	      manualLoginBypass: manualOverride,
 	      ignoredSuppressMs: ignoreSuppress ? Math.round(suppressRemainingMs) : 0,
 	      snapshotGate,
 	      liveSessionTakeover,
@@ -8032,12 +8071,18 @@ function hpDisplay(value) {
     };
     bot.lastLoginAt = t;
     try {
-      if (typeof startLinuxDoLogin === 'function') {
-        const result = startLinuxDoLogin();
+      const rawStartLinuxDoLogin = manualOverride && typeof window.__graspRatBotRawStartLinuxDoLogin === 'function'
+        ? window.__graspRatBotRawStartLinuxDoLogin
+        : null;
+      const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLogin === 'function' ? startLinuxDoLogin : null);
+      if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
+      if (typeof startLoginFn === 'function') {
+        const result = startLoginFn.call(window);
         if (result && typeof result.then === 'function') await result;
         detail.attempted = true;
-        detail.method = 'startLinuxDoLogin';
+        detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
       } else if (loginControl) {
+        if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
         loginControl.click();
         detail.attempted = true;
         detail.method = loginControl.id ? '#' + loginControl.id : (controlText(loginControl) || loginControl.tagName.toLowerCase());
@@ -8054,54 +8099,33 @@ function hpDisplay(value) {
 
 		  async function forceLoginNow(reason = 'panel immediate login') {
 		    const manualReason = String(reason || 'panel immediate login');
-		    const snapshotGate = await ensureLoginSnapshotGate(manualReason);
-		    const snapshotBlocked = !loginSnapshotGateAllowsLogin(snapshotGate);
+		    const snapshotGate = {
+		      ...snapshotLoginGateStatus(),
+		      blockReason: manualReason,
+		      manualLoginBypass: true
+		    };
 		    const currentSelf = getSelf();
-		    if (!snapshotBlocked && !(currentSelf && isAlive(currentSelf))) {
+		    if (!(currentSelf && isAlive(currentSelf))) {
 		      closeCurrentImportantSessionBeforeLogin('manual-login-before-session-end:' + manualReason);
 		    }
-		    const importantBlocked = !snapshotBlocked && importantSessionEndFlushPending();
-		    const cleared = snapshotBlocked
-		      ? {
-		        at: Date.now(),
-	        reason: manualReason,
-	        skipped: true,
-	        skipReason: 'snapshot-gate',
-	        snapshotGate
-	      }
-	      : exitAuditFlushPending()
-	      ? {
-	        at: Date.now(),
-	        reason: manualReason,
-        skipped: true,
-	        skipReason: 'exit-log-flush-pending',
-		        exitAuditFlush: exitAuditFlushBlockDetail('manual-login:' + manualReason)
-		      }
-		      : importantBlocked
-		      ? {
-		        at: Date.now(),
-		        reason: manualReason,
-	        skipped: true,
-	        skipReason: 'important-log-flush-pending',
-		        importantLogFlush: importantSessionEndFlushBlockDetail('manual-login:' + manualReason)
-		      }
-		      : clearCurrentReloginHold(manualReason);
+		    const cleared = clearCurrentReloginHold(manualReason);
+		    cleared.manualLoginBypass = true;
+		    cleared.snapshotGate = snapshotGate;
+		    if (exitAuditFlushPending()) {
+		      cleared.exitAuditFlush = exitAuditFlushBlockDetail('manual-login:' + manualReason);
+		      bot.exitAudit.lastManualLoginBypass = cleared.exitAuditFlush;
+		      flushCombatLogs(true);
+		    }
+		    if (importantSessionEndFlushPending()) {
+		      cleared.importantLogFlush = importantSessionEndFlushBlockDetail('manual-login:' + manualReason);
+		      bot.importantLogging.lastManualLoginBypass = cleared.importantLogFlush;
+		    }
 	    bot.lastLoginAt = 0;
-	    const login = snapshotBlocked
-	      ? {
-	        needed: true,
-	        attempted: false,
-	        reason: 'snapshot-gate',
-	        error: '',
-	        forced: true,
-	        snapshotGate,
-	        hasToken: Boolean(getSessionToken()),
-	        hasNativeSession: hasNativeGameSession(getNativeControl(), getCurrentUserId()),
-	        nativeWsReadyState: getNativeControl()?.wsReadyState ?? null,
-	        currentUserId: getCurrentUserId()
-	      }
-	      : await maybeStartAutoLogin(manualReason, {
+	    markManualLoginBypass(manualReason);
+	    const login = await maybeStartAutoLogin(manualReason, {
 	        force: true,
+	        manual: true,
+	        manualOverride: true,
 	        ignoreSuppress: true,
 	        ignoreLoginCooldown: true
 	      });
