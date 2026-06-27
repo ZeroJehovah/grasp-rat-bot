@@ -51,6 +51,14 @@ function latestDay(root) {
   return days[days.length - 1] || '';
 }
 
+function previousDay(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) return '';
+  const date = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
 function listJsonlFiles(dayDir) {
   if (!fs.existsSync(dayDir)) return [];
   const files = [];
@@ -93,6 +101,34 @@ function readEntries(dayDir) {
   }
   entries.sort((a, b) => a.__at - b.__at || String(a.__file).localeCompare(String(b.__file)) || a.__line - b.__line);
   return entries;
+}
+
+function readLastDeathCountEntry(dayDir) {
+  if (!fs.existsSync(dayDir)) return null;
+  let latest = null;
+  for (const file of listJsonlFiles(dayDir)) {
+    const lines = fs.readFileSync(file, 'utf8').split(/\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index].trim();
+      if (!line || !line.includes('"death_count"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.self || !Number.isFinite(Number(entry.self.death_count))) continue;
+        const at = Number(entry.at || entry.receivedAt || 0) || 0;
+        if (!latest || at >= latest.__at) {
+          latest = {
+            ...entry,
+            __file: path.relative(dayDir, file),
+            __line: index + 1,
+            __at: at
+          };
+        }
+      } catch {
+        // Ignore malformed historical lines; full report parsing records them for the current day.
+      }
+    }
+  }
+  return latest;
 }
 
 function number(value, fallback = 0) {
@@ -864,6 +900,12 @@ function buildReport(entries, options = {}) {
   attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
   const battleOutcomes = buildBattleOutcomes(sessionList, combatList);
   const battleTotals = battleOutcomeTotals(battleOutcomes);
+  const lifecycles = buildLifecycles(entries, {
+    previousEntries: options.previousEntries || [],
+    sessions: sessionList,
+    combats: combatList,
+    battleOutcomes
+  });
   const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
   const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
   const open = sessionList.filter(item => !number(item.exitAt));
@@ -874,6 +916,7 @@ function buildReport(entries, options = {}) {
     sessions: sessionList,
     combats: combatList,
     battleOutcomes,
+    lifecycles,
     totals: {
       sessions: sessionList.length,
       completed: completed.length,
@@ -907,6 +950,146 @@ function buildReport(entries, options = {}) {
       battleOutcomeStaminaSpentMs: battleTotals.staminaSpentMs
     }
   };
+}
+
+function deathCountSample(entry, current = true) {
+  const self = entry?.self && typeof entry.self === 'object' ? entry.self : null;
+  if (!self || !Number.isFinite(Number(self.death_count))) return null;
+  const at = number(entry.__at || entry.at || entry.receivedAt);
+  if (!at) return null;
+  return {
+    at,
+    current,
+    deathCount: Math.max(0, Math.round(Number(self.death_count))),
+    drop: optionalNonNegativeInteger(self.death_reward_preview ?? self.death_drop_coins ?? self.drop),
+    loss: optionalNonNegativeInteger(self.death_loss_preview),
+    totalLoss: optionalNonNegativeInteger(self.death_total_loss_preview),
+    hp: Number.isFinite(Number(self.hp)) ? Number(self.hp) : null,
+    file: entry.__file || '',
+    line: entry.__line || 0,
+    type: entry.type || ''
+  };
+}
+
+function sampleSort(a, b) {
+  return number(a.at) - number(b.at)
+    || (a.current === b.current ? 0 : (a.current ? 1 : -1))
+    || String(a.file || '').localeCompare(String(b.file || ''))
+    || number(a.line) - number(b.line);
+}
+
+function lifecycleDeathEvents(entries, previousEntries = []) {
+  const samples = [
+    ...(previousEntries || []).map(entry => deathCountSample(entry, false)).filter(Boolean),
+    ...(entries || []).map(entry => deathCountSample(entry, true)).filter(Boolean)
+  ].sort(sampleSort);
+  const events = [];
+  let previous = null;
+  for (const sample of samples) {
+    if (previous && sample.deathCount > previous.deathCount) {
+      events.push({
+        at: sample.at,
+        current: sample.current,
+        previous,
+        next: sample,
+        beforeCount: previous.deathCount,
+        afterCount: sample.deathCount,
+        deathCountIncrease: sample.deathCount - previous.deathCount,
+        drop: previous.drop,
+        loss: previous.loss,
+        totalLoss: previous.totalLoss
+      });
+    }
+    previous = sample;
+  }
+  return events;
+}
+
+function totalsForScope(sessions, combats, battleOutcomes) {
+  const sessionList = sessions || [];
+  const combatList = combats || [];
+  const outcomes = battleOutcomes || [];
+  const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
+  const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
+  const open = sessionList.filter(item => !number(item.exitAt));
+  const battleTotals = battleOutcomeTotals(outcomes);
+  return {
+    sessions: sessionList.length,
+    completed: completed.length,
+    inferred: inferred.length,
+    incomplete: open.length,
+    loginDurationMs: completed.reduce((sum, item) => sum + number(item.loginDurationMs), 0),
+    staminaSpentMs: completed.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
+    coinsGained: completed.reduce((sum, item) => sum + number(item.coinsGained), 0),
+    pureRefreshCoins: completed.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
+    killRewardCoins: completed.reduce((sum, item) => sum + number(item.killRewardCoins), 0),
+    attributedKillRewardCoins: completed.reduce((sum, item) => sum + number(item.attributedKillRewardCoins), 0),
+    unconfirmedKillDropCoins: completed.reduce((sum, item) => sum + number(item.unconfirmedKillDropCoins), 0),
+    rewardKillCount: completed.reduce((sum, item) => sum + number(item.rewardKillCount), 0),
+    afkKillCount: completed.reduce((sum, item) => sum + number(item.afkKillCount), 0),
+    afkKillRewardCoins: completed.reduce((sum, item) => sum + number(item.afkKillRewardCoins), 0),
+    afkUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedKillCount), 0),
+    afkUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedDropCoins), 0),
+    activeKillCount: completed.reduce((sum, item) => sum + number(item.activeKillCount), 0),
+    activeKillRewardCoins: completed.reduce((sum, item) => sum + number(item.activeKillRewardCoins), 0),
+    activeUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedKillCount), 0),
+    activeUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedDropCoins), 0),
+    combats: combatList.length,
+    combatDurationMs: combatList.reduce((sum, item) => sum + number(item.durationMs), 0),
+    combatStaminaSpentMs: combatList.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
+    battleOutcomes: battleTotals.count,
+    battleOutcomeKills: battleTotals.kills,
+    battleOutcomeFailures: battleTotals.failures,
+    battleOutcomeRewardCoins: battleTotals.rewardCoins,
+    battleOutcomeMissedDropCoins: battleTotals.missedDropCoins,
+    battleOutcomeFailedDropCoins: battleTotals.failedDropCoins,
+    battleOutcomeStaminaSpentMs: battleTotals.staminaSpentMs
+  };
+}
+
+function buildLifecycles(entries, options = {}) {
+  const currentSamples = (entries || []).map(entry => deathCountSample(entry, true)).filter(Boolean).sort(sampleSort);
+  if (!currentSamples.length) return [];
+  const deathEvents = lifecycleDeathEvents(entries, options.previousEntries || []).filter(event => event.current);
+  if (!deathEvents.length) return [];
+  const counts = [];
+  for (const sample of currentSamples) {
+    if (!counts.includes(sample.deathCount)) counts.push(sample.deathCount);
+  }
+  const firstByCount = new Map();
+  for (const sample of currentSamples) {
+    if (!firstByCount.has(sample.deathCount)) firstByCount.set(sample.deathCount, sample);
+  }
+  return counts.map((deathCount, index) => {
+    const startAt = number(firstByCount.get(deathCount)?.at);
+    const endingDeath = deathEvents.find(event => event.previous.current && event.beforeCount === deathCount) || null;
+    const previousBoundaryDeath = deathEvents.find(event => !event.previous.current && event.afterCount === deathCount) || null;
+    const endAt = endingDeath ? number(endingDeath.at) : Infinity;
+    const sessions = (options.sessions || []).filter(session => {
+      const at = number(session.loginAt);
+      return at >= startAt && at < endAt;
+    });
+    const combats = (options.combats || []).filter(combat => {
+      const at = number(combat.startedAt);
+      return at >= startAt && at < endAt;
+    });
+    const battleOutcomes = (options.battleOutcomes || []).filter(outcome => {
+      const at = number(outcome.startedAt);
+      return at >= startAt && at < endAt;
+    });
+    return {
+      index: index + 1,
+      deathCount,
+      startAt,
+      endAt: endingDeath ? number(endingDeath.at) : 0,
+      endingDeath,
+      previousBoundaryDeath,
+      sessions,
+      combats,
+      battleOutcomes,
+      totals: totalsForScope(sessions, combats, battleOutcomes)
+    };
+  });
 }
 
 function formatTime(ms) {
@@ -1281,56 +1464,109 @@ function battleOutcomeTotals(outcomes) {
   };
 }
 
-function printReport(report) {
-  console.log(`日期：${report.day || '-'}；日志文件：${report.files.length}；记录数：${report.entries}`);
-  console.log('');
-  console.log('## 登录统计');
+function sessionStatusText(session) {
+  return session.inferredExit
+    ? `推断收口：${verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence)}`
+    : session.incomplete && !number(session.exitAt)
+    ? (session.nextLoginAt ? `日志尚未收口：下一次登录在${formatDuration(session.nextLoginAt - number(session.loginAt))}后出现` : '日志尚未收口')
+    : verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence);
+}
+
+function printLoginSection(sessions, totals, heading = '## 登录统计') {
+  console.log(heading);
   console.log('说明：击杀列格式为确认次数/确认收益；疑似表示只有聊天或掉落值线索，未确认目标死亡或拾取，不计入总收益。');
   console.log('');
   console.log('| # | 登录时间 | 退出时间 | 耗时 | 消耗体力 | 拾取刷新金币 | 击杀挂机玩家 | 击杀活跃玩家 | 总收益 | 退出原因 |');
   console.log('|---:|---|---|---:|---:|---:|---:|---:|---:|---|');
-  report.sessions.forEach((session, index) => {
+  sessions.forEach((session, index) => {
     const exit = number(session.exitAt) ? formatTime(session.exitAt) : '未收口';
-    const status = session.inferredExit
-      ? `推断收口：${verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence)}`
-      : session.incomplete && !number(session.exitAt)
-      ? (session.nextLoginAt ? `日志尚未收口：下一次登录在${formatDuration(session.nextLoginAt - number(session.loginAt))}后出现` : '日志尚未收口')
-      : verboseExitText(session.exitReason, session.exitSummary, session.exitEvidence);
+    const status = sessionStatusText(session);
     console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins, session.afkUnconfirmedDropCoins, session.afkUnconfirmedKillCount)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins, session.activeUnconfirmedDropCoins, session.activeUnconfirmedKillCount)} | ${formatCoins(session.coinsGained)} | ${status} |`);
   });
   console.log('');
-  console.log(`登录合计：明确退出${report.totals.completed}/${report.totals.sessions}，推断收口${report.totals.inferred}，尚未收口${report.totals.incomplete}，总耗时${formatDuration(report.totals.loginDurationMs)}，消耗体力${formatStaminaSpent(report.totals.staminaSpentMs)}，拾取刷新金币${report.totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(report.totals.afkKillCount, report.totals.afkKillRewardCoins, report.totals.afkUnconfirmedDropCoins, report.totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(report.totals.activeKillCount, report.totals.activeKillRewardCoins, report.totals.activeUnconfirmedDropCoins, report.totals.activeUnconfirmedKillCount)}，总收益${report.totals.coinsGained}币`);
+  console.log(`登录合计：明确退出${totals.completed}/${totals.sessions}，推断收口${totals.inferred}，尚未收口${totals.incomplete}，总耗时${formatDuration(totals.loginDurationMs)}，消耗体力${formatStaminaSpent(totals.staminaSpentMs)}，拾取刷新金币${totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(totals.afkKillCount, totals.afkKillRewardCoins, totals.afkUnconfirmedDropCoins, totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(totals.activeKillCount, totals.activeKillRewardCoins, totals.activeUnconfirmedDropCoins, totals.activeUnconfirmedKillCount)}，总收益${totals.coinsGained}币`);
   console.log('');
-  console.log('## 实际战斗收益统计');
+}
+
+function printBattleOutcomeSection(battleOutcomes, totals, heading = '## 实际战斗收益统计') {
+  console.log(heading);
   console.log('说明：只统计确认击杀和失败/劣势离场；敌方逃离、目标切换、未交战安全避让不计入。收益只按已拾取的掉落金币计算，确认击杀但未拾取显示收益+0（未拾取）。');
   console.log('');
-  if (!report.battleOutcomes.length) {
+  if (!battleOutcomes.length) {
     console.log('无记录');
   } else {
     console.log('| # | 开始时间 | 结束时间 | 耗时 | 消耗体力 | 战斗对象 | 类别 | Drop | 结果 | 实际收益 |');
     console.log('|---:|---|---|---:|---:|---|---|---:|---|---|');
-    report.battleOutcomes.forEach((outcome, index) => {
+    battleOutcomes.forEach((outcome, index) => {
       console.log(`| ${index + 1} | ${formatTime(outcome.startedAt)} | ${formatTime(outcome.endedAt || outcome.startedAt)} | ${formatDuration(outcome.durationMs)} | ${formatOutcomeStamina(outcome.staminaSpentMs)} | ${formatOutcomeEnemy(outcome.enemy)} | ${playerCategoryText(outcome.playerCategory)} | ${formatOutcomeDrop(outcome.drop)} | ${outcome.status} | ${formatOutcomeReward(outcome)} |`);
     });
     console.log('');
-    console.log(`实际战斗收益合计：记录${report.totals.battleOutcomes}，确认击杀${report.totals.battleOutcomeKills}，失败/劣势离场${report.totals.battleOutcomeFailures}，已拾取收益${report.totals.battleOutcomeRewardCoins}币，确认击杀未拾取Drop${report.totals.battleOutcomeMissedDropCoins}币，失败未获Drop${report.totals.battleOutcomeFailedDropCoins}币，消耗体力${formatStaminaSpent(report.totals.battleOutcomeStaminaSpentMs)}`);
+    console.log(`实际战斗收益合计：记录${totals.battleOutcomes}，确认击杀${totals.battleOutcomeKills}，失败/劣势离场${totals.battleOutcomeFailures}，已拾取收益${totals.battleOutcomeRewardCoins}币，确认击杀未拾取Drop${totals.battleOutcomeMissedDropCoins}币，失败未获Drop${totals.battleOutcomeFailedDropCoins}币，消耗体力${formatStaminaSpent(totals.battleOutcomeStaminaSpentMs)}`);
   }
   console.log('');
-  console.log('## 活跃玩家战斗统计');
+}
+
+function printCombatSection(combats, totals, heading = '## 活跃玩家战斗统计') {
+  console.log(heading);
   console.log('说明：战斗结果先按互斥一级类别归类：胜利、失败、我方主动退出、敌方逃离、目标切换；冒号后是该类别下的触发原因或证据。敌方逃离包括目标脱离范围、突然消失、退出或传送；避开无敌目标属于安全移动，不计入本表。');
   console.log('');
-  if (!report.combats.length) {
+  if (!combats.length) {
     console.log('无记录');
   } else {
     console.log('| # | 战斗对象 | 开始时间 | 结束时间 | 耗时 | 消耗体力 | 我方血量变化 | 对方血量变化 | 战斗结果 |');
     console.log('|---:|---|---|---|---:|---:|---:|---:|---|');
-    report.combats.forEach((combat, index) => {
+    combats.forEach((combat, index) => {
       const endedAt = number(combat.endedAt) ? formatTime(combat.endedAt) : '未记录';
       console.log(`| ${index + 1} | ${formatEnemy(combat.enemy)} | ${formatTime(combat.startedAt)} | ${endedAt} | ${formatDuration(combat.durationMs)} | ${formatStaminaSpent(combat.staminaSpentMs)} | ${formatHpChange(combat.selfHpStart, combat.selfHpEnd, combat.selfHpDelta)} | ${formatHpChange(combat.enemyHpStart, combat.enemyHpEnd, combat.enemyHpDelta)} | ${resultText(combat.result, combat.resultReason, combat)} |`);
     });
     console.log('');
-    console.log(`战斗合计：次数${report.totals.combats}，总耗时${formatDuration(report.totals.combatDurationMs)}，消耗体力${formatStaminaSpent(report.totals.combatStaminaSpentMs)}`);
+    console.log(`战斗合计：次数${totals.combats}，总耗时${formatDuration(totals.combatDurationMs)}，消耗体力${formatStaminaSpent(totals.combatStaminaSpentMs)}`);
   }
+}
+
+function formatDeathLoss(event) {
+  if (!event) return '';
+  const countText = event.deathCountIncrease > 1
+    ? `死亡次数从${event.beforeCount}增至${event.afterCount}（增加${event.deathCountIncrease}）`
+    : `死亡次数从${event.beforeCount}增至${event.afterCount}`;
+  const sample = event.previous || {};
+  const sampleTime = sample.at ? `，死亡前最后记录${formatTime(sample.at)}` : '';
+  return `${countText}，确认时间${formatTime(event.at)}${sampleTime}，损失：爆出金币${formatOutcomeDrop(event.drop)}，额外扣除${formatOutcomeDrop(event.loss)}，合计${formatOutcomeDrop(number(event.drop) + number(event.loss))}`;
+}
+
+function printLifecycleSections(report) {
+  const lifecycles = report.lifecycles || [];
+  if (!lifecycles.length) return;
+  console.log('');
+  console.log('## 生命周期统计');
+  console.log('说明：检测到死亡次数记录后，按 `death_count` 生命周期分别重算上面的三张表；死亡损失取死亡次数增加前最后一条 self 记录中的 Drop 与 Loss。');
+  for (const lifecycle of lifecycles) {
+    console.log('');
+    console.log(`### 生命周期 ${lifecycle.index}（death_count=${lifecycle.deathCount}）`);
+    const rangeEnd = lifecycle.endAt ? formatTime(lifecycle.endAt) : '当日最后记录';
+    console.log(`范围：${formatTime(lifecycle.startAt)} 至 ${rangeEnd}`);
+    if (lifecycle.previousBoundaryDeath) {
+      console.log(`跨日死亡：${formatDeathLoss(lifecycle.previousBoundaryDeath)}`);
+    }
+    if (lifecycle.endingDeath) {
+      console.log(`本生命周期死亡损失：${formatDeathLoss(lifecycle.endingDeath)}`);
+    } else {
+      console.log('本生命周期未记录死亡收尾。');
+    }
+    console.log('');
+    printLoginSection(lifecycle.sessions, lifecycle.totals, '#### 登录统计');
+    printBattleOutcomeSection(lifecycle.battleOutcomes, lifecycle.totals, '#### 实际战斗收益统计');
+    printCombatSection(lifecycle.combats, lifecycle.totals, '#### 活跃玩家战斗统计');
+  }
+}
+
+function printReport(report) {
+  console.log(`日期：${report.day || '-'}；日志文件：${report.files.length}；记录数：${report.entries}`);
+  console.log('');
+  printLoginSection(report.sessions, report.totals);
+  printBattleOutcomeSection(report.battleOutcomes, report.totals);
+  printCombatSection(report.combats, report.totals);
+  printLifecycleSections(report);
 }
 
 function assertSelfTest(condition, message) {
@@ -1345,10 +1581,19 @@ function writeJsonl(file, entries) {
 function runSelfTest() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-daily-'));
   const day = '2026-06-13';
+  const previousDayName = '2026-06-12';
   const dayDir = path.join(root, day);
+  const previousDayDir = path.join(root, previousDayName);
   const s1 = 'session-a';
   const s2 = 'session-b';
   const s3 = 'session-d';
+  writeJsonl(path.join(previousDayDir, 'combat.jsonl'), [
+    {
+      type: 'combat-frame',
+      at: 500,
+      self: { id: 1, hp: 70, life: 'Alive', death_count: 0, death_reward_preview: 40, death_loss_preview: 20, death_total_loss_preview: 60 }
+    }
+  ]);
   writeJsonl(path.join(dayDir, 'important.jsonl'), [
     {
       type: 'important-log',
@@ -1430,6 +1675,31 @@ function runSelfTest() {
     }
   ]);
   writeJsonl(path.join(dayDir, 'combat.jsonl'), [
+    {
+      type: 'combat-frame',
+      at: 900,
+      self: { id: 1, hp: 100, life: 'Alive', death_count: 1, death_reward_preview: 10, death_loss_preview: 5, death_total_loss_preview: 15 }
+    },
+    {
+      type: 'combat-frame',
+      at: 4500,
+      self: { id: 1, hp: 40, life: 'Alive', death_count: 1, death_reward_preview: 22, death_loss_preview: 11, death_total_loss_preview: 33 }
+    },
+    {
+      type: 'combat-frame',
+      at: 8000,
+      self: { id: 1, hp: 100, life: 'Alive', death_count: 2, death_reward_preview: 3, death_loss_preview: 1, death_total_loss_preview: 4 }
+    },
+    {
+      type: 'combat-frame',
+      at: 25000,
+      self: { id: 1, hp: 30, life: 'Alive', death_count: 2, death_reward_preview: 15, death_loss_preview: 7, death_total_loss_preview: 22 }
+    },
+    {
+      type: 'combat-frame',
+      at: 29000,
+      self: { id: 1, hp: 100, life: 'Alive', death_count: 3, death_reward_preview: 1, death_loss_preview: 0, death_total_loss_preview: 1 }
+    },
     {
       type: 'important-log',
       importantType: 'session-end',
@@ -1609,7 +1879,7 @@ function runSelfTest() {
       }
     }
   ]);
-  const report = buildReport(readEntries(dayDir), { day });
+  const report = buildReport(readEntries(dayDir), { day, previousEntries: readEntries(previousDayDir) });
   assertSelfTest(report.sessions.length === 4, `expected 4 sessions, got ${report.sessions.length}`);
   assertSelfTest(report.sessions[0].exitAt === 5000, 'cross-file session-end was not merged');
   assertSelfTest(report.sessions[0].staminaSpentMs === 123000, 'cross-file stamina was not preserved');
@@ -1637,6 +1907,11 @@ function runSelfTest() {
   assertSelfTest(report.totals.battleOutcomeRewardCoins === 13, `expected 13 picked battle reward coins, got ${report.totals.battleOutcomeRewardCoins}`);
   assertSelfTest(report.totals.battleOutcomeMissedDropCoins === 30, 'unpicked confirmed kill drop was not tracked');
   assertSelfTest(report.totals.battleOutcomeFailedDropCoins === 11, 'failed battle drop exposure was not tracked');
+  assertSelfTest(report.lifecycles.length === 3, `expected 3 death-count lifecycles, got ${report.lifecycles.length}`);
+  assertSelfTest(report.lifecycles[0].previousBoundaryDeath?.drop === 40 && report.lifecycles[0].previousBoundaryDeath?.loss === 20, 'cross-day death-count transition did not preserve previous-day loss');
+  assertSelfTest(report.lifecycles[0].endingDeath?.drop === 22 && report.lifecycles[0].endingDeath?.loss === 11, 'lifecycle ending death loss did not use the last pre-death self sample');
+  assertSelfTest(report.lifecycles[0].sessions.length === 1 && report.lifecycles[0].sessions[0].sessionId === s1, 'first lifecycle did not get the expected session slice');
+  assertSelfTest(report.lifecycles[1].endingDeath?.drop === 15 && report.lifecycles[1].endingDeath?.loss === 7, 'second lifecycle death loss was not captured');
   const unpickedOutcome = report.battleOutcomes.find(item => item.enemy.name === 'unpicked-active-target');
   assertSelfTest(unpickedOutcome?.status === '确认击杀' && unpickedOutcome.rewardCoins === 0 && unpickedOutcome.rewardStatus === '未拾取', 'chat-confirmed unpicked kill was not rendered as confirmed zero-profit kill');
   assertSelfTest(unpickedOutcome?.staminaSpentMs === 600, 'standalone kill battle stamina was not preserved');
@@ -1664,6 +1939,9 @@ function runSelfTest() {
   assertSelfTest(lines.includes('| # | 开始时间 | 结束时间 | 耗时 | 消耗体力 | 战斗对象 | 类别 | Drop | 结果 | 实际收益 |'), 'actual battle outcome section did not render a table header');
   assertSelfTest(lines.some(line => /\| 1 \| .* \| .* \| .* \| .* \| .* \| .* \| \d+ \| .* \| .*币（/.test(line)), 'actual battle outcome section did not render table rows');
   assertSelfTest(!lines.some(line => /^- \d{2}:\d{2}:\d{2}-/.test(line)), 'actual battle outcome section still renders bullet rows');
+  assertSelfTest(lines.includes('## 生命周期统计'), 'death-count lifecycle section did not render');
+  assertSelfTest(lines.some(line => line.includes('跨日死亡') && line.includes('爆出金币40') && line.includes('额外扣除20')), 'cross-day lifecycle death loss did not render');
+  assertSelfTest(lines.some(line => line.includes('本生命周期死亡损失') && line.includes('爆出金币22') && line.includes('额外扣除11')), 'lifecycle death loss did not render');
   fs.rmSync(root, { recursive: true, force: true });
   console.log('日报自检通过');
 }
@@ -1677,7 +1955,10 @@ function main() {
   const day = options.day || latestDay(options.dir);
   if (!day) throw new Error(`No day directories found under ${options.dir}`);
   const dayDir = path.join(options.dir, day);
-  const report = buildReport(readEntries(dayDir), { day });
+  const previousDayDir = path.join(options.dir, previousDay(day));
+  const previousEntry = readLastDeathCountEntry(previousDayDir);
+  const previousEntries = previousEntry ? [previousEntry] : [];
+  const report = buildReport(readEntries(dayDir), { day, previousEntries });
   if (options.json) console.log(JSON.stringify(report, null, 2));
   else printReport(report);
 }
