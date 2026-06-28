@@ -8827,11 +8827,11 @@ function runSelfTest() {
       want: 'login-point-safety|'
     },
     {
-      name: 'login-point safety radius narrows only after healthy exit HP',
+      name: 'login-point safety radius uses 170m healthy and 300m unhealthy bands',
       got: (() => {
         const radiusFor = hp => {
-          const lowHpRadius = 60000;
-          const healthyRadius = 20000;
+          const lowHpRadius = 30000;
+          const healthyRadius = 17000;
           const threshold = 80;
           const n = hp === undefined || hp === null || hp === '' ? NaN : Number(hp);
           return Number.isFinite(n) && n >= threshold ? healthyRadius : lowHpRadius;
@@ -8842,7 +8842,7 @@ function runSelfTest() {
           radiusFor(null)
         ].join('|');
       })(),
-      want: '20000|60000|60000'
+      want: '17000|30000|30000'
     },
     {
       name: 'bootstrap login-point gate blocks fallback relogin only after a learned point',
