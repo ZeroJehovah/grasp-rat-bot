@@ -1642,6 +1642,16 @@ function main() {
     assert(combatLogSourceModule.includes('coinDiagnosticsHasLoggableEntry'), 'coin diagnostics log gate not found');
   });
 
+  check('target switch diagnostics expose final action focus changes', () => {
+    assert(sourceBot.includes('function recordActionSwitchDiagnostics'), 'target switch diagnostic recorder not found');
+    assert(sourceBot.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
+    assert(sourceBot.includes('action = recordActionSwitchDiagnostics(action, source);'), 'final action path does not record target switch diagnostics');
+    assert(sourceBot.includes('targetSwitch: snapshot'), 'target switch event is not attached to decisions');
+    assert(combatLogSourceModule.includes("type: 'target-switch'"), 'standalone target-switch log entry not found');
+    assert(combatLogSourceModule.includes('recordTargetSwitchLog(source, decision || {})'), 'target switch diagnostics are not recorded on each log tick');
+    assert(combatLogSourceModule.includes('targetSwitchDiagnosticSignature'), 'target switch log throttle signature not found');
+  });
+
   check('run-self-test module covers combat fire discipline self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
     assert(nodeSelfTestSource.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');

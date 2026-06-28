@@ -1289,6 +1289,58 @@ function combatLogSource(helpers = {}) {
         return true;
       }
 
+      function targetSwitchDiagnosticSignature(detail) {
+        if (!detail || typeof detail !== 'object') return '';
+        return [
+          detail?.from?.key || '',
+          detail?.to?.key || '',
+          detail?.to?.kind || '',
+          detail?.to?.reason || '',
+          detail?.oscillating ? 'oscillating' : 'single'
+        ].join('>');
+      }
+
+      function recordTargetSwitchLog(source, decision = bot.lastDecision) {
+        const state = bot.combatLogging;
+        if (!state?.enabled || !state.endpoint) return false;
+        const detail = decision?.targetSwitch || null;
+        if (!detail) return false;
+        const signature = targetSwitchDiagnosticSignature(detail);
+        const t = Date.now();
+        const minIntervalMs = Math.max(0, Number(cfg.targetSwitchLogMinIntervalMs || 1000) || 1000);
+        if (signature && signature === state.lastTargetSwitchDiagnosticsSignature && t - Number(state.lastTargetSwitchDiagnosticsAt || 0) < minIntervalMs) return false;
+        state.lastTargetSwitchDiagnosticsSignature = signature;
+        state.lastTargetSwitchDiagnosticsAt = t;
+        queueCombatLogEntry({
+          type: 'target-switch',
+          at: t,
+          perfNow: Math.round(now()),
+          tickCount: bot.tickCount,
+          source,
+          version: cfg.version,
+          sourceHash: cfg.sourceHash,
+          injectedBy: cfg.injectedBy,
+          url: location.href,
+          visibilityState: document.visibilityState || '',
+          decision: combatLogDecisionSummary(decision || {}),
+          target: decision?.target || null,
+          targetSwitch: detail,
+          targetSwitchDiagnostics: {
+            lastFocus: bot.targetSwitchDiagnostics?.lastFocus || null,
+            lastTargetFocus: bot.targetSwitchDiagnostics?.lastTargetFocus || null,
+            events: Array.isArray(bot.targetSwitchDiagnostics?.events) ? bot.targetSwitchDiagnostics.events.slice(-8) : []
+          },
+          opportunityChoice: bot.opportunityChoice || null,
+          opportunitySwitchLock: bot.opportunitySwitchLock || null,
+          lastTarget: bot.lastTarget || null,
+          safety: bot.lastSafety || null,
+          control: summarizeControl(),
+          runtime: combatLogRuntimeSummary(t),
+          globalState: combatLogGlobalStateSummary()
+        });
+        return true;
+      }
+
       function networkQualityDiagnosticSignature(summary) {
         if (!summary || typeof summary !== 'object') return '';
         const latency = Number(summary.displayLatencyMs);
@@ -1585,6 +1637,7 @@ function combatLogSource(helpers = {}) {
           state.endpoint = String(cfg.combatLogEndpoint || state.endpoint || 'http://127.0.0.1:18765/combat-log');
           if (!state.endpoint) return;
           recordCoinDiagnosticsLog(source, decision || {});
+          recordTargetSwitchLog(source, decision || {});
           recordNetworkQualityLog(source, decision || {});
           const suspendedReason = combatLogSuspendReason(decision || {});
           if (suspendedReason) {

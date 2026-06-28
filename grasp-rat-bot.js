@@ -636,6 +636,8 @@ function browserBotSource(config) {
       lastBuiltFrameAt: Number(preserved.combatLogging?.lastBuiltFrameAt || 0),
       lastCoinDiagnosticsAt: Number(preserved.combatLogging?.lastCoinDiagnosticsAt || 0),
       lastCoinDiagnosticsSignature: String(preserved.combatLogging?.lastCoinDiagnosticsSignature || ''),
+      lastTargetSwitchDiagnosticsAt: Number(preserved.combatLogging?.lastTargetSwitchDiagnosticsAt || 0),
+      lastTargetSwitchDiagnosticsSignature: String(preserved.combatLogging?.lastTargetSwitchDiagnosticsSignature || ''),
       lastFlushAt: 0,
       preBuffer: Array.isArray(preserved.combatLogging?.preBuffer) ? preserved.combatLogging.preBuffer : [],
       pending: Array.isArray(preserved.combatLogging?.pending) ? preserved.combatLogging.pending : [],
@@ -698,6 +700,12 @@ function browserBotSource(config) {
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    coinDiagnostics: null,
+	    targetSwitchDiagnostics: {
+	      lastFocus: preserved.targetSwitchDiagnostics?.lastFocus || null,
+	      lastTargetFocus: preserved.targetSwitchDiagnostics?.lastTargetFocus || null,
+	      lastSwitch: preserved.targetSwitchDiagnostics?.lastSwitch || null,
+	      events: Array.isArray(preserved.targetSwitchDiagnostics?.events) ? preserved.targetSwitchDiagnostics.events.slice(-24) : []
+	    },
 		    lastSelf: preserved.lastSelf || readPersistentLastSelfState() || null,
 		    lastSafety: null,
 			    actionThreats: [],
@@ -970,6 +978,7 @@ function browserBotSource(config) {
 	        },
 	        coinSources: this.lastCoinSourceSummary,
 	        coinDiagnostics: this.coinDiagnostics,
+	        targetSwitchDiagnostics: this.targetSwitchDiagnostics,
 			        globalState: {
 			          refreshedAt: this.globalState.refreshedAt,
 		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
@@ -11399,6 +11408,164 @@ ${importantLogSource()}
     };
   }
 
+  function targetSwitchHistoryLimit() {
+    return Math.max(4, Math.round(Number(cfg.targetSwitchDiagnosticsHistoryLimit || 24) || 24));
+  }
+
+  function targetSwitchOscillationWindowMs() {
+    return Math.max(1000, Math.round(Number(cfg.targetSwitchOscillationWindowMs || 10000) || 10000));
+  }
+
+  function roundedNullable(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.round(number) : null;
+  }
+
+  function actionPriorityBand(action) {
+    const kind = String(action?.kind || '');
+    if (kind === 'leave') return 'exit';
+    if (kind === 'flee') return 'safety';
+    if (kind === 'recover') return 'recover';
+    if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
+    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
+    if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';
+    if (kind === 'wait' || kind === 'idle') return 'wait';
+    return kind || 'action';
+  }
+
+  function actionFocusTargetType(action, target) {
+    const kind = String(action?.kind || '');
+    const reason = String(action?.reason || '');
+    if (kind === 'coin' || kind === 'seek-coin') return 'coin';
+    if (kind === 'patrol' && (String(reason).includes('coin') || target?.amount !== undefined)) return 'coin';
+    if (target?.coinRoute || target?.amount !== undefined || target?.fieldAmount !== undefined) return 'coin';
+    return 'enemy';
+  }
+
+  function actionFocusId(target, fallback = '') {
+    const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
+    if (id !== undefined && id !== null && id !== '') return String(id);
+    const name = target?.name || target?.label;
+    if (name) return 'name:' + String(name);
+    const x = Number(target?.x);
+    const y = Number(target?.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) return 'xy:' + Math.round(x) + ':' + Math.round(y);
+    return String(fallback || '');
+  }
+
+  function actionFocusSummary(action) {
+    if (!action || typeof action !== 'object') return null;
+    const kind = String(action.kind || '');
+    const reason = String(action.reason || '');
+    const band = actionPriorityBand(action);
+    const target = action.target && typeof action.target === 'object' ? action.target : null;
+    let type = '';
+    let id = '';
+    let label = '';
+    let targeted = false;
+    if (target) {
+      type = actionFocusTargetType(action, target);
+      id = actionFocusId(target, type);
+      label = String(target.name || target.label || id || '');
+      targeted = type === 'coin' || type === 'enemy';
+    } else if (kind === 'flee') {
+      const threat = Array.isArray(action.threats) ? action.threats[0] : null;
+      type = 'safety';
+      id = actionFocusId(threat, reason || kind);
+      label = String(threat?.name || threat?.label || id || reason || kind);
+    } else {
+      type = band || kind || 'action';
+      id = reason || kind || type;
+      label = id;
+    }
+    const score = Number(action.score ?? action.opportunityChoice?.score);
+    const staminaCost = Number(action.staminaCost ?? action.opportunityChoice?.staminaCost);
+    return {
+      key: String(type || 'action') + ':' + String(id || ''),
+      type,
+      id,
+      label,
+      kind,
+      reason,
+      band,
+      targeted,
+      score: Number.isFinite(score) ? Math.round(score) : null,
+      staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
+      priorityTier: roundedNullable(action.opportunityChoice?.priorityTier),
+      distance: roundedNullable(target?.distance),
+      amount: roundedNullable(target?.amount),
+      drop: roundedNullable(target?.drop),
+      hp: roundedNullable(target?.hp),
+      combat: Boolean(action.combat),
+      shoot: Boolean(action.shoot),
+      opportunisticShot: Boolean(action.opportunisticShot),
+      dx: roundedNullable(action.dx),
+      dy: roundedNullable(action.dy),
+      at: Date.now()
+    };
+  }
+
+  function ensureTargetSwitchDiagnostics() {
+    if (!bot.targetSwitchDiagnostics || typeof bot.targetSwitchDiagnostics !== 'object') {
+      bot.targetSwitchDiagnostics = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
+    }
+    if (!Array.isArray(bot.targetSwitchDiagnostics.events)) bot.targetSwitchDiagnostics.events = [];
+    return bot.targetSwitchDiagnostics;
+  }
+
+  function actionSwitchPairKey(a, b) {
+    return [String(a?.key || ''), String(b?.key || '')].sort().join('|');
+  }
+
+  function recordActionSwitchDiagnostics(action, source = '') {
+    const state = ensureTargetSwitchDiagnostics();
+    const current = actionFocusSummary(action);
+    const previous = state.lastFocus || null;
+    const previousTarget = state.lastTargetFocus || null;
+    const t = Date.now();
+    let nextAction = action;
+    if (previous && current && previous.key !== current.key && (previous.targeted || current.targeted)) {
+      const pairKey = actionSwitchPairKey(previous, current);
+      const windowMs = targetSwitchOscillationWindowMs();
+      const recentPair = state.events
+        .filter(item => item?.pairKey === pairKey && t - Number(item.at || 0) <= windowMs);
+      const reversed = recentPair.some(item => item?.from?.key === current.key && item?.to?.key === previous.key);
+      const targetChanged = Boolean(current.targeted && previousTarget && previousTarget.key !== current.key);
+      const targetChange = targetChanged ? {
+        from: previousTarget,
+        to: current,
+        ageMs: previousTarget.at ? Math.max(0, Math.round(t - Number(previousTarget.at || t))) : null
+      } : null;
+      const event = {
+        type: previous.targeted && current.targeted ? 'target-switch' : 'focus-switch',
+        at: t,
+        tickCount: bot.tickCount,
+        source: String(source || ''),
+        from: previous,
+        to: current,
+        targetChange,
+        pairKey,
+        pairSwitchCount: recentPair.length + 1,
+        oscillating: Boolean(reversed || recentPair.length + 1 >= 3),
+        previousDecision: bot.lastDecision ? {
+          kind: bot.lastDecision.kind || '',
+          reason: bot.lastDecision.reason || '',
+          target: bot.lastDecision.target || null,
+          score: roundedNullable(bot.lastDecision.score ?? bot.lastDecision.opportunityChoice?.score),
+          staminaCost: roundedNullable(bot.lastDecision.staminaCost ?? bot.lastDecision.opportunityChoice?.staminaCost)
+        } : null
+      };
+      const snapshot = safeJsonClone(event) || event;
+      state.events.push(snapshot);
+      while (state.events.length > targetSwitchHistoryLimit()) state.events.shift();
+      state.lastSwitch = snapshot;
+      nextAction = { ...action, targetSwitch: snapshot };
+    }
+    state.lastFocus = current;
+    if (current?.targeted) state.lastTargetFocus = current;
+    return nextAction;
+  }
+
   function setLastTarget(kind, id) {
     if (!id && id !== 0) return;
     if (!bot.lastTarget || bot.lastTarget.kind !== kind || String(bot.lastTarget.id) !== String(id)) {
@@ -12795,6 +12962,7 @@ ${importantLogSource()}
           pursuit: pursuitSummary
         };
 	      }
+	      action = recordActionSwitchDiagnostics(action, source);
 	      const canMove = true;
 	      const canAttack = true;
 	      if (!isSnapshotCoinWaitAction(action)) {
