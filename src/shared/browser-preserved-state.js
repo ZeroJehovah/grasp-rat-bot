@@ -16,6 +16,12 @@ function buildBrowserPreservedState(previousBot) {
     opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === 'object' ? { ...previousBot.opportunityChoice } : null,
     opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === 'object' ? { ...previousBot.opportunitySwitchLock } : null,
     opportunityAfkStamina: previousBot?.opportunityAfkStamina instanceof Map ? new Map(previousBot.opportunityAfkStamina) : new Map(),
+    targetSwitchDiagnostics: previousBot?.targetSwitchDiagnostics && typeof previousBot.targetSwitchDiagnostics === 'object'
+      ? {
+        ...previousBot.targetSwitchDiagnostics,
+        events: Array.isArray(previousBot.targetSwitchDiagnostics.events) ? previousBot.targetSwitchDiagnostics.events.slice(-24) : []
+      }
+      : null,
     pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
     lastLoginAt: Number(previousBot?.lastLoginAt || 0) || 0,
     lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
