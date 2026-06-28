@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.242`.
 - Latest manifest SHA-256: `3f489540b613d4b465e47946ae29f8b87f7d415c3c1e752d3c0bba56d678f278`.
-- Latest release commit: pending (`bootstrap-0.4.242` remove standalone snapshot connectivity relogin gate), previous release commit `83ce818` (`bootstrap-0.4.241` profit target stabilization).
+- Latest release commit: `8da748b` (`bootstrap-0.4.242` remove standalone snapshot connectivity relogin gate), previous release commit `83ce818` (`bootstrap-0.4.241` profit target stabilization).
 - Latest bootstrap A versions: Tampermonkey `0.4.59`, extension `0.1.38`.
 - Tampermonkey `0.4.59` and extension `0.1.38` remove the standalone `快照接口连通性` relogin row from the embedded panel. Relogin-related panel state now shows only cooldown and `登录点安全`; `/snapshot` errors still appear on the login-point safety row because they reset the 12-sample safe streak.
 - `bootstrap-0.4.242` removes the independent 3-success `/snapshot` connectivity condition from automatic relogin. `loginSnapshotGate` remains as the wrapper/status field and still probes `/snapshot` to advance learned login-point safety, but the gate is satisfied solely by `loginPointSafety.satisfied`: 12 consecutive safe `/snapshot` samples at the learned login coordinate. A `/snapshot` error or unsafe sample still resets login-point safety to `0/12`, so connectivity failures remain blocking through the 12-sample gate rather than through a separate `3/3` row. Live validation should confirm that once `登录点安全 12/12` is reached, automatic relogin is not additionally held by any `/snapshot` connectivity streak, and the panel no longer renders `快照接口连通性`.
