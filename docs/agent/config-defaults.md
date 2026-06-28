@@ -22,7 +22,6 @@
 - `networkQualityLogLatencyMs = 350`
 - `networkQualityLogLossPercent = 5`
 - `networkQualityLogStallMs = 1000`
-- `loginSnapshotSuccessRequired = 3`
 - `loginSnapshotProbeMinMs = 5000`
 - `loginPointSafetySuccessRequired = 12`
 - `loginPointSafetyRadius = 60000`

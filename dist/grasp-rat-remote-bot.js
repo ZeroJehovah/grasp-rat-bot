@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.241"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.242"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -458,7 +458,6 @@
     staminaExhaustionPostLoginGraceMs: 15000,
     staminaResetGraceMs: 10000,
     staminaBudgetReloginDelayMs: 1800000,
-    loginSnapshotSuccessRequired: 3,
     loginSnapshotProbeMinMs: 5000,
     loginPointSafetySuccessRequired: 12,
     loginPointSafetyRadius: 60000,
@@ -852,10 +851,9 @@
 			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
 			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
 
-		  function loginSnapshotSuccessRequired() {
-		    const raw = Number(cfg.loginSnapshotSuccessRequired ?? 3);
-		    return Math.max(0, Math.round(Number.isFinite(raw) ? raw : 3));
-		  }
+			  function loginSnapshotSuccessRequired() {
+			    return 0;
+			  }
 
 		  function normalizeLoginSnapshotGateState(state = null) {
 		    const required = loginSnapshotSuccessRequired();
@@ -2290,7 +2288,7 @@ function hpDisplay(value) {
       'paused': '手动暂停',
       'auto-login': '自动触发登录/加入',
       'login-cooldown': '登录已触发，等待页面跳转',
-	      'login-snapshot-gate': '等待snapshot连续成功',
+	      'login-snapshot-gate': '等待登录点安全快照',
 	      'login-control-missing': '等待登录控件出现',
 	      'session-mismatch-refresh': '界面显示未登录但原生会话仍在线，刷新确认状态',
 	      'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',
@@ -5583,12 +5581,12 @@ function hpDisplay(value) {
 	    if (state.streak > required) state.streak = required;
 	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
 	    const pointSafety = loginPointSafetyStatus(t);
-	    const snapshotConnectivitySatisfied = required <= 0 || state.streak >= required;
+	    const snapshotConnectivitySatisfied = true;
 	    const loginPointSafetySatisfied = Boolean(pointSafety.satisfied);
 	    return {
 	      ...state,
 	      lastSampleAt,
-	      satisfied: snapshotConnectivitySatisfied && loginPointSafetySatisfied,
+	      satisfied: loginPointSafetySatisfied,
 	      snapshotConnectivitySatisfied,
 	      loginPointSafetySatisfied,
 	      loginPointSafetyBlocked: !loginPointSafetySatisfied,
@@ -5651,7 +5649,6 @@ function hpDisplay(value) {
 	    const pointSafety = status.pointSafety || loginPointSafetyStatus();
 	    if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return 'login-point-missing';
 	    if (!pointSafety.satisfied) return 'login-point-safety';
-	    if (!status.snapshotConnectivitySatisfied) return 'snapshot-connectivity';
 	    return 'snapshot-gate';
 	  }
 
@@ -5705,12 +5702,7 @@ function hpDisplay(value) {
 	      if (pointSafety.lastError) pieces.push('最近错误：' + pointSafety.lastError);
 	      return pieces.join('，');
 	    }
-	    const pieces = [
-	      '等待snapshot连续成功',
-	      String(gate.streak || 0) + '/' + String(gate.required || 0)
-	    ];
-	    if (gate.lastError) pieces.push('最近错误：' + gate.lastError);
-	    return pieces.join('，');
+	    return '等待登录点安全快照';
 		  }
 
   function markManualLoginBypass(reason = 'manual login', durationMs = 5000) {
@@ -5920,14 +5912,11 @@ function hpDisplay(value) {
       totalMs: Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0)),
       until: 0
     };
-    const snapshotRequired = Math.max(0, Math.round(Number(snapshotGate.required || 0) || 0));
-    const snapshotStreak = Math.max(0, Math.min(snapshotRequired, Math.round(Number(snapshotGate.streak || 0) || 0)));
     const safetyRequired = Math.max(0, Math.round(Number(pointSafety.required || 0) || 0));
     const safetyStreak = Math.max(0, Math.min(safetyRequired, Math.round(Number(pointSafety.streak || 0) || 0)));
     return {
       satisfied: Boolean(
         Number(cooldown.remainingMs || 0) <= 0
-          && (snapshotRequired <= 0 || snapshotStreak >= snapshotRequired)
           && Boolean(pointSafety.satisfied)
       ),
       cooldown: {
@@ -5939,10 +5928,10 @@ function hpDisplay(value) {
         candidates: cooldowns.slice(0, 5)
       },
       snapshot: {
-        ok: snapshotRequired <= 0 || snapshotStreak >= snapshotRequired,
-        streak: snapshotStreak,
-        required: snapshotRequired,
-        remaining: Math.max(0, snapshotRequired - snapshotStreak),
+        ok: true,
+        streak: Math.max(0, Math.round(Number(snapshotGate.streak || 0) || 0)),
+        required: 0,
+        remaining: 0,
         lastSampleAgeMs: snapshotGate.lastSampleAgeMs ?? null,
         lastOkAgeMs: snapshotGate.lastOkAgeMs ?? null,
         lastErrorAgeMs: snapshotGate.lastErrorAgeMs ?? null,

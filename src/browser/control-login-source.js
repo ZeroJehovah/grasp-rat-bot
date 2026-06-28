@@ -1395,12 +1395,12 @@ function controlLoginSource(helpers = {}) {
 	    if (state.streak > required) state.streak = required;
 	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
 	    const pointSafety = loginPointSafetyStatus(t);
-	    const snapshotConnectivitySatisfied = required <= 0 || state.streak >= required;
+	    const snapshotConnectivitySatisfied = true;
 	    const loginPointSafetySatisfied = Boolean(pointSafety.satisfied);
 	    return {
 	      ...state,
 	      lastSampleAt,
-	      satisfied: snapshotConnectivitySatisfied && loginPointSafetySatisfied,
+	      satisfied: loginPointSafetySatisfied,
 	      snapshotConnectivitySatisfied,
 	      loginPointSafetySatisfied,
 	      loginPointSafetyBlocked: !loginPointSafetySatisfied,
@@ -1463,7 +1463,6 @@ function controlLoginSource(helpers = {}) {
 	    const pointSafety = status.pointSafety || loginPointSafetyStatus();
 	    if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return 'login-point-missing';
 	    if (!pointSafety.satisfied) return 'login-point-safety';
-	    if (!status.snapshotConnectivitySatisfied) return 'snapshot-connectivity';
 	    return 'snapshot-gate';
 	  }
 
@@ -1517,12 +1516,7 @@ function controlLoginSource(helpers = {}) {
 	      if (pointSafety.lastError) pieces.push('最近错误：' + pointSafety.lastError);
 	      return pieces.join('，');
 	    }
-	    const pieces = [
-	      '等待snapshot连续成功',
-	      String(gate.streak || 0) + '/' + String(gate.required || 0)
-	    ];
-	    if (gate.lastError) pieces.push('最近错误：' + gate.lastError);
-	    return pieces.join('，');
+	    return '等待登录点安全快照';
 		  }
 
   function markManualLoginBypass(reason = 'manual login', durationMs = 5000) {
@@ -1732,14 +1726,11 @@ function controlLoginSource(helpers = {}) {
       totalMs: Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0)),
       until: 0
     };
-    const snapshotRequired = Math.max(0, Math.round(Number(snapshotGate.required || 0) || 0));
-    const snapshotStreak = Math.max(0, Math.min(snapshotRequired, Math.round(Number(snapshotGate.streak || 0) || 0)));
     const safetyRequired = Math.max(0, Math.round(Number(pointSafety.required || 0) || 0));
     const safetyStreak = Math.max(0, Math.min(safetyRequired, Math.round(Number(pointSafety.streak || 0) || 0)));
     return {
       satisfied: Boolean(
         Number(cooldown.remainingMs || 0) <= 0
-          && (snapshotRequired <= 0 || snapshotStreak >= snapshotRequired)
           && Boolean(pointSafety.satisfied)
       ),
       cooldown: {
@@ -1751,10 +1742,10 @@ function controlLoginSource(helpers = {}) {
         candidates: cooldowns.slice(0, 5)
       },
       snapshot: {
-        ok: snapshotRequired <= 0 || snapshotStreak >= snapshotRequired,
-        streak: snapshotStreak,
-        required: snapshotRequired,
-        remaining: Math.max(0, snapshotRequired - snapshotStreak),
+        ok: true,
+        streak: Math.max(0, Math.round(Number(snapshotGate.streak || 0) || 0)),
+        required: 0,
+        remaining: 0,
         lastSampleAgeMs: snapshotGate.lastSampleAgeMs ?? null,
         lastOkAgeMs: snapshotGate.lastOkAgeMs ?? null,
         lastErrorAgeMs: snapshotGate.lastErrorAgeMs ?? null,

@@ -514,10 +514,9 @@ function browserBotSource(config) {
 			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
 			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
 
-		  function loginSnapshotSuccessRequired() {
-		    const raw = Number(cfg.loginSnapshotSuccessRequired ?? 3);
-		    return Math.max(0, Math.round(Number.isFinite(raw) ? raw : 3));
-		  }
+			  function loginSnapshotSuccessRequired() {
+			    return 0;
+			  }
 
 		  function normalizeLoginSnapshotGateState(state = null) {
 		    const required = loginSnapshotSuccessRequired();
