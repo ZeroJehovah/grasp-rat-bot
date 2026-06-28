@@ -1741,8 +1741,6 @@ function main() {
       assert(text.includes('if (remoteLogVisible) {'), 'remote-log dot is not hidden before endpoint configuration');
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
       assert(text.includes("label: 'Log'"), 'remote-log dot visible label not found');
-      assert(text.includes("minWidth: '64px'"), 'latency dot does not reserve four-digit width');
-      assert(text.includes("minWidth: '68px'"), 'loss dot does not reserve 00.00% width');
       assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');
       const loginBody = functionBody(text, 'syncEntityControlLogin');
       assert(text.includes('function reloginHoldRemainingFromStatus'), 'relogin hold inline-login helper not found');
@@ -1780,14 +1778,19 @@ function main() {
       assert(text.includes('onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })'), 'remote-log dot toggle not found');
       assert(text.includes("logDot.setAttribute('aria-pressed', String(remoteLogEnabled))"), 'remote-log dot aria-pressed not found');
     });
-    check(`${file} displays network quality latency/loss dots`, () => {
+    check(`${file} displays network quality latency/loss on the clock row`, () => {
       assert(text.includes('const networkQuality = status?.networkQuality || {}'), 'status.networkQuality source not found');
       assert(text.includes('function networkQualityLatencyText'), 'network latency formatter not found');
       assert(text.includes('function networkQualityLossText'), 'network loss formatter not found');
       assert(text.includes('function networkQualityLatencyTitle'), 'network latency tooltip not found');
       assert(text.includes('function networkQualityLossTitle'), 'network loss tooltip not found');
-      assert(text.includes('label: networkQualityLatencyText(networkQuality)'), 'network latency numeric dot label not found');
-      assert(text.includes('label: networkQualityLossText(networkQuality)'), 'network loss numeric dot label not found');
+      assert(text.includes('const appendClockNetworkLine = () => {'), 'clock/network row helper not found');
+      assert(text.includes("time.textContent = '当前时间：' + formatClockTime()"), 'current clock text is not rendered in the network row');
+      assert(text.includes("appendNetworkMetric('延迟', networkQualityLatencyText(networkQuality), latencyColor, networkQualityLatencyTitle(networkQuality), '48px')"), 'latency metric is not rendered on the clock row with reserved width');
+      assert(text.includes("appendNetworkMetric('丢包', networkQualityLossText(networkQuality), lossColor, networkQualityLossTitle(networkQuality), '50px')"), 'loss metric is not rendered on the clock row with reserved width');
+      assert(text.includes("text.style.cssText = 'display:inline-block;width:' + width + ';text-align:right;color:' + color"), 'network metric values are not fixed-width right-aligned');
+      assert(!text.includes('label: networkQualityLatencyText(networkQuality)'), 'network latency is still rendered as a header dot label');
+      assert(!text.includes('label: networkQualityLossText(networkQuality)'), 'network loss is still rendered as a header dot label');
       assert(!text.includes("label: '延迟 ' + networkQualityLatencyText(networkQuality)"), 'network latency visible label still includes text prefix');
       assert(!text.includes("label: '丢包 ' + networkQualityLossText(networkQuality)"), 'network loss visible label still includes text prefix');
       assert(text.includes("toFixed(2) + '%'"), 'network loss label does not reserve 00.00% precision');
@@ -1820,11 +1823,15 @@ function main() {
       assert(text.includes("value.textContent = String(metric.value ?? '-')"), 'metric value-only text not found');
       assert(!/textContent\s*=\s*String\(metric\.label/.test(text), 'metric label appears as visible textContent');
       assert(!/appendChild\(label\)/.test(text), 'metric label element append found');
-      assert(text.includes('function formatMetricPair'), 'metric a(b) formatter not found');
       assert(text.includes("const todaySession = status?.todaySession || {}"), 'today/session metric source not found');
-      assert(text.includes("label: '登录时间'"), 'login-time metric label not found');
-      assert(text.includes("label: '金币收益'"), 'coin-profit metric label not found');
-      assert(text.includes("label: '击杀次数'"), 'kill-count metric label not found');
+      assert(!text.includes('function formatMetricPair'), 'old a(b) metric formatter is still present');
+      assert(text.includes("label: '今日统计：登录时间'"), 'today login-time metric label not found');
+      assert(text.includes("label: '今日统计：金币收益'"), 'today coin-profit metric label not found');
+      assert(text.includes("label: '今日统计：击杀次数'"), 'today kill-count metric label not found');
+      assert(text.includes("label: '本次登录统计：登录时间'"), 'current-login time metric label not found');
+      assert(text.includes("label: '本次登录统计：金币收益'"), 'current-login coin-profit metric label not found');
+      assert(text.includes("label: '本次登录统计：击杀次数'"), 'current-login kill-count metric label not found');
+      assert(text.includes('value: formatDuration(todayUptimeMs)') && text.includes('value: formatDuration(sessionUptimeMs)'), 'today/current login time metrics are not split');
       assert(!text.includes("value: '+' + formatNumber(coinsGained"), 'coin-profit metric still renders a plus sign');
       assert(text.includes('status?.lastSelf || lastDailyStaminaSelf(status)'), 'panel stamina line does not fall back to last/today self state');
     });
@@ -1851,7 +1858,7 @@ function main() {
     });
     check(`${file} displays current clock and distinct action reason labels`, () => {
       assert(text.includes('function formatClockTime'), 'clock formatter not found');
-      assert(text.includes("appendLine('当前时间：' + formatClockTime()"), 'current clock line not rendered');
+      assert(text.includes('appendClockNetworkLine()'), 'current clock/network line not rendered');
       const requiredMappings = {
         'best-opportunity-coin-route': '综合收益最高：金币路线',
         'best-opportunity-visible-coin': '综合收益最高：前往可见金币',
