@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.39';
+  const BOOTSTRAP_VERSION = '0.1.40';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -855,10 +855,6 @@
     return formatNumber(Math.max(0, spent) / 1000, '0');
   }
 
-  function formatMetricPair(todayValue, sessionValue, formatter) {
-    return formatter(todayValue) + '(' + formatter(sessionValue) + ')';
-  }
-
   function reasonText(reason) {
     const map = {
       'active-threat-before-bullet-range': 'Active 玩家进入危险圈',
@@ -1025,13 +1021,6 @@
     if (n >= 80) return '#86efac';
     if (n >= 45) return '#fde68a';
     return '#fca5a5';
-  }
-
-  function metricGlow(color, alpha = '13') {
-    if (color === '#86efac') return 'rgba(52,211,153,.' + alpha + ')';
-    if (color === '#fde68a') return 'rgba(251,191,36,.' + alpha + ')';
-    if (color === '#fca5a5') return 'rgba(251,113,133,.' + alpha + ')';
-    return 'rgba(148,163,184,.' + alpha + ')';
   }
 
   function networkQualityLatencyText(summary) {
@@ -2001,6 +1990,33 @@
       appendParent.appendChild(grid);
       return grid;
     };
+    const appendClockNetworkLine = () => {
+      const line = document.createElement('div');
+      line.style.cssText = 'min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:nowrap;font-size:10.5px;line-height:1.34;margin:2px 0 0;color:#94a3b8;font-variant-numeric:tabular-nums;overflow:hidden';
+      const time = document.createElement('span');
+      time.textContent = '当前时间：' + formatClockTime();
+      time.style.cssText = 'flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8';
+      line.appendChild(time);
+      const appendNetworkMetric = (label, value, color, title, width) => {
+        const group = document.createElement('span');
+        group.title = title;
+        group.setAttribute('aria-label', title);
+        group.style.cssText = 'display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;min-width:0;white-space:nowrap;color:#94a3b8';
+        const name = document.createElement('span');
+        name.textContent = label;
+        name.style.cssText = 'color:#94a3b8';
+        const text = document.createElement('span');
+        text.textContent = value;
+        text.style.cssText = 'display:inline-block;width:' + width + ';text-align:right;color:' + color + ';font-weight:700;overflow:hidden;text-overflow:clip;white-space:nowrap';
+        group.appendChild(name);
+        group.appendChild(text);
+        line.appendChild(group);
+      };
+      appendNetworkMetric('延迟', networkQualityLatencyText(networkQuality), latencyColor, networkQualityLatencyTitle(networkQuality), '48px');
+      appendNetworkMetric('丢包', networkQualityLossText(networkQuality), lossColor, networkQualityLossTitle(networkQuality), '50px');
+      appendParent.appendChild(line);
+      return line;
+    };
     const appendSection = titleText => {
       const section = document.createElement('div');
       const first = !panel.firstChild;
@@ -2080,15 +2096,6 @@
     actions.appendChild(createDot(wsTitle, wsColor, control.wsOpen ? 'rgba(52,211,153,.13)' : (control.connecting ? 'rgba(251,191,36,.14)' : 'rgba(251,113,133,.13)'), control.wsOpen ? 'rgba(52,211,153,.45)' : (control.connecting ? 'rgba(251,191,36,.45)' : 'rgba(251,113,133,.45)'), {
       label: 'WS'
     }));
-    actions.appendChild(createDot(networkQualityLatencyTitle(networkQuality), latencyColor, metricGlow(latencyColor, '13'), metricGlow(latencyColor, '45'), {
-      label: networkQualityLatencyText(networkQuality),
-      minWidth: '64px'
-    }));
-    actions.appendChild(createDot(networkQualityLossTitle(networkQuality), lossColor, metricGlow(lossColor, '13'), metricGlow(lossColor, '45'), {
-      label: networkQualityLossText(networkQuality),
-      minWidth: '68px',
-      pending: Boolean(networkQuality?.stalled)
-    }));
     if (remoteLogVisible) {
       const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
         label: 'Log',
@@ -2114,7 +2121,7 @@
       { text: '远程脚本 ', style: 'color:#94a3b8' },
       { text: displayVersion(bVersion), style: 'color:#86efac;font-weight:700' }
     ], 'font-size:10.5px;margin:4px 0 0;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
-    appendLine('当前时间：' + formatClockTime(), 'font-size:10.5px;margin:2px 0 0;color:#94a3b8');
+    appendClockNetworkLine();
     appendSection();
     const hold = reloginHold;
     appendLine('当前行为：' + behaviorText(decision, status) + (hold > 0 ? '，等待重连：' + formatDuration(hold) : ''));
@@ -2153,10 +2160,14 @@
       const todayCoinsGained = Number(todaySession.coinsGained ?? coinsGained) || 0;
       const todayKills = Number(todaySession.kills ?? kills) || 0;
       appendMetricGrid([
-        { label: '登录时间', value: formatMetricPair(todayUptimeMs, sessionUptimeMs, formatDuration), color: '#e0f2fe' },
-        { label: '消耗体力', value: formatMetricPair(todayStaminaSpent, staminaSpent, formatStaminaSpentMs), color: Number(todayStaminaSpent || staminaSpent || 0) > 0 ? '#fde68a' : '#e0f2fe' },
-        { label: '金币收益', value: formatMetricPair(todayCoinsGained, coinsGained, value => formatNumber(value, '0')), color: todayCoinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
-        { label: '击杀次数', value: formatMetricPair(todayKills, kills, value => formatNumber(value, '0')), color: todayKills > 0 ? '#fde68a' : '#e0f2fe' }
+        { label: '今日统计：登录时间', value: formatDuration(todayUptimeMs), color: '#e0f2fe' },
+        { label: '今日统计：消耗体力', value: formatStaminaSpentMs(todayStaminaSpent), color: todayStaminaSpent > 0 ? '#fde68a' : '#e0f2fe' },
+        { label: '今日统计：金币收益', value: formatNumber(todayCoinsGained, '0'), color: todayCoinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
+        { label: '今日统计：击杀次数', value: formatNumber(todayKills, '0'), color: todayKills > 0 ? '#fde68a' : '#e0f2fe' },
+        { label: '本次登录统计：登录时间', value: formatDuration(sessionUptimeMs), color: '#e0f2fe' },
+        { label: '本次登录统计：消耗体力', value: formatStaminaSpentMs(staminaSpent), color: Number(staminaSpent || 0) > 0 ? '#fde68a' : '#e0f2fe' },
+        { label: '本次登录统计：金币收益', value: formatNumber(coinsGained, '0'), color: coinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
+        { label: '本次登录统计：击杀次数', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
       appendStaminaLine();
       if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
