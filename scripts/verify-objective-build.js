@@ -993,12 +993,11 @@ function main() {
       assert(text.includes('const anyPositiveNumber = (...values) => values.some(value => Number(value) > 0);'), 'invulnerable numeric aliases are not checked independently');
       assert(text.includes('invulnerableRemainingMs') && text.includes('invulnerable_remaining_ms'), 'invulnerable millisecond aliases are not recognized');
       assert(text.includes('function mergeThreatLists'), 'threat-list merge helper not found');
-      assert(text.includes('function isOrdinaryCoinActiveThreat'), 'ordinary Active coin threat helper not found');
       assert(body.includes('const highValueCoinThreats = mergeThreatLists('), 'high-value coin threat list is not kept separate from ordinary coin threats');
-      assert(body.includes('const ordinaryActiveCoinThreats = activeThreats.filter(isOrdinaryCoinActiveThreat)'), 'ordinary coin safety does not include realtime Active coin threats');
-      assert(/const coinThreats = mergeThreatLists\(\s*highValueCoinThreats,\s*ordinaryActiveCoinThreats\s*\)/.test(body), 'ordinary coin safety does not merge visible invulnerable and ordinary Active threats');
+      assert(body.includes('const coinThreats = highValueCoinThreats'), 'ordinary Active players can still enter coin threat filtering');
+      assert(!body.includes('ordinaryActiveCoinThreats'), 'ordinary Active coin threat list is still present in chooseAction');
       assert(body.includes('pickHighValueVisibleCoin(self, realtimeCoins, highValueCoinThreats'), 'high-value coin priority no longer uses the narrower threat list');
-      assert(text.includes('context.highValuePriorityCoin') && text.includes('context.ordinaryCoinThreats'), 'high-value coin priority does not detect ordinary Active coin-threat bypass cases');
+      assert(!text.includes('context.ordinaryCoinThreats'), 'high-value coin priority still contains ordinary Active coin-threat bypass logic');
       assert(body.includes('bot.actionThreats = coinThreats'), 'action threat diagnostics do not use merged coin threats');
       assert(body.includes('activeAvoidanceThreats: avoidanceThreats.length'), 'active avoidance threat count is not exposed separately');
       assert(body.includes('nearbyAvoidanceThreats: nearbyAvoidanceThreats.length'), 'nearby invulnerable avoidance count is not exposed');
@@ -1578,8 +1577,8 @@ function main() {
     assert(sourceBot.includes("'high-value-visible-coin-priority'"), 'high-value visible coin action reason not found');
     assert(nodeSelfTestSource.includes("name: 'low-drop active incoming bullet beats low-value coin inside attack range'"), 'low-drop incoming bullet combat self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low-drop active in range does not beat foot coin without incoming fire'"), 'low-drop no-incoming coin self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'ordinary one coin is blocked by realtime active coin threat'"), 'ordinary 1-coin Active-threat blocking self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'healthy high-value coin bypasses ordinary active coin threat'"), 'high-value coin ordinary Active bypass self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'ordinary one coin near realtime active remains selectable'"), 'ordinary 1-coin Active non-blocking self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'healthy high-value coin near realtime active uses normal opportunity path'"), 'high-value coin ordinary Active normal-path self-test not found');
     assert(nodeSelfTestSource.includes("name: 'healthy high-value visible coin beats active combat state'"), 'healthy high-value coin combat override self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp existing combat is not interrupted by high-value coin'"), 'low-HP combat high-value coin guard self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp no-threat high-value visible coin beats recovery wait'"), 'low-HP no-threat high-value coin self-test not found');
@@ -1617,7 +1616,7 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'same first coin route keeps overlay metadata when single coin roi is higher'"), 'same-first-coin route overlay self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route does not skip much closer local coin'"), 'coin route closer-first self-test not found');
     assert(nodeSelfTestSource.includes("name: 'visible afk drop still beats weaker coin route by stamina roi'"), 'AFK-vs-coin-route ROI self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'coin route leg threat block rejects path through active danger'"), 'coin route threat-block self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'coin route leg threat block rejects path through invulnerable danger'"), 'coin route invulnerable threat-block self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route rejects unaffordable whole route'"), 'coin route stamina budget self-test not found');
       assert(nodeSelfTestSource.includes("name: 'near realtime coin remains first target before known field route'"), 'near realtime coin first-target route self-test not found');
       assert(nodeSelfTestSource.includes('coinRoute?.legCount'), 'coin route metadata self-test assertion not found');
