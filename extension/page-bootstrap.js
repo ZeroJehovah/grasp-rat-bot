@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.38';
+  const BOOTSTRAP_VERSION = '0.1.39';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -685,12 +685,12 @@
       detail = null;
     }
     if (!detail || typeof detail !== 'object') return null;
-    const reloginUntil = Number(detail.reloginUntil || 0);
+    let reloginUntil = Number(detail.reloginUntil || 0);
     if (reloginUntil && reloginUntil <= t) {
-      try {
-        localStorage.removeItem(key);
-      } catch (_) {}
-      return null;
+      detail.reloginUntil = 0;
+      detail.holdRemainingMs = 0;
+      detail.reloginDelayMs = 0;
+      reloginUntil = 0;
     }
     if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
     const base = String(detail.summary || detail.exitSummary || detail.enemyLeaveSummary || detail.reason || '').trim();
@@ -816,6 +816,21 @@
       + suffix;
   }
 
+  function lastDailyStaminaSelf(status) {
+    const source = status?.todaySession || status?.session || {};
+    const remaining = Number(source.stamina1dLastRemaining);
+    const limit = Number(source.stamina1dLastLimit);
+    if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return null;
+    return {
+      stamina1d: remaining,
+      stamina1dLimit: limit,
+      stamina: {
+        stamina1d: remaining,
+        stamina1dLimit: limit
+      }
+    };
+  }
+
   function sessionStaminaSpentMs(session, self) {
     if (session && Object.prototype.hasOwnProperty.call(session, 'stamina1dSpentMs')) {
       const spent = Number(session.stamina1dSpentMs);
@@ -832,6 +847,16 @@
     const spent = sessionStaminaSpentMs(session, self);
     if (!Number.isFinite(Number(spent))) return '-';
     return formatNumber(Math.max(0, Number(spent)) / 1000, '0');
+  }
+
+  function formatStaminaSpentMs(value) {
+    const spent = Number(value);
+    if (!Number.isFinite(spent)) return '-';
+    return formatNumber(Math.max(0, spent) / 1000, '0');
+  }
+
+  function formatMetricPair(todayValue, sessionValue, formatter) {
+    return formatter(todayValue) + '(' + formatter(sessionValue) + ')';
   }
 
   function reasonText(reason) {
@@ -1016,7 +1041,7 @@
 
   function networkQualityLossText(summary) {
     const n = Number(summary?.lossPercent);
-    return Number.isFinite(n) ? Math.max(0, n).toFixed(1) + '%' : '-';
+    return Number.isFinite(n) ? Math.max(0, n).toFixed(2) + '%' : '-';
   }
 
   function networkQualityLatencyColor(summary) {
@@ -1845,7 +1870,8 @@
     syncEntityControlLogin(status);
     const decision = status?.lastDecision || null;
     const reasonDetail = state.cloudflareError?.displayReason || decisionReasonDetail(decision, status) || reasonText(decision?.reason);
-    const self = status?.self || decision?.self || null;
+    const todaySession = status?.todaySession || {};
+    const self = status?.self || decision?.self || status?.lastSelf || lastDailyStaminaSelf(status) || null;
     const safety = status?.safety || {};
     const control = status?.control || {};
     const manifest = readCachedManifest();
@@ -2002,6 +2028,7 @@
         'position:relative',
         'flex:0 0 auto',
         'width:auto',
+        'min-width:' + (options.minWidth || '0'),
         'height:24px',
         'box-sizing:border-box',
         'padding:' + (label ? '0 8px' : '0'),
@@ -2054,15 +2081,17 @@
       label: 'WS'
     }));
     actions.appendChild(createDot(networkQualityLatencyTitle(networkQuality), latencyColor, metricGlow(latencyColor, '13'), metricGlow(latencyColor, '45'), {
-      label: networkQualityLatencyText(networkQuality)
+      label: networkQualityLatencyText(networkQuality),
+      minWidth: '64px'
     }));
     actions.appendChild(createDot(networkQualityLossTitle(networkQuality), lossColor, metricGlow(lossColor, '13'), metricGlow(lossColor, '45'), {
       label: networkQualityLossText(networkQuality),
+      minWidth: '68px',
       pending: Boolean(networkQuality?.stalled)
     }));
     if (remoteLogVisible) {
       const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow, {
-        label: '日志',
+        label: 'Log',
         pending: remoteLogPending > 0 && !remoteLogHasFailure,
         onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })
       });
@@ -2118,11 +2147,16 @@
       const coinsGained = Number(session.coinsGained || 0) || 0;
       const kills = Number(session.kills || 0) || 0;
       const staminaSpent = sessionStaminaSpentMs(session, self);
+      const sessionUptimeMs = Number(session.uptimeMs ?? status.uptimeMs ?? 0) || 0;
+      const todayUptimeMs = Number(todaySession.uptimeMs ?? sessionUptimeMs) || 0;
+      const todayStaminaSpent = Number(todaySession.stamina1dSpentMs ?? staminaSpent ?? 0) || 0;
+      const todayCoinsGained = Number(todaySession.coinsGained ?? coinsGained) || 0;
+      const todayKills = Number(todaySession.kills ?? kills) || 0;
       appendMetricGrid([
-        { label: 'uptime', value: formatDuration(session.uptimeMs ?? status.uptimeMs), color: '#e0f2fe' },
-        { label: '消耗体力', value: formatStaminaSpent(session, self), color: Number(staminaSpent || 0) > 0 ? '#fde68a' : '#e0f2fe' },
-        { label: 'coins', value: '+' + formatNumber(coinsGained, '0'), color: coinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
-        { label: 'kills', value: formatNumber(kills, '0'), color: kills > 0 ? '#fde68a' : '#e0f2fe' }
+        { label: '登录时间', value: formatMetricPair(todayUptimeMs, sessionUptimeMs, formatDuration), color: '#e0f2fe' },
+        { label: '消耗体力', value: formatMetricPair(todayStaminaSpent, staminaSpent, formatStaminaSpentMs), color: Number(todayStaminaSpent || staminaSpent || 0) > 0 ? '#fde68a' : '#e0f2fe' },
+        { label: '金币收益', value: formatMetricPair(todayCoinsGained, coinsGained, value => formatNumber(value, '0')), color: todayCoinsGained > 0 ? '#a7f3d0' : '#e0f2fe' },
+        { label: '击杀次数', value: formatMetricPair(todayKills, kills, value => formatNumber(value, '0')), color: todayKills > 0 ? '#fde68a' : '#e0f2fe' }
       ]);
       appendStaminaLine();
       if (control.nativeReconnectChurn || Number(control.nativeReconnectEventCount || 0) > 0) {
