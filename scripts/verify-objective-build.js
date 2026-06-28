@@ -36,7 +36,6 @@ const NUMERIC_INVARIANTS = [
   { key: 'leaveCommandTimeoutMs', value: 10000 },
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
-  { key: 'loginSnapshotSuccessRequired', value: 3 },
   { key: 'sessionMismatchRecoveryReloadMaxAgeMs', value: 120000 },
   { key: 'pendingExitPersistMaxMs', value: 3600000 },
   { key: 'leaveSuccessReloadUnknownGraceMs', value: 12000 },
@@ -1231,7 +1230,7 @@ function main() {
       assert(clearBody.includes('clearLoginSuppressMatching'), '403 snapshot recovery does not clear login suppress');
       assert(clearBody.includes('clearPersistentExitState'), '403 snapshot recovery does not clear persistent hold state');
     });
-    check(`${file} gates relogin on consecutive snapshot success`, () => {
+    check(`${file} gates relogin on learned login-point safety`, () => {
       const gateBody = functionBody(text, 'ensureLoginSnapshotGate');
       assert(gateBody.includes('await refreshGlobalState(true)'), 'login snapshot gate does not actively probe snapshot');
       assert(!gateBody.includes('session-mismatch-recovery'), 'login snapshot gate still has a reason-based session mismatch bypass');
@@ -1240,11 +1239,14 @@ function main() {
       assert(gateBody.includes('options.liveSessionTakeover?.allowed'), 'login snapshot gate bypass is not tied to allowed live-session takeover state');
       assert(gateBody.includes('status.liveSessionTakeoverBypass = true'), 'login snapshot gate does not mark explicit live-session takeover bypasses');
       assert(gateBody.includes('allowTakeoverBypass && status.pointSafety?.satisfied'), 'login snapshot gate can mark takeover bypass before login-point safety is satisfied');
+      const statusBody = functionBody(text, 'snapshotLoginGateStatus');
+      assert(statusBody.includes('const snapshotConnectivitySatisfied = true'), 'snapshot connectivity streak can still block relogin');
+      assert(statusBody.includes('satisfied: loginPointSafetySatisfied'), 'login gate is not satisfied solely by login-point safety');
       const allowLoginBody = functionBody(text, 'loginSnapshotGateAllowsLogin');
       assert(allowLoginBody.includes('gate.pointSafety?.satisfied'), 'login gate bypass can skip login-point safety');
       const refreshBody = functionBody(text, 'refreshGlobalState');
-      assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not advance login gate');
-      assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login gate');
+      assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not update login-point safety probe');
+      assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login-point safety probe');
       assert(text.includes('function loginPointSafetyStatus'), 'login-point safety status helper not found');
       assert(text.includes('function evaluateLoginPointSafety'), 'login-point safety evaluator not found');
       assert(text.includes('function loginPointSafetyRadiusInfo'), 'login-point safety dynamic radius helper not found');
@@ -1319,6 +1321,7 @@ function main() {
       const reloginGateBody = functionBody(text, 'summarizeReloginGateStatus');
       assert(reloginGateBody.includes('cooldown') && reloginGateBody.includes('snapshot') && reloginGateBody.includes('loginPointSafety'), 'relogin gate summary does not include all gate dimensions');
       assert(reloginGateBody.includes('snapshotLoginGateStatus(t)') && reloginGateBody.includes('loginPointSafetyStatus(t)'), 'relogin gate summary does not reuse login snapshot / point safety gates');
+      assert(!reloginGateBody.includes('snapshotRequired <= 0 || snapshotStreak >= snapshotRequired'), 'relogin gate summary still requires the old snapshot connectivity streak');
     });
     check(`${file} leaves broken no-self game sessions`, () => {
       const snapshotSelfBody = functionBody(text, 'snapshotSelfPresenceState');
@@ -1832,7 +1835,7 @@ function main() {
       assert(text.includes('function reloginGateFromStatus(status)'), 'relogin gate status normalizer not found');
       assert(text.includes('function formatReloginGateDuration(ms)'), 'relogin gate duration formatter not found');
       assert(text.includes("text: '冷却时间: ' + formatReloginGateDuration(gate.cooldown.remainingMs) + ' / ' + formatReloginGateDuration(gate.cooldown.totalMs)"), 'cooldown gate row not rendered');
-      assert(text.includes("text: '快照接口连通性: ' + gate.snapshot.streak + ' / ' + gate.snapshot.required"), 'snapshot connectivity gate row not rendered');
+      assert(!text.includes("text: '快照接口连通性: ' + gate.snapshot.streak + ' / ' + gate.snapshot.required"), 'snapshot connectivity gate row is still rendered');
       assert(text.includes("text: '登录点安全: ' + gate.loginPointSafety.streak + ' / ' + gate.loginPointSafety.required"), 'login point safety gate row not rendered');
       assert(text.includes('if (reloginGateVisible(status, hold))'), 'relogin gate rows are not guarded by relogin visibility');
     });

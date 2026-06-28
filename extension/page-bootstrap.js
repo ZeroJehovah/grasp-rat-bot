@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.37';
+  const BOOTSTRAP_VERSION = '0.1.38';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -657,18 +657,12 @@
   function reloginGatePanelRows(status) {
     const gate = reloginGateFromStatus(status);
     const cooldownOk = gate.cooldown.remainingMs <= 0;
-    const snapshotOk = gate.snapshot.required <= 0 || gate.snapshot.streak >= gate.snapshot.required || gate.snapshot.ok;
     const pointOk = gate.loginPointSafety.required <= 0 || gate.loginPointSafety.ok;
     const rows = [
       {
         text: '冷却时间: ' + formatReloginGateDuration(gate.cooldown.remainingMs) + ' / ' + formatReloginGateDuration(gate.cooldown.totalMs),
         ok: cooldownOk,
         title: gate.cooldown.reason || gate.cooldown.source || 'login cooldown'
-      },
-      {
-        text: '快照接口连通性: ' + gate.snapshot.streak + ' / ' + gate.snapshot.required + (gate.snapshot.lastError ? '，错误 ' + gate.snapshot.lastError : ''),
-        ok: snapshotOk,
-        title: 'loginSnapshotGate'
       },
       {
         text: '登录点安全: ' + gate.loginPointSafety.streak + ' / ' + gate.loginPointSafety.required
@@ -935,7 +929,7 @@
       'leave-success-refresh-confirmation': '退出成功后刷新确认',
       'post-attack-drop-wait-position': '战斗后等待掉落刷新',
       'target-whitelisted': '目标在白名单内，跳过攻击',
-      'login-snapshot-gate': '等待 snapshot 连续成功',
+      'login-snapshot-gate': '等待登录点安全快照',
       'login-control-missing': '等待登录控件出现',
       'session-mismatch-refresh': '界面显示未登录但原生会话仍在线，刷新确认状态',
       'session-mismatch-recovery': '界面显示未登录但原生会话仍在线，等待安全恢复接管',

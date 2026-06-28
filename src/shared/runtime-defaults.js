@@ -377,7 +377,6 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     staminaExhaustionPostLoginGraceMs: 15000,
     staminaResetGraceMs: 10000,
     staminaBudgetReloginDelayMs: 1800000,
-    loginSnapshotSuccessRequired: 3,
     loginSnapshotProbeMinMs: 5000,
     loginPointSafetySuccessRequired: 12,
     loginPointSafetyRadius: 60000,
