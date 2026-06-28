@@ -40,11 +40,9 @@ const NUMERIC_INVARIANTS = [
   { key: 'pendingExitPersistMaxMs', value: 3600000 },
   { key: 'leaveSuccessReloadUnknownGraceMs', value: 12000 },
   { key: 'loginPointSafetySuccessRequired', value: 12 },
-  { key: 'loginPointSafetyRadius', value: 60000 },
-  { key: 'loginPointSafetyHealthyRadius', value: 20000 },
+  { key: 'loginPointSafetyRadius', value: 30000 },
+  { key: 'loginPointSafetyHealthyRadius', value: 17000 },
   { key: 'loginPointSafetyHealthyHpThreshold', value: 80 },
-  { key: 'loginPointSafetyMoveThreshold', value: 500 },
-  { key: 'loginPointSafetyDangerDropMin', value: 2 },
   { key: 'gameSessionNoSelfLeaveMs', value: 30000 },
   { key: 'nativeCoinAuthoritativeRadius', value: 50000 },
   { key: 'opportunityVisibleDistance', value: 50000 },
@@ -1283,12 +1281,16 @@ function main() {
       assert(!functionBody(text, 'resetLoginPointSafetyGate').includes('point = null'), 'login-point reset clears persisted point');
       assert(functionBody(text, 'resetLoginPointSafetyGate').includes('state.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null'), 'login-point reset does not record unknown exit HP as unknown');
       const pointDangerBody = functionBody(text, 'loginPointDangerReason');
+      const pointEvaluateBody = functionBody(text, 'evaluateLoginPointSafety');
       assert(pointDangerBody.includes("'damaged-self-today'"), 'login-point safety does not block known same-day damage actors');
-      assert(pointDangerBody.includes("dropValue(entity) >= minDrop"), 'login-point safety does not hard-block Drop danger');
       assert(pointDangerBody.includes("return 'active-mode'"), 'login-point safety does not block Active mode');
-      assert(pointDangerBody.includes("return 'recent-movement'"), 'login-point safety does not block recent movement');
-      assert(pointDangerBody.includes("return 'stamina-not-full'"), 'login-point safety does not block non-full 5s stamina');
-      assert(pointDangerBody.includes("return 'firing'"), 'login-point safety does not block firing evidence');
+      assert(!pointDangerBody.includes('dropValue(') && !pointDangerBody.includes("'drop'"), 'login-point safety still blocks by Drop value');
+      assert(!pointDangerBody.includes("return 'recent-movement'"), 'login-point safety still blocks recent movement');
+      assert(!pointDangerBody.includes("return 'stamina-not-full'"), 'login-point safety still blocks non-full 5s stamina');
+      assert(!pointDangerBody.includes("return 'firing'"), 'login-point safety still blocks firing evidence');
+      assert(!pointEvaluateBody.includes('loginPointEntityMoved'), 'login-point safety still samples movement for danger evidence');
+      assert(!pointEvaluateBody.includes('stamina5s'), 'login-point safety still attaches stamina evidence to danger blocks');
+      assert(pointProbeBody.includes('state.lastDanger = null'), 'snapshot failure does not clear stale player-danger block');
       const loginBody = functionBody(text, 'maybeStartAutoLogin');
       assert(loginBody.includes('await ensureLoginSnapshotGate(reason, {'), 'auto login does not pass explicit options to snapshot gate');
       assert(loginBody.includes('allowLiveSessionTakeoverBypass'), 'auto login does not thread live-session takeover bypass state');

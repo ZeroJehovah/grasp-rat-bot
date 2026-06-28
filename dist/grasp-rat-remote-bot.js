@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.244"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.245"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -471,12 +471,9 @@
     staminaBudgetReloginDelayMs: 1800000,
     loginSnapshotProbeMinMs: 5000,
     loginPointSafetySuccessRequired: 12,
-    loginPointSafetyRadius: 60000,
-    loginPointSafetyHealthyRadius: 20000,
+    loginPointSafetyRadius: 30000,
+    loginPointSafetyHealthyRadius: 17000,
     loginPointSafetyHealthyHpThreshold: 80,
-    loginPointSafetyMoveThreshold: 500,
-    loginPointSafetyDangerDropMin: 2,
-    loginPointSafetyStaminaFullRatio: 0.98,
     autoLogin: true,
     loginCooldownMs: 5000,
     postLoginGraceMs: 45000,
@@ -5207,11 +5204,11 @@ function hpDisplay(value) {
   }
 
   function loginPointSafetyLowHpRadius() {
-    return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 60000) || 60000);
+    return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 30000) || 30000);
   }
 
   function loginPointSafetyHealthyRadius() {
-    return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 20000) || 20000);
+    return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 17000) || 17000);
   }
 
   function loginPointSafetyRadiusInfo(state = null) {
@@ -5450,25 +5447,12 @@ function hpDisplay(value) {
     return moved || Boolean(state.movement[key].movedAt && t - Number(state.movement[key].movedAt || 0) <= 10 * 60 * 1000);
   }
 
-  function loginPointEntityStaminaUnsafe(entity) {
-    const remaining = finiteNumber(entity?.stamina_5s_remaining_milli, entity?.stamina5s);
-    const limit = finiteNumber(entity?.stamina_5s_limit_milli, entity?.stamina5sLimit, 10000);
-    if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return false;
-    const ratio = Math.max(0, Math.min(1, Number(cfg.loginPointSafetyStaminaFullRatio ?? 0.98) || 0.98));
-    return remaining < limit * ratio;
-  }
-
-  function loginPointDangerReason(state, entity, moved) {
+  function loginPointDangerReason(state, entity) {
     if (!entity || typeof entity !== 'object') return '';
     const damagedKeys = loginPointDamageActorKeys(state);
     const key = loginPointEntityKey(entity);
     if (key && damagedKeys.has(key)) return 'damaged-self-today';
-    const minDrop = Math.max(0, Number(cfg.loginPointSafetyDangerDropMin ?? 2) || 2);
-    if (dropValue(entity) >= minDrop) return 'drop';
     if (isJoinModeActive(entity)) return 'active-mode';
-    if (moved) return 'recent-movement';
-    if (loginPointEntityStaminaUnsafe(entity)) return 'stamina-not-full';
-    if (isFiringEntity(entity)) return 'firing';
     return '';
   }
 
@@ -5490,17 +5474,13 @@ function hpDisplay(value) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const distance = Math.hypot(x - Number(point.x), y - Number(point.y));
       if (!(distance <= radius)) continue;
-      const moved = loginPointEntityMoved(state, entity, t);
-      const reason = loginPointDangerReason(state, entity, moved);
+      const reason = loginPointDangerReason(state, entity);
       if (!reason) continue;
       return {
         safe: false,
         reason,
         danger: loginPointActorSummary(entity, {
-          distance: Math.round(distance),
-          moved: Boolean(moved),
-          stamina5s: finiteNumber(entity.stamina_5s_remaining_milli, entity.stamina5s),
-          stamina5sLimit: finiteNumber(entity.stamina_5s_limit_milli, entity.stamina5sLimit, 10000)
+          distance: Math.round(distance)
         })
       };
     }
@@ -5551,6 +5531,7 @@ function hpDisplay(value) {
       } else {
         state.lastErrorAt = t;
         state.lastError = String(detail.error || detail.message || 'snapshot failed');
+        state.lastDanger = null;
       }
     }
     writeLoginPointSafetyState(state);
