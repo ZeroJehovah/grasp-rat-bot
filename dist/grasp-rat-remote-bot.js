@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.242"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.243"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -27,6 +27,7 @@
 		      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
+	      const LAST_SELF_STATE_KEY = 'graspRatLastSelfState';
 	      const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
 		  function buildBrowserPreservedState(previousBot) {
   return {
@@ -34,6 +35,7 @@
     killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
     seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
     session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
+    lastSelf: previousBot?.lastSelf && typeof previousBot.lastSelf === 'object' ? { ...previousBot.lastSelf } : null,
     combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
     combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
     combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
@@ -644,6 +646,31 @@
 	    lastReason: preservedTargetWhitelistNames.length ? 'preserved' : 'empty'
 	  };
 
+	  function readPersistentLastSelfState(t = Date.now()) {
+	    let state = null;
+	    try {
+	      state = JSON.parse(localStorage.getItem(LAST_SELF_STATE_KEY) || 'null');
+	    } catch (_) {
+	      state = null;
+	    }
+	    if (!state || typeof state !== 'object') return null;
+	    const at = Number(state.at || state.updatedAt || 0) || 0;
+	    const maxAgeMs = Math.max(3600000, Number(cfg.lastSelfPersistMaxMs || 172800000) || 172800000);
+	    if (at && t - at > maxAgeMs) return null;
+	    const self = state.self && typeof state.self === 'object' ? state.self : state;
+	    return self && typeof self === 'object' ? { ...self } : null;
+	  }
+
+	  function writePersistentLastSelfState(selfSummary, t = Date.now()) {
+	    if (!selfSummary || typeof selfSummary !== 'object') return;
+	    try {
+	      localStorage.setItem(LAST_SELF_STATE_KEY, JSON.stringify({
+	        at: t,
+	        self: selfSummary
+	      }));
+	    } catch (_) {}
+	  }
+
 	  function readPersistentExitState(key, t = Date.now()) {
 	    let state = null;
 	    try {
@@ -654,8 +681,9 @@
 	    if (!state || typeof state !== 'object') return null;
 	    const reloginUntil = Number(state.reloginUntil || 0);
 	    if (reloginUntil && reloginUntil <= t) {
-	      clearPersistentExitState(key);
-	      return null;
+	      state.reloginUntil = 0;
+	      state.holdRemainingMs = 0;
+	      state.reloginDelayMs = 0;
 	    }
 	    return refreshExitDetail({ ...state, restored: true }, t);
 	  }
@@ -663,10 +691,11 @@
 	  function writePersistentExitState(key, detail) {
 	    if (!detail || typeof detail !== 'object') return;
 	    const t = Date.now();
-	    const reloginUntil = Number(detail.reloginUntil || 0);
+	    let reloginUntil = Number(detail.reloginUntil || 0);
 	    if (reloginUntil && reloginUntil <= t) {
-	      clearPersistentExitState(key);
-	      return;
+	      detail.reloginUntil = 0;
+	      detail.holdRemainingMs = 0;
+	      reloginUntil = 0;
 	    }
 	    const state = refreshExitDetail({
 	      at: Number(detail.at || t),
@@ -1007,7 +1036,7 @@
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    coinDiagnostics: null,
-	    lastSelf: null,
+		    lastSelf: preserved.lastSelf || readPersistentLastSelfState() || null,
 		    lastSafety: null,
 			    actionThreats: [],
 			    opportunityChoice: preserved.opportunityChoice,
@@ -1185,6 +1214,7 @@
       if (self) updateKillHistory(self);
 	      updateSessionStats(currentSelfSummary);
 	      const session = summarizeSessionStats(displaySelf);
+	      const todaySession = summarizeTodaySessionStats(session, displaySelf);
 	      const enemyLeaveDetail = activeEnemyLeaveDetail();
 	      const offlineLeaveDetail = activeOfflineLeaveDetail();
 	      const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
@@ -1245,7 +1275,9 @@
 		          lockRemainingMs: exitMotionLockRemainingMs
 		        },
 		        self: displaySelf,
-        session,
+		        lastSelf: displaySelf,
+	        session,
+	        todaySession,
         safety: this.lastSafety,
         attackHistory: this.attackHistory.slice(-10),
         killHistory: this.killHistory.slice(-10),
@@ -6399,12 +6431,10 @@ function hpDisplay(value) {
 	      if (storageReason === 'enemy leave') {
 	        bot.pursuitReloginUntil = 0;
 	        bot.lastEnemyLeaveWaitMs = 0;
-	        clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
 	        clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
 	      } else if (storageReason === 'offline leave') {
 	        bot.offlineReloginUntil = 0;
 	        bot.lastOfflineLeaveWaitMs = 0;
-	        clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
 	        clearLoginSuppressMatching(/offline.*leave/i);
 	      }
 	      if (detail) {
@@ -6423,8 +6453,13 @@ function hpDisplay(value) {
 	        detail.loginSuppressReason = '';
 	        detail.defensiveReloginDelaySkipped = true;
 	        finalizeLeaveDisplayReason(detail);
-	        if (storageReason === 'enemy leave') bot.lastEnemyLeaveResult = detail;
-	        else if (storageReason === 'offline leave') bot.lastOfflineLeaveResult = detail;
+	        if (storageReason === 'enemy leave') {
+	          bot.lastEnemyLeaveResult = detail;
+	          writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
+	        } else if (storageReason === 'offline leave') {
+	          bot.lastOfflineLeaveResult = detail;
+	          writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
+	        }
 	      }
 	      return 0;
 	    }
@@ -6568,12 +6603,12 @@ function hpDisplay(value) {
 		        detail.reloginDelayMs = 0;
 		        detail.safeReloginAllowed = !unsafeOfflineExit;
 		        if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true;
-		        detail.loginSuppressReason = '';
-		        finalizeLeaveDisplayReason(detail);
-		        bot.lastOfflineLeaveResult = detail;
-		      }
-		      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-		      return 0;
+			        detail.loginSuppressReason = '';
+			        finalizeLeaveDisplayReason(detail);
+			        bot.lastOfflineLeaveResult = detail;
+			        writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
+			      }
+			      return 0;
 		    }
 		    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
 		      existingUntil: bot.offlineReloginUntil,
@@ -6615,12 +6650,11 @@ function hpDisplay(value) {
         bot.pursuitReloginUntil = suppressUntil;
       }
     } catch (_) {}
-    const remaining = Math.max(0, until - Date.now());
-    if (!remaining && bot.pursuitReloginUntil) {
-      bot.pursuitReloginUntil = 0;
-      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-    }
-    return Math.round(remaining);
+	    const remaining = Math.max(0, until - Date.now());
+	    if (!remaining && bot.pursuitReloginUntil) {
+	      bot.pursuitReloginUntil = 0;
+	    }
+	    return Math.round(remaining);
   }
 
   function offlineReloginHoldRemainingMs() {
@@ -6647,11 +6681,10 @@ function hpDisplay(value) {
       clearOfflineReloginHold('stale offline suppress contradicted by known stamina');
       return 0;
     }
-    const remaining = Math.max(0, until - Date.now());
-    if (!remaining && bot.offlineReloginUntil) {
-      bot.offlineReloginUntil = 0;
-      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-    }
+	    const remaining = Math.max(0, until - Date.now());
+	    if (!remaining && bot.offlineReloginUntil) {
+	      bot.offlineReloginUntil = 0;
+	    }
     return Math.round(remaining);
   }
 
@@ -9482,6 +9515,7 @@ function hpDisplay(value) {
     updateSessionStaminaStats(session, selfSummary, t);
     const killCount = bot.killHistory.filter(item => Number(item?.at || 0) >= Number(session.startedAt || 0)).length;
     session.kills = Math.max(Math.max(0, Number(session.kills || 0) || 0), killCount);
+    if (typeof writePersistentLastSelfState === 'function') writePersistentLastSelfState(selfSummary, t);
   }
 
   function summarizeSessionStats(selfSummary) {
@@ -9505,6 +9539,85 @@ function hpDisplay(value) {
       combatLogFailed: Math.max(0, Math.round((Number(bot.combatLogging?.failed || 0) || 0) - (Number(session.combatLogFailedBase || 0) || 0))),
       userId: session.userId ?? null
     };
+  }
+
+  function readTodaySessionRecords(dayStart) {
+    try {
+      if (typeof readImportantLogsStore !== 'function') return [];
+      const store = readImportantLogsStore();
+      const sessions = Array.isArray(store?.sessions) ? store.sessions : [];
+      return sessions.filter(record => Number(record?.loginAt || 0) >= dayStart);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function maybeSetLatestTodayStamina(out, record, latestAtRef) {
+    const stamp = Math.max(
+      Number(record?.updatedAt || 0) || 0,
+      Number(record?.exitAt || 0) || 0,
+      Number(record?.loginAt || 0) || 0
+    );
+    if (stamp < latestAtRef.value) return;
+    const remaining = Number(record?.stamina1dLastRemaining);
+    const limit = Number(record?.stamina1dLastLimit);
+    if (!Number.isFinite(remaining)) return;
+    out.stamina1dLastRemaining = remaining;
+    out.stamina1dLastLimit = Number.isFinite(limit) && limit > 0 ? limit : null;
+    latestAtRef.value = stamp;
+  }
+
+  function addTodaySessionRecord(out, record, latestAtRef) {
+    out.uptimeMs += Math.max(0, Math.round(Number(record?.loginDurationMs || 0) || 0));
+    out.stamina1dSpentMs += Math.max(0, Math.round(Number(record?.staminaSpentMs || 0) || 0));
+    out.coinsGained += Math.max(0, Math.round(Number(record?.coinsGained || 0) || 0));
+    out.coinPickupTotal += Math.max(0, Math.round(Number(record?.pickedCoins || record?.coinPickupTotal || 0) || 0));
+    out.kills += Math.max(0, Math.round(Number(record?.killCount || 0) || 0));
+    out.sessionCount += 1;
+    maybeSetLatestTodayStamina(out, record, latestAtRef);
+  }
+
+  function summarizeTodaySessionStats(sessionSummary = null, selfSummary = null, t = Date.now()) {
+    const dayStart = dailyStaminaWindowStartAt(t);
+    const out = {
+      dayStartedAt: dayStart,
+      uptimeMs: 0,
+      stamina1dSpentMs: 0,
+      coinsGained: 0,
+      coinPickupTotal: 0,
+      kills: 0,
+      sessionCount: 0,
+      stamina1dLastRemaining: null,
+      stamina1dLastLimit: null
+    };
+    const latestStaminaAt = { value: 0 };
+    const currentSessionId = String(bot.session?.importantSessionId || '');
+    for (const record of readTodaySessionRecords(dayStart)) {
+      if (currentSessionId && String(record?.sessionId || '') === currentSessionId) continue;
+      addTodaySessionRecord(out, record, latestStaminaAt);
+    }
+    const startedAt = Number(sessionSummary?.startedAt || 0) || 0;
+    if (startedAt >= dayStart) {
+      out.uptimeMs += Math.max(0, Math.round(Number(sessionSummary?.uptimeMs || 0) || 0));
+      out.stamina1dSpentMs += Math.max(0, Math.round(Number(sessionSummary?.stamina1dSpentMs || 0) || 0));
+      out.coinsGained += Math.max(0, Math.round(Number(sessionSummary?.coinsGained || 0) || 0));
+      out.coinPickupTotal += Math.max(0, Math.round(Number(sessionSummary?.coinPickupTotal || 0) || 0));
+      out.kills += Math.max(0, Math.round(Number(sessionSummary?.kills || 0) || 0));
+      out.sessionCount += 1;
+      maybeSetLatestTodayStamina(out, {
+        updatedAt: t,
+        loginAt: startedAt,
+        stamina1dLastRemaining: sessionSummary?.stamina1dLastRemaining,
+        stamina1dLastLimit: sessionSummary?.stamina1dLastLimit
+      }, latestStaminaAt);
+    }
+    const selfRemaining = Number(selfSummary?.stamina1d ?? selfSummary?.stamina?.stamina1d);
+    const selfLimit = Number(selfSummary?.stamina1dLimit ?? selfSummary?.stamina?.stamina1dLimit);
+    if (Number.isFinite(selfRemaining)) {
+      out.stamina1dLastRemaining = selfRemaining;
+      out.stamina1dLastLimit = Number.isFinite(selfLimit) && selfLimit > 0 ? selfLimit : out.stamina1dLastLimit;
+    }
+    return out;
   }
 
   function pushBounded(list, item, max) {

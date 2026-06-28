@@ -1429,7 +1429,7 @@ function main() {
       assert(body.includes('const unsafeOfflineExit = offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'offline zero-hold path does not preserve unsafe classification');
       assert(body.includes('detail.safeReloginAllowed = !unsafeOfflineExit'), 'safe offline relogin marker is not limited to safe exits');
       assert(body.includes('if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true'), 'unsafe offline zero-hold path is not marked');
-      assert(body.includes('clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'safe offline path does not clear persistent hold state');
+      assert(body.includes('writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail)'), 'safe offline path does not preserve last exit detail');
       assert(body.includes('return 0'), 'safe offline path does not return without suppress');
     });
     check(`${file} clears stale enemy relogin hold after online recovery`, () => {
@@ -1740,7 +1740,9 @@ function main() {
       assert(text.includes('const remoteLogVisible = Boolean(cfg.combatLogEndpointConfigured)'), 'remote-log visibility gate not found');
       assert(text.includes('if (remoteLogVisible) {'), 'remote-log dot is not hidden before endpoint configuration');
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
-      assert(text.includes("label: '日志'"), 'remote-log dot visible label not found');
+      assert(text.includes("label: 'Log'"), 'remote-log dot visible label not found');
+      assert(text.includes("minWidth: '64px'"), 'latency dot does not reserve four-digit width');
+      assert(text.includes("minWidth: '68px'"), 'loss dot does not reserve 00.00% width');
       assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');
       const loginBody = functionBody(text, 'syncEntityControlLogin');
       assert(text.includes('function reloginHoldRemainingFromStatus'), 'relogin hold inline-login helper not found');
@@ -1788,6 +1790,7 @@ function main() {
       assert(text.includes('label: networkQualityLossText(networkQuality)'), 'network loss numeric dot label not found');
       assert(!text.includes("label: '延迟 ' + networkQualityLatencyText(networkQuality)"), 'network latency visible label still includes text prefix');
       assert(!text.includes("label: '丢包 ' + networkQualityLossText(networkQuality)"), 'network loss visible label still includes text prefix');
+      assert(text.includes("toFixed(2) + '%'"), 'network loss label does not reserve 00.00% precision');
       assert(text.includes('等待运行时网络质量样本'), 'latency no-sample tooltip not found');
       assert(text.includes('等待 WS 状态帧样本'), 'loss no-sample tooltip not found');
     });
@@ -1817,6 +1820,13 @@ function main() {
       assert(text.includes("value.textContent = String(metric.value ?? '-')"), 'metric value-only text not found');
       assert(!/textContent\s*=\s*String\(metric\.label/.test(text), 'metric label appears as visible textContent');
       assert(!/appendChild\(label\)/.test(text), 'metric label element append found');
+      assert(text.includes('function formatMetricPair'), 'metric a(b) formatter not found');
+      assert(text.includes("const todaySession = status?.todaySession || {}"), 'today/session metric source not found');
+      assert(text.includes("label: '登录时间'"), 'login-time metric label not found');
+      assert(text.includes("label: '金币收益'"), 'coin-profit metric label not found');
+      assert(text.includes("label: '击杀次数'"), 'kill-count metric label not found');
+      assert(!text.includes("value: '+' + formatNumber(coinsGained"), 'coin-profit metric still renders a plus sign');
+      assert(text.includes('status?.lastSelf || lastDailyStaminaSelf(status)'), 'panel stamina line does not fall back to last/today self state');
     });
     check(`${file} formats stamina as second-scale remaining/limit values`, () => {
       const body = functionBody(text, 'formatStamina');

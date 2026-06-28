@@ -267,6 +267,7 @@ function browserBotSource(config) {
 		      const ENEMY_LEAVE_STREAK_KEY = 'graspRatEnemyLeaveStreak';
 	      const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
+	      const LAST_SELF_STATE_KEY = 'graspRatLastSelfState';
 	      const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
 		  ${buildBrowserPreservedState.toString()}
 
@@ -307,6 +308,31 @@ function browserBotSource(config) {
 	    lastReason: preservedTargetWhitelistNames.length ? 'preserved' : 'empty'
 	  };
 
+	  function readPersistentLastSelfState(t = Date.now()) {
+	    let state = null;
+	    try {
+	      state = JSON.parse(localStorage.getItem(LAST_SELF_STATE_KEY) || 'null');
+	    } catch (_) {
+	      state = null;
+	    }
+	    if (!state || typeof state !== 'object') return null;
+	    const at = Number(state.at || state.updatedAt || 0) || 0;
+	    const maxAgeMs = Math.max(3600000, Number(cfg.lastSelfPersistMaxMs || 172800000) || 172800000);
+	    if (at && t - at > maxAgeMs) return null;
+	    const self = state.self && typeof state.self === 'object' ? state.self : state;
+	    return self && typeof self === 'object' ? { ...self } : null;
+	  }
+
+	  function writePersistentLastSelfState(selfSummary, t = Date.now()) {
+	    if (!selfSummary || typeof selfSummary !== 'object') return;
+	    try {
+	      localStorage.setItem(LAST_SELF_STATE_KEY, JSON.stringify({
+	        at: t,
+	        self: selfSummary
+	      }));
+	    } catch (_) {}
+	  }
+
 	  function readPersistentExitState(key, t = Date.now()) {
 	    let state = null;
 	    try {
@@ -317,8 +343,9 @@ function browserBotSource(config) {
 	    if (!state || typeof state !== 'object') return null;
 	    const reloginUntil = Number(state.reloginUntil || 0);
 	    if (reloginUntil && reloginUntil <= t) {
-	      clearPersistentExitState(key);
-	      return null;
+	      state.reloginUntil = 0;
+	      state.holdRemainingMs = 0;
+	      state.reloginDelayMs = 0;
 	    }
 	    return refreshExitDetail({ ...state, restored: true }, t);
 	  }
@@ -326,10 +353,11 @@ function browserBotSource(config) {
 	  function writePersistentExitState(key, detail) {
 	    if (!detail || typeof detail !== 'object') return;
 	    const t = Date.now();
-	    const reloginUntil = Number(detail.reloginUntil || 0);
+	    let reloginUntil = Number(detail.reloginUntil || 0);
 	    if (reloginUntil && reloginUntil <= t) {
-	      clearPersistentExitState(key);
-	      return;
+	      detail.reloginUntil = 0;
+	      detail.holdRemainingMs = 0;
+	      reloginUntil = 0;
 	    }
 	    const state = refreshExitDetail({
 	      at: Number(detail.at || t),
@@ -670,7 +698,7 @@ function browserBotSource(config) {
 	    lastSnapshotCoinWaitAgeMs: Number(previousBot?.lastSnapshotCoinWaitAgeMs || 0) || 0,
 	    lastCoinSourceSummary: previousBot?.lastCoinSourceSummary || null,
 	    coinDiagnostics: null,
-	    lastSelf: null,
+		    lastSelf: preserved.lastSelf || readPersistentLastSelfState() || null,
 		    lastSafety: null,
 			    actionThreats: [],
 			    opportunityChoice: preserved.opportunityChoice,
@@ -848,6 +876,7 @@ function browserBotSource(config) {
       if (self) updateKillHistory(self);
 	      updateSessionStats(currentSelfSummary);
 	      const session = summarizeSessionStats(displaySelf);
+	      const todaySession = summarizeTodaySessionStats(session, displaySelf);
 	      const enemyLeaveDetail = activeEnemyLeaveDetail();
 	      const offlineLeaveDetail = activeOfflineLeaveDetail();
 	      const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
@@ -908,7 +937,9 @@ function browserBotSource(config) {
 		          lockRemainingMs: exitMotionLockRemainingMs
 		        },
 		        self: displaySelf,
-        session,
+		        lastSelf: displaySelf,
+	        session,
+	        todaySession,
         safety: this.lastSafety,
         attackHistory: this.attackHistory.slice(-10),
         killHistory: this.killHistory.slice(-10),
@@ -1786,12 +1817,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	      if (storageReason === 'enemy leave') {
 	        bot.pursuitReloginUntil = 0;
 	        bot.lastEnemyLeaveWaitMs = 0;
-	        clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
 	        clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
 	      } else if (storageReason === 'offline leave') {
 	        bot.offlineReloginUntil = 0;
 	        bot.lastOfflineLeaveWaitMs = 0;
-	        clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
 	        clearLoginSuppressMatching(/offline.*leave/i);
 	      }
 	      if (detail) {
@@ -1810,8 +1839,13 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        detail.loginSuppressReason = '';
 	        detail.defensiveReloginDelaySkipped = true;
 	        finalizeLeaveDisplayReason(detail);
-	        if (storageReason === 'enemy leave') bot.lastEnemyLeaveResult = detail;
-	        else if (storageReason === 'offline leave') bot.lastOfflineLeaveResult = detail;
+	        if (storageReason === 'enemy leave') {
+	          bot.lastEnemyLeaveResult = detail;
+	          writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
+	        } else if (storageReason === 'offline leave') {
+	          bot.lastOfflineLeaveResult = detail;
+	          writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
+	        }
 	      }
 	      return 0;
 	    }
@@ -1955,12 +1989,12 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 		        detail.reloginDelayMs = 0;
 		        detail.safeReloginAllowed = !unsafeOfflineExit;
 		        if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true;
-		        detail.loginSuppressReason = '';
-		        finalizeLeaveDisplayReason(detail);
-		        bot.lastOfflineLeaveResult = detail;
-		      }
-		      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-		      return 0;
+			        detail.loginSuppressReason = '';
+			        finalizeLeaveDisplayReason(detail);
+			        bot.lastOfflineLeaveResult = detail;
+			        writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
+			      }
+			      return 0;
 		    }
 		    return setExitReloginSuppress('offline leave', reason, detail, selfLike, {
 		      existingUntil: bot.offlineReloginUntil,
@@ -2002,12 +2036,11 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
         bot.pursuitReloginUntil = suppressUntil;
       }
     } catch (_) {}
-    const remaining = Math.max(0, until - Date.now());
-    if (!remaining && bot.pursuitReloginUntil) {
-      bot.pursuitReloginUntil = 0;
-      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-    }
-    return Math.round(remaining);
+	    const remaining = Math.max(0, until - Date.now());
+	    if (!remaining && bot.pursuitReloginUntil) {
+	      bot.pursuitReloginUntil = 0;
+	    }
+	    return Math.round(remaining);
   }
 
   function offlineReloginHoldRemainingMs() {
@@ -2034,11 +2067,10 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
       clearOfflineReloginHold('stale offline suppress contradicted by known stamina');
       return 0;
     }
-    const remaining = Math.max(0, until - Date.now());
-    if (!remaining && bot.offlineReloginUntil) {
-      bot.offlineReloginUntil = 0;
-      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-    }
+	    const remaining = Math.max(0, until - Date.now());
+	    if (!remaining && bot.offlineReloginUntil) {
+	      bot.offlineReloginUntil = 0;
+	    }
     return Math.round(remaining);
   }
 

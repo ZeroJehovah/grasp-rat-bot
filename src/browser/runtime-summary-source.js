@@ -298,6 +298,7 @@ function runtimeSummarySource() {
     updateSessionStaminaStats(session, selfSummary, t);
     const killCount = bot.killHistory.filter(item => Number(item?.at || 0) >= Number(session.startedAt || 0)).length;
     session.kills = Math.max(Math.max(0, Number(session.kills || 0) || 0), killCount);
+    if (typeof writePersistentLastSelfState === 'function') writePersistentLastSelfState(selfSummary, t);
   }
 
   function summarizeSessionStats(selfSummary) {
@@ -321,6 +322,85 @@ function runtimeSummarySource() {
       combatLogFailed: Math.max(0, Math.round((Number(bot.combatLogging?.failed || 0) || 0) - (Number(session.combatLogFailedBase || 0) || 0))),
       userId: session.userId ?? null
     };
+  }
+
+  function readTodaySessionRecords(dayStart) {
+    try {
+      if (typeof readImportantLogsStore !== 'function') return [];
+      const store = readImportantLogsStore();
+      const sessions = Array.isArray(store?.sessions) ? store.sessions : [];
+      return sessions.filter(record => Number(record?.loginAt || 0) >= dayStart);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function maybeSetLatestTodayStamina(out, record, latestAtRef) {
+    const stamp = Math.max(
+      Number(record?.updatedAt || 0) || 0,
+      Number(record?.exitAt || 0) || 0,
+      Number(record?.loginAt || 0) || 0
+    );
+    if (stamp < latestAtRef.value) return;
+    const remaining = Number(record?.stamina1dLastRemaining);
+    const limit = Number(record?.stamina1dLastLimit);
+    if (!Number.isFinite(remaining)) return;
+    out.stamina1dLastRemaining = remaining;
+    out.stamina1dLastLimit = Number.isFinite(limit) && limit > 0 ? limit : null;
+    latestAtRef.value = stamp;
+  }
+
+  function addTodaySessionRecord(out, record, latestAtRef) {
+    out.uptimeMs += Math.max(0, Math.round(Number(record?.loginDurationMs || 0) || 0));
+    out.stamina1dSpentMs += Math.max(0, Math.round(Number(record?.staminaSpentMs || 0) || 0));
+    out.coinsGained += Math.max(0, Math.round(Number(record?.coinsGained || 0) || 0));
+    out.coinPickupTotal += Math.max(0, Math.round(Number(record?.pickedCoins || record?.coinPickupTotal || 0) || 0));
+    out.kills += Math.max(0, Math.round(Number(record?.killCount || 0) || 0));
+    out.sessionCount += 1;
+    maybeSetLatestTodayStamina(out, record, latestAtRef);
+  }
+
+  function summarizeTodaySessionStats(sessionSummary = null, selfSummary = null, t = Date.now()) {
+    const dayStart = dailyStaminaWindowStartAt(t);
+    const out = {
+      dayStartedAt: dayStart,
+      uptimeMs: 0,
+      stamina1dSpentMs: 0,
+      coinsGained: 0,
+      coinPickupTotal: 0,
+      kills: 0,
+      sessionCount: 0,
+      stamina1dLastRemaining: null,
+      stamina1dLastLimit: null
+    };
+    const latestStaminaAt = { value: 0 };
+    const currentSessionId = String(bot.session?.importantSessionId || '');
+    for (const record of readTodaySessionRecords(dayStart)) {
+      if (currentSessionId && String(record?.sessionId || '') === currentSessionId) continue;
+      addTodaySessionRecord(out, record, latestStaminaAt);
+    }
+    const startedAt = Number(sessionSummary?.startedAt || 0) || 0;
+    if (startedAt >= dayStart) {
+      out.uptimeMs += Math.max(0, Math.round(Number(sessionSummary?.uptimeMs || 0) || 0));
+      out.stamina1dSpentMs += Math.max(0, Math.round(Number(sessionSummary?.stamina1dSpentMs || 0) || 0));
+      out.coinsGained += Math.max(0, Math.round(Number(sessionSummary?.coinsGained || 0) || 0));
+      out.coinPickupTotal += Math.max(0, Math.round(Number(sessionSummary?.coinPickupTotal || 0) || 0));
+      out.kills += Math.max(0, Math.round(Number(sessionSummary?.kills || 0) || 0));
+      out.sessionCount += 1;
+      maybeSetLatestTodayStamina(out, {
+        updatedAt: t,
+        loginAt: startedAt,
+        stamina1dLastRemaining: sessionSummary?.stamina1dLastRemaining,
+        stamina1dLastLimit: sessionSummary?.stamina1dLastLimit
+      }, latestStaminaAt);
+    }
+    const selfRemaining = Number(selfSummary?.stamina1d ?? selfSummary?.stamina?.stamina1d);
+    const selfLimit = Number(selfSummary?.stamina1dLimit ?? selfSummary?.stamina?.stamina1dLimit);
+    if (Number.isFinite(selfRemaining)) {
+      out.stamina1dLastRemaining = selfRemaining;
+      out.stamina1dLastLimit = Number.isFinite(selfLimit) && selfLimit > 0 ? selfLimit : out.stamina1dLastLimit;
+    }
+    return out;
   }
 
   function pushBounded(list, item, max) {
