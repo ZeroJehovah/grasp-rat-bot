@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.245"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.246"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1490,16 +1490,6 @@
     if (!e) return false;
     const name = normalizeTargetWhitelistName(e.name);
     return Boolean(name && bot.targetWhitelist?.nameSet?.has(name));
-  }
-  function isRealtimeVisibleThreat(e) {
-    return Boolean(e?.native || e?.render || e?.renderVisible || e?.nativeSource === 'render');
-  }
-  function isOrdinaryCoinActiveThreat(e) {
-    return Boolean(e
-      && !isWhitelistedTarget(e)
-      && !isInvulnerable(e)
-      && isRealtimeVisibleThreat(e)
-      && hasCombatActivitySignal(e));
   }
   function summarizeTargetWhitelistStatus() {
     const state = bot.targetWhitelist || targetWhitelistState;
@@ -12904,15 +12894,9 @@ function hpDisplay(value) {
   function highValueVisibleCoinPriorityNeeded(self, context = {}) {
     if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
     if ((context.avoidanceThreats || []).length) return true;
-    if (context.highValuePriorityCoin
-      && (context.ordinaryCoinThreats || []).some(threat => coinBlockedByThreat(self, context.highValuePriorityCoin, threat))) {
-      return true;
-    }
     const incoming = incomingBulletThreat(self, null, context.bullets || []);
     if (incoming) return true;
-    const incomingOwnerId = incoming?.ownerId;
-    const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
-    return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incomingOwnerId, unknownIncoming));
+    return false;
   }
 
   function recentCombatInjuryActive() {
@@ -18285,11 +18269,7 @@ function hpDisplay(value) {
       avoidanceThreats,
       nearbyHumans.filter(e => e.native && isAvoidanceThreat(e))
     );
-    const ordinaryActiveCoinThreats = activeThreats.filter(isOrdinaryCoinActiveThreat);
-    const coinThreats = mergeThreatLists(
-      highValueCoinThreats,
-      ordinaryActiveCoinThreats
-    );
+    const coinThreats = highValueCoinThreats;
     bot.actionThreats = coinThreats;
     const recovery = !fullHp && isRecovering(self);
     const closeThreats = avoidanceThreats.filter(e => e.distance <= e.threatRadius);
@@ -18352,7 +18332,6 @@ function hpDisplay(value) {
       activeThreats,
       avoidanceThreats,
       bullets,
-      ordinaryCoinThreats: ordinaryActiveCoinThreats,
       highValuePriorityCoin
     };
     if (!pendingPostAttackWaitTarget

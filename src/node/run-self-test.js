@@ -445,12 +445,6 @@ function runSelfTest() {
     const name = normalizeTargetWhitelistName(e.name);
     return Boolean(name && targetWhitelistNameSet.has(name));
   };
-  const isRealtimeVisibleThreat = e => Boolean(e?.native || e?.render || e?.renderVisible || e?.nativeSource === 'render');
-  const isOrdinaryCoinActiveThreat = e => Boolean(e
-    && !isWhitelistedTarget(e)
-    && !isInvulnerable(e)
-    && isRealtimeVisibleThreat(e)
-    && hasCombatActivitySignalForTest(e));
   const decorateThreat = (self, e) => {
     const moving = isMovingThreat(e);
     return {
@@ -1630,13 +1624,9 @@ function runSelfTest() {
   function highValueVisibleCoinPriorityNeeded(self, context = {}) {
     if (context.recovery || context.engagedCombatTarget || context.defensiveCombatTarget) return true;
     if ((context.avoidanceThreats || []).length) return true;
-    if (context.highValuePriorityCoin
-      && (context.ordinaryCoinThreats || []).some(threat => coinBlockedByThreat(self, context.highValuePriorityCoin, threat))) {
-      return true;
-    }
     const incoming = incomingBulletInfo(self, context.bullets || []);
     if (incoming.incoming) return true;
-    return (context.activeThreats || []).some(threat => nearbyThreatBlocksLowHpHighValueCoin(threat, incoming.ownerId, incoming.unknownIncoming));
+    return false;
   }
 
   function snapshotLocalCoinAllowed(self, coin) {
@@ -4865,11 +4855,7 @@ function runSelfTest() {
         .filter(e => e.native)
         .filter(isAvoidanceThreat)
     );
-    const ordinaryActiveCoinThreats = activeThreats.filter(isOrdinaryCoinActiveThreat);
-    const coinThreats = mergeThreatLists(
-      highValueCoinThreats,
-      ordinaryActiveCoinThreats
-    );
+    const coinThreats = highValueCoinThreats;
     const usableCoins = filterLocalSnapshotCoins(self, coins);
     const realtimeCoins = usableCoins.filter(coin => !isSnapshotOnlyCoin(coin));
     bot.currentVisibleCoins = visibleCoinsAvailable ? realtimeCoins : null;
@@ -4890,7 +4876,6 @@ function runSelfTest() {
       activeThreats,
       avoidanceThreats,
       bullets,
-      ordinaryCoinThreats: ordinaryActiveCoinThreats,
       highValuePriorityCoin
     };
     if (!pendingPostAttackWaitTarget
@@ -5066,7 +5051,7 @@ function runSelfTest() {
       want: 'coin'
     },
     {
-      name: 'ordinary one coin is blocked by realtime active coin threat',
+      name: 'ordinary one coin near realtime active remains selectable',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -5075,10 +5060,10 @@ function runSelfTest() {
         });
         return action.kind + ':' + action.reason;
       })(),
-      want: 'wait:wait-for-snapshot-coin'
+      want: 'seek-coin:best-opportunity-visible-coin'
     },
     {
-      name: 'healthy high-value coin bypasses ordinary active coin threat',
+      name: 'healthy high-value coin near realtime active uses normal opportunity path',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -5087,7 +5072,7 @@ function runSelfTest() {
         });
         return action.kind + ':' + action.reason;
       })(),
-      want: 'seek-coin:high-value-visible-coin-priority'
+      want: 'seek-coin:best-opportunity-visible-coin'
     },
     {
       name: 'low-drop retreat ignored active threat does not wait over foot coin',
@@ -7577,24 +7562,6 @@ function runSelfTest() {
       want: 'coin'
     },
     {
-      name: 'active coin danger allows route that stops before threat buffer',
-      got: (() => {
-        const self = { user_id: 1, x: 0, y: 0 };
-        const threat = decorateThreat(self, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active', vx: -50 });
-        return coinBlockedByThreat(self, { drop_id: 2, x: 10000, y: 0, amount: 1 }, threat);
-      })(),
-      want: false
-    },
-    {
-      name: 'active coin danger blocks route ending inside threat buffer',
-      got: (() => {
-        const self = { user_id: 1, x: 0, y: 0 };
-        const threat = decorateThreat(self, { user_id: 4, x: 30000, y: 0, current_join_mode: 'Active', vx: -50 });
-        return coinBlockedByThreat(self, { drop_id: 2, x: 18000, y: 0, amount: 1 }, threat);
-      })(),
-      want: true
-    },
-    {
       name: 'combat target in range beats active caution',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -8203,10 +8170,10 @@ function runSelfTest() {
       want: 'coin:best-opportunity-coin:1:false'
     },
     {
-      name: 'coin route leg threat block rejects path through active danger',
+      name: 'coin route leg threat block rejects path through invulnerable danger',
       got: (() => {
         const self = { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 };
-        const threat = decorateThreat(self, { user_id: 4, x: 25000, y: 0, current_join_mode: 'Active', vx: -50 });
+        const threat = decorateThreat(self, { user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', vx: -50, invulnerable: true });
         const route = pickCoinRouteOpportunity(self, [
           { drop_id: 1, x: 10000, y: 0, amount: 1, native: true },
           { drop_id: 2, x: 16000, y: 0, amount: 1, native: true },
