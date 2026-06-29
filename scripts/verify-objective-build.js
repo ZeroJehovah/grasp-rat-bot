@@ -1281,8 +1281,14 @@ function main() {
       assert(functionBody(text, 'resetLoginPointSafetyGate').includes('state.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null'), 'login-point reset does not record unknown exit HP as unknown');
       const pointDangerBody = functionBody(text, 'loginPointDangerReason');
       const pointEvaluateBody = functionBody(text, 'evaluateLoginPointSafety');
+      const damageEvidenceBody = functionBody(text, 'loginPointDamageEvidence');
+      const rememberDamageBody = functionBody(text, 'rememberLoginPointDamageThreat');
       assert(pointDangerBody.includes("'damaged-self-today'"), 'login-point safety does not block known same-day damage actors');
       assert(pointDangerBody.includes("return 'active-mode'"), 'login-point safety does not block Active mode');
+      assert(damageEvidenceBody.includes('incoming-bullet-owner'), 'login-point damage actor evidence does not use incoming bullet ownership');
+      assert(damageEvidenceBody.includes('firing-near-self-hp-drop'), 'login-point damage actor evidence does not require firing evidence');
+      assert(rememberDamageBody.includes('loginPointDamageEvidence(candidate, injury)'), 'login-point damage actor recording still accepts unevidenced nearby actors');
+      assert(rememberDamageBody.includes('evidence'), 'login-point damage actor recording does not persist evidence reason');
       assert(!pointDangerBody.includes('dropValue(') && !pointDangerBody.includes("'drop'"), 'login-point safety still blocks by Drop value');
       assert(!pointDangerBody.includes("return 'recent-movement'"), 'login-point safety still blocks recent movement');
       assert(!pointDangerBody.includes("return 'stamina-not-full'"), 'login-point safety still blocks non-full 5s stamina');
@@ -1770,7 +1776,10 @@ function main() {
       const loginBody = functionBody(text, 'syncEntityControlLogin');
       assert(text.includes('function reloginHoldRemainingFromStatus'), 'relogin hold inline-login helper not found');
       assert(text.includes('function shouldShowInlineLogin'), 'inline login visibility helper not found');
+      assert(text.includes('function waitReasonPrefersLastExit'), 'relogin wait reason helper not found');
+      assert(text.includes('function panelReasonDetail'), 'panel reason detail helper not found');
       assert(loginBody.includes('!shouldShowInlineLogin(status)'), 'inline login is still hidden solely by logged-in state');
+      assert(functionBody(text, 'shouldShowInlineLogin').includes('waitReasonPrefersLastExit(status)'), 'inline login is not visible during relogin/no-self safety waits');
       assert(loginBody.includes('跳过重连等待并立即登录/加入游戏'), 'inline login title does not reflect relogin hold bypass');
       assert(text.includes('function bootstrapLoginPointSafetyBlock'), 'bootstrap login-point safety block helper not found');
       assert(text.includes('LOGIN_POINT_SAFETY_KEY'), 'bootstrap cannot read persisted login-point safety');
@@ -1907,6 +1916,7 @@ function main() {
       const allowsBody = functionBody(text, 'decisionAllowsExitReasonDetail');
       assert(detailBody.includes('const actionDisplay = decisionActionDisplayReason(decision)'), 'reason detail does not prefer scoped action display reason');
       assert(detailBody.includes('if (!decisionAllowsExitReasonDetail(decision)) return \'\';'), 'reason detail can still fall through to stale exit detail for active actions');
+      assert(text.includes('function panelReasonDetail') && functionBody(text, 'panelReasonDetail').includes('lastExitReasonDetail(status)'), 'panel reason does not prefer last exit detail during relogin waits');
       assert(!detailBody.includes('|| decision?.displayReason'), 'reason detail still accepts unscoped decision displayReason');
       assert(actionBody.includes("kind === 'coin' || kind === 'seek-coin'"), 'coin action display reason scope not found');
       assert(actionBody.includes('/金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/'), 'coin action display reason allow-list not found');

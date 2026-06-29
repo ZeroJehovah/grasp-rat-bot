@@ -1135,6 +1135,32 @@ function controlLoginSource(helpers = {}) {
     return new Set((state?.damagedBy?.actors || []).map(actor => String(actor.key || '')).filter(Boolean));
   }
 
+  function loginPointDamageEvidence(candidate, injury = {}) {
+    if (!candidate || typeof candidate !== 'object') return '';
+    const rawId = candidate.user_id ?? candidate.userId ?? candidate.id;
+    const incomingOwnerId = injury?.incomingBullet?.ownerId
+      ?? injury?.incomingBullet?.owner_id
+      ?? candidate.incomingBulletOwnerId
+      ?? candidate.damageEvidence?.incomingBulletOwnerId
+      ?? null;
+    if (incomingOwnerId !== null && incomingOwnerId !== undefined && rawId !== undefined && rawId !== null && String(incomingOwnerId) === String(rawId)) {
+      return 'incoming-bullet-owner';
+    }
+    if (truthyFlag(candidate.firing)
+      || truthyFlag(candidate.isFiring)
+      || truthyFlag(candidate.shooting)
+      || truthyFlag(candidate.damageEvidence?.firing)) {
+      return 'firing-near-self-hp-drop';
+    }
+    if (truthyFlag(candidate.combat)
+      || truthyFlag(candidate.engagedCombat)
+      || truthyFlag(candidate.damageEvidence?.combat)
+      || String(candidate.combatIntent || candidate.damageEvidence?.combatIntent || '') === 'engaged') {
+      return 'combat-engaged-self-hp-drop';
+    }
+    return '';
+  }
+
   function loginPointEntityMoved(state, entity, t) {
     const key = loginPointEntityKey(entity);
     if (!key) return false;
@@ -1305,11 +1331,12 @@ function controlLoginSource(helpers = {}) {
       injury?.nearestActive,
       injury?.nearestAvoidance,
       injury?.nearestHuman
-    ].filter(Boolean);
+    ].filter(candidate => Boolean(loginPointDamageEvidence(candidate, injury)));
     if (!candidates.length) return state;
     const existing = new Map((state.damagedBy?.actors || []).map(actor => [String(actor.key || ''), actor]));
     for (const candidate of candidates) {
-      const actor = loginPointActorSummary(candidate, { at: t, reason });
+      const evidence = loginPointDamageEvidence(candidate, injury);
+      const actor = loginPointActorSummary(candidate, { at: t, reason, evidence });
       if (!actor?.key) continue;
       existing.set(actor.key, { ...(existing.get(actor.key) || {}), ...actor, at: t, reason });
     }

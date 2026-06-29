@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.249"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.250"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5510,6 +5510,32 @@ function hpDisplay(value) {
     return new Set((state?.damagedBy?.actors || []).map(actor => String(actor.key || '')).filter(Boolean));
   }
 
+  function loginPointDamageEvidence(candidate, injury = {}) {
+    if (!candidate || typeof candidate !== 'object') return '';
+    const rawId = candidate.user_id ?? candidate.userId ?? candidate.id;
+    const incomingOwnerId = injury?.incomingBullet?.ownerId
+      ?? injury?.incomingBullet?.owner_id
+      ?? candidate.incomingBulletOwnerId
+      ?? candidate.damageEvidence?.incomingBulletOwnerId
+      ?? null;
+    if (incomingOwnerId !== null && incomingOwnerId !== undefined && rawId !== undefined && rawId !== null && String(incomingOwnerId) === String(rawId)) {
+      return 'incoming-bullet-owner';
+    }
+    if (truthyFlag(candidate.firing)
+      || truthyFlag(candidate.isFiring)
+      || truthyFlag(candidate.shooting)
+      || truthyFlag(candidate.damageEvidence?.firing)) {
+      return 'firing-near-self-hp-drop';
+    }
+    if (truthyFlag(candidate.combat)
+      || truthyFlag(candidate.engagedCombat)
+      || truthyFlag(candidate.damageEvidence?.combat)
+      || String(candidate.combatIntent || candidate.damageEvidence?.combatIntent || '') === 'engaged') {
+      return 'combat-engaged-self-hp-drop';
+    }
+    return '';
+  }
+
   function loginPointEntityMoved(state, entity, t) {
     const key = loginPointEntityKey(entity);
     if (!key) return false;
@@ -5680,11 +5706,12 @@ function hpDisplay(value) {
       injury?.nearestActive,
       injury?.nearestAvoidance,
       injury?.nearestHuman
-    ].filter(Boolean);
+    ].filter(candidate => Boolean(loginPointDamageEvidence(candidate, injury)));
     if (!candidates.length) return state;
     const existing = new Map((state.damagedBy?.actors || []).map(actor => [String(actor.key || ''), actor]));
     for (const candidate of candidates) {
-      const actor = loginPointActorSummary(candidate, { at: t, reason });
+      const evidence = loginPointDamageEvidence(candidate, injury);
+      const actor = loginPointActorSummary(candidate, { at: t, reason, evidence });
       if (!actor?.key) continue;
       existing.set(actor.key, { ...(existing.get(actor.key) || {}), ...actor, at: t, reason });
     }
@@ -18375,6 +18402,8 @@ function hpDisplay(value) {
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities, bullets);
     const defensiveCombatTarget = pickCombatTarget(self, [...combatTargets, ...combatDodgeOnlyTargets], bullets, { mode: 'defensive' });
+    const safetyIncomingBullet = incomingBulletThreat(self, null, bullets);
+    const safetyIncomingOwnerId = safetyIncomingBullet?.ownerId ?? null;
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -18393,6 +18422,12 @@ function hpDisplay(value) {
         distance: Math.round(activeThreats[0].distance),
         speed: Math.round(activeThreats[0].speed),
         moving: Boolean(activeThreats[0].moving),
+        firing: isFiringEntity(activeThreats[0]),
+        combatIntent: activeThreats[0].combatIntent || '',
+        incomingBulletOwnerId: safetyIncomingOwnerId !== null && safetyIncomingOwnerId !== undefined && String(safetyIncomingOwnerId) === String(activeThreats[0].user_id)
+          ? String(safetyIncomingOwnerId)
+          : '',
+        mode: activeThreats[0].current_join_mode || activeThreats[0].mode || '',
         threatRadius: Math.round(activeThreats[0].threatRadius),
         cautionRadius: Math.round(activeThreats[0].cautionRadius),
         returnBlockRadius: Math.round(returnBlockRadius(activeThreats[0])),
@@ -18413,6 +18448,12 @@ function hpDisplay(value) {
         id: coinThreats[0].user_id,
         name: coinThreats[0].name,
         distance: Math.round(coinThreats[0].distance),
+        firing: isFiringEntity(coinThreats[0]),
+        combatIntent: coinThreats[0].combatIntent || '',
+        incomingBulletOwnerId: safetyIncomingOwnerId !== null && safetyIncomingOwnerId !== undefined && String(safetyIncomingOwnerId) === String(coinThreats[0].user_id)
+          ? String(safetyIncomingOwnerId)
+          : '',
+        mode: coinThreats[0].current_join_mode || coinThreats[0].mode || '',
         invulnerable: isInvulnerable(coinThreats[0])
       } : null,
       conservingStamina: isConservingStamina(self)
@@ -19220,6 +19261,7 @@ function hpDisplay(value) {
           currentHp,
           lostHp: Math.max(0, previousHp - currentHp),
           self: currentSummary,
+          incomingBullet: bot.lastDecision?.incomingBullet || null,
           nearestActive: bot.lastSafety?.nearestActive || null,
           nearestHuman: bot.lastSafety?.nearestHuman || null
         };

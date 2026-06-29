@@ -11776,6 +11776,8 @@ ${importantLogSource()}
     const cautionThreats = avoidanceThreats.filter(e => e.distance <= e.cautionRadius + cfg.activeCautionExitMargin);
     const engagedCombatTarget = pickEngagedCombatTarget(self, combatTargets, entities, bullets);
     const defensiveCombatTarget = pickCombatTarget(self, [...combatTargets, ...combatDodgeOnlyTargets], bullets, { mode: 'defensive' });
+    const safetyIncomingBullet = incomingBulletThreat(self, null, bullets);
+    const safetyIncomingOwnerId = safetyIncomingBullet?.ownerId ?? null;
     bot.lastSafety = {
       fullHp,
       combatTargets: combatTargets.length,
@@ -11794,6 +11796,12 @@ ${importantLogSource()}
         distance: Math.round(activeThreats[0].distance),
         speed: Math.round(activeThreats[0].speed),
         moving: Boolean(activeThreats[0].moving),
+        firing: isFiringEntity(activeThreats[0]),
+        combatIntent: activeThreats[0].combatIntent || '',
+        incomingBulletOwnerId: safetyIncomingOwnerId !== null && safetyIncomingOwnerId !== undefined && String(safetyIncomingOwnerId) === String(activeThreats[0].user_id)
+          ? String(safetyIncomingOwnerId)
+          : '',
+        mode: activeThreats[0].current_join_mode || activeThreats[0].mode || '',
         threatRadius: Math.round(activeThreats[0].threatRadius),
         cautionRadius: Math.round(activeThreats[0].cautionRadius),
         returnBlockRadius: Math.round(returnBlockRadius(activeThreats[0])),
@@ -11814,6 +11822,12 @@ ${importantLogSource()}
         id: coinThreats[0].user_id,
         name: coinThreats[0].name,
         distance: Math.round(coinThreats[0].distance),
+        firing: isFiringEntity(coinThreats[0]),
+        combatIntent: coinThreats[0].combatIntent || '',
+        incomingBulletOwnerId: safetyIncomingOwnerId !== null && safetyIncomingOwnerId !== undefined && String(safetyIncomingOwnerId) === String(coinThreats[0].user_id)
+          ? String(safetyIncomingOwnerId)
+          : '',
+        mode: coinThreats[0].current_join_mode || coinThreats[0].mode || '',
         invulnerable: isInvulnerable(coinThreats[0])
       } : null,
       conservingStamina: isConservingStamina(self)
@@ -12621,6 +12635,7 @@ ${importantLogSource()}
           currentHp,
           lostHp: Math.max(0, previousHp - currentHp),
           self: currentSummary,
+          incomingBullet: bot.lastDecision?.incomingBullet || null,
           nearestActive: bot.lastSafety?.nearestActive || null,
           nearestHuman: bot.lastSafety?.nearestHuman || null
         };

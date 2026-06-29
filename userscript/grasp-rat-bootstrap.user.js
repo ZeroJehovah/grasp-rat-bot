@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.63
+// @version      0.4.64
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.63';
+  const BOOTSTRAP_VERSION = '0.4.64';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -627,6 +627,25 @@
     return readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
   }
 
+  function reloginWaitReason(status) {
+    return String(status?.lastDecision?.reason || status?.login?.lastResult?.reason || '');
+  }
+
+  function waitReasonPrefersLastExit(status) {
+    return /login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait/.test(reloginWaitReason(status));
+  }
+
+  function lastExitReasonDetail(status) {
+    const persistent = activePersistentExitDetail(status);
+    return persistent?.displayReason
+      || persistent?.summary
+      || persistent?.exitSummary
+      || persistent?.enemyLeaveSummary
+      || status?.session?.exitSummary
+      || status?.session?.exitReason
+      || '';
+  }
+
   function decisionReasonDetail(decision, status) {
     const actionDisplay = decisionActionDisplayReason(decision);
     if (actionDisplay) return actionDisplay;
@@ -644,6 +663,14 @@
       || decision?.leave?.enemyLeaveSummary
       || decision?.leave?.enemyLeaveReason
       || '';
+  }
+
+  function panelReasonDetail(decision, status) {
+    if (waitReasonPrefersLastExit(status)) {
+      const lastExit = lastExitReasonDetail(status);
+      if (lastExit) return lastExit;
+    }
+    return decisionReasonDetail(decision, status);
   }
 
   function decisionAllowsExitReasonDetail(decision) {
@@ -1586,7 +1613,9 @@
 
   function shouldShowInlineLogin(status) {
     const reloginHold = reloginHoldRemainingFromStatus(status);
-    return reloginHold > 0 || !pageLooksLoggedIn(status);
+    return reloginHold > 0
+      || waitReasonPrefersLastExit(status)
+      || !pageLooksLoggedIn(status);
   }
 
   function syncEntityControlLogin(status) {
@@ -1804,7 +1833,7 @@
     const status = getBotStatus();
     syncEntityControlLogin(status);
     const decision = status?.lastDecision || null;
-    const reasonDetail = state.cloudflareError?.displayReason || decisionReasonDetail(decision, status) || reasonText(decision?.reason);
+    const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || reasonText(decision?.reason);
     const todaySession = status?.todaySession || {};
     const self = status?.self || decision?.self || status?.lastSelf || lastDailyStaminaSelf(status) || null;
     const safety = status?.safety || {};
