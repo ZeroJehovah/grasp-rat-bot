@@ -989,7 +989,8 @@ function main() {
       const recordImportantBody = functionBody(text, 'recordImportantCombatTick');
       assert(body.includes('const recoveryCombatAction = buildCombatAction(self, recoveryCombatTarget, bullets)'), 'recovery combat action is not built in chooseAction');
       assert(body.includes('const avoidanceThreats = activeThreats.filter(isAvoidanceThreat)'), 'ordinary active threats can still enter the avoidance set');
-      assert(text.includes('const isAvoidanceThreat = e => isInvulnerable(e)'), 'avoidance threat helper is not limited to invulnerable players');
+      assert(text.includes('function isIdleInvulnerableTarget(e)'), 'idle invulnerable helper not found');
+      assert(text.includes('const isAvoidanceThreat = e => isInvulnerable(e) && !isIdleInvulnerableTarget(e)'), 'idle invulnerable players can still enter active avoidance');
       assert(text.includes('const anyPositiveNumber = (...values) => values.some(value => Number(value) > 0);'), 'invulnerable numeric aliases are not checked independently');
       assert(text.includes('invulnerableRemainingMs') && text.includes('invulnerable_remaining_ms'), 'invulnerable millisecond aliases are not recognized');
       assert(text.includes('function mergeThreatLists'), 'threat-list merge helper not found');
@@ -1003,7 +1004,7 @@ function main() {
       assert(body.includes('nearbyAvoidanceThreats: nearbyAvoidanceThreats.length'), 'nearby invulnerable avoidance count is not exposed');
       assert(!body.includes('const coinThreats = avoidanceThreats;'), 'ordinary coin safety still uses only active avoidance threats');
       assert(body.includes('if (recoveryCombatAction) {'), 'recovery combat can still fall through to non-combat avoidance');
-      assert(body.includes('const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e))'), 'nearby safety avoidance is not limited to invulnerable players');
+      assert(body.includes('const nearbyAvoidanceThreats = nearbyHumans.filter(e => e.distance <= nearbyAvoidanceRadius && isAvoidanceThreat(e))'), 'nearby safety avoidance is not limited to non-idle invulnerable players');
       assert(body.includes("const reason = 'avoid-invulnerable-target'"), 'nearby invulnerable avoidance does not use the non-combat safety reason');
       assert(text.includes('function importantCombatReasonIsPostCombatObservation'), 'important combat logging does not classify post-combat observation reasons');
       assert(recordImportantBody.includes('importantCombatReasonIsPostCombatObservation(reason)'), 'important combat logging can still close immediately on recovery wait');
@@ -1573,6 +1574,16 @@ function main() {
   check('run-self-test module covers visible invulnerable coin blocking self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'invulnerable aliases detect positive field despite earlier zero alias'"), 'invulnerable alias precedence self-test not found');
     assert(nodeSelfTestSource.includes('invulnerableRemainingMs: 5000'), 'invulnerableRemainingMs self-test field not found');
+    assert(nodeSelfTestSource.includes("name: 'full hp ignores idle invulnerable active in caution range'"), 'idle invulnerable non-avoidance self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'full hp avoids moving invulnerable active in caution range'"), 'moving invulnerable avoidance self-test not found');
+    assert(
+      /name: 'full hp ignores idle invulnerable active in caution range'[\s\S]*invulnerable_remaining_ticks: 5[\s\S]*want: 'coin'/.test(nodeSelfTestSource),
+      'idle invulnerable self-test does not keep ordinary coin action'
+    );
+    assert(
+      /name: 'full hp avoids moving invulnerable active in caution range'[\s\S]*vx: -10[\s\S]*invulnerable_remaining_ticks: 5[\s\S]*want: 'flee'/.test(nodeSelfTestSource),
+      'moving invulnerable self-test does not preserve avoidance'
+    );
     assert(nodeSelfTestSource.includes("name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'"), 'visible invulnerable coin block self-test not found');
     assert(
       /name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'[\s\S]*x: 25500[\s\S]*native: true[\s\S]*invulnerableRemainingMs: 5000[\s\S]*x: 12300[\s\S]*amount: 1[\s\S]*want: 'wait-for-snapshot-coin'/.test(nodeSelfTestSource),

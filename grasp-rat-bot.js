@@ -1137,7 +1137,6 @@ function browserBotSource(config) {
     || truthyFlag(e?.combat)
     || truthyFlag(e?.engagedCombat)
     || String(e?.combatIntent || '') === 'engaged';
-  const isAvoidanceThreat = e => isInvulnerable(e);
   function entityRecentActivityAgeMs(e) {
     const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
     return Number.isFinite(value) && value >= 0 ? value : null;
@@ -1148,6 +1147,14 @@ function browserBotSource(config) {
     const ageMs = entityRecentActivityAgeMs(e);
     return Boolean(e?.recentlyActive || (ageMs !== null && ageMs <= cooldownMs));
   }
+  function isIdleInvulnerableTarget(e) {
+    return Boolean(isInvulnerable(e)
+      && !isMovingThreat(e)
+      && !isFiringEntity(e)
+      && hasFullStamina(e)
+      && !recentlyActionedForAfk(e));
+  }
+  const isAvoidanceThreat = e => isInvulnerable(e) && !isIdleInvulnerableTarget(e);
   const isAfkTarget = e => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => !recentlyActionedForAfk(e) && (isAfkTarget(e) || (isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e)));
   function isWhitelistedTarget(e) {
