@@ -1688,6 +1688,22 @@ function main() {
     assert(combatLogSourceModule.includes('targetSwitchDiagnosticSignature'), 'target switch log throttle signature not found');
   });
 
+  check('final action arbitration gates cross-band focus steals', () => {
+    assert(sourceBot.includes('function applyFinalActionArbitration'), 'final action arbitration function not found');
+    assert(sourceBot.includes('function finalActionBandRank'), 'final action priority band rank helper not found');
+    assert(sourceBot.includes('higher-priority-band-stick'), 'final action hysteresis reason not found');
+    assert(sourceBot.includes('action = applyFinalActionArbitration(action, source);'), 'final action path does not run arbitration before diagnostics');
+    assert(sourceBot.indexOf('action = applyFinalActionArbitration(action, source);') < sourceBot.indexOf('action = recordActionSwitchDiagnostics(action, source);'), 'final action arbitration must run before target-switch diagnostics');
+    assert(sourceBot.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');
+    assert(sourceBot.includes('preserved.finalActionArbitration?.lastAction'), 'runtime does not restore final action arbitration state');
+    assert(sharedPreservedStateSource.includes('finalActionArbitration: previousBot?.finalActionArbitration'), 'hot-update preserved state omits final action arbitration');
+    assert(sharedRuntimeDefaultsSource.includes('finalActionArbitrationHoldMs: 480'), 'final action arbitration hold default not found');
+    assert(sourceBot.includes('action.ignoreReturnBlock = true;') && sourceBot.includes("'high-value-visible-coin-priority'"), 'high-value coin priority does not bypass return-block rewrite');
+    assert(nodeSelfTestSource.includes("name: 'final arbitration keeps recent safety action over profit'"), 'final arbitration safety/profit self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'final arbitration keeps recent combat action over recovery'"), 'final arbitration combat/recover self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'final arbitration does not keep profit over new combat'"), 'final arbitration combat override self-test not found');
+  });
+
   check('run-self-test module covers combat fire discipline self-tests', () => {
     assert(nodeSelfTestSource.includes("name: 'recovering combat gap at threshold keeps fighting'"), 'recovery combat keep-fighting self-test not found');
     assert(nodeSelfTestSource.includes("name: 'recovering fights non-invulnerable moving enemy already in range'"), 'recovery non-invulnerable active combat self-test not found');

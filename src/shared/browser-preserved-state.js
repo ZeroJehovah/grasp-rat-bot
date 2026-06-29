@@ -22,6 +22,12 @@ function buildBrowserPreservedState(previousBot) {
         events: Array.isArray(previousBot.targetSwitchDiagnostics.events) ? previousBot.targetSwitchDiagnostics.events.slice(-24) : []
       }
       : null,
+    finalActionArbitration: previousBot?.finalActionArbitration && typeof previousBot.finalActionArbitration === 'object'
+      ? {
+        ...previousBot.finalActionArbitration,
+        history: Array.isArray(previousBot.finalActionArbitration.history) ? previousBot.finalActionArbitration.history.slice(-24) : []
+      }
+      : null,
     pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === 'object' ? { ...previousBot.pendingExit } : null,
     lastLoginAt: Number(previousBot?.lastLoginAt || 0) || 0,
     lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === 'object' ? { ...previousBot.lastLoginResult } : null,
