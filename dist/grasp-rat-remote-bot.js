@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.247"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.248"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1819,7 +1819,10 @@
   function targetOverlayWorldPoint(value) {
     if (!value || typeof value !== 'object') return null;
     const point = value.position || value.pos || value.point || value.coord || null;
+    const renderX = firstFiniteNumber(value.visual_x, value.visualX, value.render_x, value.renderX);
+    const renderY = firstFiniteNumber(value.visual_y, value.visualY, value.render_y, value.renderY);
     const x = firstFiniteNumber(
+      renderX,
       value.x,
       value.pos_x,
       value.posX,
@@ -1836,6 +1839,7 @@
       point?.x
     );
     const y = firstFiniteNumber(
+      renderY,
       value.y,
       value.pos_y,
       value.posY,
@@ -1845,10 +1849,6 @@
       value.coordY,
       value.center_y,
       value.centerY,
-      value.visual_y,
-      value.visualY,
-      value.render_y,
-      value.renderY,
       point?.y
     );
     return Number.isFinite(x) && Number.isFinite(y) ? { ...value, x, y } : null;
