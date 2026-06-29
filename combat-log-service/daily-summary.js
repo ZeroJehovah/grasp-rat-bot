@@ -60,6 +60,39 @@ function previousDay(day) {
   return date.toISOString().slice(0, 10);
 }
 
+function reportDayWindow(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) return null;
+  const start = Date.parse(`${day}T00:00:00+08:00`);
+  if (!Number.isFinite(start)) return null;
+  return { start, end: start + 24 * 60 * 60 * 1000 };
+}
+
+function sessionOverlapsWindow(session, window) {
+  if (!window) return true;
+  const loginAt = number(session?.loginAt);
+  const exitAt = number(session?.exitAt);
+  if (!loginAt) return false;
+  if (!exitAt) return loginAt >= window.start && loginAt < window.end;
+  return (exitAt || window.end) > window.start && loginAt < window.end;
+}
+
+function applyReportDayWindow(session, window) {
+  if (!window || !sessionOverlapsWindow(session, window)) return session;
+  const loginAt = number(session.loginAt);
+  const exitAt = number(session.exitAt);
+  session.reportLoginAt = Math.max(loginAt, window.start);
+  if (exitAt) {
+    session.reportExitAt = Math.min(exitAt, window.end);
+    session.reportLoginDurationMs = Math.max(0, session.reportExitAt - session.reportLoginAt);
+    session.reportClippedToDay = session.reportLoginAt !== loginAt || session.reportExitAt !== exitAt;
+  } else {
+    session.reportExitAt = 0;
+    session.reportLoginDurationMs = 0;
+    session.reportClippedToDay = session.reportLoginAt !== loginAt;
+  }
+  return session;
+}
+
 function listJsonlFiles(dayDir) {
   if (!fs.existsSync(dayDir)) return [];
   const files = [];
@@ -923,10 +956,15 @@ function buildReport(entries, options = {}) {
   }
   attachExitEvidenceToSessions(sessionList, exitEvents);
   attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
-  const battleOutcomes = buildBattleOutcomes(sessionList, combatList);
+  const rawWindow = reportDayWindow(options.day || '');
+  const window = rawWindow && sessionList.some(session => sessionOverlapsWindow(session, rawWindow)) ? rawWindow : null;
+  const reportSessions = sessionList
+    .filter(session => sessionOverlapsWindow(session, window))
+    .map(session => applyReportDayWindow(session, window));
+  const battleOutcomes = buildBattleOutcomes(reportSessions, combatList);
   const lifecycles = buildLifecycles(entries, {
     previousEntries: options.previousEntries || [],
-    sessions: sessionList,
+    sessions: reportSessions,
     combats: combatList,
     battleOutcomes
   });
@@ -934,11 +972,11 @@ function buildReport(entries, options = {}) {
     day: options.day || '',
     entries: entries.length,
     files: Array.from(new Set(entries.map(item => item.__file))).sort(),
-    sessions: sessionList,
+    sessions: reportSessions,
     combats: combatList,
     battleOutcomes,
     lifecycles,
-    totals: totalsForScope(sessionList, combatList, battleOutcomes)
+    totals: totalsForScope(reportSessions, combatList, battleOutcomes)
   };
 }
 
@@ -1009,7 +1047,7 @@ function totalsForScope(sessions, combats, battleOutcomes) {
     completed: completed.length,
     inferred: inferred.length,
     incomplete: open.length,
-    loginDurationMs: settled.reduce((sum, item) => sum + number(item.loginDurationMs), 0),
+    loginDurationMs: settled.reduce((sum, item) => sum + number(item.reportLoginDurationMs ?? item.loginDurationMs), 0),
     staminaSpentMs: settled.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
     coinsGained: settled.reduce((sum, item) => sum + number(item.coinsGained), 0),
     pureRefreshCoins: settled.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
@@ -1470,9 +1508,12 @@ function printLoginSection(sessions, totals, heading = '## 登录统计') {
   console.log('| # | 登录时间 | 退出时间 | 耗时 | 消耗体力 | 拾取刷新金币 | 击杀挂机玩家 | 击杀活跃玩家 | 总收益 | 退出原因 |');
   console.log('|---:|---|---|---:|---:|---:|---:|---:|---:|---|');
   sessions.forEach((session, index) => {
-    const exit = number(session.exitAt) ? formatTime(session.exitAt) : '未收口';
+    const loginAt = number(session.reportLoginAt || session.loginAt);
+    const exitAt = number(session.reportExitAt || session.exitAt);
+    const durationMs = number(session.reportLoginDurationMs ?? session.loginDurationMs);
+    const exit = exitAt ? formatTime(exitAt) : '未收口';
     const status = sessionStatusText(session);
-    console.log(`| ${index + 1} | ${formatTime(session.loginAt)} | ${exit} | ${formatDuration(session.loginDurationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins, session.afkUnconfirmedDropCoins, session.afkUnconfirmedKillCount)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins, session.activeUnconfirmedDropCoins, session.activeUnconfirmedKillCount)} | ${formatCoins(session.coinsGained)} | ${status} |`);
+    console.log(`| ${index + 1} | ${formatTime(loginAt)} | ${exit} | ${formatDuration(durationMs)} | ${formatStaminaSpent(session.staminaSpentMs)} | ${formatCoins(session.pureRefreshCoins)} | ${formatKillCell(session.afkKillCount, session.afkKillRewardCoins, session.afkUnconfirmedDropCoins, session.afkUnconfirmedKillCount)} | ${formatKillCell(session.activeKillCount, session.activeKillRewardCoins, session.activeUnconfirmedDropCoins, session.activeUnconfirmedKillCount)} | ${formatCoins(session.coinsGained)} | ${status} |`);
   });
   console.log('');
   console.log(`登录合计：明确退出${totals.completed}/${totals.sessions}，推断收口${totals.inferred}，尚未收口${totals.incomplete}，总耗时${formatDuration(totals.loginDurationMs)}，消耗体力${formatStaminaSpent(totals.staminaSpentMs)}，拾取刷新金币${totals.pureRefreshCoins}币，击杀挂机玩家${formatKillCell(totals.afkKillCount, totals.afkKillRewardCoins, totals.afkUnconfirmedDropCoins, totals.afkUnconfirmedKillCount)}，击杀活跃玩家${formatKillCell(totals.activeKillCount, totals.activeKillRewardCoins, totals.activeUnconfirmedDropCoins, totals.activeUnconfirmedKillCount)}，总收益${totals.coinsGained}币`);
@@ -1895,6 +1936,13 @@ function runSelfTest() {
   assertSelfTest(inferredTotals.completed === 1 && inferredTotals.inferred === 1 && inferredTotals.incomplete === 1, 'inferred session counts are wrong');
   assertSelfTest(inferredTotals.loginDurationMs === 5000 && inferredTotals.staminaSpentMs === 7000, 'inferred closed sessions were not included in duration/stamina totals');
   assertSelfTest(inferredTotals.coinsGained === 10 && inferredTotals.pureRefreshCoins === 6 && inferredTotals.activeKillCount === 3 && inferredTotals.activeKillRewardCoins === 4, 'inferred closed sessions were not included in reward totals');
+  const clippedSession = applyReportDayWindow(
+    { loginAt: Date.parse('2026-06-12T15:00:00Z'), exitAt: Date.parse('2026-06-13T01:30:00Z'), loginDurationMs: 10.5 * 60 * 60 * 1000 },
+    reportDayWindow(day)
+  );
+  assertSelfTest(clippedSession.reportLoginAt === Date.parse('2026-06-12T16:00:00Z'), 'cross-day session start was not clipped to report day');
+  assertSelfTest(clippedSession.reportExitAt === Date.parse('2026-06-13T01:30:00Z'), 'in-day session exit was clipped incorrectly');
+  assertSelfTest(totalsForScope([clippedSession], [], []).loginDurationMs === 9.5 * 60 * 60 * 1000, 'login totals did not use clipped report duration');
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
   assertSelfTest(report.combats.length === 2, `expected 2 combats, got ${report.combats.length}`);
   assertSelfTest(report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'engaged enemy-leave-wait combat was incorrectly filtered out');
