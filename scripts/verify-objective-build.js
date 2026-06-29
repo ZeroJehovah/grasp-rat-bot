@@ -1633,6 +1633,14 @@ function main() {
     assert(targetOverlaySourceModule.includes('decision?.coinRoute || target?.coinRoute'), 'target overlay does not read route metadata from decisions');
     assert(targetOverlaySourceModule.includes('if (targetKey && firstKey && targetKey !== firstKey) return [];'), 'target overlay does not suppress stale/mismatched coin routes');
     assert(targetOverlaySourceModule.includes('for (const point of routePoints) ctx.lineTo(point.x, point.y);'), 'target overlay does not connect route points');
+    assert(targetOverlaySourceModule.includes('function targetOverlayProjection'), 'target overlay projection resolver not found');
+    assert(targetOverlaySourceModule.includes('function targetOverlayPageViewParams'), 'target overlay does not read native page view params');
+    assert(targetOverlaySourceModule.includes("typeof viewParams === 'function' ? viewParams : win?.viewParams"), 'target overlay does not prefer the native viewParams projection');
+    assert(targetOverlaySourceModule.includes('targetOverlayScaleTextRadiusCm()'), 'target overlay does not use native scaleText radius fallback');
+    assert(targetOverlaySourceModule.includes("window.matchMedia?.('(max-aspect-ratio: 1/1)')"), 'target overlay fallback does not mirror native screenCenter aspect rule');
+    assert(targetOverlaySourceModule.includes('Math.min(368, Math.max(0, width - 320))'), 'target overlay fallback does not mirror native reserved-left screen center');
+    assert(targetOverlaySourceModule.includes('worldOffsetX: worldRect.left - shellRect.left'), 'target overlay does not preserve world-to-shell x offset');
+    assert(targetOverlaySourceModule.includes('worldWidth: worldRect.width'), 'target overlay does not preserve native world canvas width for projection');
   });
 
   check('coin diagnostics expose filtered visible coin candidates', () => {

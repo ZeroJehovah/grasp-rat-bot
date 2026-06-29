@@ -75,12 +75,31 @@ function targetOverlaySource() {
     const height = Math.max(1, Math.round(shellRect.height * dpr));
     if (overlay.width !== width) overlay.width = width;
     if (overlay.height !== height) overlay.height = height;
-    return { overlay, width: shellRect.width, height: shellRect.height, dpr };
+    return {
+      overlay,
+      width: shellRect.width,
+      height: shellRect.height,
+      dpr,
+      worldWidth: worldRect.width,
+      worldHeight: worldRect.height,
+      worldOffsetX: worldRect.left - shellRect.left,
+      worldOffsetY: worldRect.top - shellRect.top
+    };
+  }
+
+  function targetOverlayScaleTextRadiusCm() {
+    const text = String(document.getElementById('scaleText')?.textContent || '');
+    const match = text.match(/r\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b/i);
+    if (!match) return 0;
+    const value = Number(match[1]);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return /km/i.test(match[2]) ? value * 100000 : value * 100;
   }
 
   function currentViewRadiusCm() {
     const nativeState = getNativeState();
     const values = [
+      targetOverlayScaleTextRadiusCm(),
       nativeState?.viewRadiusCm,
       nativeState?.view_radius_cm,
       nativeState?.viewRadius,
@@ -93,18 +112,84 @@ function targetOverlaySource() {
     return 10000;
   }
 
-  function targetOverlayPoint(point, self, view) {
-    const targetPoint = targetOverlayWorldPoint(point);
+  function targetOverlayPageViewParams() {
+    const win = typeof window === 'object' && window ? window : null;
+    const fn = typeof viewParams === 'function' ? viewParams : win?.viewParams;
+    if (typeof fn !== 'function') return null;
+    try {
+      const params = fn.call(win);
+      const units = Number(params?.units);
+      const cx = Number(params?.cx);
+      const cy = Number(params?.cy);
+      const centerX = Number(params?.centerX);
+      const centerY = Number(params?.centerY);
+      if ([units, cx, cy, centerX, centerY].every(Number.isFinite) && units > 0) {
+        return { units, cx, cy, centerX, centerY, source: 'viewParams' };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function targetOverlayScreenCenter(canvasWidth, canvasHeight) {
+    const width = Math.max(1, Number(canvasWidth) || 1);
+    const height = Math.max(1, Number(canvasHeight) || 1);
+    let narrow = false;
+    try {
+      narrow = Boolean(window.matchMedia?.('(max-aspect-ratio: 1/1)')?.matches);
+    } catch (_) {
+      narrow = width <= height;
+    }
+    const reservedLeft = narrow ? 0 : Math.min(368, Math.max(0, width - 320));
+    return {
+      x: reservedLeft + (width - reservedLeft) / 2,
+      y: height / 2
+    };
+  }
+
+  function targetOverlayProjection(self, view) {
+    const nativeView = targetOverlayPageViewParams();
+    if (nativeView) {
+      return {
+        ...nativeView,
+        offsetX: Number(view?.worldOffsetX) || 0,
+        offsetY: Number(view?.worldOffsetY) || 0
+      };
+    }
     const selfPoint = targetOverlayWorldPoint(self);
-    const x = Number(targetPoint?.x);
-    const y = Number(targetPoint?.y);
     const selfX = Number(selfPoint?.x);
     const selfY = Number(selfPoint?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
-    const scale = Math.min(view.width, view.height) / (Math.max(1, currentViewRadiusCm()) * 2);
+    if (!Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
+    const canvasWidth = Math.max(1, Number(view?.worldWidth || view?.width) || 1);
+    const canvasHeight = Math.max(1, Number(view?.worldHeight || view?.height) || 1);
+    const shortSide = Math.max(1, Math.min(canvasWidth, canvasHeight));
+    const units = Math.max(1, currentViewRadiusCm()) * 2 / shortSide;
+    const center = targetOverlayScreenCenter(canvasWidth, canvasHeight);
     return {
-      x: view.width / 2 + (x - selfX) * scale,
-      y: view.height / 2 + (y - selfY) * scale
+      units,
+      cx: center.x,
+      cy: center.y,
+      centerX: selfX,
+      centerY: selfY,
+      offsetX: Number(view?.worldOffsetX) || 0,
+      offsetY: Number(view?.worldOffsetY) || 0,
+      source: 'fallback'
+    };
+  }
+
+  function targetOverlayPoint(point, self, view, projection = null) {
+    const targetPoint = targetOverlayWorldPoint(point);
+    const viewProjection = projection || targetOverlayProjection(self, view);
+    const x = Number(targetPoint?.x);
+    const y = Number(targetPoint?.y);
+    const units = Number(viewProjection?.units);
+    const cx = Number(viewProjection?.cx);
+    const cy = Number(viewProjection?.cy);
+    const centerX = Number(viewProjection?.centerX);
+    const centerY = Number(viewProjection?.centerY);
+    if (![x, y, units, cx, cy, centerX, centerY].every(Number.isFinite) || units <= 0) return null;
+    return {
+      x: (Number(viewProjection?.offsetX) || 0) + cx + (x - centerX) / units,
+      y: (Number(viewProjection?.offsetY) || 0) + cy + (y - centerY) / units
     };
   }
 
@@ -315,11 +400,12 @@ function targetOverlaySource() {
       if (!ctx) return;
       ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
       ctx.clearRect(0, 0, view.width, view.height);
-      const start = targetOverlayPoint(self, self, view);
-      const end = targetOverlayPoint(target, self, view);
+      const projection = targetOverlayProjection(self, view);
+      const start = targetOverlayPoint(self, self, view, projection);
+      const end = targetOverlayPoint(target, self, view, projection);
       if (!start || !end) return;
       const routePoints = targetOverlayRoutePoints(decision, target)
-        .map(point => targetOverlayPoint(point, self, view))
+        .map(point => targetOverlayPoint(point, self, view, projection))
         .filter(Boolean);
       ctx.save();
       ctx.strokeStyle = style.stroke;
