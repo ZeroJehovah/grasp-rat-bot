@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.250"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.251"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5562,12 +5562,34 @@ function hpDisplay(value) {
     return moved || Boolean(state.movement[key].movedAt && t - Number(state.movement[key].movedAt || 0) <= 10 * 60 * 1000);
   }
 
-  function loginPointDangerReason(state, entity) {
+  function loginPointActiveModeStaminaSpent(entity) {
+    const remaining = staminaRemaining(entity, '5s');
+    if (remaining === null) return false;
+    const limit = staminaLimitValue(entity, '5s', 10000);
+    return Number.isFinite(limit) && limit > 0 && remaining < limit * cfg.staminaFullRatio;
+  }
+
+  function loginPointActiveModeDangerReason(state, entity, t) {
+    if (!isJoinModeActive(entity)) return '';
+    const moved = loginPointEntityMoved(state, entity, t);
+    if (isFiringEntity(entity)) return 'active-mode-firing';
+    if (isMovingThreat(entity) || moved) return 'active-mode-moving';
+    if (loginPointActiveModeStaminaSpent(entity)) return 'active-mode-stamina-spent';
+    if (truthyFlag(entity.combat)
+      || truthyFlag(entity.engagedCombat)
+      || String(entity.combatIntent || '') === 'engaged') {
+      return 'active-mode-combat';
+    }
+    return '';
+  }
+
+  function loginPointDangerReason(state, entity, t) {
     if (!entity || typeof entity !== 'object') return '';
     const damagedKeys = loginPointDamageActorKeys(state);
     const key = loginPointEntityKey(entity);
     if (key && damagedKeys.has(key)) return 'damaged-self-today';
-    if (isJoinModeActive(entity)) return 'active-mode';
+    const activeModeReason = loginPointActiveModeDangerReason(state, entity, t);
+    if (activeModeReason) return activeModeReason;
     return '';
   }
 
@@ -5589,7 +5611,7 @@ function hpDisplay(value) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const distance = Math.hypot(x - Number(point.x), y - Number(point.y));
       if (!(distance <= radius)) continue;
-      const reason = loginPointDangerReason(state, entity);
+      const reason = loginPointDangerReason(state, entity, t);
       if (!reason) continue;
       return {
         safe: false,

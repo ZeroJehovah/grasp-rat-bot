@@ -1280,11 +1280,16 @@ function main() {
       assert(!functionBody(text, 'resetLoginPointSafetyGate').includes('point = null'), 'login-point reset clears persisted point');
       assert(functionBody(text, 'resetLoginPointSafetyGate').includes('state.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null'), 'login-point reset does not record unknown exit HP as unknown');
       const pointDangerBody = functionBody(text, 'loginPointDangerReason');
+      const activeModeDangerBody = functionBody(text, 'loginPointActiveModeDangerReason');
       const pointEvaluateBody = functionBody(text, 'evaluateLoginPointSafety');
       const damageEvidenceBody = functionBody(text, 'loginPointDamageEvidence');
       const rememberDamageBody = functionBody(text, 'rememberLoginPointDamageThreat');
       assert(pointDangerBody.includes("'damaged-self-today'"), 'login-point safety does not block known same-day damage actors');
-      assert(pointDangerBody.includes("return 'active-mode'"), 'login-point safety does not block Active mode');
+      assert(pointDangerBody.includes('loginPointActiveModeDangerReason(state, entity, t)'), 'login-point safety does not route Active mode through evidence-gated danger helper');
+      assert(activeModeDangerBody.includes('if (!isJoinModeActive(entity)) return'), 'login-point Active-mode helper can block non-Active players');
+      assert(activeModeDangerBody.includes('loginPointEntityMoved(state, entity, t)'), 'login-point Active-mode helper does not observe movement before blocking');
+      assert(activeModeDangerBody.includes('isFiringEntity(entity)') && activeModeDangerBody.includes('isMovingThreat(entity)') && activeModeDangerBody.includes('loginPointActiveModeStaminaSpent(entity)'), 'login-point Active-mode blocks are not limited to observed activity evidence');
+      assert(!activeModeDangerBody.includes("return 'active-mode';"), 'login-point Active-mode can still block solely by mode');
       assert(damageEvidenceBody.includes('incoming-bullet-owner'), 'login-point damage actor evidence does not use incoming bullet ownership');
       assert(damageEvidenceBody.includes('firing-near-self-hp-drop'), 'login-point damage actor evidence does not require firing evidence');
       assert(rememberDamageBody.includes('loginPointDamageEvidence(candidate, injury)'), 'login-point damage actor recording still accepts unevidenced nearby actors');
@@ -1293,7 +1298,7 @@ function main() {
       assert(!pointDangerBody.includes("return 'recent-movement'"), 'login-point safety still blocks recent movement');
       assert(!pointDangerBody.includes("return 'stamina-not-full'"), 'login-point safety still blocks non-full 5s stamina');
       assert(!pointDangerBody.includes("return 'firing'"), 'login-point safety still blocks firing evidence');
-      assert(!pointEvaluateBody.includes('loginPointEntityMoved'), 'login-point safety still samples movement for danger evidence');
+      assert(!pointEvaluateBody.includes('loginPointEntityMoved'), 'login-point safety still samples movement outside the Active-mode evidence gate');
       assert(!pointEvaluateBody.includes('stamina5s'), 'login-point safety still attaches stamina evidence to danger blocks');
       assert(pointProbeBody.includes('state.lastDanger = null'), 'snapshot failure does not clear stale player-danger block');
       const loginBody = functionBody(text, 'maybeStartAutoLogin');
