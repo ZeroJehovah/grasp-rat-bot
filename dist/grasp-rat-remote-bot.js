@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.251"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.252"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -2079,6 +2079,115 @@
     return target;
   }
 
+  function targetOverlayHasAliveSelf() {
+    const self = getSelf();
+    if (!self) return false;
+    try {
+      if (typeof isAlive === 'function') return Boolean(isAlive(self));
+    } catch (_) {}
+    const life = String(self.life ?? self.status ?? '').toLowerCase();
+    if (life) return /alive|live|living|存活/.test(life) && !/dead|death|死亡/.test(life);
+    const hp = Number(self.hp ?? self.health);
+    return Number.isFinite(hp) && hp > 0;
+  }
+
+  function targetOverlayStoredLoginPointSafety() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(LOGIN_POINT_SAFETY_KEY) || 'null');
+      return stored && typeof stored === 'object' ? stored : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function targetOverlayLoginPointStatus(decision) {
+    try {
+      if (typeof loginPointSafetyStatus === 'function') {
+        const status = loginPointSafetyStatus();
+        if (status?.point) return status;
+      }
+    } catch (_) {}
+    const candidates = [
+      decision?.login?.snapshotGate?.pointSafety,
+      decision?.snapshotGate?.pointSafety,
+      decision?.loginSnapshotGate?.pointSafety,
+      decision?.reloginGate?.loginPointSafety,
+      bot?.lastLoginResult?.snapshotGate?.pointSafety,
+      bot?.loginSnapshotGate?.pointSafety,
+      bot?.loginPointSafety,
+      targetOverlayStoredLoginPointSafety()
+    ];
+    return candidates.find(item => item?.point) || null;
+  }
+
+  function targetOverlayLoginPointRadius(status) {
+    const configured = Number(status?.radius);
+    if (Number.isFinite(configured) && configured > 0) return configured;
+    const lastExitSelfHp = Number(status?.lastExitSelfHp);
+    const threshold = Math.max(0, Number(cfg.loginPointSafetyHealthyHpThreshold ?? 80) || 80);
+    if (Number.isFinite(lastExitSelfHp) && lastExitSelfHp >= threshold) {
+      return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 17000) || 17000);
+    }
+    return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 30000) || 30000);
+  }
+
+  function targetOverlayLoginPointState(decision) {
+    if (targetOverlayHasAliveSelf()) return null;
+    const status = targetOverlayLoginPointStatus(decision);
+    const point = targetOverlayWorldPoint(status?.point);
+    const radius = targetOverlayLoginPointRadius(status);
+    if (!point || !(radius > 0)) return null;
+    const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 12) || 12);
+    const streak = Math.max(0, Number(status?.streak || 0) || 0);
+    return {
+      ...status,
+      point,
+      radius,
+      required,
+      streak,
+      satisfied: Boolean(status?.satisfied || (required <= 0 || streak >= required)),
+      unsafe: Boolean(status?.lastDanger || status?.lastError)
+    };
+  }
+
+  function drawLoginPointOverlay(ctx, view, state) {
+    if (!ctx || !view || !state?.point) return false;
+    const projection = targetOverlayProjection(state.point, view);
+    const center = targetOverlayPoint(state.point, state.point, view, projection);
+    const units = Number(projection?.units);
+    if (!center || !(units > 0)) return false;
+    const radiusPx = Math.max(1, Number(state.radius || 0) / units);
+    const tone = state.unsafe
+      ? { stroke: 'rgba(248,113,113,.62)', fill: 'rgba(248,113,113,.08)', point: 'rgba(248,113,113,.9)' }
+      : (state.satisfied
+        ? { stroke: 'rgba(74,222,128,.56)', fill: 'rgba(74,222,128,.07)', point: 'rgba(74,222,128,.9)' }
+        : { stroke: 'rgba(250,204,21,.58)', fill: 'rgba(250,204,21,.08)', point: 'rgba(250,204,21,.9)' });
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = tone.stroke;
+    ctx.fillStyle = tone.fill;
+    ctx.setLineDash([12, 8]);
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = tone.point;
+    ctx.fillStyle = tone.point;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(center.x - 13, center.y);
+    ctx.lineTo(center.x + 13, center.y);
+    ctx.moveTo(center.x, center.y - 13);
+    ctx.lineTo(center.x, center.y + 13);
+    ctx.stroke();
+    ctx.restore();
+    return true;
+  }
+
   function renderTargetOverlay(decision = bot.lastDecision) {
     try {
       if (bot?.paused || decision?.paused || String(decision?.reason || '') === 'paused') {
@@ -2092,11 +2201,16 @@
       const style = targetOverlayStyle(decision);
       const target = targetOverlayResolvedTarget(decision);
       const self = targetOverlayVisualSelf() || decision?.self || bot.lastSelf;
+      const loginPointOverlay = targetOverlayLoginPointState(decision);
       if (!style || !target || !self) {
-        const existing = document.getElementById(TARGET_OVERLAY_ID);
-        if (existing) {
-          const ctx = existing.getContext('2d');
-          if (ctx) ctx.clearRect(0, 0, existing.width, existing.height);
+        const world = document.getElementById('world');
+        const shell = world?.closest?.('.map-shell') || world?.parentElement || null;
+        const view = loginPointOverlay ? ensureTargetOverlayCanvas(world, shell) : null;
+        const ctx = view?.overlay?.getContext('2d') || document.getElementById(TARGET_OVERLAY_ID)?.getContext('2d') || null;
+        if (ctx) {
+          if (view) ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+          ctx.clearRect(0, 0, view?.width || ctx.canvas.width, view?.height || ctx.canvas.height);
+          if (view && loginPointOverlay) drawLoginPointOverlay(ctx, view, loginPointOverlay);
         }
         return;
       }
@@ -2108,6 +2222,7 @@
       if (!ctx) return;
       ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
       ctx.clearRect(0, 0, view.width, view.height);
+      if (loginPointOverlay) drawLoginPointOverlay(ctx, view, loginPointOverlay);
       const projection = targetOverlayProjection(self, view);
       const start = targetOverlayPoint(self, self, view, projection);
       const end = targetOverlayPoint(target, self, view, projection);
