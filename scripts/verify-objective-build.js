@@ -1626,6 +1626,10 @@ function main() {
   check('target overlay renders selected coin route points', () => {
     assert(targetOverlaySourceModule.includes('function targetOverlayRoutePoints'), 'target overlay route point resolver not found');
     assert(targetOverlaySourceModule.includes('function targetOverlayRoutePointKey'), 'target overlay route target-key helper not found');
+    assert(targetOverlaySourceModule.includes('const renderX = firstFiniteNumber(value.visual_x, value.visualX, value.render_x, value.renderX)'), 'target overlay does not read visual/render x coordinates');
+    assert(targetOverlaySourceModule.includes('const renderY = firstFiniteNumber(value.visual_y, value.visualY, value.render_y, value.renderY)'), 'target overlay does not read visual/render y coordinates');
+    assert(targetOverlaySourceModule.includes('const x = firstFiniteNumber(\n      renderX,'), 'target overlay does not prefer visual/render x coordinates');
+    assert(targetOverlaySourceModule.includes('const y = firstFiniteNumber(\n      renderY,'), 'target overlay does not prefer visual/render y coordinates');
     assert(targetOverlaySourceModule.includes('decision?.coinRoute || target?.coinRoute'), 'target overlay does not read route metadata from decisions');
     assert(targetOverlaySourceModule.includes('if (targetKey && firstKey && targetKey !== firstKey) return [];'), 'target overlay does not suppress stale/mismatched coin routes');
     assert(targetOverlaySourceModule.includes('for (const point of routePoints) ctx.lineTo(point.x, point.y);'), 'target overlay does not connect route points');
