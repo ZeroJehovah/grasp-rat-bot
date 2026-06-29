@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.41';
+  const BOOTSTRAP_VERSION = '0.1.42';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -712,9 +712,11 @@
   }
 
   function decisionReasonDetail(decision, status) {
+    const actionDisplay = decisionActionDisplayReason(decision);
+    if (actionDisplay) return actionDisplay;
+    if (!decisionAllowsExitReasonDetail(decision)) return '';
     const persistent = activePersistentExitDetail(status);
     return decision?.leave?.displayReason
-      || decision?.displayReason
       || decision?.enemyLeave?.displayReason
       || decision?.offlineLeave?.displayReason
       || status?.enemyLeave?.displayReason
@@ -726,6 +728,33 @@
       || decision?.leave?.enemyLeaveSummary
       || decision?.leave?.enemyLeaveReason
       || '';
+  }
+
+  function decisionAllowsExitReasonDetail(decision) {
+    if (!decision) return true;
+    const kind = String(decision?.kind || '');
+    const reason = String(decision?.reason || '');
+    return kind === 'leave'
+      || kind === 'wait'
+      || kind === 'idle'
+      || /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|session-mismatch|game-session/.test(reason);
+  }
+
+  function decisionActionDisplayReason(decision) {
+    const text = String(decision?.displayReason || '').trim();
+    if (!text) return '';
+    if (decisionAllowsExitReasonDetail(decision)) return text;
+    const kind = String(decision?.kind || '');
+    const reason = String(decision?.reason || '');
+    if (kind === 'coin' || kind === 'seek-coin' || (kind === 'patrol' && /coin/.test(reason))) {
+      return /金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/.test(text) ? text : '';
+    }
+    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop') {
+      return /战斗|攻击|目标|Drop|收益|挂机|白名单/.test(text) ? text : '';
+    }
+    if (kind === 'flee') return /避|危险|威胁|撤离|距离/.test(text) ? text : '';
+    if (kind === 'recover') return /恢复|回血|体力/.test(text) ? text : '';
+    return text;
   }
 
   function cloudflareErrorInfo() {

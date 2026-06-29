@@ -1625,7 +1625,9 @@ function main() {
 
   check('target overlay renders selected coin route points', () => {
     assert(targetOverlaySourceModule.includes('function targetOverlayRoutePoints'), 'target overlay route point resolver not found');
+    assert(targetOverlaySourceModule.includes('function targetOverlayRoutePointKey'), 'target overlay route target-key helper not found');
     assert(targetOverlaySourceModule.includes('decision?.coinRoute || target?.coinRoute'), 'target overlay does not read route metadata from decisions');
+    assert(targetOverlaySourceModule.includes('if (targetKey && firstKey && targetKey !== firstKey) return [];'), 'target overlay does not suppress stale/mismatched coin routes');
     assert(targetOverlaySourceModule.includes('for (const point of routePoints) ctx.lineTo(point.x, point.y);'), 'target overlay does not connect route points');
   });
 
@@ -1886,6 +1888,17 @@ function main() {
         assert(text.includes(`'${reason}': '${label}'`), `${reason} mapping missing`);
       }
       assert(requiredMappings['best-opportunity-coin-route'] !== requiredMappings['best-opportunity-visible-coin'], 'route and visible coin labels are not distinct');
+    });
+    check(`${file} filters stale exit detail from active action reasons`, () => {
+      const detailBody = functionBody(text, 'decisionReasonDetail');
+      const actionBody = functionBody(text, 'decisionActionDisplayReason');
+      const allowsBody = functionBody(text, 'decisionAllowsExitReasonDetail');
+      assert(detailBody.includes('const actionDisplay = decisionActionDisplayReason(decision)'), 'reason detail does not prefer scoped action display reason');
+      assert(detailBody.includes('if (!decisionAllowsExitReasonDetail(decision)) return \'\';'), 'reason detail can still fall through to stale exit detail for active actions');
+      assert(!detailBody.includes('|| decision?.displayReason'), 'reason detail still accepts unscoped decision displayReason');
+      assert(actionBody.includes("kind === 'coin' || kind === 'seek-coin'"), 'coin action display reason scope not found');
+      assert(actionBody.includes('/金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/'), 'coin action display reason allow-list not found');
+      assert(allowsBody.includes("kind === 'leave'") && allowsBody.includes("kind === 'wait'"), 'exit detail scope does not preserve wait/leave reasons');
     });
     check(`${file} renders combat HP as a full-width fight panel`, () => {
       const body = functionBody(text, 'appendCombatHpPanel');

@@ -236,6 +236,9 @@ function targetOverlaySource() {
     const route = decision?.coinRoute || target?.coinRoute || null;
     const points = Array.isArray(route?.points) ? route.points : [];
     if (!points.length) return [];
+    const targetKey = targetOverlayRoutePointKey(target);
+    const firstKey = targetOverlayRoutePointKey(points[0]);
+    if (targetKey && firstKey && targetKey !== firstKey) return [];
     const resolved = points
       .map(point => targetOverlayResolvedCoin(point) || point)
       .map(targetOverlayWorldPoint)
@@ -245,6 +248,16 @@ function targetOverlaySource() {
       if (first) resolved[0] = first;
     }
     return resolved;
+  }
+
+  function targetOverlayRoutePointKey(point) {
+    const id = point?.id ?? point?.drop_id ?? point?.dropId ?? point?.coin_id ?? point?.coinId;
+    if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    const amount = Number(point?.amount);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return '';
+    return 'xy:' + Math.round(x) + ':' + Math.round(y) + ':' + (Number.isFinite(amount) ? Math.round(amount) : '');
   }
 
   function targetOverlayResolvedEntity(target) {
