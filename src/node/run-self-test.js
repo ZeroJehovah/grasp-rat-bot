@@ -420,14 +420,6 @@ function runSelfTest() {
     || truthyFlag(e?.is_firing)
     || truthyFlag(e?.attacking)
     || truthyFlag(e?.is_attacking);
-  const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
-  const hasCombatActivitySignalForTest = e => isActive(e)
-    || truthyFlag(e?.active)
-    || truthyFlag(e?.currentlyActive)
-    || truthyFlag(e?.combat)
-    || truthyFlag(e?.engagedCombat)
-    || String(e?.combatIntent || '') === 'engaged';
-  const isAvoidanceThreat = e => isInvulnerable(e);
   function entityRecentActivityAgeMs(e) {
     const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
     return Number.isFinite(value) && value >= 0 ? value : null;
@@ -438,6 +430,21 @@ function runSelfTest() {
     const ageMs = entityRecentActivityAgeMs(e);
     return Boolean(e?.recentlyActive || (ageMs !== null && ageMs <= cooldownMs));
   }
+  function isIdleInvulnerableTarget(e) {
+    return Boolean(isInvulnerable(e)
+      && !isMovingThreat(e)
+      && !isFiringEntity(e)
+      && hasFullStamina(e)
+      && !recentlyActionedForAfk(e));
+  }
+  const isActive = e => isMovingThreat(e) || isFiringEntity(e) || (isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e)));
+  const hasCombatActivitySignalForTest = e => isActive(e)
+    || truthyFlag(e?.active)
+    || truthyFlag(e?.currentlyActive)
+    || truthyFlag(e?.combat)
+    || truthyFlag(e?.engagedCombat)
+    || String(e?.combatIntent || '') === 'engaged';
+  const isAvoidanceThreat = e => isInvulnerable(e) && !isIdleInvulnerableTarget(e);
   const isAfkTarget = e => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e);
   const isAfkProfitTarget = e => !recentlyActionedForAfk(e) && (isAfkTarget(e) || (isJoinModeActive(e) && !isActive(e) && !isMovingThreat(e) && !isFiringEntity(e)));
   const targetWhitelistNames = parseTargetWhitelistNames({ names: ['文月', 'Firefox'] }, cfg.targetWhitelistMaxNames);
@@ -5289,7 +5296,7 @@ function runSelfTest() {
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 4, x: 23000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
+          local: [{ user_id: 4, x: 23000, y: 0, vx: -10, vy: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
           coins: [{ drop_id: 2, x: -18000, y: 0, amount: 10, native: true }]
         });
         return action.kind + ':' + action.reason;
@@ -5301,7 +5308,7 @@ function runSelfTest() {
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 4, x: 12000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
+          local: [{ user_id: 4, x: 12000, y: 0, vx: -10, vy: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
           coins: [{ drop_id: 2, x: 10000, y: 0, amount: 30, native: true }]
         });
         return action.kind + ':' + action.reason + ':' + action.id;
@@ -7545,10 +7552,19 @@ function runSelfTest() {
       want: true
     },
     {
-      name: 'full hp avoids invulnerable active in caution range',
+      name: 'full hp ignores idle invulnerable active in caution range',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 23000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
+        coins: [{ drop_id: 2, x: -18000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'coin'
+    },
+    {
+      name: 'full hp avoids moving invulnerable active in caution range',
+      got: choose({
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        local: [{ user_id: 4, x: 23000, y: 0, vx: -10, vy: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable_remaining_ticks: 5 }],
         coins: [{ drop_id: 2, x: -18000, y: 0, amount: 1 }]
       }).kind,
       want: 'flee'
@@ -7575,7 +7591,7 @@ function runSelfTest() {
       name: 'invulnerable active blocks coin route in same direction',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 4, x: 50000, y: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable: true }],
+        local: [{ user_id: 4, x: 50000, y: 0, vx: -10, vy: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable: true }],
         coins: [{ drop_id: 2, x: 22000, y: 0, amount: 1 }]
       }).reason,
       want: 'wait-for-snapshot-coin'
