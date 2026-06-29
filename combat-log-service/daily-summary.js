@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const DEFAULT_DIR = path.join(__dirname, 'logs');
+const JSONL_READ_CHUNK_BYTES = 1024 * 1024;
 
 function parseArgs(args) {
   const out = {
@@ -73,19 +74,44 @@ function listJsonlFiles(dayDir) {
   return files.sort();
 }
 
+function forEachJsonlLine(file, onLine) {
+  const fd = fs.openSync(file, 'r');
+  const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
+  let remainder = '';
+  let lineNumber = 0;
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      const text = remainder + buffer.toString('utf8', 0, bytesRead);
+      const lines = text.split(/\n/);
+      remainder = lines.pop() || '';
+      for (const line of lines) {
+        lineNumber += 1;
+        onLine(line, lineNumber);
+      }
+    }
+    if (remainder) {
+      lineNumber += 1;
+      onLine(remainder, lineNumber);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function readEntries(dayDir) {
   const entries = [];
   for (const file of listJsonlFiles(dayDir)) {
-    const lines = fs.readFileSync(file, 'utf8').split(/\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index].trim();
-      if (!line) continue;
+    forEachJsonlLine(file, (rawLine, lineNumber) => {
+      const line = rawLine.trim();
+      if (!line) return;
       try {
         const entry = JSON.parse(line);
         entries.push({
           ...entry,
           __file: path.relative(dayDir, file),
-          __line: index + 1,
+          __line: lineNumber,
           __at: Number(entry.at || entry.receivedAt || 0) || 0
         });
       } catch (err) {
@@ -93,11 +119,11 @@ function readEntries(dayDir) {
           type: 'parse-error',
           error: err.message || String(err),
           __file: path.relative(dayDir, file),
-          __line: index + 1,
+          __line: lineNumber,
           __at: 0
         });
       }
-    }
+    });
   }
   entries.sort((a, b) => a.__at - b.__at || String(a.__file).localeCompare(String(b.__file)) || a.__line - b.__line);
   return entries;
@@ -107,26 +133,25 @@ function readLastDeathCountEntry(dayDir) {
   if (!fs.existsSync(dayDir)) return null;
   let latest = null;
   for (const file of listJsonlFiles(dayDir)) {
-    const lines = fs.readFileSync(file, 'utf8').split(/\n/);
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index].trim();
-      if (!line || !line.includes('"death_count"')) continue;
+    forEachJsonlLine(file, (rawLine, lineNumber) => {
+      const line = rawLine.trim();
+      if (!line || !line.includes('"death_count"')) return;
       try {
         const entry = JSON.parse(line);
-        if (!entry.self || !Number.isFinite(Number(entry.self.death_count))) continue;
+        if (!entry.self || !Number.isFinite(Number(entry.self.death_count))) return;
         const at = Number(entry.at || entry.receivedAt || 0) || 0;
         if (!latest || at >= latest.__at) {
           latest = {
             ...entry,
             __file: path.relative(dayDir, file),
-            __line: index + 1,
+            __line: lineNumber,
             __at: at
           };
         }
       } catch {
         // Ignore malformed historical lines; full report parsing records them for the current day.
       }
-    }
+    });
   }
   return latest;
 }
@@ -899,16 +924,12 @@ function buildReport(entries, options = {}) {
   attachExitEvidenceToSessions(sessionList, exitEvents);
   attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
   const battleOutcomes = buildBattleOutcomes(sessionList, combatList);
-  const battleTotals = battleOutcomeTotals(battleOutcomes);
   const lifecycles = buildLifecycles(entries, {
     previousEntries: options.previousEntries || [],
     sessions: sessionList,
     combats: combatList,
     battleOutcomes
   });
-  const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
-  const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
-  const open = sessionList.filter(item => !number(item.exitAt));
   return {
     day: options.day || '',
     entries: entries.length,
@@ -917,38 +938,7 @@ function buildReport(entries, options = {}) {
     combats: combatList,
     battleOutcomes,
     lifecycles,
-    totals: {
-      sessions: sessionList.length,
-      completed: completed.length,
-      inferred: inferred.length,
-      incomplete: open.length,
-      loginDurationMs: completed.reduce((sum, item) => sum + number(item.loginDurationMs), 0),
-      staminaSpentMs: completed.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
-      coinsGained: completed.reduce((sum, item) => sum + number(item.coinsGained), 0),
-      pureRefreshCoins: completed.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
-      killRewardCoins: completed.reduce((sum, item) => sum + number(item.killRewardCoins), 0),
-      attributedKillRewardCoins: completed.reduce((sum, item) => sum + number(item.attributedKillRewardCoins), 0),
-      unconfirmedKillDropCoins: completed.reduce((sum, item) => sum + number(item.unconfirmedKillDropCoins), 0),
-      rewardKillCount: completed.reduce((sum, item) => sum + number(item.rewardKillCount), 0),
-      afkKillCount: completed.reduce((sum, item) => sum + number(item.afkKillCount), 0),
-      afkKillRewardCoins: completed.reduce((sum, item) => sum + number(item.afkKillRewardCoins), 0),
-      afkUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedKillCount), 0),
-      afkUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedDropCoins), 0),
-      activeKillCount: completed.reduce((sum, item) => sum + number(item.activeKillCount), 0),
-      activeKillRewardCoins: completed.reduce((sum, item) => sum + number(item.activeKillRewardCoins), 0),
-      activeUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedKillCount), 0),
-      activeUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedDropCoins), 0),
-      combats: combatList.length,
-      combatDurationMs: combatList.reduce((sum, item) => sum + number(item.durationMs), 0),
-      combatStaminaSpentMs: combatList.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
-      battleOutcomes: battleTotals.count,
-      battleOutcomeKills: battleTotals.kills,
-      battleOutcomeFailures: battleTotals.failures,
-      battleOutcomeRewardCoins: battleTotals.rewardCoins,
-      battleOutcomeMissedDropCoins: battleTotals.missedDropCoins,
-      battleOutcomeFailedDropCoins: battleTotals.failedDropCoins,
-      battleOutcomeStaminaSpentMs: battleTotals.staminaSpentMs
-    }
+    totals: totalsForScope(sessionList, combatList, battleOutcomes)
   };
 }
 
@@ -1011,6 +1001,7 @@ function totalsForScope(sessions, combats, battleOutcomes) {
   const outcomes = battleOutcomes || [];
   const completed = sessionList.filter(item => number(item.exitAt) && !item.inferredExit);
   const inferred = sessionList.filter(item => number(item.exitAt) && item.inferredExit);
+  const settled = sessionList.filter(item => number(item.exitAt));
   const open = sessionList.filter(item => !number(item.exitAt));
   const battleTotals = battleOutcomeTotals(outcomes);
   return {
@@ -1018,22 +1009,22 @@ function totalsForScope(sessions, combats, battleOutcomes) {
     completed: completed.length,
     inferred: inferred.length,
     incomplete: open.length,
-    loginDurationMs: completed.reduce((sum, item) => sum + number(item.loginDurationMs), 0),
-    staminaSpentMs: completed.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
-    coinsGained: completed.reduce((sum, item) => sum + number(item.coinsGained), 0),
-    pureRefreshCoins: completed.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
-    killRewardCoins: completed.reduce((sum, item) => sum + number(item.killRewardCoins), 0),
-    attributedKillRewardCoins: completed.reduce((sum, item) => sum + number(item.attributedKillRewardCoins), 0),
-    unconfirmedKillDropCoins: completed.reduce((sum, item) => sum + number(item.unconfirmedKillDropCoins), 0),
-    rewardKillCount: completed.reduce((sum, item) => sum + number(item.rewardKillCount), 0),
-    afkKillCount: completed.reduce((sum, item) => sum + number(item.afkKillCount), 0),
-    afkKillRewardCoins: completed.reduce((sum, item) => sum + number(item.afkKillRewardCoins), 0),
-    afkUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedKillCount), 0),
-    afkUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.afkUnconfirmedDropCoins), 0),
-    activeKillCount: completed.reduce((sum, item) => sum + number(item.activeKillCount), 0),
-    activeKillRewardCoins: completed.reduce((sum, item) => sum + number(item.activeKillRewardCoins), 0),
-    activeUnconfirmedKillCount: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedKillCount), 0),
-    activeUnconfirmedDropCoins: completed.reduce((sum, item) => sum + number(item.activeUnconfirmedDropCoins), 0),
+    loginDurationMs: settled.reduce((sum, item) => sum + number(item.loginDurationMs), 0),
+    staminaSpentMs: settled.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
+    coinsGained: settled.reduce((sum, item) => sum + number(item.coinsGained), 0),
+    pureRefreshCoins: settled.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
+    killRewardCoins: settled.reduce((sum, item) => sum + number(item.killRewardCoins), 0),
+    attributedKillRewardCoins: settled.reduce((sum, item) => sum + number(item.attributedKillRewardCoins), 0),
+    unconfirmedKillDropCoins: settled.reduce((sum, item) => sum + number(item.unconfirmedKillDropCoins), 0),
+    rewardKillCount: settled.reduce((sum, item) => sum + number(item.rewardKillCount), 0),
+    afkKillCount: settled.reduce((sum, item) => sum + number(item.afkKillCount), 0),
+    afkKillRewardCoins: settled.reduce((sum, item) => sum + number(item.afkKillRewardCoins), 0),
+    afkUnconfirmedKillCount: settled.reduce((sum, item) => sum + number(item.afkUnconfirmedKillCount), 0),
+    afkUnconfirmedDropCoins: settled.reduce((sum, item) => sum + number(item.afkUnconfirmedDropCoins), 0),
+    activeKillCount: settled.reduce((sum, item) => sum + number(item.activeKillCount), 0),
+    activeKillRewardCoins: settled.reduce((sum, item) => sum + number(item.activeKillRewardCoins), 0),
+    activeUnconfirmedKillCount: settled.reduce((sum, item) => sum + number(item.activeUnconfirmedKillCount), 0),
+    activeUnconfirmedDropCoins: settled.reduce((sum, item) => sum + number(item.activeUnconfirmedDropCoins), 0),
     combats: combatList.length,
     combatDurationMs: combatList.reduce((sum, item) => sum + number(item.durationMs), 0),
     combatStaminaSpentMs: combatList.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
@@ -1896,6 +1887,14 @@ function runSelfTest() {
   assertSelfTest(placeholderSession?.coinsGained === 0, 'explicit zero pickedCoins incorrectly fell back to raw coinsGained');
   assertSelfTest(placeholderSession?.pureRefreshCoins === 0, 'explicit zero pickedCoins incorrectly produced refresh coins');
   assertSelfTest(report.totals.coinsGained === 20, `expected normalized total coins to stay at 20, got ${report.totals.coinsGained}`);
+  const inferredTotals = totalsForScope([
+    { exitAt: 1, loginDurationMs: 1000, staminaSpentMs: 2000, coinsGained: 3, pureRefreshCoins: 2, activeKillCount: 1, activeKillRewardCoins: 1 },
+    { exitAt: 2, inferredExit: true, loginDurationMs: 4000, staminaSpentMs: 5000, coinsGained: 7, pureRefreshCoins: 4, activeKillCount: 2, activeKillRewardCoins: 3 },
+    { loginDurationMs: 8000, staminaSpentMs: 9000, coinsGained: 11, pureRefreshCoins: 6, activeKillCount: 4, activeKillRewardCoins: 5 }
+  ], [], []);
+  assertSelfTest(inferredTotals.completed === 1 && inferredTotals.inferred === 1 && inferredTotals.incomplete === 1, 'inferred session counts are wrong');
+  assertSelfTest(inferredTotals.loginDurationMs === 5000 && inferredTotals.staminaSpentMs === 7000, 'inferred closed sessions were not included in duration/stamina totals');
+  assertSelfTest(inferredTotals.coinsGained === 10 && inferredTotals.pureRefreshCoins === 6 && inferredTotals.activeKillCount === 3 && inferredTotals.activeKillRewardCoins === 4, 'inferred closed sessions were not included in reward totals');
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
   assertSelfTest(report.combats.length === 2, `expected 2 combats, got ${report.combats.length}`);
   assertSelfTest(report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'engaged enemy-leave-wait combat was incorrectly filtered out');
