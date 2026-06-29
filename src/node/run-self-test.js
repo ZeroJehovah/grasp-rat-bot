@@ -351,8 +351,10 @@ function runSelfTest() {
     pursuitLeaveNonFullHpInvulnerableMs: 45000,
     targetStickMs: 5000,
     coinStickMs: 2500,
+    finalActionArbitrationHoldMs: 480,
+    finalActionArbitrationHistoryLimit: 24,
   };
-  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map(), ignoredCoins: new Map(), coinAttempts: new Map(), coinProgress: null, coinApproachLock: null, currentVisibleCoins: null };
+  const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map(), ignoredCoins: new Map(), coinAttempts: new Map(), coinProgress: null, coinApproachLock: null, currentVisibleCoins: null, finalActionArbitration: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
   const isAlive = e => e && e.life !== 'Dead' && e.life !== 'WaitingRevive' && !e.waiting_revive;
@@ -4791,6 +4793,94 @@ function runSelfTest() {
     };
   }
 
+  function actionPriorityBand(action) {
+    const kind = String(action?.kind || '');
+    if (kind === 'leave') return 'exit';
+    if (kind === 'flee') return 'safety';
+    if (kind === 'recover') return 'recover';
+    if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
+    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
+    if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';
+    if (kind === 'wait' || kind === 'idle') return 'wait';
+    return kind || 'action';
+  }
+
+  function actionFocusSummary(action) {
+    const target = action?.target || null;
+    const kind = String(action?.kind || '');
+    const reason = String(action?.reason || '');
+    const band = actionPriorityBand(action);
+    let type = band;
+    let id = reason || kind || band;
+    if (target) {
+      type = kind === 'coin' || kind === 'seek-coin' || target.amount !== undefined ? 'coin' : 'enemy';
+      id = target.id ?? target.user_id ?? target.drop_id ?? target.coin_id ?? target.targetId ?? id;
+    }
+    return {
+      key: String(type) + ':' + String(id),
+      type,
+      id: String(id),
+      kind,
+      reason,
+      band,
+      targeted: type === 'coin' || type === 'enemy'
+    };
+  }
+
+  function finalActionBandRank(band) {
+    switch (String(band || '')) {
+      case 'exit': return 600;
+      case 'safety': return 500;
+      case 'combat': return 400;
+      case 'profit': return 300;
+      case 'recover': return 200;
+      case 'wait': return 100;
+      default: return 0;
+    }
+  }
+
+  function finalActionReusable(action) {
+    const band = actionPriorityBand(action);
+    return band === 'safety' || band === 'combat' || band === 'profit';
+  }
+
+  function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs) {
+    if (!(cfg.finalActionArbitrationHoldMs > 0) || ageMs > cfg.finalActionArbitrationHoldMs) return false;
+    if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
+    if (previousFocus.key === currentFocus.key) return false;
+    const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
+    const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
+    if (currentBand === 'exit') return false;
+    const previousRank = finalActionBandRank(previousBand);
+    const currentRank = finalActionBandRank(currentBand);
+    if (currentRank > previousRank) return false;
+    if (previousBand === currentBand && previousBand !== 'profit') return false;
+    if (previousBand === 'profit' && currentBand !== 'profit') return false;
+    if (previousBand === 'safety' && currentBand === 'combat') return false;
+    return true;
+  }
+
+  function applyFinalActionArbitrationForTest(action, ageMs = 0) {
+    const state = bot.finalActionArbitration || (bot.finalActionArbitration = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] });
+    const currentFocus = actionFocusSummary(action);
+    let selected = action;
+    if (shouldHoldPreviousFinalAction(state.lastAction, state.lastFocus, action, currentFocus, ageMs)) {
+      selected = {
+        ...state.lastAction,
+        finalActionArbitration: {
+          mode: 'hold-previous',
+          from: currentFocus,
+          to: state.lastFocus
+        }
+      };
+      state.lastOverride = selected.finalActionArbitration;
+      state.history.push(state.lastOverride);
+    }
+    state.lastAction = { ...selected };
+    state.lastFocus = actionFocusSummary(selected);
+    return selected;
+  }
+
   function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     const dodgeRange = combatDodgeThreatRange();
@@ -4886,6 +4976,7 @@ function runSelfTest() {
       return {
         kind: highValuePriorityCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
         reason: 'high-value-visible-coin-priority',
+        ignoreReturnBlock: true,
         id: highValuePriorityCoin.drop_id,
         amount: highValuePriorityCoin.amount,
         dx: dir.dx,
@@ -5031,6 +5122,39 @@ function runSelfTest() {
   }
 
   const cases = [
+    {
+      name: 'final arbitration keeps recent safety action over profit',
+      got: (() => {
+        bot.finalActionArbitration = null;
+        applyFinalActionArbitrationForTest({ kind: 'flee', reason: 'avoid-invulnerable-target' }, 0);
+        const action = applyFinalActionArbitrationForTest({ kind: 'coin', reason: 'best-opportunity-coin', target: { id: 1, amount: 1 } }, 120);
+        bot.finalActionArbitration = null;
+        return action.kind + ':' + action.reason + ':' + action.finalActionArbitration?.mode;
+      })(),
+      want: 'flee:avoid-invulnerable-target:hold-previous'
+    },
+    {
+      name: 'final arbitration keeps recent combat action over recovery',
+      got: (() => {
+        bot.finalActionArbitration = null;
+        applyFinalActionArbitrationForTest({ kind: 'attack', reason: 'combat-burst-fire', combat: true, target: { id: 2, hp: 80 } }, 0);
+        const action = applyFinalActionArbitrationForTest({ kind: 'recover', reason: 'wait-for-full-stamina-and-hp' }, 160);
+        bot.finalActionArbitration = null;
+        return action.kind + ':' + action.reason + ':' + action.finalActionArbitration?.mode;
+      })(),
+      want: 'attack:combat-burst-fire:hold-previous'
+    },
+    {
+      name: 'final arbitration does not keep profit over new combat',
+      got: (() => {
+        bot.finalActionArbitration = null;
+        applyFinalActionArbitrationForTest({ kind: 'coin', reason: 'best-opportunity-coin', target: { id: 1, amount: 1 } }, 0);
+        const action = applyFinalActionArbitrationForTest({ kind: 'attack', reason: 'combat-burst-fire', combat: true, target: { id: 2, hp: 80 } }, 120);
+        bot.finalActionArbitration = null;
+        return action.kind + ':' + action.reason + ':' + Boolean(action.finalActionArbitration);
+      })(),
+      want: 'attack:combat-burst-fire:false'
+    },
     {
       name: 'low-drop active incoming bullet beats low-value coin inside attack range',
       got: choose({

@@ -706,6 +706,13 @@ function browserBotSource(config) {
 	      lastSwitch: preserved.targetSwitchDiagnostics?.lastSwitch || null,
 	      events: Array.isArray(preserved.targetSwitchDiagnostics?.events) ? preserved.targetSwitchDiagnostics.events.slice(-24) : []
 	    },
+	    finalActionArbitration: {
+	      lastAction: preserved.finalActionArbitration?.lastAction || null,
+	      lastFocus: preserved.finalActionArbitration?.lastFocus || null,
+	      lastSelectedAt: Number(preserved.finalActionArbitration?.lastSelectedAt || 0) || 0,
+	      lastOverride: preserved.finalActionArbitration?.lastOverride || null,
+	      history: Array.isArray(preserved.finalActionArbitration?.history) ? preserved.finalActionArbitration.history.slice(-24) : []
+	    },
 		    lastSelf: preserved.lastSelf || readPersistentLastSelfState() || null,
 		    lastSafety: null,
 			    actionThreats: [],
@@ -979,6 +986,7 @@ function browserBotSource(config) {
 	        coinSources: this.lastCoinSourceSummary,
 	        coinDiagnostics: this.coinDiagnostics,
 	        targetSwitchDiagnostics: this.targetSwitchDiagnostics,
+	        finalActionArbitration: this.finalActionArbitration,
 			        globalState: {
 			          refreshedAt: this.globalState.refreshedAt,
 		          snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
@@ -11550,6 +11558,100 @@ ${importantLogSource()}
     return nextAction;
   }
 
+  function finalActionArbitrationHoldMs() {
+    return Math.max(0, Math.round(Number(cfg.finalActionArbitrationHoldMs || 0) || 0));
+  }
+
+  function finalActionArbitrationHistoryLimit() {
+    return Math.max(4, Math.round(Number(cfg.finalActionArbitrationHistoryLimit || 24) || 24));
+  }
+
+  function ensureFinalActionArbitration() {
+    if (!bot.finalActionArbitration || typeof bot.finalActionArbitration !== 'object') {
+      bot.finalActionArbitration = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+    }
+    if (!Array.isArray(bot.finalActionArbitration.history)) bot.finalActionArbitration.history = [];
+    return bot.finalActionArbitration;
+  }
+
+  function finalActionBandRank(band) {
+    switch (String(band || '')) {
+      case 'exit': return 600;
+      case 'safety': return 500;
+      case 'combat': return 400;
+      case 'profit': return 300;
+      case 'recover': return 200;
+      case 'wait': return 100;
+      default: return 0;
+    }
+  }
+
+  function finalActionReusable(action) {
+    if (!action || typeof action !== 'object') return false;
+    if (action.kind === 'leave') return false;
+    if (action.leave || action.pendingExitIntent) return false;
+    const band = actionPriorityBand(action);
+    return band === 'safety' || band === 'combat' || band === 'profit';
+  }
+
+  function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs) {
+    const holdMs = finalActionArbitrationHoldMs();
+    if (!(holdMs > 0) || ageMs > holdMs) return false;
+    if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
+    if (previousFocus.key === currentFocus.key) return false;
+    const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
+    const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
+    if (currentBand === 'exit') return false;
+    const previousRank = finalActionBandRank(previousBand);
+    const currentRank = finalActionBandRank(currentBand);
+    if (previousRank <= 0 || currentRank <= 0) return false;
+    if (currentRank > previousRank) return false;
+    if (previousBand === currentBand && previousBand !== 'profit') return false;
+    if (previousBand === 'profit' && currentBand !== 'profit') return false;
+    if (previousBand === 'safety' && currentBand === 'combat') return false;
+    return true;
+  }
+
+  function applyFinalActionArbitration(action, source = '') {
+    const state = ensureFinalActionArbitration();
+    const currentFocus = actionFocusSummary(action);
+    const previousAction = state.lastAction || null;
+    const previousFocus = state.lastFocus || null;
+    const t = Date.now();
+    const ageMs = Math.max(0, t - Number(state.lastSelectedAt || 0));
+    let selected = action;
+    let selectedFocus = currentFocus;
+    let override = null;
+    if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs)) {
+      override = {
+        type: 'final-action-arbitration',
+        at: t,
+        source: String(source || ''),
+        mode: 'hold-previous',
+        ageMs: Math.round(ageMs),
+        holdMs: finalActionArbitrationHoldMs(),
+        from: currentFocus,
+        to: previousFocus,
+        reason: 'higher-priority-band-stick'
+      };
+      selected = {
+        ...previousAction,
+        finalActionArbitration: override
+      };
+      selectedFocus = previousFocus;
+    }
+    if (override) {
+      const snapshot = safeJsonClone(override) || override;
+      state.lastOverride = snapshot;
+      state.history.push(snapshot);
+      while (state.history.length > finalActionArbitrationHistoryLimit()) state.history.shift();
+    }
+    state.lastAction = safeJsonClone(selected) || selected;
+    state.lastFocus = safeJsonClone(selectedFocus) || selectedFocus;
+    if (!override) state.lastSelectedAt = t;
+    return selected;
+  }
+
   function setLastTarget(kind, id) {
     if (!id && id !== 0) return;
     if (!bot.lastTarget || bot.lastTarget.kind !== kind || String(bot.lastTarget.id) !== String(id)) {
@@ -11855,6 +11957,7 @@ ${importantLogSource()}
       bot.returnBlockScan = null;
       if (engagedCombatTarget) clearCombatEngagement('high-value-visible-coin-priority');
       const action = buildCoinAction(self, highValuePriorityCoin, 'high-value-visible-coin-priority');
+      action.ignoreReturnBlock = true;
       action.highValueCoinPriority = {
         amount: Number(highValuePriorityCoin.amount || 0),
         minAmount: highValueCoinPriorityAmount(),
@@ -12956,6 +13059,7 @@ ${importantLogSource()}
           pursuit: pursuitSummary
         };
 	      }
+	      action = applyFinalActionArbitration(action, source);
 	      action = recordActionSwitchDiagnostics(action, source);
 	      const canMove = true;
 	      const canAttack = true;

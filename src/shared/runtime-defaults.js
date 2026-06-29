@@ -300,6 +300,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     coinStickMs: 2500,
     coinDiagnosticsNearDistance: 50000,
     coinDiagnosticsMaxEntries: 8,
+    finalActionArbitrationHoldMs: 480,
+    finalActionArbitrationHistoryLimit: 24,
     targetSwitchDiagnosticsHistoryLimit: 24,
     targetSwitchOscillationWindowMs: 10000,
     targetSwitchLogMinIntervalMs: 1000,
