@@ -1654,6 +1654,16 @@ function main() {
     assert(targetOverlaySourceModule.includes('worldWidth: worldRect.width'), 'target overlay does not preserve native world canvas width for projection');
   });
 
+  check('target overlay renders logged-out login-point safety range', () => {
+    assert(targetOverlaySourceModule.includes('function targetOverlayLoginPointState'), 'login-point overlay state resolver not found');
+    assert(targetOverlaySourceModule.includes('function drawLoginPointOverlay'), 'login-point overlay draw helper not found');
+    assert(targetOverlaySourceModule.includes('targetOverlayHasAliveSelf()'), 'login-point overlay is not gated to logged-out/no-self states');
+    assert(targetOverlaySourceModule.includes('loginPointSafetyStatus()'), 'login-point overlay does not reuse login-point safety status');
+    assert(targetOverlaySourceModule.includes('LOGIN_POINT_SAFETY_KEY'), 'login-point overlay does not fall back to persisted safety state');
+    assert(targetOverlaySourceModule.includes('ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2)'), 'login-point overlay does not draw the safety radius');
+    assert(targetOverlaySourceModule.includes('drawLoginPointOverlay(ctx, view, loginPointOverlay)'), 'target overlay render path does not draw login-point overlay');
+  });
+
   check('coin diagnostics expose filtered visible coin candidates', () => {
     assert(sourceBot.includes('function buildCoinDiagnostics'), 'coin diagnostics builder not found');
     assert(sourceBot.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
