@@ -5146,7 +5146,10 @@ function runSelfTest() {
     const decoratedTargets = [...global, ...local]
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e) }))
       .filter(e => e.drop > 0);
-    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, decoratedCoins, decoratedTargets);
+    const hasRealtimeCoinForBudgetWait = decoratedCoins.some(coin => Number(coin?.amount || 0) > 0);
+    const staminaBlocked = hasRealtimeCoinForBudgetWait
+      ? summarizeBlockedStaminaOpportunity(self, decoratedCoins, [])
+      : null;
     return {
       kind: 'wait',
       reason: staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-visible-coin-refresh',
@@ -8589,20 +8592,23 @@ function runSelfTest() {
       want: 'wait-for-visible-coin-refresh'
     },
     {
-      name: 'low long stamina skips expensive afk drop target',
-      got: choose({
-        self: {
-          user_id: 1,
-          x: 0,
-          y: 0,
-          hp: 100,
-          stamina_5s_remaining_milli: 10000,
-          stamina_1h_remaining_milli: 3500,
-          stamina_1d_remaining_milli: 3500
-        },
-        local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, death_reward_preview: 100 }]
-      }).kind,
-      want: 'wait'
+      name: 'low long stamina target-only budget block waits for visible coin refresh',
+      got: (() => {
+        const action = choose({
+          self: {
+            user_id: 1,
+            x: 0,
+            y: 0,
+            hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 3500,
+            stamina_1d_remaining_milli: 3500
+          },
+          local: [{ user_id: 7, x: 10000, y: 0, current_join_mode: 'Passive', hp: 100, death_reward_preview: 100 }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'wait:wait-for-visible-coin-refresh'
     },
     {
       name: 'stamina budget leave summary identifies nearest coin',

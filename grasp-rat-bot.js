@@ -12683,7 +12683,10 @@ ${importantLogSource()}
 
 	    bot.snapshotCoinWaitSince = 0;
 	    bot.lastSnapshotCoinWaitAgeMs = 0;
-	    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, realtimeCoins, realtimeInactiveTargets);
+	    const hasRealtimeCoinForBudgetWait = (realtimeCoins || []).some(coin => Number(coin?.amount || 0) > 0);
+	    const staminaBlocked = hasRealtimeCoinForBudgetWait
+	      ? summarizeBlockedStaminaOpportunity(self, realtimeCoins, [])
+	      : null;
 	    const waitReason = staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-visible-coin-refresh';
 	    const sourceSummary = bot.lastCoinSourceSummary || {};
 	    const waitDisplay = staminaBlocked

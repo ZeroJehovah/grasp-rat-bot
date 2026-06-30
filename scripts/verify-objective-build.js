@@ -27,6 +27,12 @@ const BOOTSTRAP_FILES = [
 
 const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomOutClicks', value: 5 },
+  { key: 'postLoginZoomFitRadiusCm', value: 50000 },
+  { key: 'postLoginZoomFitTargetRatio', value: 0.96 },
+  { key: 'postLoginZoomFitTolerance', value: 0.03 },
+  { key: 'postLoginZoomFitPaddingPx', value: 16 },
+  { key: 'postLoginZoomFitMaxSteps', value: 24 },
+  { key: 'postLoginZoomWheelDeltaY', value: 100 },
   { key: 'postLoginZoomStartDelayMs', value: 350 },
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
@@ -662,24 +668,41 @@ function main() {
       const scheduleBody = functionBody(text, 'schedulePostLoginZoomOut');
       assert(scheduleBody.includes('state.lastSeenSelfAt = t'), 'last seen self timestamp not updated');
       assert(scheduleBody.includes('state.missingSince = 0'), 'missing-self timer not cleared on self detection');
-      assert(scheduleBody.includes('cfg.postLoginZoomOutClicks'), 'zoom click count config not used');
-      assert(scheduleBody.includes('if (!clicks || !state.armed) return null'), 'zoom armed/click guard not found');
+      assert(scheduleBody.includes('cfg.postLoginZoomOutClicks'), 'fallback zoom click count config not used');
+      assert(scheduleBody.includes('postLoginZoomFitBounds()'), 'zoom fit bounds are not recorded');
+      assert(scheduleBody.includes('postLoginZoomTargetRadiusCm()'), 'zoom target radius is not recorded');
+      assert(scheduleBody.includes("mode: 'fit-visible-range'"), 'post-login zoom does not run in visible-range fit mode');
+      assert(scheduleBody.includes('if (!state.armed) return null'), 'zoom armed guard not found');
       assert(scheduleBody.includes('state.appliedKey === key || state.scheduledKey === key'), 'duplicate session zoom guard not found');
       assert(scheduleBody.includes('state.armed = false'), 'zoom not disarmed after scheduling');
-      assert(scheduleBody.includes('requestedClicks: clicks'), 'requested click count not recorded');
+      assert(scheduleBody.includes('fallbackRequestedClicks: clicks'), 'fallback click count not recorded');
       assert(scheduleBody.includes('cfg.postLoginZoomStartDelayMs'), 'zoom start delay config not used');
       assert(scheduleBody.includes('requestNativeViewportResize'), 'zoom scheduling does not request native viewport resize');
-      assert(scheduleBody.includes('cfg.postLoginZoomOutIntervalMs'), 'zoom click interval config not used');
-      assert(scheduleBody.includes('for (let index = 0; index < clicks; index += 1)'), 'per-click scheduling loop not found');
-      assert(scheduleBody.includes('clickZoomOutControl()'), 'scheduled callback does not click zoom-out control');
-      assert(scheduleBody.includes('index * intervalMs'), 'scheduled clicks are not interval-spaced');
-      assert(scheduleBody.includes('latest.completedClicks') && scheduleBody.includes('latest.failedClicks'), 'zoom result counters not updated');
+      assert(scheduleBody.includes('schedulePostLoginZoomFitStep(selfSummary, 0, state.lastResult.startDelayMs)'), 'zoom fit loop is not scheduled');
 
-      const findBody = functionBody(text, 'findZoomOutControl');
+      const measureBody = functionBody(text, 'postLoginZoomFitMeasurement');
+      assert(measureBody.includes('postLoginZoomTargetRadiusCm()'), 'fit measurement does not use configured blue-circle radius');
+      assert(measureBody.includes('circleRadiusPx = radiusCm / units'), 'fit measurement does not convert circle radius to pixels');
+      assert(measureBody.includes('availablePx') && measureBody.includes('fitRatio'), 'fit measurement does not compare circle radius with available viewport room');
+      const decisionBody = functionBody(text, 'postLoginZoomFitDecision');
+      assert(decisionBody.includes("ratio > maxRatio") && decisionBody.includes("direction: 'out'"), 'fit decision does not zoom out when the blue circle is clipped');
+      assert(decisionBody.includes("ratio < minRatio") && decisionBody.includes("direction: 'in'"), 'fit decision does not zoom in when the blue circle is too small');
+      const wheelBody = functionBody(text, 'dispatchPostLoginZoomWheel');
+      assert(wheelBody.includes("new WheelEvent('wheel'"), 'post-login zoom does not use wheel events for fine adjustment');
+      assert(wheelBody.includes('cfg.postLoginZoomWheelDeltaY'), 'wheel delta config not used');
+      const stepBody = functionBody(text, 'schedulePostLoginZoomFitStep');
+      assert(stepBody.includes('cfg.postLoginZoomFitMaxSteps'), 'fit loop max-step config not used');
+      assert(stepBody.includes('postLoginZoomStepImproved(before, after, decision.direction)'), 'fit loop does not verify wheel progress');
+      assert(stepBody.includes('clickZoomControl(decision.direction)'), 'fit loop does not fall back to native zoom buttons');
+      assert(stepBody.includes('latest.wheelSteps') && stepBody.includes('current.completedClicks'), 'zoom fit result counters not updated');
+
+      const findBody = functionBody(text, 'findZoomControl');
       assert(findBody.includes('#zoomOutBtn') && findBody.includes('[data-testid="zoom-out"]'), 'native zoom-out selectors not found');
-      assert(findBody.includes('缩小'), 'localized zoom-out text fallback not found');
-      const clickBody = functionBody(text, 'clickZoomOutControl');
-      assert(clickBody.includes('control.click()'), 'zoom-out control click not found');
+      assert(findBody.includes('#zoomInBtn') && findBody.includes('[data-testid="zoom-in"]'), 'native zoom-in selectors not found');
+      assert(findBody.includes('缩小') && findBody.includes('放大'), 'localized zoom text fallback not found');
+      const clickBody = functionBody(text, 'clickZoomControl');
+      assert(clickBody.includes('control.click()'), 'zoom control click not found');
+      assert(text.includes('function findZoomControl'), 'bidirectional native zoom control helper not found');
       assert(text.includes('postLoginZoom: this.postLoginZoom'), 'status does not expose postLoginZoom state');
     });
     check(`${file} ignores join-mode-only Active for defensive combat`, () => {
@@ -1686,6 +1709,7 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
     assert(nodeSelfTestSource.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low long stamina target-only budget block waits for visible coin refresh'"), 'target-only stamina budget wait reason self-test not found');
 	    assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
 	    assert(sourceBot.includes('function visibleCoinSourcesConfirmTargetMissing'), 'visible missing coin confirmation helper not found');
 	    assert(sourceBot.includes('function clearMissingVisibleCoinTarget'), 'visible missing coin clear helper not found');

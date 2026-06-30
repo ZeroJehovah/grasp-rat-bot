@@ -24,7 +24,7 @@
   - low 1h stamina exits instead of waiting when the nearest safe visible coin is unaffordable;
   - low 1h stamina exits before the old delayed snapshot branch could run;
   - 1h budget below a foot coin exits instead of bypassing long-window budget;
-  - low long-window stamina still reports `wait-for-stamina-budget` for target-only budget blocks;
+  - low long-window stamina target-only budget blocks still wait, but report `wait-for-visible-coin-refresh` when no visible/native coin is present;
   - stale daily stamina holds are contradicted by preserved session stamina evidence, while zero remaining 1d evidence does not clear the hold;
   - daily-only 1d stamina exhaustion summaries render as `一天体力到达限制，退出等待重连` instead of falling back to stale combat or exit detail;
   - 150m coin beats richer 200m coin by nearby opportunity priority;
