@@ -5212,6 +5212,17 @@ function runSelfTest() {
     };
   }
 
+  function currentOfflineDisplayReasonForTest(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '') {
+    const currentSummary = offlineLeaveSummaryText(reason, offlineSafety);
+    const leaveDisplay = String(leaveResult?.displayReason || '');
+    const leaveSummary = String(leaveResult?.summary || leaveResult?.exitSummary || '');
+    if (currentSummary && leaveDisplay && (leaveSummary === currentSummary || leaveDisplay.includes(currentSummary))) {
+      return leaveDisplay;
+    }
+    if (currentSummary) return currentSummary;
+    return leaveDisplay || String(offlineDetail?.displayReason || '') || String(fallback || '');
+  }
+
   const cases = [
     {
       name: 'final arbitration keeps recent safety action over profit',
@@ -8699,6 +8710,36 @@ function runSelfTest() {
 	      got: offlineLeaveSummaryText('websocket reconnect churn', { reconnectChurn: { count: 3, windowMs: 10000 } }),
 		      want: '网络连接反复重连，退出等待重连'
 		    },
+	    {
+	      name: 'current websocket offline display beats stale pending combat detail',
+	      got: currentOfflineDisplayReasonForTest(
+	        'websocket offline',
+	        { unsafe: false },
+	        {
+	          reason: 'pending-exit-active',
+	          summary: '与lockcc战斗，血量59，对方血量100，差距41，距离145米，提前劣势退出',
+	          displayReason: '与lockcc战斗，血量59，对方血量100，差距41，距离145米，提前劣势退出，等待退出确认，未退出会继续补发'
+	        },
+	        {
+	          displayReason: '与lockcc战斗，血量59，对方血量100，差距41，距离145米，提前劣势退出，等待退出确认，未退出会继续补发'
+	        }
+	      ),
+	      want: '网络连接离线，退出等待重连'
+	    },
+	    {
+	      name: 'fresh websocket offline pending display keeps confirmation suffix',
+	      got: currentOfflineDisplayReasonForTest(
+	        'websocket offline',
+	        { unsafe: false },
+	        {
+	          reason: 'pending-exit-active',
+	          summary: '网络连接离线，退出等待重连',
+	          displayReason: '网络连接离线，退出等待重连，等待退出确认，未退出会继续补发'
+	        },
+	        null
+	      ),
+	      want: '网络连接离线，退出等待重连，等待退出确认，未退出会继续补发'
+	    },
 	    {
 	      name: 'offline sampling outage summary is explicit',
 	      got: offlineLeaveSummaryText('global sampling outage', { samplingOutage: { errorCount: 1 } }),

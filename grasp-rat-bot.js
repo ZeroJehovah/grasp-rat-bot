@@ -1787,6 +1787,17 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 			    return '网络连接离线，退出等待重连';
 		  }
 
+		  function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '') {
+		    const currentSummary = offlineLeaveSummary(reason, offlineSafety);
+		    const leaveDisplay = String(leaveResult?.displayReason || '');
+		    const leaveSummary = String(leaveResult?.summary || leaveResult?.exitSummary || '');
+		    if (currentSummary && leaveDisplay && (leaveSummary === currentSummary || leaveDisplay.includes(currentSummary))) {
+		      return leaveDisplay;
+		    }
+		    if (currentSummary) return currentSummary;
+		    return leaveDisplay || String(offlineDetail?.displayReason || '') || String(fallback || '');
+		  }
+
 	  function reloginDelayForHp(selfLike, detail) {
 	    const info = hpInfoForRelogin(selfLike, detail);
 	    const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
@@ -8962,7 +8973,7 @@ ${importantLogSource()}
       leaveDelayMs: 0,
       offlineSafety,
       combatTickGap,
-      displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '战斗主循环断档，正在退出',
+      displayReason: currentOfflineDisplayReason('combat tick gap', offlineSafety, leaveResult, offlineDetail, '战斗主循环断档，正在退出'),
       leave: leaveResult,
       tickReentry: true
     };
@@ -12992,7 +13003,7 @@ ${importantLogSource()}
 	            noSelfGameSession: noSelfExit,
 	            liveSessionTakeover,
 	            offlineSafety,
-	            displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || noSelfExit.displayReason,
+	            displayReason: currentOfflineDisplayReason(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason),
 	            leave: leaveResult
 	          };
 	          updateBotPanel(bot.lastDecision);
@@ -13106,7 +13117,7 @@ ${importantLogSource()}
           leaveDelayMs: 0,
           stamina: staminaState,
           offlineSafety,
-          displayReason: leaveResult?.displayReason || staminaDisplayReason || offlineDetail?.displayReason || '',
+          displayReason: currentOfflineDisplayReason('stamina exhausted', offlineSafety, leaveResult, offlineDetail, staminaDisplayReason),
           leave: leaveResult
         };
         updateBotPanel(bot.lastDecision);
@@ -13195,7 +13206,7 @@ ${importantLogSource()}
           serverPositionStall,
           samplingOutage,
           combatTickGap,
-	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))),
+	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : '')))),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
@@ -13339,7 +13350,7 @@ ${importantLogSource()}
 	          control: summarizeControl(),
 	          self: currentSummary,
 	          offlineSafety,
-	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || action.displayReason || '',
+	          displayReason: currentOfflineDisplayReason(action.reason || 'stamina budget coin leave', offlineSafety, leaveResult, offlineDetail, action.displayReason || ''),
 	          leave: leaveResult,
 	          holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
 	        };

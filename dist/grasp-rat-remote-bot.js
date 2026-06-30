@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.261"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.262"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -6721,6 +6721,17 @@ function hpDisplay(value) {
 			    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
 			    if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
 			    return '网络连接离线，退出等待重连';
+		  }
+
+		  function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '') {
+		    const currentSummary = offlineLeaveSummary(reason, offlineSafety);
+		    const leaveDisplay = String(leaveResult?.displayReason || '');
+		    const leaveSummary = String(leaveResult?.summary || leaveResult?.exitSummary || '');
+		    if (currentSummary && leaveDisplay && (leaveSummary === currentSummary || leaveDisplay.includes(currentSummary))) {
+		      return leaveDisplay;
+		    }
+		    if (currentSummary) return currentSummary;
+		    return leaveDisplay || String(offlineDetail?.displayReason || '') || String(fallback || '');
 		  }
 
 	  function reloginDelayForHp(selfLike, detail) {
@@ -15741,7 +15752,7 @@ function hpDisplay(value) {
       leaveDelayMs: 0,
       offlineSafety,
       combatTickGap,
-      displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '战斗主循环断档，正在退出',
+      displayReason: currentOfflineDisplayReason('combat tick gap', offlineSafety, leaveResult, offlineDetail, '战斗主循环断档，正在退出'),
       leave: leaveResult,
       tickReentry: true
     };
@@ -19771,7 +19782,7 @@ function hpDisplay(value) {
 	            noSelfGameSession: noSelfExit,
 	            liveSessionTakeover,
 	            offlineSafety,
-	            displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || noSelfExit.displayReason,
+	            displayReason: currentOfflineDisplayReason(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason),
 	            leave: leaveResult
 	          };
 	          updateBotPanel(bot.lastDecision);
@@ -19885,7 +19896,7 @@ function hpDisplay(value) {
           leaveDelayMs: 0,
           stamina: staminaState,
           offlineSafety,
-          displayReason: leaveResult?.displayReason || staminaDisplayReason || offlineDetail?.displayReason || '',
+          displayReason: currentOfflineDisplayReason('stamina exhausted', offlineSafety, leaveResult, offlineDetail, staminaDisplayReason),
           leave: leaveResult
         };
         updateBotPanel(bot.lastDecision);
@@ -19974,7 +19985,7 @@ function hpDisplay(value) {
           serverPositionStall,
           samplingOutage,
           combatTickGap,
-	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))),
+	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : '')))),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
@@ -20118,7 +20129,7 @@ function hpDisplay(value) {
 	          control: summarizeControl(),
 	          self: currentSummary,
 	          offlineSafety,
-	          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || action.displayReason || '',
+	          displayReason: currentOfflineDisplayReason(action.reason || 'stamina budget coin leave', offlineSafety, leaveResult, offlineDetail, action.displayReason || ''),
 	          leave: leaveResult,
 	          holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
 	        };
