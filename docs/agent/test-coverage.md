@@ -1,7 +1,7 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `304`.
+- Latest bot self-test count: `306`.
 - Latest combat-log analyzer self-test count: `84`.
 - Latest combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
@@ -13,16 +13,16 @@
   - session-mismatch recovery now has bot self-tests for explicit live-session takeover bypass state, the rule that takeover bypass still requires learned login-point safety, the one-time controlled refresh before same-user takeover, fresh snapshot-self live evidence, and post-exit blockers including pending exit, login suppress, exit-reset snapshot gate, reconnect churn, and offline-ish WebSocket state;
   - persistent login-point safety now has bot self-test coverage for preserving `lastLoginAt` across hot updates, explicit entry summary text, pre-login-only gate behavior after entry, dynamic safety radius selection (`>=80` last-exit HP uses `17000cm`; low/unknown uses `30000cm`), and the bootstrap fallback rule that blocks unattended relogin only after a learned point or explicit bot missing-point state exists. Static verification requires localStorage login-point coordinates to win over empty/stale memory, newer persisted last-exit HP context to win over stale memory, missing login points to block the safety gate explicitly, OAuth/callback/session timestamp inference to feed login-point recording, persisted reset/last-exit HP context, reset paths to clear only the safety streak without clearing the persisted point, dynamic radius helpers, exit trigger/confirmation passing self HP into the gate reset, no post-entry `login point safety gate` leave path, login-point danger limited to same-day damage actors and evidence-gated Active mode while clearing stale player danger on snapshot errors, damage-actor persistence requiring incoming-bullet ownership/firing/engaged-combat evidence, automatic bootstrap/native login interceptors plus the `startLinuxDoLogin` guard, and explicit manual login bypass markers that keep the sidebar login button clickable;
   - static verification now requires the old standalone `/snapshot` connectivity streak to stay disabled for automatic relogin: `snapshotLoginGateStatus()` must satisfy on learned login-point safety alone, `summarizeReloginGateStatus()` must not require a separate snapshot streak, and Tampermonkey/extension relogin panels must not render the removed `快照接口连通性` row;
-  - combat/recent-combat global sampling outage now has bot self-tests for explicit offline summary text, combat-triggered offline leave gating, the default non-combat guard, and top-level `exit` summary fallback for `control-global-sampling-outage` frames without `leave` detail;
+  - legacy combat/recent-combat global sampling outage helpers still have bot self-tests for explicit offline summary text, combat-triggered offline leave gating, the default non-combat guard, and top-level `exit` summary fallback for `control-global-sampling-outage` frames without `leave` detail, even though active bot-owned `/snapshot` and `/minimap` polling is now disabled;
   - combat/recent-combat tick/frame gaps now have bot self-tests for explicit offline summary text, combat-triggered offline leave gating, non-combat guard behavior, the guard that stale recent combat-frame context alone does not exit during a coin route, the `tick-reentry-gap` diagnosis when a new tick arrives while the previous tick is still stuck, the `combat-log-gap-with-active-tick` diagnosis when ticks continue but combat frames stop with live combat context, and top-level `exit` summary fallback for `control-combat-tick-gap` frames without `leave` detail;
   - local snapshot coin at `185m` cannot beat visible/native coin;
   - local snapshot-only coin is not chased;
   - nearby native coin with stale snapshot metadata still reports visible coin reason;
-  - far snapshot clusters beyond local authority remain valid;
-  - nearby known coin fields beat farther snapshot fields by ROI;
-  - low-value far snapshot coin waits before 60s snapshot idle timeout and is chased after timeout when 1h budget can afford it;
+  - far snapshot clusters beyond local authority are ignored by ordinary coin pickup;
+  - nearby known coin fields beat farther snapshot fields by ROI because snapshot-only fields are no longer pickup destinations;
+  - low-value far snapshot coin waits for visible coin refresh both before and after the old delayed fallback threshold;
   - low 1h stamina exits instead of waiting when the nearest safe visible coin is unaffordable;
-  - low 1h stamina exits before the 60s snapshot idle fallback;
+  - low 1h stamina exits before the old delayed snapshot branch could run;
   - 1h budget below a foot coin exits instead of bypassing long-window budget;
   - low long-window stamina still reports `wait-for-stamina-budget` for target-only budget blocks;
   - stale daily stamina holds are contradicted by preserved session stamina evidence, while zero remaining 1d evidence does not clear the hold;
@@ -52,10 +52,10 @@
   - long no-damage combat target triggers `combat-pressure-close`;
   - combat aim uses live/native/render precision only and no longer exposes snapshot authority fields;
   - real incoming bullet pressure can switch moving-target aim to live/native precision before intercept lead, while lateral live targets under real-bullet pressure or server stall can stay on live intercept instead of collapsing to live precision; replay self-tests include 2026-06-17 xmsthc (`0 -> 28` estimated hits) and Motor (`1 -> 25`) samples plus 2026-06-18 Noah_Z (`0 -> 5` dynamic, `7` pure live-intercept), lockcc (`1 -> 8` dynamic), BeingS (`0 -> 7` dynamic/live-intercept in the old high-HP exit window), and long tyshine (`14 -> 36` dynamic, `38` pure live-intercept);
-  - visible/native AFK Drop targets beat richer snapshot fallback targets, and visible native coins beat snapshot coins before any snapshot idle fallback;
+  - visible/native AFK Drop targets and visible native coins are covered without reintroducing richer snapshot-only targets or delayed snapshot pickup;
   - native visible coin routes beat isolated single coins when route-level stamina ROI is better, while weaker routes still lose to higher-yield visible AFK Drop targets;
   - visible coin route metadata, including per-coin route points for overlay drawing, is exposed on actions; same-first-coin routes keep that overlay metadata even when the first coin's single-coin ROI is higher than the whole route score; held routes keep their first coin through near-tie replans and still switch when a competing route score is clearly better; near realtime coins remain the first route target when a route continues toward a farther field, routes cannot skip a much closer safe local coin as their first target, route legs through invulnerable danger are rejected, and whole routes are skipped when the 1h/1d stamina budget cannot afford the full route;
-  - snapshot-only coins remain valid only as a fallback when no visible/realtime profit exists;
+  - snapshot-only coins remain ignored for ordinary pickup when no visible/realtime profit exists, so the fallback decision is `wait-for-visible-coin-refresh`;
   - visible/native ordinary 1-coin selection near a native/realtime visible non-idle invulnerable player is blocked before the later avoidance-flee branch, even when that player is not in the Active threat set; a snapshot-only invulnerable player does not block visible coin pickup. Idle invulnerable Active players with full 5s stamina, no movement, no firing, and no recent activity do not trigger proactive avoidance and can still allow ordinary coin pickup. Invulnerability alias self-tests cover positive millisecond aliases such as `invulnerableRemainingMs` even when an earlier tick alias is zero;
   - ordinary visible/native coins near non-invulnerable realtime Active players remain selectable; self-tests cover both 1-coin and high-value visible coins taking the normal opportunity path near such players;
   - held visible/native coin targets now have bot self-test coverage for both source-gap jitter protection and immediate release when current visible coin sources no longer contain the held target. Static verification requires the `visible-coin-disappeared` clear path and the regression self-test;

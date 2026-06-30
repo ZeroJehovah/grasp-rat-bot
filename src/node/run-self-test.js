@@ -2492,7 +2492,7 @@ function runSelfTest() {
     return chosen;
   }
 
-  function bestCoinOpportunityScore(self, coins, activeThreats, snapshotCompetitionCoin = null, fieldCompetitionCoin = null) {
+  function bestCoinOpportunityScore(self, coins, activeThreats, fieldCompetitionCoin = null) {
     let best = -Infinity;
     for (const coin of safeCoins(self, coins, activeThreats, cfg.globalCoinMaxDistance)) {
       if (!opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin))) continue;
@@ -2504,10 +2504,7 @@ function runSelfTest() {
       const score = scoreCoinOpportunity(route);
       if (score > best) best = score;
     }
-    const extraCoins = [
-      fieldCompetitionCoin,
-      snapshotCompetitionCoin || pickSnapshotCoinDestination(self, coins, activeThreats)
-    ].filter(Boolean);
+    const extraCoins = [fieldCompetitionCoin].filter(Boolean);
     for (const coin of extraCoins) {
       if (opportunityStaminaAffordable(self, opportunityCoinStaminaCost(coin))) {
         const score = scoreCoinOpportunity(coin);
@@ -2517,13 +2514,13 @@ function runSelfTest() {
     return best;
   }
 
-  function pickProfitableCombatTarget(self, entities, bullets, coins, activeThreats, snapshotCompetitionCoin = null, fieldCompetitionCoin = null) {
+  function pickProfitableCombatTarget(self, entities, bullets, coins, activeThreats, fieldCompetitionCoin = null) {
     if (!isFullHp(self)) return null;
     const target = pickCombatTarget(self, entities, bullets, { mode: 'profit' });
     if (!target) return null;
     const targetScore = scoreEnemyOpportunity(target);
     if (targetScore === null) return null;
-    const coinScore = bestCoinOpportunityScore(self, coins, activeThreats, snapshotCompetitionCoin, fieldCompetitionCoin);
+    const coinScore = bestCoinOpportunityScore(self, coins, activeThreats, fieldCompetitionCoin);
     if (targetScore < coinScore) return null;
     return {
       ...target,
@@ -4658,7 +4655,7 @@ function runSelfTest() {
     };
   }
 
-  function pickBestOpportunity(self, entities, coins, activeThreats, snapshotCompetitionCoin = null, fieldCompetitionCoin = null) {
+  function pickBestOpportunity(self, entities, coins, activeThreats, fieldCompetitionCoin = null) {
     const opportunities = [];
     const upsertCoinOpportunity = item => {
       const index = opportunities.findIndex(existing => existing.type === 'coin' && String(existing.id) === String(item.id));
@@ -4726,26 +4723,6 @@ function runSelfTest() {
           routeLegs: routeCoin.routeLegs || 0,
           routeHeld: Boolean(routeCoin.routeHeld),
           competingRouteScore: routeCoin.competingRouteScore
-        });
-      }
-    }
-    if (snapshotCompetitionCoin) {
-      const staminaCost = opportunityCoinStaminaCost(snapshotCompetitionCoin);
-      if (opportunityStaminaAffordable(self, staminaCost)) {
-        upsertCoinOpportunity({
-          type: 'coin',
-          kind: 'seek-coin',
-          actionKind: 'seek-coin',
-          reason: snapshotCoinNavigationReason(snapshotCompetitionCoin),
-          id: snapshotCompetitionCoin.drop_id,
-          amount: snapshotCompetitionCoin.amount,
-          x: snapshotCompetitionCoin.x,
-          y: snapshotCompetitionCoin.y,
-          members: snapshotCompetitionCoin.snapshotMembers,
-          distance: snapshotCompetitionCoin.distance,
-          staminaCost,
-          score: scoreCoinOpportunity(snapshotCompetitionCoin),
-          maxDistance: cfg.snapshotCoinMaxDistance
         });
       }
     }
@@ -5130,10 +5107,10 @@ function runSelfTest() {
     const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
       ? pickField(self, realtimeCoins, coinThreats)
       : null;
-    const profitableCombatTarget = pickProfitableCombatTarget(self, entities, bullets, realtimeCoins, coinThreats, null, fieldCompetitionCoin);
+    const profitableCombatTarget = pickProfitableCombatTarget(self, entities, bullets, realtimeCoins, coinThreats, fieldCompetitionCoin);
     if (profitableCombatTarget) return chooseCombatAction(self, profitableCombatTarget, bullets);
     const opportunityTargets = fullHp ? entities.filter(isAfkProfitTarget) : entities;
-    const opportunity = pickBestOpportunity(self, opportunityTargets, realtimeCoins, coinThreats, null, fieldCompetitionCoin);
+    const opportunity = pickBestOpportunity(self, opportunityTargets, realtimeCoins, coinThreats, fieldCompetitionCoin);
     if (opportunity) return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, opportunity), self, entities, !recovery);
     const distantCoin = pickDistantCoin(self, realtimeCoins, coinThreats);
     if (distantCoin) {
@@ -5163,36 +5140,6 @@ function runSelfTest() {
     if (hasReturnBlockThreat(avoidanceThreats)) return { kind: 'patrol', reason: 'return-block-lateral-scan' };
     const shotWait = buildOpportunisticShotWait(self, entities, !recovery);
     if (shotWait) return shotWait;
-    const snapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { ignoreRealtimeLocalCoin: true });
-    if (snapshotCoin) {
-      const dir = directionTo(self, snapshotCoin);
-      return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, {
-        kind: 'seek-coin',
-        reason: snapshotCoinNavigationReason(snapshotCoin),
-        id: snapshotCoin.drop_id,
-        amount: snapshotCoin.amount,
-        members: snapshotCoin.snapshotMembers,
-        dx: dir.dx,
-        dy: dir.dy,
-        target: { distance: Math.round(dir.distance), fieldMembers: snapshotCoin.snapshotMembers, fieldAmount: snapshotCoin.snapshotAmount }
-      }), self, entities, !recovery);
-    }
-    if (!localRealtimeCoin && snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
-      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true, ignoreRealtimeLocalCoin: true });
-      if (idleSnapshotCoin) {
-        const dir = directionTo(self, idleSnapshotCoin);
-        return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, {
-          kind: 'seek-coin',
-          reason: snapshotCoinNavigationReason(idleSnapshotCoin),
-          id: idleSnapshotCoin.drop_id,
-          amount: idleSnapshotCoin.amount,
-          members: idleSnapshotCoin.snapshotMembers,
-          dx: dir.dx,
-          dy: dir.dy,
-          target: { distance: Math.round(dir.distance), fieldMembers: idleSnapshotCoin.snapshotMembers, fieldAmount: idleSnapshotCoin.snapshotAmount }
-        }), self, entities, !recovery);
-      }
-    }
     const decoratedCoins = realtimeCoins
       .map(c => ({ ...c, distance: dist(self, c), amount: Number(c.amount || 0) }))
       .filter(c => c.amount > 0);
@@ -5202,7 +5149,7 @@ function runSelfTest() {
     const staminaBlocked = summarizeBlockedStaminaOpportunity(self, decoratedCoins, decoratedTargets);
     return {
       kind: 'wait',
-      reason: staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-snapshot-coin',
+      reason: staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-visible-coin-refresh',
       staminaBlocked,
       snapshot: {
         waitAgeMs: Math.round(snapshotWaitAgeMs),
@@ -5474,7 +5421,7 @@ function runSelfTest() {
       want: 'best-opportunity-afk-drop-target'
     },
     {
-      name: 'visible afk target beats richer snapshot fallback',
+      name: 'visible afk target ignores richer snapshot-only coins',
       got: (() => {
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
@@ -5698,7 +5645,7 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [{ drop_id: 1034, x: 18500, y: 0, amount: 50, snapshot: true }]
       }).reason,
-      want: 'wait-for-snapshot-coin'
+      want: 'wait-for-visible-coin-refresh'
     },
     {
       name: '500m snapshot-only coin is suppressed by realtime authority',
@@ -5706,7 +5653,7 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [{ drop_id: 1034, x: 50000, y: 0, amount: 50, snapshot: true }]
       }).reason,
-      want: 'wait-for-snapshot-coin'
+      want: 'wait-for-visible-coin-refresh'
     },
     {
       name: 'native nearby coin with snapshot metadata uses visible coin reason',
@@ -5919,34 +5866,34 @@ function runSelfTest() {
       want: 'seek-coin'
     },
     {
-      name: 'far snapshot coin outside local range is chased',
+      name: 'far snapshot coin outside local range is ignored',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         global: [{ user_id: 4, x: 20000, y: 0, current_join_mode: 'Active', vx: -50, death_reward_preview: 7 }],
         coins: [{ drop_id: 2, x: 52000, y: 0, amount: 5, snapshot: true }]
-      }).kind,
-      want: 'seek-coin'
+      }).reason,
+      want: 'wait-for-visible-coin-refresh'
     },
 	    {
-	      name: 'single far low-value snapshot coin waits before idle timeout',
+	      name: 'single far low-value snapshot coin waits for visible refresh',
 	      got: choose({
 	        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
 	        coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
 	        snapshotWaitAgeMs: 59999
 	      }).reason,
-	      want: 'wait-for-snapshot-coin'
+	      want: 'wait-for-visible-coin-refresh'
 	    },
 	    {
-	      name: 'single far low-value snapshot coin is chased after idle timeout',
+	      name: 'single far low-value snapshot coin is still ignored after idle timeout',
 	      got: choose({
 	        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
 	        coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
 	        snapshotWaitAgeMs: 60000
 	      }).reason,
-	      want: 'snapshot-coin-idle-timeout'
+	      want: 'wait-for-visible-coin-refresh'
 	    },
     {
-      name: 'far snapshot coin cluster replaces open patrol',
+      name: 'far snapshot coin cluster is ignored',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         coins: [
@@ -5954,11 +5901,11 @@ function runSelfTest() {
           { drop_id: 3, x: 56000, y: 2000, amount: 1, snapshot: true },
           { drop_id: 4, x: 59000, y: -1000, amount: 1, snapshot: true }
         ]
-      }).kind,
-      want: 'seek-coin'
+      }).reason,
+      want: 'wait-for-visible-coin-refresh'
     },
 	    {
-	      name: 'far snapshot coin cluster uses snapshot field reason',
+	      name: 'far snapshot coin cluster does not create snapshot field reason',
 	      got: choose({
 	        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
 	        coins: [
@@ -5967,7 +5914,7 @@ function runSelfTest() {
 	          { drop_id: 4, x: 59000, y: -1000, amount: 1, snapshot: true }
 	        ]
 	      }).reason,
-	      want: 'snapshot-coin-field'
+	      want: 'wait-for-visible-coin-refresh'
 	    },
 	    {
 	      name: 'near known coin field beats farther snapshot field by ROI',
@@ -6001,11 +5948,11 @@ function runSelfTest() {
       want: '1:best-opportunity-coin-route:1,11,12:3'
     },
 	    {
-	      name: 'no coin fallback waits for snapshot coin',
+	      name: 'no coin fallback waits for visible coin refresh',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 }
       }).reason,
-      want: 'wait-for-snapshot-coin'
+      want: 'wait-for-visible-coin-refresh'
     },
     {
       name: 'low hp waits instead of chasing',
@@ -7698,7 +7645,7 @@ function runSelfTest() {
         local: [{ user_id: 4, x: 25500, y: 0, native: true, current_join_mode: 'Passive', invulnerableRemainingMs: 5000 }],
         coins: [{ drop_id: 2, x: 12300, y: 0, amount: 1, native: true }]
       }).reason,
-      want: 'wait-for-snapshot-coin'
+      want: 'wait-for-visible-coin-refresh'
     },
     {
       name: 'snapshot-only invulnerable player does not block visible ordinary coin',
@@ -7716,7 +7663,7 @@ function runSelfTest() {
         local: [{ user_id: 4, x: 50000, y: 0, vx: -10, vy: 0, current_join_mode: 'Active', stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000, invulnerable: true }],
         coins: [{ drop_id: 2, x: 22000, y: 0, amount: 1 }]
       }).reason,
-      want: 'wait-for-snapshot-coin'
+      want: 'wait-for-visible-coin-refresh'
     },
     {
       name: 'invulnerable active allows coin away from its direction',
@@ -8093,7 +8040,7 @@ function runSelfTest() {
       want: 'seek-coin'
     },
     {
-      name: 'far active allows snapshot coin travel away from it',
+      name: 'far active does not re-enable snapshot coin travel away from it',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
@@ -8102,11 +8049,11 @@ function runSelfTest() {
           { drop_id: 3, x: -94000, y: 2000, amount: 1, snapshot: true },
           { drop_id: 4, x: -98000, y: -2000, amount: 1, snapshot: true }
         ]
-      }).kind,
-      want: 'seek-coin'
+      }).reason,
+      want: 'wait-for-visible-coin-refresh'
     },
     {
-      name: 'far active allows snapshot coin travel beyond it',
+      name: 'far active does not re-enable snapshot coin travel beyond it',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 4, x: 40000, y: 0, current_join_mode: 'Active' }],
@@ -8115,8 +8062,8 @@ function runSelfTest() {
           { drop_id: 3, x: 74000, y: 2000, amount: 1, snapshot: true },
           { drop_id: 4, x: 78000, y: -2000, amount: 1, snapshot: true }
         ]
-      }).kind,
-      want: 'seek-coin'
+      }).reason,
+      want: 'wait-for-visible-coin-refresh'
       },
     {
       name: 'full hp low stamina waits when no snapshot coin exists',
@@ -8186,7 +8133,7 @@ function runSelfTest() {
         });
         return action.kind + ':' + action.reason;
       })(),
-      want: 'wait:wait-for-snapshot-coin'
+      want: 'wait:wait-for-visible-coin-refresh'
     },
     {
       name: 'low value afk target in range is skipped',
@@ -8639,7 +8586,7 @@ function runSelfTest() {
         coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
         snapshotWaitAgeMs: 60000
       }).reason,
-      want: 'snapshot-coin-idle-timeout'
+      want: 'wait-for-visible-coin-refresh'
     },
     {
       name: 'low long stamina skips expensive afk drop target',
@@ -8755,7 +8702,7 @@ function runSelfTest() {
 	      got: offlineLeaveSummaryText('login point safety gate', {
 	        loginPointSafetyGate: {
 	          reason: 'login-point-safety',
-	          loginPointSafety: { streak: 0, required: 12 }
+		          loginPointSafety: { streak: 0, required: 3 }
 	        }
 	      }),
 	      want: '登录点安全快照未满足，退出等待安全重连'
@@ -9018,7 +8965,7 @@ function runSelfTest() {
           satisfied: false,
           streak: 0,
           required: 3,
-          pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 12 }
+	          pointSafety: { hasPoint: true, satisfied: false, streak: 0, required: 3 }
         };
         const liveSessionTakeover = {
           allowed: true,
@@ -9052,21 +8999,21 @@ function runSelfTest() {
             liveSessionTakeoverBypass: true,
             streak: 3,
             required: 3,
-            pointSafety: { satisfied: false, streak: 0, required: 12 }
+	            pointSafety: { satisfied: false, streak: 0, required: 3 }
           }),
           allowsLogin({
             satisfied: false,
             liveSessionTakeoverBypass: true,
             streak: 2,
             required: 3,
-            pointSafety: { satisfied: true, streak: 12, required: 12 }
+	            pointSafety: { satisfied: true, streak: 3, required: 3 }
           }),
           allowsLogin({
             satisfied: false,
             liveSessionTakeoverBypass: true,
             streak: 3,
             required: 3,
-            pointSafety: { satisfied: true, streak: 12, required: 12 }
+	            pointSafety: { satisfied: true, streak: 3, required: 3 }
           })
         ].map(String).join('|');
       })(),
@@ -9148,7 +9095,7 @@ function runSelfTest() {
       name: 'login-point safety gate is pre-login only',
       got: (() => {
         const postLoginHasSelf = true;
-        const pointSafety = { hasPoint: true, satisfied: false, streak: 0, required: 12 };
+	        const pointSafety = { hasPoint: true, satisfied: false, streak: 0, required: 3 };
         const preLoginBlock = pointSafety.hasPoint && !pointSafety.satisfied ? 'login-point-safety' : '';
         const postLoginBlock = postLoginHasSelf ? '' : preLoginBlock;
         return [preLoginBlock, postLoginBlock].join('|');
@@ -9177,7 +9124,7 @@ function runSelfTest() {
       name: 'bootstrap login-point gate blocks fallback relogin only after a learned point',
       got: (() => {
         const block = point => {
-          const required = Math.max(0, Math.round(Number(point.required ?? 12) || 12));
+	          const required = Math.max(0, Math.round(Number(point.required ?? 3) || 3));
           const hasPoint = Boolean(point.hasPoint);
           const streak = Math.max(0, Math.min(required, Math.round(Number(point.streak || 0) || 0)));
           const ok = required <= 0 || (hasPoint && streak >= required);
@@ -9187,10 +9134,10 @@ function runSelfTest() {
           return missing ? 'login-point-missing' : 'login-point-safety';
         };
         return [
-          block({ hasPoint: false, missingPoint: false, streak: 0, required: 12 }),
-          block({ hasPoint: false, missingPoint: true, streak: 0, required: 12 }),
-          block({ hasPoint: true, missingPoint: false, streak: 0, required: 12 }),
-          block({ hasPoint: true, missingPoint: false, streak: 12, required: 12 })
+	          block({ hasPoint: false, missingPoint: false, streak: 0, required: 3 }),
+	          block({ hasPoint: false, missingPoint: true, streak: 0, required: 3 }),
+	          block({ hasPoint: true, missingPoint: false, streak: 0, required: 3 }),
+	          block({ hasPoint: true, missingPoint: false, streak: 3, required: 3 })
         ].join('|');
       })(),
       want: '|login-point-missing|login-point-safety|'

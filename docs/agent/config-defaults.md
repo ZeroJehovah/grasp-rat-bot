@@ -3,6 +3,7 @@
 
 - `globalRefreshMs = 5000`
 - `globalRefreshTimeoutMs = 3000`
+- Active bot-owned `/snapshot` and `/minimap` polling is disabled; `globalRefreshMs` now only throttles passive-refresh diagnostics.
 - `globalSamplingOutageOfflineEnabled = true`
 - `globalSamplingOutageMinErrors = 1`
 - `globalSamplingOutageMinAgeMs = 0`
@@ -23,7 +24,7 @@
 - `networkQualityLogLossPercent = 5`
 - `networkQualityLogStallMs = 1000`
 - `loginSnapshotProbeMinMs = 5000`
-- `loginPointSafetySuccessRequired = 12`
+- `loginPointSafetySuccessRequired = 3`
 - `loginPointSafetyRadius = 30000`
 - `loginPointSafetyHealthyRadius = 17000`
 - `loginPointSafetyHealthyHpThreshold = 80`
@@ -224,7 +225,7 @@
 - `pursuitLeaveNonFullHpInvulnerableMs = 45000`
 - `combatLoggingEnabled = false`
 - `combatLogEndpoint = http://127.0.0.1:18765/combat-log`
-- `postLoginZoomOutClicks = 4`
+- `postLoginZoomOutClicks = 7`
 - `postLoginZoomStartDelayMs = 350`
 - `postLoginZoomOutIntervalMs = 80`
 - `postLoginZoomArmMissingMs = 1000`

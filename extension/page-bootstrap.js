@@ -514,7 +514,7 @@
     }
     const stored = readStoredLoginPointSafety();
     if (!stored) return { source: 'none', ok: true, hasPoint: false, missingPoint: false, streak: 0, required: 0, remaining: 0, lastDanger: null, lastError: '' };
-    const required = Math.max(0, Math.round(Number(stored.required ?? 12) || 12));
+    const required = Math.max(0, Math.round(Number(stored.required ?? 3) || 3));
     const hasPoint = Boolean(stored.point && Number.isFinite(Number(stored.point.x)) && Number.isFinite(Number(stored.point.y)));
     const streak = Math.max(0, Math.min(required, Math.round(Number(stored.streak || 0) || 0)));
     return {
@@ -1024,13 +1024,13 @@
       'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
       'migrate-to-known-field': '迁移到金币密集区域',
       'scan-toward-distant-coin': '扫描远处金币',
-      'snapshot-coin-field': '快照金币区域导航',
-      'snapshot-coin-target': '快照金币导航',
-      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
+      'snapshot-coin-field': '等待视野内金币刷新',
+      'snapshot-coin-target': '等待视野内金币刷新',
+      'snapshot-coin-idle-timeout': '等待视野内金币刷新',
       'wait-for-stamina-budget': '长期体力预算不足',
       'stamina-budget-coin-leave': '一小时体力预算不足，退出等待恢复',
       'stamina-budget-coin-leave-retry': '一小时体力预算不足，重试退出',
-      'wait-for-snapshot-coin': '等待快照金币',
+      'wait-for-snapshot-coin': '等待视野内金币刷新',
       'login-suppressed': '等待重连',
       'exit-log-flush-pending': '等待退出日志发送完成',
       'important-log-flush-pending': '等待会话结束日志发送完成',

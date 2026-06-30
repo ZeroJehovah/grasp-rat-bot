@@ -26,7 +26,7 @@ const BOOTSTRAP_FILES = [
 ];
 
 const NUMERIC_INVARIANTS = [
-  { key: 'postLoginZoomOutClicks', value: 4 },
+  { key: 'postLoginZoomOutClicks', value: 7 },
   { key: 'postLoginZoomStartDelayMs', value: 350 },
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
@@ -39,7 +39,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'sessionMismatchRecoveryReloadMaxAgeMs', value: 120000 },
   { key: 'pendingExitPersistMaxMs', value: 3600000 },
   { key: 'leaveSuccessReloadUnknownGraceMs', value: 12000 },
-  { key: 'loginPointSafetySuccessRequired', value: 12 },
+  { key: 'loginPointSafetySuccessRequired', value: 3 },
   { key: 'loginPointSafetyRadius', value: 30000 },
   { key: 'loginPointSafetyHealthyRadius', value: 17000 },
   { key: 'loginPointSafetyHealthyHpThreshold', value: 80 },
@@ -469,17 +469,18 @@ function main() {
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowNativeReconnect: false'), 'runtime defaults do not keep native reconnect disabled');
       assert(functionBody(defaultsSource, 'buildRuntimeDefaults').includes('allowBotWebSocketFallback: false'), 'runtime defaults do not keep bot websocket fallback disabled');
     });
-    check(`${file} treats combat sampling and tick/frame gaps as offline network risk`, () => {
+    check(`${file} disables active game API polling and keeps tick/frame gaps as offline network risk`, () => {
       assert(defaultConfigSource.includes('globalSamplingOutageOfflineEnabled: true'), 'sampling outage offline gate is not enabled by default');
       assert(defaultConfigSource.includes('globalSamplingOutageCombatOnly: true'), 'sampling outage offline gate is not combat-only by default');
       assert(expectObjectNumber(defaultConfigSource, 'globalRefreshTimeoutMs', 3000), 'global refresh timeout is not configured at 3000ms');
       assert(defaultConfigSource.includes('combatTickGapOfflineEnabled: true'), 'combat tick gap offline gate is not enabled by default');
       const refreshBody = functionBody(text, 'refreshGlobalState');
-      assert(refreshBody.includes('bot.globalState.samplingOutage = outage'), 'sampling outage state is not recorded on global refresh errors');
-      assert(refreshBody.includes("triggerNativeTick('global-sampling-outage', false)"), 'sampling outage does not trigger an immediate native tick');
-      assert(refreshBody.includes('snapshotTimedOut') && refreshBody.includes('minimapTimedOut'), 'sampling outage timeout evidence is not recorded');
-      assert(refreshBody.includes('refreshDurationMs') && refreshBody.includes('snapshotDurationMs') && refreshBody.includes('minimapDurationMs'), 'sampling outage does not record refresh/request timing diagnostics');
-      assert(refreshBody.includes('lastTickDurationMs') && refreshBody.includes('lastCombatLogBuildMs') && refreshBody.includes('lastCombatLogRecordMs'), 'sampling outage does not include recent runtime timing diagnostics');
+      assert(!refreshBody.includes("'/snapshot'") && !refreshBody.includes('"/snapshot"'), 'active global refresh still fetches snapshot');
+      assert(!refreshBody.includes("'/minimap'") && !refreshBody.includes('"/minimap"'), 'active global refresh still fetches minimap');
+      assert(refreshBody.includes("skipped: 'passive-snapshot-only-active-game-api-disabled'"), 'active global refresh does not expose disabled game API diagnostics');
+      assert(refreshBody.includes('bot.globalState.minimap = null'), 'active global refresh does not clear stale minimap data');
+      assert(refreshBody.includes('bot.globalState.samplingOutage = null'), 'active global refresh does not clear stale sampling outage state');
+      assert(refreshBody.includes('snapshot: { ok: false, skipped: true') && refreshBody.includes('minimap: { ok: false, skipped: true'), 'active global refresh skip diagnostics do not cover both game APIs');
       const outageBody = functionBody(text, 'globalSamplingOutageOfflineState');
       assert(outageBody.includes("reason: 'global sampling outage'"), 'sampling outage offline state does not expose the canonical reason');
       assert(outageBody.includes('combatTickActiveFromState({'), 'sampling outage gate does not reuse combat activity state');
@@ -553,7 +554,7 @@ function main() {
       assert(sessionBody.includes('uptimeMs: startedAt ? Math.max(0, (stoppedAt || Date.now()) - startedAt) : 0'), 'session uptime does not freeze at missingSince');
       assert(sessionBody.includes('uptimeStoppedAt: stoppedAt'), 'session uptime stopped-at status is not exposed');
     });
-    check(`${file} keeps realtime profit ahead of snapshot fallback`, () => {
+    check(`${file} limits ordinary profit to realtime/native visible state`, () => {
       const classifyBody = functionBody(text, 'classify');
       const chooseBody = functionBody(text, 'chooseAction');
       assert(text.includes('function pickRealtimeLocalCoin'), 'realtime local coin picker not found');
@@ -562,10 +563,10 @@ function main() {
       assert(classifyBody.includes('const realtimeEntities = attackableEntities.filter(e => e.native && !e.minimapOnly)'), 'classification does not split realtime/native entities');
       assert(classifyBody.includes('const realtimeGlobalTargets = realtimeEntities'), 'classification does not split realtime AFK targets');
       assert(classifyBody.includes('.filter(e => e.native)'), 'combat targets can still include snapshot-only entities');
-      assert(chooseBody.includes('const nearCoin = pickCoin(self, realtimeNearCoins'), 'near coin priority can still use snapshot coins');
-      assert(chooseBody.includes('pickPostAttackDropCoin(self, realtimeCoins'), 'post-attack pickup can still use snapshot coins');
-      assert(chooseBody.includes('{ coins: realtimeGlobalCoins, maxDistance: cfg.globalCoinMaxDistance }'), 'normal opportunity coin pool can still use snapshot coins');
-      assert(chooseBody.includes('realtimeGlobalTargets.filter(isAfkProfitTarget)'), 'normal AFK opportunity pool can still use snapshot targets');
+      assert(chooseBody.includes('const nearCoin = pickCoin(self, realtimeNearCoins'), 'near coin priority is not limited to realtime coins');
+      assert(chooseBody.includes('pickPostAttackDropCoin(self, realtimeCoins'), 'post-attack pickup is not limited to realtime coins');
+      assert(chooseBody.includes('{ coins: realtimeGlobalCoins, maxDistance: cfg.globalCoinMaxDistance }'), 'normal opportunity coin pool is not limited to realtime coins');
+      assert(chooseBody.includes('realtimeGlobalTargets.filter(isAfkProfitTarget)'), 'normal AFK opportunity pool is not limited to realtime targets');
       const visibleOpportunityIndex = chooseBody.indexOf('const opportunity = pickBestOpportunity(');
       const distantCoinIndex = chooseBody.indexOf('const distantCoin = pickDistantCoin(self, realtimeCoins');
       const localRealtimeIndex = chooseBody.indexOf('if (localRealtimeCoin) {');
@@ -576,9 +577,9 @@ function main() {
       assert(distantCoinIndex > visibleOpportunityIndex, 'distant realtime coin is not after visible opportunities');
       assert(localRealtimeIndex > distantCoinIndex, 'local realtime coin fallback is not after distant realtime coin');
       assert(shotWaitIndex > localRealtimeIndex, 'visible opportunistic AFK shot wait is not after realtime profit paths');
-      assert(snapshotCoinIndex > shotWaitIndex, 'snapshot coin fallback is not after visible AFK shot wait');
-      assert(snapshotOpportunityIndex > snapshotCoinIndex, 'snapshot opportunity fallback is not separated after visible profit paths');
-      assert(chooseBody.includes('{ disableMissingHold: true }'), 'snapshot fallback can still revive missing held visible opportunities');
+      assert(snapshotCoinIndex === -1, 'ordinary profit still has a snapshot coin fallback');
+      assert(snapshotOpportunityIndex === -1, 'ordinary profit still has a snapshot/minimap opportunity fallback');
+      assert(!chooseBody.includes('{ disableMissingHold: true }'), 'ordinary profit still carries the old snapshot fallback missing-hold bypass');
     });
     check(`${file} prices player drops with full pickup travel cost`, () => {
       const body = functionBody(text, 'opportunityEnemyStaminaCost');
@@ -1268,9 +1269,11 @@ function main() {
       assert(confirmBody.includes('detail.http403RiskControl = true'), '403 risk-control marker not recorded');
       assert(pendingBody.includes("source: 'leave-http-403'"), 'pending exit does not confirm on leave HTTP 403');
       const refreshBody = functionBody(text, 'refreshGlobalState');
-      assert(refreshBody.includes("timedFetchJsonNoStore('snapshot', '/snapshot')") || refreshBody.includes("fetchJsonNoStore('/snapshot')"), 'snapshot refresh request not found');
-      assert(refreshBody.includes('noteLeave403SnapshotProbe(true'), 'snapshot success does not update 403 recovery probe');
-      assert(refreshBody.includes('noteLeave403SnapshotProbe(false'), 'snapshot failure does not reset 403 recovery probe');
+      assert(!refreshBody.includes("'/snapshot'") && !refreshBody.includes('"/snapshot"'), '403 recovery still actively fetches snapshot through global refresh');
+      const passiveSnapshotBody = functionBody(text, 'pageNativeSnapshotPayload');
+      const passiveSnapshotErrorBody = functionBody(text, 'pageNativeSnapshotError');
+      assert(passiveSnapshotBody.includes('noteLeave403SnapshotProbe(true'), 'page-native snapshot success does not update 403 recovery probe');
+      assert(passiveSnapshotErrorBody.includes('noteLeave403SnapshotProbe(false'), 'page-native snapshot failure does not reset 403 recovery probe');
       const probeBody = functionBody(text, 'noteLeave403SnapshotProbe');
       assert(probeBody.includes('clearLeave403RiskHolds'), 'snapshot success streak does not clear 403 hold');
       assert(probeBody.includes('leave403SnapshotSuccessRequired()'), 'snapshot success threshold helper not used');
@@ -1280,7 +1283,8 @@ function main() {
     });
     check(`${file} gates relogin on learned login-point safety`, () => {
       const gateBody = functionBody(text, 'ensureLoginSnapshotGate');
-      assert(gateBody.includes('await refreshGlobalState(true)'), 'login snapshot gate does not actively probe snapshot');
+      assert(!gateBody.includes('await refreshGlobalState(true)'), 'login snapshot gate still actively probes snapshot');
+      assert(gateBody.includes('status.passiveSnapshotOnly = true'), 'login snapshot gate does not expose passive snapshot-only mode');
       assert(!gateBody.includes('session-mismatch-recovery'), 'login snapshot gate still has a reason-based session mismatch bypass');
       assert(!gateBody.includes('recoveryBypass'), 'login snapshot gate exposes the old recovery bypass');
       assert(gateBody.includes('options.allowLiveSessionTakeoverBypass'), 'login snapshot gate does not require an explicit live-session takeover bypass option');
@@ -1293,8 +1297,23 @@ function main() {
       const allowLoginBody = functionBody(text, 'loginSnapshotGateAllowsLogin');
       assert(allowLoginBody.includes('gate.pointSafety?.satisfied'), 'login gate bypass can skip login-point safety');
       const refreshBody = functionBody(text, 'refreshGlobalState');
-      assert(refreshBody.includes('noteLoginSnapshotProbe(true'), 'snapshot success does not update login-point safety probe');
-      assert(refreshBody.includes('noteLoginSnapshotProbe(false'), 'snapshot failure does not reset login-point safety probe');
+      assert(!refreshBody.includes('noteLoginSnapshotProbe('), 'active snapshot refresh still updates login-point safety probe');
+      assert(!refreshBody.includes("'/snapshot'") && !refreshBody.includes('"/snapshot"'), 'login/global refresh still actively fetches snapshot');
+      assert(!refreshBody.includes("'/minimap'") && !refreshBody.includes('"/minimap"'), 'login/global refresh still actively fetches minimap');
+      assert(refreshBody.includes("skipped: 'passive-snapshot-only-active-game-api-disabled'"), 'global refresh does not expose passive-only active API disabled diagnostics');
+      const passiveSnapshotBody = functionBody(text, 'pageNativeSnapshotPayload');
+      const passiveSnapshotErrorBody = functionBody(text, 'pageNativeSnapshotError');
+      const passiveSnapshotObserverBody = functionBody(text, 'installPageNativeSnapshotObserver');
+      assert(passiveSnapshotBody.includes('noteLoginSnapshotProbe(true'), 'page-native snapshot success does not update login-point safety probe');
+      assert(passiveSnapshotBody.includes('Array.isArray(payload?.entities)') && passiveSnapshotBody.includes('/snapshot invalid payload'), 'page-native snapshot success can advance without a valid entities array');
+      assert(passiveSnapshotErrorBody.includes('noteLoginSnapshotProbe(false'), 'page-native snapshot failure does not reset login-point safety probe');
+      assert(passiveSnapshotObserverBody.includes('window.Response') && passiveSnapshotObserverBody.includes('Response.prototype'), 'page-native snapshot observer does not inspect parsed fetch responses passively');
+      assert(passiveSnapshotObserverBody.includes('originalResponseJson') && passiveSnapshotObserverBody.includes('originalResponseText'), 'page-native snapshot observer does not hook response body parsing');
+      assert(!passiveSnapshotObserverBody.includes('window.fetch ='), 'page-native snapshot observer still wraps fetch and can alter request initiators');
+      assert(!passiveSnapshotObserverBody.includes('originalFetch'), 'page-native snapshot observer still stores original fetch');
+      assert(!passiveSnapshotObserverBody.includes('proto.send ='), 'page-native snapshot observer still wraps XHR send and can alter request initiators');
+      assert(!passiveSnapshotObserverBody.includes('originalXhrSend'), 'page-native snapshot observer still stores original XHR send');
+      assert(text.includes('installPageNativeSnapshotObserver()'), 'page-native snapshot observer is not installed');
       assert(text.includes('function loginPointSafetyStatus'), 'login-point safety status helper not found');
       assert(text.includes('function evaluateLoginPointSafety'), 'login-point safety evaluator not found');
       assert(text.includes('function loginPointSafetyRadiusInfo'), 'login-point safety dynamic radius helper not found');
@@ -1636,7 +1655,7 @@ function main() {
     );
     assert(nodeSelfTestSource.includes("name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'"), 'visible invulnerable coin block self-test not found');
     assert(
-      /name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'[\s\S]*x: 25500[\s\S]*native: true[\s\S]*invulnerableRemainingMs: 5000[\s\S]*x: 12300[\s\S]*amount: 1[\s\S]*want: 'wait-for-snapshot-coin'/.test(nodeSelfTestSource),
+      /name: 'visible invulnerable player blocks nearby ordinary coin before avoidance flee'[\s\S]*x: 25500[\s\S]*native: true[\s\S]*invulnerableRemainingMs: 5000[\s\S]*x: 12300[\s\S]*amount: 1[\s\S]*want: 'wait-for-visible-coin-refresh'/.test(nodeSelfTestSource),
       'visible invulnerable coin block self-test does not model the screenshot distance'
     );
     assert(nodeSelfTestSource.includes("name: 'snapshot-only invulnerable player does not block visible ordinary coin'"), 'snapshot-only invulnerable non-blocking self-test not found');
@@ -1662,7 +1681,7 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'higher roi 200m coin beats 150m coin inside visible pool'"), 'visible coin ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'visible high afk drop beats opposite one coin by stamina roi'"), 'visible AFK-vs-coin ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'near afk drop target beats far snapshot cluster by yield'"), 'visible AFK-vs-snapshot self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'visible afk target beats richer snapshot fallback'"), 'explicit visible AFK-before-snapshot self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'visible afk target ignores richer snapshot-only coins'"), 'explicit visible AFK-before-snapshot self-test not found');
     assert(nodeSelfTestSource.includes("name: '500m drop five afk loses to 100m one coin by pickup travel cost'"), 'full pickup travel cost self-test not found');
     assert(nodeSelfTestSource.includes("name: 'same distance ten coin beats drop ten after kill pickup cost'"), 'same-distance coin-vs-drop pickup cost self-test not found');
     assert(nodeSelfTestSource.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');

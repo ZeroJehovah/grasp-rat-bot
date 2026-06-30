@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.262"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.264"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -484,7 +484,7 @@
     staminaResetGraceMs: 10000,
     staminaBudgetReloginDelayMs: 1800000,
     loginSnapshotProbeMinMs: 5000,
-    loginPointSafetySuccessRequired: 12,
+    loginPointSafetySuccessRequired: 3,
     loginPointSafetyRadius: 30000,
     loginPointSafetyHealthyRadius: 17000,
     loginPointSafetyHealthyHpThreshold: 80,
@@ -553,7 +553,7 @@
     combatLogPendingPersistMinMs: 5000,
     combatLogMaxBulletEntries: 24,
     combatLogMaxEntityEntries: 12,
-    postLoginZoomOutClicks: 4,
+    postLoginZoomOutClicks: 7,
     postLoginZoomStartDelayMs: 350,
     postLoginZoomOutIntervalMs: 80,
     postLoginZoomArmMissingMs: 1000,
@@ -2201,7 +2201,7 @@
     const point = targetOverlayWorldPoint(status?.point);
     const radius = targetOverlayLoginPointRadius(status);
     if (!point || !(radius > 0)) return null;
-    const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 12) || 12);
+    const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 3) || 3);
     const streak = Math.max(0, Number(status?.streak || 0) || 0);
     return {
       ...status,
@@ -2538,13 +2538,14 @@ function hpDisplay(value) {
 	      'opportunistic-afk-drop-shot': '顺手射击挂机 Drop 目标',
 	      'migrate-to-known-field': '迁移到金币密集区域',
 	      'scan-toward-distant-coin': '扫描远处金币',
-		      'snapshot-coin-field': '快照金币区域导航',
-		      'snapshot-coin-target': '快照金币导航',
-			      'snapshot-coin-idle-timeout': '等待超时，前往远处快照金币',
-			      'wait-for-stamina-budget': '长期体力预算不足',
-			      'stamina-budget-coin-leave': '一小时体力预算不足，退出等待恢复',
+		      'snapshot-coin-field': '等待视野内金币刷新',
+		      'snapshot-coin-target': '等待视野内金币刷新',
+			      'snapshot-coin-idle-timeout': '等待视野内金币刷新',
+				      'wait-for-stamina-budget': '长期体力预算不足',
+				      'wait-for-visible-coin-refresh': '等待视野内金币刷新',
+				      'stamina-budget-coin-leave': '一小时体力预算不足，退出等待恢复',
 			      'stamina-budget-coin-leave-retry': '一小时体力预算不足，重试退出',
-			      'wait-for-snapshot-coin': '等待快照金币',
+			      'wait-for-snapshot-coin': '等待视野内金币刷新',
 		      'login-suppressed': '等待重连',
 		      'exit-log-flush-pending': '等待退出日志发送完成',
 		      'important-log-flush-pending': '等待会话结束日志发送完成',
@@ -4557,7 +4558,7 @@ function hpDisplay(value) {
         }
       }
 
-		function staminaExhaustedWindowLabel(staminaState) {
+			function staminaExhaustedWindowLabel(staminaState) {
   return staminaExhaustedLongWindows(staminaState).join('/');
 }
   function requestReload(reason) {
@@ -5449,7 +5450,7 @@ function hpDisplay(value) {
   }
 
   function loginPointSafetySuccessRequired() {
-    return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 12) || 12));
+    return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 3) || 3));
   }
 
   function optionalFiniteNumber(value) {
@@ -6063,19 +6064,8 @@ function hpDisplay(value) {
 	      status.liveSessionTakeover = options.liveSessionTakeover;
 	      return status;
 	    }
-	    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
-	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
-	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
-	      try {
-	        await refreshGlobalState(true);
-	      } catch (err) {
-	        const message = err?.message || String(err);
-	        bot.globalState.error = message;
-	        noteLoginSnapshotProbe(false, { error: message });
-	      }
-	      status = snapshotLoginGateStatus();
-	    }
-	    status.blockReason = String(reason || 'login');
+    status.blockReason = String(reason || 'login');
+    status.passiveSnapshotOnly = true;
 	    if (!status.satisfied && allowTakeoverBypass && status.pointSafety?.satisfied) {
 	      status.liveSessionTakeoverBypass = true;
 	      status.liveSessionTakeover = options.liveSessionTakeover;
@@ -6484,7 +6474,157 @@ function hpDisplay(value) {
 
 
 
-  function leaveWaitDisplay(base, detail) {
+	  function pageNativeSnapshotUrl(input) {
+	    try {
+	      const raw = typeof input === 'string' ? input : String(input?.url || input || '');
+	      if (!raw) return '';
+	      const url = new URL(raw, location.href);
+	      if (url.origin !== location.origin || url.pathname !== '/snapshot') return '';
+	      return url.toString();
+	    } catch (_) {
+	      return '';
+	    }
+	  }
+
+	  function pageNativeSnapshotPayload(payload, meta = {}) {
+	    if (!payload || typeof payload !== 'object') return;
+	    const entities = Array.isArray(payload?.entities) ? payload.entities : null;
+	    if (!entities) {
+	      pageNativeSnapshotError(new Error('/snapshot invalid payload'), meta);
+	      return;
+	    }
+	    bot.globalState.tick = Number(payload?.tick || bot.globalState.tick || 0);
+	    bot.globalState.entities = entities;
+	    bot.globalState.bullets = Array.isArray(payload?.bullets) ? payload.bullets : [];
+	    bot.globalState.coinDrops = Array.isArray(payload?.coin_drops) ? payload.coin_drops : [];
+	    bot.globalState.messages = Array.isArray(payload?.messages) ? payload.messages : [];
+	    bot.globalState.snapshotRefreshedAt = Date.now();
+	    bot.globalState.passiveSnapshotRefreshedAt = bot.globalState.snapshotRefreshedAt;
+	    bot.globalState.passiveSnapshotSource = String(meta.source || 'page-native-snapshot');
+	    bot.globalState.error = String(bot.globalState.error || '').replace(/(^|; )snapshot: [^;]*/g, '').replace(/^;\s*/, '');
+	    noteLoginSnapshotProbe(true, {
+	      tick: bot.globalState.tick,
+	      entities: bot.globalState.entities,
+	      source: bot.globalState.passiveSnapshotSource,
+	      passive: true
+	    });
+	    noteLeave403SnapshotProbe(true, {
+	      tick: bot.globalState.tick,
+	      source: bot.globalState.passiveSnapshotSource,
+	      passive: true
+	    });
+	    recordRuntimeDiagnostics({
+	      lastPassiveSnapshot: {
+	        at: bot.globalState.snapshotRefreshedAt,
+	        source: bot.globalState.passiveSnapshotSource,
+	        url: String(meta.url || ''),
+	        entities: arrayCount(bot.globalState.entities),
+	        tick: bot.globalState.tick
+	      }
+	    });
+	  }
+
+	  function pageNativeSnapshotError(err, meta = {}) {
+	    const message = err?.message || String(err || 'page native snapshot failed');
+	    bot.globalState.passiveSnapshotError = message;
+	    bot.globalState.passiveSnapshotErrorAt = Date.now();
+	    noteLoginSnapshotProbe(false, {
+	      error: message,
+	      source: String(meta.source || 'page-native-snapshot'),
+	      passive: true
+	    });
+	    noteLeave403SnapshotProbe(false, {
+	      error: message,
+	      source: String(meta.source || 'page-native-snapshot'),
+	      passive: true
+	    });
+	  }
+
+	  function installPageNativeSnapshotObserver() {
+	    const key = '__graspRatPageNativeSnapshotObserver';
+	    const state = window[key] || {
+	      installed: false,
+	      originalResponseJson: null,
+	      originalResponseText: null,
+	      originalXhrOpen: null,
+	      observedXhrs: null
+	    };
+	    window[key] = state;
+	    state.handleSnapshotPayload = pageNativeSnapshotPayload;
+	    state.handleSnapshotError = pageNativeSnapshotError;
+	    if (state.installed) return;
+	    state.installed = true;
+	    const observeFetchResponse = (response, parsed, source) => {
+	      const snapshotUrl = pageNativeSnapshotUrl(response?.url || '');
+	      if (!snapshotUrl) return;
+	      Promise.resolve(parsed)
+	        .then(payload => {
+	          if (!response?.ok) {
+	            state.handleSnapshotError?.(new Error('/snapshot HTTP ' + (response?.status || 0)), { source, url: snapshotUrl });
+	            return;
+	          }
+	          state.handleSnapshotPayload?.(payload, { source, url: snapshotUrl });
+	        })
+	        .catch(err => state.handleSnapshotError?.(err, { source, url: snapshotUrl }));
+	    };
+	    if (typeof window.Response === 'function' && window.Response.prototype) {
+	      const responseProto = window.Response.prototype;
+	      if (typeof responseProto.json === 'function') {
+	        state.originalResponseJson = responseProto.json;
+	        responseProto.json = function graspRatObservedResponseJson() {
+	          const result = state.originalResponseJson.apply(this, arguments);
+	          observeFetchResponse(this, result, 'page-native-fetch-json');
+	          return result;
+	        };
+	      }
+	      if (typeof responseProto.text === 'function') {
+	        state.originalResponseText = responseProto.text;
+	        responseProto.text = function graspRatObservedResponseText() {
+	          const result = state.originalResponseText.apply(this, arguments);
+	          const snapshotUrl = pageNativeSnapshotUrl(this?.url || '');
+	          if (snapshotUrl) {
+	            const response = this;
+	            const parsed = Promise.resolve(result).then(text => JSON.parse(String(text || 'null')));
+	            observeFetchResponse(response, parsed, 'page-native-fetch-text');
+	          }
+	          return result;
+	        };
+	      }
+	    }
+	    if (typeof window.XMLHttpRequest === 'function') {
+	      const proto = window.XMLHttpRequest.prototype;
+	      state.originalXhrOpen = proto.open;
+	      state.observedXhrs = typeof WeakSet === 'function' ? new WeakSet() : null;
+	      proto.open = function graspRatObservedXhrOpen(method, url) {
+	        const xhr = this;
+	        let snapshotUrl = '';
+	        try {
+	          snapshotUrl = pageNativeSnapshotUrl(url);
+	        } catch (_) {
+	          snapshotUrl = '';
+	        }
+	        if (snapshotUrl && (!state.observedXhrs || !state.observedXhrs.has(xhr))) {
+	          try {
+	            state.observedXhrs?.add(xhr);
+	          } catch (_) {}
+	          xhr.addEventListener('loadend', () => {
+	            try {
+	              if (xhr.status < 200 || xhr.status >= 300) throw new Error('/snapshot HTTP ' + xhr.status);
+	              const payload = xhr.responseType === 'json'
+	                ? xhr.response
+	                : JSON.parse(String(xhr.responseText || xhr.response || 'null'));
+	              state.handleSnapshotPayload?.(payload, { source: 'page-native-xhr', url: snapshotUrl });
+	            } catch (err) {
+	              state.handleSnapshotError?.(err, { source: 'page-native-xhr', url: snapshotUrl });
+	            }
+	          });
+	        }
+	        return state.originalXhrOpen.apply(this, arguments);
+	      };
+	    }
+	  }
+
+	  function leaveWaitDisplay(base, detail) {
 	    const summary = String(base || '').trim();
 	    const waitMs = Number(detail?.holdRemainingMs ?? detail?.reloginDelayMs ?? 0);
 	    if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
@@ -9821,7 +9961,7 @@ function hpDisplay(value) {
 
   function fetchJsonNoStore(url, timeoutMs = cfg.globalRefreshTimeoutMs) {
     const ms = Math.max(250, Number(timeoutMs) || cfg.globalRefreshTimeoutMs);
-    const options = { cache: 'no-store' };
+    const options = { cache: 'no-store', __graspRatBotFetch: true };
     let controller = null;
     let timer = 0;
     if (typeof AbortController === 'function') {
@@ -11850,111 +11990,22 @@ function hpDisplay(value) {
 	    const t = Date.now();
 	    if (!force && t - bot.globalState.refreshedAt < cfg.globalRefreshMs) return;
 	    bot.globalState.refreshedAt = t;
-	    const refreshStartedPerf = now();
-	    const requestTimings = {};
-	    const timedFetchJsonNoStore = (label, url) => {
-	      const requestStartedAt = Date.now();
-	      const requestStartedPerf = now();
-	      return fetchJsonNoStore(url).finally(() => {
-	        requestTimings[label] = {
-	          startedAt: requestStartedAt,
-	          completedAt: Date.now(),
-	          durationMs: Math.max(0, Math.round(now() - requestStartedPerf))
-	        };
-	      });
-	    };
-	    const [snapshotRes, minimapRes] = await Promise.allSettled([
-	      timedFetchJsonNoStore('snapshot', '/snapshot'),
-	      timedFetchJsonNoStore('minimap', '/minimap')
-	    ]);
-	    const errors = [];
-	    let snapshotError = '';
-	    let minimapError = '';
-	    if (snapshotRes.status === 'fulfilled') {
-	      const snapshot = snapshotRes.value;
-	      bot.globalState.tick = Number(snapshot?.tick || bot.globalState.tick || 0);
-	      bot.globalState.entities = snapshot?.entities || [];
-	      bot.globalState.bullets = snapshot?.bullets || [];
-	      bot.globalState.coinDrops = snapshot?.coin_drops || [];
-		      bot.globalState.messages = snapshot?.messages || [];
-		      bot.globalState.snapshotRefreshedAt = Date.now();
-		      noteLoginSnapshotProbe(true, { tick: bot.globalState.tick, entities: bot.globalState.entities });
-		      noteLeave403SnapshotProbe(true, { tick: bot.globalState.tick });
-		    } else {
-		      const message = snapshotRes.reason?.message || String(snapshotRes.reason || '');
-		      snapshotError = message;
-		      errors.push('snapshot: ' + message);
-		      noteLoginSnapshotProbe(false, { error: message });
-		      noteLeave403SnapshotProbe(false, { error: message });
-		    }
-	    if (minimapRes.status === 'fulfilled') {
-	      bot.globalState.minimap = minimapRes.value || null;
-	    } else {
-	      minimapError = minimapRes.reason?.message || String(minimapRes.reason || '');
-	      errors.push('minimap: ' + minimapError);
-	    }
-	    bot.globalState.error = errors.join('; ');
+	    bot.globalState.activeRefreshSkippedAt = t;
+	    bot.globalState.minimap = null;
+	    bot.globalState.error = '';
+	    bot.globalState.samplingOutage = null;
 	    const completedAt = Date.now();
 	    const refreshDiagnostic = {
 	      startedAt: t,
 	      completedAt,
-	      durationMs: Math.max(0, Math.round(now() - refreshStartedPerf)),
+	      durationMs: 0,
 	      force: Boolean(force),
-	      snapshot: {
-	        ...(requestTimings.snapshot || {}),
-	        ok: snapshotRes.status === 'fulfilled',
-	        error: snapshotError
-	      },
-	      minimap: {
-	        ...(requestTimings.minimap || {}),
-	        ok: minimapRes.status === 'fulfilled',
-	        error: minimapError
-	      },
+	      skipped: 'passive-snapshot-only-active-game-api-disabled',
+	      snapshot: { ok: false, skipped: true, error: '' },
+	      minimap: { ok: false, skipped: true, error: '' },
 	      error: bot.globalState.error
 	    };
 	    recordRuntimeDiagnostics({ lastRefresh: refreshDiagnostic });
-	    if (errors.length) {
-	      const previous = bot.globalState.samplingOutage || null;
-	      const firstAt = previous?.active ? (Number(previous.firstAt || 0) || t) : t;
-	      const errorCount = Math.max(0, Number(previous?.errorCount || 0)) + 1;
-	      const ageMs = Math.max(0, completedAt - firstAt);
-	      const timedOutPattern = /timed out|abort/i;
-	      const outage = {
-	        active: true,
-	        firstAt,
-	        lastAt: completedAt,
-	        ageMs,
-	        errorCount,
-	        error: bot.globalState.error,
-	        snapshotError,
-	        minimapError,
-	        snapshotTimedOut: timedOutPattern.test(snapshotError),
-	        minimapTimedOut: timedOutPattern.test(minimapError),
-	        visibilityState: document.visibilityState || '',
-	        refreshedAt: bot.globalState.refreshedAt,
-	        snapshotRefreshedAt: bot.globalState.snapshotRefreshedAt || 0,
-	        snapshotAgeMs: bot.globalState.snapshotRefreshedAt ? Math.max(0, completedAt - bot.globalState.snapshotRefreshedAt) : null,
-	        refreshDurationMs: refreshDiagnostic.durationMs,
-	        snapshotDurationMs: Number.isFinite(Number(refreshDiagnostic.snapshot.durationMs)) ? refreshDiagnostic.snapshot.durationMs : null,
-	        minimapDurationMs: Number.isFinite(Number(refreshDiagnostic.minimap.durationMs)) ? refreshDiagnostic.minimap.durationMs : null,
-	        lastTickDurationMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastTickDurationMs)) ? bot.runtimeDiagnostics.lastTickDurationMs : null,
-	        lastTickSource: bot.runtimeDiagnostics?.lastTickSource || '',
-	        lastCombatLogBuildMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastCombatLogBuildMs)) ? bot.runtimeDiagnostics.lastCombatLogBuildMs : null,
-	        lastCombatLogRecordMs: Number.isFinite(Number(bot.runtimeDiagnostics?.lastCombatLogRecordMs)) ? bot.runtimeDiagnostics.lastCombatLogRecordMs : null
-	      };
-	      outage.combatActive = combatTickActiveFromState({
-	        decision: bot.lastDecision,
-	        combatTarget: bot.combatTarget,
-	        pendingExit: bot.pendingExit || bot.pendingCombatLeave,
-	        nowMs: completedAt
-	      });
-	      bot.globalState.samplingOutage = outage;
-	      if (globalSamplingOutageOfflineState(null, { nowMs: completedAt, outage })) {
-	        setTimeout(() => triggerNativeTick('global-sampling-outage', false), 0);
-	      }
-	    } else {
-	      bot.globalState.samplingOutage = null;
-	    }
 	  }
 
 	  function wsSend(message) {
@@ -18352,7 +18403,7 @@ function hpDisplay(value) {
 	      return { dx, dy, distance: 0, reason: 'maintain-safe-spacing' };
 	    }
 	    bot.patrolHeading = null;
-		    return { dx: 0, dy: 0, distance: 0, reason: 'wait-for-snapshot-coin' };
+		    return { dx: 0, dy: 0, distance: 0, reason: 'wait-for-visible-coin-refresh' };
 		  }
 
 		  function clearOpportunityChoiceFor(type, id = null) {
@@ -19399,70 +19450,16 @@ function hpDisplay(value) {
 	    const shotWait = buildOpportunisticShotWait(self, realtimeEntities, { recovery });
 	    if (shotWait) return shotWait;
 
-    const snapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { ignoreRealtimeLocalCoin: true });
-    const snapshotEnemyGroups = fullHp
-      ? [
-        globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target) && !target.native),
-        minimapDropTargets
-      ]
-      : [
-        globalTargets.filter(target => !target.native),
-        minimapDropTargets
-      ];
-    const snapshotOpportunity = pickBestOpportunity(
-      self,
-      coinThreats,
-      snapshotCoin ? [{ coins: [snapshotCoin], maxDistance: cfg.snapshotCoinMaxDistance }] : [],
-      snapshotEnemyGroups,
-      { disableMissingHold: true }
-    );
-    if (snapshotOpportunity) {
-      bot.fleeLock = null;
-      return snapshotOpportunity;
-    }
-		    const snapshotWaitNow = Date.now();
-		    if (!isSnapshotCoinWaitAction(bot.lastDecision) || !bot.snapshotCoinWaitSince) bot.snapshotCoinWaitSince = snapshotWaitNow;
-		    const snapshotWaitAgeMs = Math.max(0, snapshotWaitNow - Number(bot.snapshotCoinWaitSince || snapshotWaitNow));
-		    bot.lastSnapshotCoinWaitAgeMs = snapshotWaitAgeMs;
-	    const snapshotWaitMaxMs = Math.max(0, Number(cfg.snapshotCoinIdleMaxMs || 0));
-	    const snapshotWaitRemainingMs = Math.max(0, snapshotWaitMaxMs - snapshotWaitAgeMs);
-		    if (snapshotWaitAgeMs >= cfg.snapshotCoinIdleMaxMs) {
-		      const idleSnapshotCoin = pickSnapshotCoinDestination(self, snapshotCoins, coinThreats, { allowIdleFallback: true });
-		      if (idleSnapshotCoin) {
-	        const action = buildCoinAction(
-	          self,
-	          idleSnapshotCoin,
-	          snapshotCoinNavigationReason(idleSnapshotCoin),
-	          'seek-coin'
-	        );
-	        action.target.fieldMembers = idleSnapshotCoin.snapshotMembers;
-	        action.target.fieldAmount = idleSnapshotCoin.snapshotAmount;
-	        action.target.snapshotAgeMs = Number.isFinite(idleSnapshotCoin.snapshotAgeMs) ? Math.round(idleSnapshotCoin.snapshotAgeMs) : null;
-	        action.target.snapshotWaitAgeMs = Math.round(snapshotWaitAgeMs);
-	        action.snapshotWaitAgeMs = Math.round(snapshotWaitAgeMs);
-	        action.snapshotIdleFallback = true;
-	        action.score = Math.round(idleSnapshotCoin.snapshotScore ?? action.score ?? 0);
-	        return attachOpportunisticShot(action, self, realtimeEntities, { recovery });
-	      }
-	    }
-	    const blockedTargets = [
-	      ...globalTargets.filter(target => !target.minimapOnly && isAfkProfitTarget(target) && !target.native),
-	      ...minimapDropTargets,
-	      ...realtimeInactiveTargets
-	    ];
-	    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, realtimeCoins, blockedTargets);
-	    const waitReason = staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-snapshot-coin';
+	    bot.snapshotCoinWaitSince = 0;
+	    bot.lastSnapshotCoinWaitAgeMs = 0;
+	    const staminaBlocked = summarizeBlockedStaminaOpportunity(self, realtimeCoins, realtimeInactiveTargets);
+	    const waitReason = staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-visible-coin-refresh';
 	    const sourceSummary = bot.lastCoinSourceSummary || {};
 	    const waitDisplay = staminaBlocked
 	      ? '长期体力预算不足，预算' + formatDurationMs(staminaBlocked.budgetMs)
 	        + '，最近目标需' + formatDurationMs(staminaBlocked.requiredMs)
 	        + '，差' + formatDurationMs(staminaBlocked.shortageMs)
-	        + (snapshotWaitRemainingMs > 0
-	          ? '，' + formatDurationMs(snapshotWaitRemainingMs) + '后尝试远处快照金币'
-	          : '，已达到' + formatDurationMs(snapshotWaitMaxMs) + '兜底等待')
-	      : (snapshotWaitRemainingMs > 0
-	        ? '等待快照金币，' + formatDurationMs(snapshotWaitRemainingMs) + '后尝试远处快照金币'
-	        : '已达到' + formatDurationMs(snapshotWaitMaxMs) + '等待，暂无安全快照金币');
+	      : '等待视野内金币刷新';
 	    return {
 	      kind: 'wait',
 	      reason: waitReason,
@@ -19471,12 +19468,14 @@ function hpDisplay(value) {
 	      displayReason: waitDisplay,
 	      staminaBlocked,
 	      coinSources: sourceSummary,
-	      snapshot: {
-		        coinDrops: arrayCount(bot.globalState.coinDrops),
-	        ageMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
-	        waitAgeMs: Math.round(snapshotWaitAgeMs),
-	        waitMaxMs: Math.round(snapshotWaitMaxMs),
-	        waitRemainingMs: Math.round(snapshotWaitRemainingMs),
+	      visibleCoins: {
+	        realtime: arrayCount(realtimeCoins),
+	        near: arrayCount(realtimeNearCoins),
+	        patrol: arrayCount(realtimePatrolCoins),
+	        global: arrayCount(realtimeGlobalCoins)
+	      },
+	      sampling: {
+	        snapshotAgeMs: Number.isFinite(snapshotCoinAgeMs()) ? Math.round(snapshotCoinAgeMs()) : null,
 	        error: bot.globalState.error || ''
 	      }
 	    };
@@ -20352,16 +20351,17 @@ function hpDisplay(value) {
 	  installNativeLoginGateInterceptors();
 
 	  window[BOT_KEY] = bot;
-	  if (previousBot && previousBot !== bot && previousBot.stop) {
-	    try {
-	      previousBot.stop('replaced by ' + cfg.version);
+		  if (previousBot && previousBot !== bot && previousBot.stop) {
+		    try {
+		      previousBot.stop('replaced by ' + cfg.version);
 	    } catch (err) {
-	      console.warn('[grasp-rat-bot] previous stop failed', err);
-	    }
-	  }
-	  startTargetWhitelistPolling();
+		      console.warn('[grasp-rat-bot] previous stop failed', err);
+		    }
+		  }
+		  installPageNativeSnapshotObserver();
+		  startTargetWhitelistPolling();
 
-		  return refreshGlobalState(true)
+			  return refreshGlobalState(true)
 		    .catch(err => {
 		      bot.globalState.error = err?.message || String(err);
 		      recordUnhandledTickError('startup-refresh', err);
