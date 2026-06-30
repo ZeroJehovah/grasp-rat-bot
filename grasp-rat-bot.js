@@ -3681,12 +3681,13 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     const retryMs = Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
     if (t - Number(bot.lastOfflineLeaveAt || 0) < retryMs) {
       const active = activeOfflineLeaveDetail(t);
+      const summary = offlineLeaveSummary(reason, offlineSafety);
       const detail = {
         attempted: false,
         reason: 'cooldown',
         cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastOfflineLeaveAt || 0)))),
         offlineSafety,
-        summary: active?.summary || offlineLeaveSummary(reason, offlineSafety),
+        summary: summary || active?.summary || '',
         reloginUntil: active?.reloginUntil || bot.offlineReloginUntil || 0,
         reloginDelayMs: active?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || 0
       };
@@ -12808,6 +12809,7 @@ ${importantLogSource()}
           staminaExhausted: staminaState
         };
         bot.lastOfflineSafety = offlineSafety;
+        const staminaDisplayReason = offlineLeaveSummary('stamina exhausted', offlineSafety);
         const leaveResult = await leaveOffline('stamina exhausted', currentSummary, offlineSafety);
         const offlineDetail = activeOfflineLeaveDetail();
         bot.lastDecision = {
@@ -12821,7 +12823,7 @@ ${importantLogSource()}
           leaveDelayMs: 0,
           stamina: staminaState,
           offlineSafety,
-          displayReason: leaveResult?.displayReason || offlineDetail?.displayReason || '',
+          displayReason: leaveResult?.displayReason || staminaDisplayReason || offlineDetail?.displayReason || '',
           leave: leaveResult
         };
         updateBotPanel(bot.lastDecision);
