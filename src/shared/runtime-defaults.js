@@ -410,6 +410,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     offlineLeaveRetryMs: 600,
 	    leaveRetryMinMs: 10000,
 	    leaveCommandTimeoutMs: 10000,
+	    clashLeaveRescueEnabled: false,
+	    clashLeaveRescueTimeoutMs: 9000,
 	    pendingExitPersistMaxMs: 3600000,
 	    leaveSuccessReloadUnknownGraceMs: 12000,
 	    leave403ReloginDelayMs: 3600000,

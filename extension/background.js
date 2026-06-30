@@ -7,6 +7,17 @@ const AUTH_ORIGIN = 'https://connect.linux.do';
 const TRACKED_TAB_KEY = 'gameTabId';
 const LAST_TAB_URL_KEY = 'gameTabLastUrl';
 const LAST_TAB_RECORDED_AT_KEY = 'gameTabRecordedAt';
+const CLASH_SECRET_KEY = 'clashControllerSecret';
+const SENSITIVE_STORAGE_KEYS = new Set([CLASH_SECRET_KEY]);
+const CLASH_DEFAULTS = {
+  enabled: false,
+  controllerUrl: 'http://127.0.0.1:9097',
+  group: 'GRASP-RAT-GAME',
+  autoProxy: 'S2-自动',
+  manualProxy: 'S2-手动',
+  directProxy: 'DIRECT',
+  timeoutMs: 7000
+};
 
 function isGameUrl(url) {
   try {
@@ -35,6 +46,13 @@ function storageGet(keys) {
 
 function storageSet(items) {
   return chrome.storage.local.set(items);
+}
+
+function withoutSensitiveStorage(values) {
+  if (!values || typeof values !== 'object') return values;
+  const filtered = { ...values };
+  for (const key of SENSITIVE_STORAGE_KEYS) delete filtered[key];
+  return filtered;
 }
 
 async function getTrackedTab() {
@@ -166,6 +184,105 @@ async function fetchText(payload = {}) {
   }
 }
 
+function normalizeClashControllerUrl(value) {
+  const url = String(value || CLASH_DEFAULTS.controllerUrl).trim().replace(/\/+$/, '');
+  if (!/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(url)) {
+    throw new Error('Clash controller URL must be localhost');
+  }
+  return url || CLASH_DEFAULTS.controllerUrl;
+}
+
+function clashRescueStageTarget(stage, settings) {
+  const normalized = String(stage || '').toLowerCase();
+  if (normalized === 'auto') return settings.autoProxy;
+  if (normalized === 'manual') return settings.manualProxy;
+  if (normalized === 'direct') return settings.directProxy;
+  throw new Error(`unknown Clash rescue stage: ${stage}`);
+}
+
+async function clashControllerFetch(settings, path, options = {}) {
+  const timeoutMs = Math.max(1000, Number(settings.timeoutMs || CLASH_DEFAULTS.timeoutMs) || CLASH_DEFAULTS.timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const method = String(options.method || 'GET').toUpperCase();
+  try {
+    const res = await fetch(`${settings.controllerUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${settings.secret}`,
+        ...(options.headers || {})
+      },
+      body: options.body ?? undefined,
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'follow',
+      signal: controller.signal
+    });
+    const text = await res.text();
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`${method} ${path} failed: ${res.status}`);
+    }
+    return { ok: true, status: res.status, bodyLength: text.length };
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new Error(`${method} ${path} timed out`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function clashLeaveRescue(payload = {}) {
+  const stored = await storageGet([
+    'clashLeaveRescueEnabled',
+    'clashControllerUrl',
+    CLASH_SECRET_KEY,
+    'clashGameProxyGroup',
+    'clashAutoProxyName',
+    'clashManualProxyName',
+    'clashDirectProxyName',
+    'clashControllerTimeoutMs'
+  ]);
+  const settings = {
+    enabled: stored.clashLeaveRescueEnabled === true || stored.clashLeaveRescueEnabled === 'true',
+    controllerUrl: normalizeClashControllerUrl(stored.clashControllerUrl || CLASH_DEFAULTS.controllerUrl),
+    secret: String(stored[CLASH_SECRET_KEY] || ''),
+    group: String(stored.clashGameProxyGroup || CLASH_DEFAULTS.group),
+    autoProxy: String(stored.clashAutoProxyName || CLASH_DEFAULTS.autoProxy),
+    manualProxy: String(stored.clashManualProxyName || CLASH_DEFAULTS.manualProxy),
+    directProxy: String(stored.clashDirectProxyName || CLASH_DEFAULTS.directProxy),
+    timeoutMs: Math.max(1000, Number(stored.clashControllerTimeoutMs || CLASH_DEFAULTS.timeoutMs) || CLASH_DEFAULTS.timeoutMs)
+  };
+  if (!settings.enabled) throw new Error('Clash leave rescue is not enabled');
+  if (!settings.secret) throw new Error('Clash controller secret is missing');
+  if (!settings.group) throw new Error('Clash game proxy group is missing');
+  const stage = String(payload.stage || '');
+  const target = clashRescueStageTarget(stage, settings);
+  if (!target) throw new Error(`Clash target proxy missing for stage: ${stage}`);
+  const startedAt = Date.now();
+  const groupPath = `/proxies/${encodeURIComponent(settings.group)}`;
+  const switchResult = await clashControllerFetch(settings, groupPath, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: target })
+  });
+  let closeConnections = null;
+  try {
+    closeConnections = await clashControllerFetch(settings, '/connections', { method: 'DELETE' });
+  } catch (err) {
+    closeConnections = { ok: false, error: err?.message || String(err) };
+  }
+  return {
+    ok: true,
+    stage,
+    target,
+    group: settings.group,
+    switched: switchResult,
+    closeConnections,
+    at: startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt)
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const run = async () => {
     const type = String(message?.type || '');
@@ -178,7 +295,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (type === 'storageGet') {
       const defaults = payload.defaults && typeof payload.defaults === 'object' ? payload.defaults : {};
       const values = await storageGet(null);
-      return { ok: true, values: { ...defaults, ...values }, keys: Object.keys(values || {}) };
+      const safeValues = withoutSensitiveStorage(values);
+      return { ok: true, values: { ...defaults, ...safeValues }, keys: Object.keys(safeValues || {}) };
     }
     if (type === 'storageSet') {
       await storageSet(payload.items || {});
@@ -187,6 +305,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (type === 'fetchText') {
       const result = await fetchText(payload);
       return { ok: true, ...result };
+    }
+    if (type === 'clashLeaveRescue') {
+      return clashLeaveRescue(payload);
     }
     if (type === 'detectGameTabs') {
       return detectGameTabs();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.65
+// @version      0.4.66
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.65';
+  const BOOTSTRAP_VERSION = '0.4.66';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -42,6 +42,7 @@
   const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
   const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
   const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
+  const CLASH_SECRET_KEY = 'clashControllerSecret';
   const BLOCKED_REMOTE_HASHES = new Set([
     '4dd9444acda372a715e559b4e3a03409299aed70c09ceb58cbfd9dbf1178591a',
     'a78f30e186e7cbaac7f2cf351aeaed6edccca787be4f238d5a895046946db58e',
@@ -83,7 +84,14 @@
     combatLogEndpointConfigured: false,
     debugBootstrapLogging: false,
     cacheBust: true,
-    autoLogin: true
+    autoLogin: true,
+    clashLeaveRescueEnabled: false,
+    clashControllerUrl: 'http://127.0.0.1:9097',
+    clashGameProxyGroup: 'GRASP-RAT-GAME',
+    clashAutoProxyName: 'S2-自动',
+    clashManualProxyName: 'S2-手动',
+    clashDirectProxyName: 'DIRECT',
+    clashControllerTimeoutMs: 7000
   };
 
   try {
@@ -125,7 +133,14 @@
     combatLogEndpoint: storedCombatLogEndpoint || DEFAULTS.combatLogEndpoint,
     combatLogEndpointConfigured: storedCombatLogEndpointConfigured,
     cacheBust: Boolean(GM_getValue('cacheBust', DEFAULTS.cacheBust)),
-    autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin))
+    autoLogin: Boolean(GM_getValue('autoLogin', DEFAULTS.autoLogin)),
+    clashLeaveRescueEnabled: Boolean(GM_getValue('clashLeaveRescueEnabled', DEFAULTS.clashLeaveRescueEnabled)),
+    clashControllerUrl: String(GM_getValue('clashControllerUrl', DEFAULTS.clashControllerUrl) || DEFAULTS.clashControllerUrl),
+    clashGameProxyGroup: String(GM_getValue('clashGameProxyGroup', DEFAULTS.clashGameProxyGroup) || DEFAULTS.clashGameProxyGroup),
+    clashAutoProxyName: String(GM_getValue('clashAutoProxyName', DEFAULTS.clashAutoProxyName) || DEFAULTS.clashAutoProxyName),
+    clashManualProxyName: String(GM_getValue('clashManualProxyName', DEFAULTS.clashManualProxyName) || DEFAULTS.clashManualProxyName),
+    clashDirectProxyName: String(GM_getValue('clashDirectProxyName', DEFAULTS.clashDirectProxyName) || DEFAULTS.clashDirectProxyName),
+    clashControllerTimeoutMs: Math.max(1000, Number(GM_getValue('clashControllerTimeoutMs', DEFAULTS.clashControllerTimeoutMs)) || DEFAULTS.clashControllerTimeoutMs)
   };
 
   const state = {
@@ -1888,6 +1903,134 @@
     };
   }
 
+  function configureClashLeaveRescue(options = {}) {
+    const next = options && typeof options === 'object' ? options : {};
+    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+      cfg.clashLeaveRescueEnabled = Boolean(next.enabled);
+      GM_setValue('clashLeaveRescueEnabled', cfg.clashLeaveRescueEnabled);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'controllerUrl')) {
+      cfg.clashControllerUrl = String(next.controllerUrl || DEFAULTS.clashControllerUrl);
+      GM_setValue('clashControllerUrl', cfg.clashControllerUrl);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'secret')) {
+      GM_setValue(CLASH_SECRET_KEY, String(next.secret || ''));
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'group')) {
+      cfg.clashGameProxyGroup = String(next.group || DEFAULTS.clashGameProxyGroup);
+      GM_setValue('clashGameProxyGroup', cfg.clashGameProxyGroup);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'autoProxy')) {
+      cfg.clashAutoProxyName = String(next.autoProxy || DEFAULTS.clashAutoProxyName);
+      GM_setValue('clashAutoProxyName', cfg.clashAutoProxyName);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'manualProxy')) {
+      cfg.clashManualProxyName = String(next.manualProxy || DEFAULTS.clashManualProxyName);
+      GM_setValue('clashManualProxyName', cfg.clashManualProxyName);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'directProxy')) {
+      cfg.clashDirectProxyName = String(next.directProxy || DEFAULTS.clashDirectProxyName);
+      GM_setValue('clashDirectProxyName', cfg.clashDirectProxyName);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'timeoutMs')) {
+      cfg.clashControllerTimeoutMs = Math.max(1000, Number(next.timeoutMs || DEFAULTS.clashControllerTimeoutMs) || DEFAULTS.clashControllerTimeoutMs);
+      GM_setValue('clashControllerTimeoutMs', cfg.clashControllerTimeoutMs);
+    }
+    try {
+      const bot = unsafeWindow.__graspRatBot;
+      if (bot && typeof bot.configureClashLeaveRescue === 'function') {
+        bot.configureClashLeaveRescue({
+          enabled: Boolean(cfg.clashLeaveRescueEnabled),
+          timeoutMs: cfg.clashControllerTimeoutMs
+        });
+      }
+    } catch (_) {}
+    updateBootstrapPanel(true);
+    return {
+      enabled: Boolean(cfg.clashLeaveRescueEnabled),
+      controllerUrl: cfg.clashControllerUrl,
+      group: cfg.clashGameProxyGroup,
+      autoProxy: cfg.clashAutoProxyName,
+      manualProxy: cfg.clashManualProxyName,
+      directProxy: cfg.clashDirectProxyName,
+      timeoutMs: cfg.clashControllerTimeoutMs
+    };
+  }
+
+  function normalizeClashControllerUrl(value) {
+    const url = String(value || DEFAULTS.clashControllerUrl).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(url)) {
+      throw new Error('Clash controller URL must be localhost');
+    }
+    return url || DEFAULTS.clashControllerUrl;
+  }
+
+  function clashRescueStageTarget(stage) {
+    const normalized = String(stage || '').toLowerCase();
+    if (normalized === 'auto') return cfg.clashAutoProxyName;
+    if (normalized === 'manual') return cfg.clashManualProxyName;
+    if (normalized === 'direct') return cfg.clashDirectProxyName;
+    throw new Error(`unknown Clash rescue stage: ${stage}`);
+  }
+
+  function clashControllerRequest(method, path, body = null, headers = {}) {
+    const secret = String(GM_getValue(CLASH_SECRET_KEY, '') || '');
+    if (!secret) return Promise.reject(new Error('Clash controller secret is missing'));
+    const baseUrl = normalizeClashControllerUrl(cfg.clashControllerUrl);
+    const timeoutMs = Math.max(1000, Number(cfg.clashControllerTimeoutMs || DEFAULTS.clashControllerTimeoutMs) || DEFAULTS.clashControllerTimeoutMs);
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method,
+        url: `${baseUrl}${path}`,
+        data: body,
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          ...headers
+        },
+        timeout: timeoutMs,
+        onload: res => {
+          if (res.status >= 200 && res.status < 300) {
+            resolve({ ok: true, status: res.status, bodyLength: String(res.responseText || '').length });
+          } else {
+            reject(new Error(`${method} ${path} failed: ${res.status}`));
+          }
+        },
+        ontimeout: () => reject(new Error(`${method} ${path} timed out`)),
+        onerror: err => reject(new Error(`${method} ${path} error: ${err?.error || err?.message || 'unknown'}`))
+      });
+    });
+  }
+
+  async function clashLeaveRescue(payload = {}) {
+    if (!cfg.clashLeaveRescueEnabled) throw new Error('Clash leave rescue is not enabled');
+    const stage = String(payload?.stage || '');
+    const target = clashRescueStageTarget(stage);
+    const group = String(cfg.clashGameProxyGroup || DEFAULTS.clashGameProxyGroup);
+    const startedAt = Date.now();
+    const switchResult = await clashControllerRequest(
+      'PUT',
+      `/proxies/${encodeURIComponent(group)}`,
+      JSON.stringify({ name: target }),
+      { 'content-type': 'application/json' }
+    );
+    let closeConnections = null;
+    try {
+      closeConnections = await clashControllerRequest('DELETE', '/connections');
+    } catch (err) {
+      closeConnections = { ok: false, error: err?.message || String(err) };
+    }
+    return {
+      ok: true,
+      stage,
+      target,
+      group,
+      switched: switchResult,
+      closeConnections,
+      at: startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt)
+    };
+  }
+
   function renderBootstrapPanel(force = false) {
     if (!isGamePage()) return;
     const t = Date.now();
@@ -2931,7 +3074,9 @@
       injectedBy: 'tampermonkey',
       combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled && cfg.combatLogEndpointConfigured),
       combatLogEndpoint: cfg.combatLogEndpointConfigured ? cfg.combatLogEndpoint : '',
-      combatLogEndpointConfigured: Boolean(cfg.combatLogEndpointConfigured)
+      combatLogEndpointConfigured: Boolean(cfg.combatLogEndpointConfigured),
+      clashLeaveRescueEnabled: Boolean(cfg.clashLeaveRescueEnabled),
+      clashLeaveRescueTimeoutMs: Math.max(1000, Number(cfg.clashControllerTimeoutMs || DEFAULTS.clashControllerTimeoutMs) || DEFAULTS.clashControllerTimeoutMs)
     };
     const injectResult = await runInPage(source, manifest.scriptUrl);
     state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
@@ -3507,12 +3652,16 @@
 	    configureCombatLogging(options = {}) {
 	      return configureCombatLogging(options);
 	    },
+    configureClashLeaveRescue(options = {}) {
+      return configureClashLeaveRescue(options);
+    },
     setManifestUrl(url) {
       cfg.manifestUrl = String(url || '');
       GM_setValue('manifestUrl', cfg.manifestUrl);
       return cfg.manifestUrl;
     }
   };
+  unsafeWindow.__graspRatBotClashLeaveRescue = clashLeaveRescue;
 
   if (isAuthorizePage()) {
     suppressLogin('authorize page', cfg.authReturnGraceMs);
