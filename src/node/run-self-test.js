@@ -1295,6 +1295,34 @@ function runSelfTest() {
       return b.minCpaDistance - a.minCpaDistance;
     })[0] || null;
   }
+  function combatMoveClosesDistanceForTest(self, target, move) {
+    const dx = clampValue(Math.round(Number(move?.dx) || 0), -1, 1);
+    const dy = clampValue(Math.round(Number(move?.dy) || 0), -1, 1);
+    if (!(dx || dy) || !self || !target) return false;
+    const toTargetX = Number(target.x) - Number(self.x);
+    const toTargetY = Number(target.y) - Number(self.y);
+    return (toTargetX * dx + toTargetY * dy) > 0;
+  }
+  function combatSafeCloseMoveOverrideForTest(self, target, pressure, closeMove) {
+    if (!self || !target || !pressure || pressure.synthetic || !closeMove?.active) return null;
+    const dx = clampValue(Math.round(Number(closeMove.dx) || 0), -1, 1);
+    const dy = clampValue(Math.round(Number(closeMove.dy) || 0), -1, 1);
+    if (!(dx || dy) || !combatMoveClosesDistanceForTest(self, target, { dx, dy })) return null;
+    const candidate = combatThreatFieldCandidateForTest(self, pressure.threats || [pressure], dx, dy);
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const minSafeCpa = Math.max(hitRadius * 3, Number(cfg.combatPressureCloseMinCpaCm || 0));
+    if (candidate.directHitCount > 0) return null;
+    if (Number.isFinite(Number(candidate.minCpaDistance)) && Number(candidate.minCpaDistance) < minSafeCpa) return null;
+    return {
+      dx,
+      dy,
+      active: true,
+      reason: closeMove.reason || 'safe-close',
+      source: closeMove,
+      threatField: candidate,
+      minSafeCpa
+    };
+  }
   function coinAxisApproachDirection(dxRaw, dyRaw, distance, tolerance = cfg.coinPrecisionTolerance) {
     const absX = Math.abs(dxRaw);
     const absY = Math.abs(dyRaw);
@@ -4234,15 +4262,19 @@ function runSelfTest() {
     );
     if (Number(target.distance || 0) > Number(cfg.combatAttackRange || 0)) {
       if (anyThreat && !anyThreat.synthetic && Number(target.distance || 0) <= combatDodgeThreatRange()) {
+        const outOfRangeCloseMove = outOfRangeFinishPressure.active
+          ? outOfRangeFinishPressure
+          : (outOfRangeReengage.active ? outOfRangeReengage : null);
+        const closeOverride = combatSafeCloseMoveOverrideForTest(self, target, anyThreat, outOfRangeCloseMove);
         const preciseSign = combatPreciseStrafeSign(anyThreat);
-        const threatFieldBase = combatStrafeVectorForTest(self, target, anyThreat, preciseSign || 1, { preferClosing: false });
-        const threatField = combatBulletThreatFieldForTest(self, anyThreat.threats || [anyThreat], {
+        const threatFieldBase = closeOverride || combatStrafeVectorForTest(self, target, anyThreat, preciseSign || 1, { preferClosing: false });
+        const threatField = closeOverride ? closeOverride.threatField : combatBulletThreatFieldForTest(self, anyThreat.threats || [anyThreat], {
           preferred: threatFieldBase,
           target,
           preferClosing: false
         });
-        const dx = threatField ? threatField.dx : threatFieldBase.dx;
-        const dy = threatField ? threatField.dy : threatFieldBase.dy;
+        const dx = closeOverride ? closeOverride.dx : (threatField ? threatField.dx : threatFieldBase.dx);
+        const dy = closeOverride ? closeOverride.dy : (threatField ? threatField.dy : threatFieldBase.dy);
         return {
           kind: 'attack',
           reason: 'combat-out-of-range-dodge',
@@ -4273,6 +4305,12 @@ function runSelfTest() {
               dx: threatField.dx,
               dy: threatField.dy,
               directHitCount: threatField.directHitCount
+            } : null,
+            safeCloseOverride: closeOverride ? {
+              dx: closeOverride.dx,
+              dy: closeOverride.dy,
+              reason: closeOverride.reason,
+              directHitCount: Number(closeOverride.threatField?.directHitCount || 0)
             } : null
           }
         };
@@ -4424,8 +4462,15 @@ function runSelfTest() {
     }
     const dodgeDx = threatField ? threatField.dx : (incoming ? (threatFieldBase?.dx ?? 1) : spacing.dx);
     const dodgeDy = threatField ? threatField.dy : (incoming ? (threatFieldBase?.dy ?? 1) : spacing.dy);
-    const requestedDx = pressureClose.active ? pressureClose.dx : (spacingOverride ? spacing.dx : dodgeDx);
-    const requestedDy = pressureClose.active ? pressureClose.dy : (spacingOverride ? spacing.dy : dodgeDy);
+    const safePressureCloseOverride = incoming
+      ? combatSafeCloseMoveOverrideForTest(self, target, anyThreat, pressureClose)
+      : null;
+    const requestedDx = safePressureCloseOverride
+      ? safePressureCloseOverride.dx
+      : ((!incoming && pressureClose.active) ? pressureClose.dx : (spacingOverride ? spacing.dx : dodgeDx));
+    const requestedDy = safePressureCloseOverride
+      ? safePressureCloseOverride.dy
+      : ((!incoming && pressureClose.active) ? pressureClose.dy : (spacingOverride ? spacing.dy : dodgeDy));
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(requestedDx || requestedDy)
       ? {
         reason: 'stamina-5s-exhausted',
@@ -4577,7 +4622,13 @@ function runSelfTest() {
           distance: Math.round(pressureClose.distance),
           closeRange: Math.round(pressureClose.closeRange),
           noDamageMs: Math.round(pressureClose.noDamageMs),
-          farNoDamageClose: Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage')
+          farNoDamageClose: Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage'),
+          safeCloseOverride: safePressureCloseOverride ? {
+            dx: safePressureCloseOverride.dx,
+            dy: safePressureCloseOverride.dy,
+            reason: safePressureCloseOverride.reason,
+            directHitCount: Number(safePressureCloseOverride.threatField?.directHitCount || 0)
+          } : null
         } : null,
         passiveRunner,
         noDamageMs,
@@ -6257,17 +6308,41 @@ function runSelfTest() {
         );
         bot.combatTarget = null;
         bot.combatRetreatIgnore.clear();
-        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + Boolean(action.combatDodgeOnly) + ':' + action.combatState?.dodgeOnly?.dodgeRange;
+        return action.kind + ':' + action.reason + ':' + Boolean(action.combat) + ':' + Boolean(action.shoot) + ':' + Boolean(action.combatDodgeOnly) + ':' + action.dx + ':' + action.dy + ':' + Boolean(action.combatState?.safeCloseOverride);
       })(),
-      want: 'attack:combat-out-of-range-dodge:true:false:true:15500'
+      want: 'attack:combat-out-of-range-dodge:true:false:true:0:1:false'
     },
     {
-      name: 'target-owned out-of-range pressure dodges before recoverable hp reengage',
+      name: 'target-owned recoverable out-of-range pressure dodges with safe close bias',
       got: (() => {
         bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 91, intent: 'engaged' };
         const action = chooseCombatAction(
           { user_id: 1, x: 0, y: 0, hp: 73, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          { user_id: 7, x: 14700, y: 0, distance: 14700, current_join_mode: 'Active', hp: 91, vx: 0, vy: 0, recentlyMoved: false, motionObservedSpeed: 0, drop: 107, combatIntent: 'reengage' },
+          { user_id: 7, x: 14700, y: 1800, distance: 14810, current_join_mode: 'Active', hp: 91, vx: 0, vy: 0, recentlyMoved: false, motionObservedSpeed: 0, drop: 107, combatIntent: 'reengage' },
+          [{ id: 'target-shot', ownerId: 7, x: 11000, y: 1800, vx: -500, vy: 0 }]
+        );
+        bot.combatTarget = null;
+        bot.combatRetreatIgnore.clear();
+        return [
+          action.kind,
+          action.reason,
+          Boolean(action.shoot),
+          Boolean(action.combatDodgeOnly),
+          action.dx,
+          action.dy,
+          action.combatState?.dodgeOnly?.buffer,
+          Boolean(action.combatState?.safeCloseOverride)
+        ].join(':');
+      })(),
+      want: 'attack:combat-out-of-range-dodge:false:true:1:1:1000:true'
+    },
+    {
+      name: 'losing out-of-range pressure keeps pure dodge without safe close bias',
+      got: (() => {
+        bot.combatTarget = { id: 7, at: Date.now() - 4000, lastDamageAt: Date.now() - 18000, lastInRangeAt: Date.now() - 2200, distance: 14500, hp: 100, intent: 'engaged' };
+        const action = chooseCombatAction(
+          { user_id: 1, x: 0, y: 0, hp: 70, max_hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 7, x: 14700, y: 0, distance: 14700, current_join_mode: 'Active', hp: 100, vx: 0, vy: 0, recentlyMoved: false, motionObservedSpeed: 0, drop: 107, combatIntent: 'reengage' },
           [{ id: 'target-shot', ownerId: 7, x: 11000, y: 0, vx: -500, vy: 0 }]
         );
         bot.combatTarget = null;
@@ -6277,10 +6352,13 @@ function runSelfTest() {
           action.reason,
           Boolean(action.shoot),
           Boolean(action.combatDodgeOnly),
-          action.combatState?.dodgeOnly?.buffer
+          action.dx,
+          action.dy,
+          action.combatState?.dodgeOnly?.buffer,
+          Boolean(action.combatState?.safeCloseOverride)
         ].join(':');
       })(),
-      want: 'attack:combat-out-of-range-dodge:false:true:1000'
+      want: 'attack:combat-out-of-range-dodge:false:true:0:1:1000:false'
     },
     {
       name: 'non-pressure out-of-range reengage keeps base hp gap guard',
@@ -7000,7 +7078,7 @@ function runSelfTest() {
         bot.combatRetreatIgnore.clear();
         return action.dx + ':' + action.dy + ':' + Boolean(action.shoot) + ':' + action.combatState?.pressureClose?.reason + ':' + action.combatState?.pressureClose?.farNoDamageClose + ':' + (action.combatState?.shooting?.reason === 'target-retreating-edge') + ':' + action.combatState?.retreatingTarget?.reason;
       })(),
-      want: '1:0:true:retreating-fighter-close:true:false:target-retreating-edge'
+      want: '1:1:true:retreating-fighter-close:true:false:target-retreating-edge'
     },
     {
       name: 'combat far no-damage pressure waits when hp gap is already bad',

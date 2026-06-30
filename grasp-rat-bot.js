@@ -7072,6 +7072,36 @@ ${importantLogSource()}
     };
   }
 
+  function combatMoveClosesDistance(self, target, move) {
+    const dx = clamp(Math.round(Number(move?.dx) || 0), -1, 1);
+    const dy = clamp(Math.round(Number(move?.dy) || 0), -1, 1);
+    if (!(dx || dy) || !self || !target) return false;
+    const toTargetX = Number(target.x) - Number(self.x);
+    const toTargetY = Number(target.y) - Number(self.y);
+    return (toTargetX * dx + toTargetY * dy) > 0;
+  }
+
+  function combatSafeCloseMoveOverride(self, target, pressure, closeMove) {
+    if (!self || !target || !pressure || pressure.synthetic || !closeMove?.active) return null;
+    const dx = clamp(Math.round(Number(closeMove.dx) || 0), -1, 1);
+    const dy = clamp(Math.round(Number(closeMove.dy) || 0), -1, 1);
+    if (!(dx || dy) || !combatMoveClosesDistance(self, target, { dx, dy })) return null;
+    const candidate = combatThreatFieldCandidate(self, pressure.threats || [pressure], dx, dy);
+    const hitRadius = Math.max(0, Number(cfg.combatBulletHitRadiusCm || 90));
+    const minSafeCpa = Math.max(hitRadius * 3, Number(cfg.combatPressureCloseMinCpaCm || 0));
+    if (candidate.directHitCount > 0) return null;
+    if (Number.isFinite(Number(candidate.minCpaDistance)) && Number(candidate.minCpaDistance) < minSafeCpa) return null;
+    return {
+      dx,
+      dy,
+      active: true,
+      reason: closeMove.reason || 'safe-close',
+      source: closeMove,
+      threatField: candidate,
+      minSafeCpa
+    };
+  }
+
   function combatSpacingVector(self, target, targetDistance = null) {
     const distance = Number.isFinite(Number(targetDistance)) ? Number(targetDistance) : dist(self, target);
     const minRange = Math.max(0, Number(cfg.combatSpacingMinRange || 0));
@@ -7627,14 +7657,23 @@ ${importantLogSource()}
     };
   }
 
-  function combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget = null) {
+  function combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget = null, closeMove = null) {
     if (!pressure || pressure.synthetic) return null;
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || 0));
     const dodgeRange = combatDodgeThreatRange();
     const targetDistance = Number.isFinite(Number(target?.distance)) ? Number(target.distance) : dist(self, target);
     if (!attackRange || !(targetDistance > attackRange) || !(targetDistance <= dodgeRange)) return null;
     const spacing = combatSpacingVector(self, target, targetDistance);
-    const strafe = tangentMoveForBullet(self, target, pressure, { preferClosing: false });
+    const closeOverride = combatSafeCloseMoveOverride(self, target, pressure, closeMove);
+    const strafe = closeOverride
+      ? {
+        dx: closeOverride.dx,
+        dy: closeOverride.dy,
+        active: true,
+        closingBiased: true,
+        safeCloseOverride: closeOverride
+      }
+      : tangentMoveForBullet(self, target, pressure, { preferClosing: false });
     const spacingOverride = combatSpacingShouldOverrideBullet(spacing, selfHp, targetHp);
     let combatMove = mergeCombatMove(strafe, spacing, spacingOverride);
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
@@ -7691,6 +7730,13 @@ ${importantLogSource()}
           locked: Boolean(strafe.locked),
           lockOverridden: Boolean(strafe.lockOverridden),
           closingBiased: Boolean(strafe.closingBiased),
+          safeCloseOverride: closeOverride ? {
+            dx: closeOverride.dx,
+            dy: closeOverride.dy,
+            reason: closeOverride.reason,
+            minCpaDistance: Number.isFinite(Number(closeOverride.threatField?.minCpaDistance)) ? Math.round(Number(closeOverride.threatField.minCpaDistance)) : null,
+            directHitCount: Number(closeOverride.threatField?.directHitCount || 0)
+          } : null,
           carried: Boolean(strafe.carried),
           holdRemainingMs: strafe.holdRemainingMs || 0,
           carryRemainingMs: strafe.carryRemainingMs || 0,
@@ -9609,7 +9655,10 @@ ${importantLogSource()}
       targetRealBulletPressure
     );
     if (targetDistance > Number(cfg.combatAttackRange || 0)) {
-      const outOfRangeDodge = combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget);
+      const outOfRangeCloseMove = outOfRangeFinishPressure.active
+        ? outOfRangeFinishPressure
+        : (outOfRangeReengage.active ? outOfRangeReengage : null);
+      const outOfRangeDodge = combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget, outOfRangeCloseMove);
       if (outOfRangeDodge) return outOfRangeDodge;
       if (outOfRangeFinishPressure.active) {
         return {
@@ -9711,7 +9760,17 @@ ${importantLogSource()}
     let combatMove = dodging
       ? mergeCombatMove(strafe, spacing, !realBulletPressure || spacingOverride)
       : mergeCombatMove({ dx: 0, dy: 0 }, spacing, true);
-    combatMove = mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
+    const safePressureCloseOverride = realBulletPressure
+      ? combatSafeCloseMoveOverride(self, target, pressure, pressureClose)
+      : null;
+    combatMove = safePressureCloseOverride
+      ? {
+        ...combatMove,
+        dx: safePressureCloseOverride.dx,
+        dy: safePressureCloseOverride.dy,
+        safeCloseOverride: safePressureCloseOverride
+      }
+      : mergeCombatMove(combatMove, pressureClose, !realBulletPressure);
     const requestedMove = { dx: combatMove.dx, dy: combatMove.dy };
     const movementSuppressed = combatMovementBlockedByStamina(self) && Boolean(combatMove.dx || combatMove.dy)
       ? {
@@ -9929,7 +9988,14 @@ ${importantLogSource()}
           noDamageMs: Math.round(pressureClose.noDamageMs),
           farNoDamageClose: Boolean(pressureClose.farNoDamageClose || pressureClose.reason === 'far-no-damage'),
           preferClosing: Boolean(pressureClose.active),
-          merged: Boolean(!realBulletPressure)
+          merged: Boolean(!realBulletPressure || safePressureCloseOverride),
+          safeCloseOverride: safePressureCloseOverride ? {
+            dx: safePressureCloseOverride.dx,
+            dy: safePressureCloseOverride.dy,
+            reason: safePressureCloseOverride.reason,
+            minCpaDistance: Number.isFinite(Number(safePressureCloseOverride.threatField?.minCpaDistance)) ? Math.round(Number(safePressureCloseOverride.threatField.minCpaDistance)) : null,
+            directHitCount: Number(safePressureCloseOverride.threatField?.directHitCount || 0)
+          } : null
         } : null,
         passiveRunner,
         movementSuppressed,
