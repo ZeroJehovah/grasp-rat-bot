@@ -180,7 +180,7 @@ function buildStatus(options) {
     {
       key: 'post-login-zoom-out',
       ok: staticCheck.ok,
-      evidence: 'static verifier checks five scheduled native zoom-out clicks after self detection and state preservation across bot updates'
+      evidence: 'static verifier checks post-login visible-range fit zoom after self detection and state preservation across bot updates'
     },
     {
       key: 'tall-viewport-layout',
