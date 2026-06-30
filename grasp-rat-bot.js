@@ -3594,7 +3594,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        if (result && typeof result.then === 'function') {
           detail.leaveRequestPending = true;
           detail.leaveRequestSentAt = request.sentAt;
-          detail.leaveRequestTimeoutMs = Math.max(1000, Number(cfg.leaveCommandTimeoutMs || 0) || 10000);
+          detail.leaveRequestTimeoutMs = Math.max(1000, Number(cfg.leaveCommandTimeoutMs || 0) || 3000);
           request.attempted = true;
           request.method = detail.method;
           request.pending = true;

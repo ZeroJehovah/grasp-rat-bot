@@ -33,7 +33,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'unsafeExitReloginMinDelayMs', value: 0 },
   { key: 'staminaBudgetReloginDelayMs', value: 1800000 },
   { key: 'leaveRetryMinMs', value: 10000 },
-  { key: 'leaveCommandTimeoutMs', value: 10000 },
+  { key: 'leaveCommandTimeoutMs', value: 3000 },
   { key: 'leave403ReloginDelayMs', value: 3600000 },
   { key: 'leave403SnapshotSuccessRequired', value: 5 },
   { key: 'sessionMismatchRecoveryReloadMaxAgeMs', value: 120000 },
