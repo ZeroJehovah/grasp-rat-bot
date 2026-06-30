@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.264"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.265"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -553,7 +553,7 @@
     combatLogPendingPersistMinMs: 5000,
     combatLogMaxBulletEntries: 24,
     combatLogMaxEntityEntries: 12,
-    postLoginZoomOutClicks: 7,
+    postLoginZoomOutClicks: 5,
     postLoginZoomStartDelayMs: 350,
     postLoginZoomOutIntervalMs: 80,
     postLoginZoomArmMissingMs: 1000,

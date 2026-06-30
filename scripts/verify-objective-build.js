@@ -26,7 +26,7 @@ const BOOTSTRAP_FILES = [
 ];
 
 const NUMERIC_INVARIANTS = [
-  { key: 'postLoginZoomOutClicks', value: 7 },
+  { key: 'postLoginZoomOutClicks', value: 5 },
   { key: 'postLoginZoomStartDelayMs', value: 350 },
   { key: 'postLoginZoomOutIntervalMs', value: 80 },
   { key: 'postLoginZoomArmMissingMs', value: 1000 },
