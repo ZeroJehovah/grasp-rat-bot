@@ -589,6 +589,8 @@ function main() {
       assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
       assert(text.includes('function coinRouteLegClear'), 'coin route leg safety checker not found');
       assert(text.includes('function coinRouteSkipsCloserFirstCoin'), 'coin route closer-first guard not found');
+      assert(text.includes('function currentHeldCoinChoice'), 'coin route held single-coin choice helper not found');
+      assert(text.includes('function coinRouteSkipsHeldSingleCoin'), 'coin route held single-coin skip guard not found');
       assert(text.includes('function currentHeldCoinRouteChoice'), 'coin route held-choice stabilizer not found');
       assert(text.includes('function heldCoinRouteBeatsSwitch'), 'coin route switch hysteresis helper not found');
       assert(text.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
@@ -599,6 +601,7 @@ function main() {
       assert(routeBody.includes('cfg.coinRouteAnchorLimit'), 'coin route planner is not anchor bounded');
       assert(routeBody.includes('coinRouteLegClear(self, anchor, activeThreats)'), 'coin route planner does not safety-check first leg');
       assert(routeBody.includes('coinRouteSkipsCloserFirstCoin(self, route, candidates)'), 'coin route planner can skip much closer local coins');
+      assert(routeBody.includes('currentHeldCoinChoice') && routeBody.includes('coinRouteSkipsHeldSingleCoin(self, route, heldChoice)'), 'coin route planner can skip the held nearby single coin');
       assert(routeBody.includes('currentHeldCoinRouteChoice') && routeBody.includes('heldCoinRouteBeatsSwitch(heldRoute, best)'), 'coin route planner does not stabilize held route first coin');
       assert(bestBody.includes('pickCoinRouteOpportunity'), 'profitable combat comparison does not include coin route score');
       assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
@@ -1635,6 +1638,8 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'visible coin route beats closer single coin by route roi'"), 'coin route ROI self-test not found');
     assert(nodeSelfTestSource.includes("name: 'held coin route keeps first coin through near tie replans'"), 'coin route first-target hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'held coin route switches first coin when route score is clearly better'"), 'coin route first-target clear-switch self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'held nearby single coin blocks farther coin route first target'"), 'held single coin route-block self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'held nearby single coin can become same-first coin route'"), 'held single coin same-first route self-test not found');
     assert(nodeSelfTestSource.includes("name: 'same first coin route keeps overlay metadata when single coin roi is higher'"), 'same-first-coin route overlay self-test not found');
     assert(nodeSelfTestSource.includes("name: 'coin route does not skip much closer local coin'"), 'coin route closer-first self-test not found');
     assert(nodeSelfTestSource.includes("name: 'visible afk drop still beats weaker coin route by stamina roi'"), 'AFK-vs-coin-route ROI self-test not found');

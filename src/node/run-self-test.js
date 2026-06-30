@@ -2029,6 +2029,37 @@ function runSelfTest() {
     return choice;
   }
 
+  function currentHeldCoinChoice(t = Date.now()) {
+    const choice = bot.opportunityChoice;
+    if (!choice || opportunityChoiceType(choice) !== 'coin') return null;
+    if (t >= Number(choice.until || 0)) return null;
+    const id = opportunityChoiceId(choice);
+    if (!id && id !== '0') return null;
+    return choice;
+  }
+
+  function coinRouteSkipsHeldSingleCoin(self, route, choice) {
+    if (!self || !route || !choice || opportunityChoiceType(choice) !== 'coin') return false;
+    if (String(choice.reason || '') === 'best-opportunity-coin-route' || coinRouteIdsFrom(choice).length) return false;
+    const choiceId = opportunityChoiceId(choice);
+    if (!choiceId && choiceId !== '0') return false;
+    if (coinRouteKey(route) === String(choiceId)) return false;
+    let heldDistance = Number(choice.distance);
+    if (!Number.isFinite(heldDistance)) {
+      const x = Number(choice.x);
+      const y = Number(choice.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) heldDistance = dist(self, { x, y });
+    }
+    const routeDistance = Number(route.distance ?? route.coinRoute?.firstDistance ?? Infinity);
+    if (!Number.isFinite(heldDistance) || !Number.isFinite(routeDistance)) return false;
+    const nearbyLimit = Math.max(0, Number(cfg.coinRouteNearbyFirstCoinDistance || 0));
+    if (!(nearbyLimit > 0) || heldDistance > nearbyLimit) return false;
+    const ratio = Math.max(1, Number(cfg.coinRouteFirstCoinDistanceRatio || 1));
+    const slack = Math.max(0, Number(cfg.coinRouteFirstCoinDistanceSlack || 0));
+    const allowedFirstDistance = Math.max(heldDistance * ratio, heldDistance + slack);
+    return routeDistance > allowedFirstDistance;
+  }
+
   function coinRouteMatchesHeldChoice(route, choice) {
     if (!route || !choice) return false;
     const firstKey = coinRouteKey(route);
@@ -2071,7 +2102,8 @@ function runSelfTest() {
       const key = coinRouteKey(coin);
       if (!anchors.some(item => coinRouteKey(item) === key)) anchors.push(coin);
     };
-    const heldChoice = currentHeldCoinRouteChoice();
+    const heldChoice = currentHeldCoinChoice();
+    const heldRouteChoice = currentHeldCoinRouteChoice();
     const heldAnchor = heldChoice ? candidates.find(coin => coinRouteKey(coin) === opportunityChoiceId(heldChoice)) : null;
     if (heldAnchor) addAnchor(heldAnchor);
     candidates.slice(0, Math.max(1, Number(cfg.coinRouteAnchorLimit || 22))).forEach(addAnchor);
@@ -2090,7 +2122,8 @@ function runSelfTest() {
       const route = buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats);
       if (!route) continue;
       if (coinRouteSkipsCloserFirstCoin(self, route, candidates)) continue;
-      if (coinRouteMatchesHeldChoice(route, heldChoice)) heldRoute = route;
+      if (coinRouteSkipsHeldSingleCoin(self, route, heldChoice)) continue;
+      if (coinRouteMatchesHeldChoice(route, heldRouteChoice || heldChoice)) heldRoute = route;
       const score = Number(route.opportunityScore || -Infinity);
       if (!best
         || score > Number(best.opportunityScore || -Infinity)
@@ -8246,6 +8279,71 @@ function runSelfTest() {
         return action.kind + ':' + action.reason + ':' + action.id + ':' + Boolean(action.routeHeld) + ':' + action.coinRoute?.ids?.join('-');
       })(),
       want: 'coin:best-opportunity-coin-route:2:false:2-3-1'
+    },
+    {
+      name: 'held nearby single coin blocks farther coin route first target',
+      got: (() => {
+        const t = Date.now();
+        bot.opportunityChoice = {
+          key: 'coin:1',
+          type: 'coin',
+          id: 1,
+          reason: 'best-opportunity-coin',
+          x: -8900,
+          y: 0,
+          amount: 1,
+          distance: 8900,
+          score: 67416,
+          at: t - 500,
+          lastSeenAt: t - 100,
+          until: t + cfg.opportunitySwitchHoldMs
+        };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: -8900, y: 0, amount: 1, native: true },
+            { drop_id: 2, x: 21700, y: 0, amount: 1, native: true },
+            { drop_id: 3, x: 21800, y: 1200, amount: 1, native: true },
+            { drop_id: 4, x: 21900, y: -1200, amount: 1, native: true }
+          ]
+        });
+        const remembered = bot.opportunityChoice?.id + ':' + bot.opportunityChoice?.reason;
+        bot.opportunityChoice = null;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + Boolean(action.coinRoute) + ':' + remembered;
+      })(),
+      want: 'coin:best-opportunity-coin:1:false:1:best-opportunity-coin'
+    },
+    {
+      name: 'held nearby single coin can become same-first coin route',
+      got: (() => {
+        const t = Date.now();
+        bot.opportunityChoice = {
+          key: 'coin:1',
+          type: 'coin',
+          id: 1,
+          reason: 'best-opportunity-coin',
+          x: 8900,
+          y: 0,
+          amount: 1,
+          distance: 8900,
+          score: 67416,
+          at: t - 500,
+          lastSeenAt: t - 100,
+          until: t + cfg.opportunitySwitchHoldMs
+        };
+        const action = choose({
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          coins: [
+            { drop_id: 1, x: 8900, y: 0, amount: 1, native: true },
+            { drop_id: 2, x: 10000, y: 0, amount: 1, native: true },
+            { drop_id: 3, x: 11200, y: 0, amount: 1, native: true }
+          ]
+        });
+        const remembered = bot.opportunityChoice?.id + ':' + bot.opportunityChoice?.reason + ':' + (bot.opportunityChoice?.coinRouteIds || []).join('-');
+        bot.opportunityChoice = null;
+        return action.kind + ':' + action.reason + ':' + action.id + ':' + action.coinRoute?.ids?.join('-') + ':' + remembered;
+      })(),
+      want: 'coin:best-opportunity-coin-route:1:1-2-3:1:best-opportunity-coin-route:1-2-3'
     },
     {
       name: 'same first coin route keeps overlay metadata when single coin roi is higher',
