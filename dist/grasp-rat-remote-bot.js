@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.260"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.261"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -7817,6 +7817,7 @@ function hpDisplay(value) {
     detail.injury = detail.injury || pending.injury || null;
     detail.combat = detail.combat || pending.combat || null;
     detail.combatCover = detail.combatCover || pending.combatCover || detail.combat?.leaveCover || null;
+    resetClashLeaveRescueRound(detail);
     detail.exitPending = true;
     detail.exitConfirmed = false;
     detail.pendingExitRetry = true;
@@ -8276,10 +8277,13 @@ function hpDisplay(value) {
       : [];
   }
 
+  const CLASH_LEAVE_RESCUE_STAGE_ORDER = ['auto', 'direct', 'manual'];
+
   function nextClashLeaveRescueStage(detail) {
     const stages = new Set(clashLeaveRescueAttempts(detail).map(item => String(item.stage || '')));
-    if (!stages.has('auto')) return 'auto';
-    if (!stages.has('manual')) return 'manual';
+    for (const stage of CLASH_LEAVE_RESCUE_STAGE_ORDER) {
+      if (!stages.has(stage)) return stage;
+    }
     return '';
   }
 
@@ -8334,6 +8338,61 @@ function hpDisplay(value) {
     retryDetail.summary = detail.summary || detail.exitSummary || detail.reason || '';
     retryDetail.displayReason = detail.displayReason || pendingExitDisplayReason(retryDetail.summary);
     return retryDetail;
+  }
+
+  function resetClashLeaveRescueRound(detail) {
+    if (!detail || typeof detail !== 'object') return detail;
+    detail.clashLeaveRescueAttempts = [];
+    detail.clashLeaveRescue = null;
+    detail.clashLeaveRescueStage = '';
+    detail.clashLeaveRescueRetry = false;
+    return detail;
+  }
+
+  async function prepareDefaultClashLeaveProxy(detail) {
+    if (!cfg.clashLeaveRescueEnabled) return false;
+    if (!detail || typeof detail !== 'object') return false;
+    if (detail.clashLeaveRescueRetry || clashLeaveRescueAttempts(detail).length) return false;
+    if (bot.clashLeaveRescue.running) return false;
+    const hook = clashLeaveRescueHook();
+    if (!hook) return false;
+    const stage = 'auto';
+    bot.clashLeaveRescue.running = true;
+    try {
+      let attempt = null;
+      try {
+        const result = await waitWithTimeout(
+          hook({
+            stage,
+            reason: detail.reason || '',
+            scope: detail.exitAuditScope || '',
+            source: detail.exitAuditSource || '',
+            exitAuditId: detail.exitAuditId || '',
+            requestId: ''
+          }),
+          Math.max(1000, Number(cfg.clashLeaveRescueTimeoutMs || 9000) || 9000),
+          'Clash leave default ' + stage
+        );
+        attempt = summarizeClashLeaveRescueResult(result, stage);
+      } catch (err) {
+        attempt = summarizeClashLeaveRescueResult(null, stage, err?.message || String(err));
+      }
+      appendClashLeaveRescueAttempt(detail, attempt);
+      updatePendingExitLastResult(detail);
+      recordExitAuditEvent('clash-leave-rescue', detail, {
+        at: attempt.at || Date.now(),
+        source: detail.exitAuditSource || 'leave-command',
+        scope: detail.exitAuditScope || '',
+        request: attempt
+      });
+      logStatus(
+        attempt.ok ? 'clash leave default switched ' + stage : 'clash leave default failed ' + stage,
+        { stage, clashLeaveRescue: attempt }
+      );
+      return Boolean(attempt.ok);
+    } finally {
+      bot.clashLeaveRescue.running = false;
+    }
   }
 
   async function runClashLeaveRescueRetry(detail) {
@@ -8498,7 +8557,7 @@ function hpDisplay(value) {
     return detail;
   }
 
-  function issueLeaveCommand(detail) {
+  async function issueLeaveCommand(detail) {
     if (bot.pendingExit && !detail?.pendingExitRetry) {
       const skipped = pendingExitSkipNewLeave(detail?.exitAuditSource || detail?.reason || 'leave-command', detail?.reason || '', detail || {});
       if (skipped) {
@@ -8510,6 +8569,7 @@ function hpDisplay(value) {
       source: detail?.exitAuditSource || detail?.reason || 'leave-command',
       scope: detail?.exitAuditScope || ''
     });
+    await prepareDefaultClashLeaveProxy(detail);
     const request = {
       requestId: newExitAuditRequestId(detail.exitAuditId),
       exitAuditId: detail.exitAuditId || '',
