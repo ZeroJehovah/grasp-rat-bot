@@ -8669,8 +8669,13 @@ function runSelfTest() {
 	    {
 	      name: 'stamina leave summary identifies long-window limits',
 	      got: offlineLeaveSummaryText('stamina exhausted', { staminaExhausted: { exhausted: ['5s', '1h', '1d'] } }),
-		      want: '一小时和一天体力到达限制，退出等待重连'
-		    },
+	      want: '一小时和一天体力到达限制，退出等待重连'
+	    },
+	    {
+	      name: 'stamina leave summary identifies daily limit',
+	      got: offlineLeaveSummaryText('stamina exhausted', { staminaExhausted: { exhausted: ['5s', '1d'] } }),
+	      want: '一天体力到达限制，退出等待重连'
+	    },
 	    {
 	      name: 'stale daily stamina hold is contradicted by preserved session stamina',
 	      got: String(staminaHoldContradictedByStaminaEvidence(

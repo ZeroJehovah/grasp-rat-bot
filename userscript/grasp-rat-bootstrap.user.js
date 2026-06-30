@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.64
+// @version      0.4.65
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.64';
+  const BOOTSTRAP_VERSION = '0.4.65';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -636,6 +636,8 @@
   }
 
   function lastExitReasonDetail(status) {
+    const staminaReason = staminaExhaustedReasonDetail(status?.lastDecision, status);
+    if (staminaReason) return staminaReason;
     const persistent = activePersistentExitDetail(status);
     return persistent?.displayReason
       || persistent?.summary
@@ -650,6 +652,8 @@
     const actionDisplay = decisionActionDisplayReason(decision);
     if (actionDisplay) return actionDisplay;
     if (!decisionAllowsExitReasonDetail(decision)) return '';
+    const staminaReason = staminaExhaustedReasonDetail(decision, status);
+    if (staminaReason) return staminaReason;
     const persistent = activePersistentExitDetail(status);
     return decision?.leave?.displayReason
       || decision?.enemyLeave?.displayReason
@@ -794,6 +798,68 @@
         stamina1dLimit: limit
       }
     };
+  }
+
+  function staminaWindowRemaining(source, key) {
+    const suffix = String(key || '');
+    const stamina = source?.stamina || {};
+    const candidates = [
+      source?.['stamina' + suffix],
+      stamina?.['stamina' + suffix],
+      source?.['stamina_' + suffix + '_remaining_milli']
+    ];
+    for (const value of candidates) {
+      const number = Number(value);
+      if (Number.isFinite(number)) return number;
+    }
+    return null;
+  }
+
+  function staminaExhaustedWindowList(source) {
+    const stamina = source?.stamina || source || {};
+    const raw = Array.isArray(stamina.longExhausted)
+      ? stamina.longExhausted
+      : (Array.isArray(stamina.exhausted) ? stamina.exhausted : []);
+    const windows = [];
+    for (const item of raw) {
+      const key = String(item || '').toLowerCase();
+      if ((key === '1h' || key === '1d') && !windows.includes(key)) windows.push(key);
+    }
+    for (const key of ['1h', '1d']) {
+      const remaining = staminaWindowRemaining(source || stamina, key);
+      if (remaining !== null && remaining < 1000 && !windows.includes(key)) windows.push(key);
+    }
+    return ['1h', '1d'].filter(key => windows.includes(key));
+  }
+
+  function staminaExhaustedReasonText(source) {
+    const label = staminaExhaustedWindowList(source).join('/');
+    if (label === '1h') return '一小时体力到达限制，退出等待重连';
+    if (label === '1d') return '一天体力到达限制，退出等待重连';
+    if (label === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
+    return '';
+  }
+
+  function staminaExhaustedReasonDetail(decision, status) {
+    const sources = [
+      decision?.offlineSafety?.staminaExhausted,
+      decision?.leave?.offlineSafety?.staminaExhausted,
+      decision?.stamina,
+      decision?.self,
+      status?.lastDecision?.offlineSafety?.staminaExhausted,
+      status?.lastDecision?.leave?.offlineSafety?.staminaExhausted,
+      status?.lastDecision?.stamina,
+      status?.lastDecision?.self,
+      status?.offlineLeave?.safety?.staminaExhausted,
+      status?.offlineLeave?.lastResult?.offlineSafety?.staminaExhausted,
+      status?.self,
+      status?.lastSelf
+    ];
+    for (const source of sources) {
+      const text = staminaExhaustedReasonText(source);
+      if (text) return text;
+    }
+    return '';
   }
 
   function sessionStaminaSpentMs(session, self) {

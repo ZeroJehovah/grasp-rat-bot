@@ -511,6 +511,9 @@ function main() {
       assert(text.includes('lastTickReentryGapAt: this.lastTickReentryGapAt || 0'), 'status does not expose tick reentry gap timestamp');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
+      const leaveOfflineBody = functionBody(text, 'leaveOffline');
+      assert(leaveOfflineBody.includes('const summary = offlineLeaveSummary(reason, offlineSafety);'), 'offline leave retry cooldown does not compute the current offline summary');
+      assert(leaveOfflineBody.includes('summary: summary || active?.summary'), 'offline leave retry cooldown can still prefer a stale active summary over the current reason');
       assert(functionBody(text, 'setOfflineLeaveSuppress').includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))'), 'ordinary unsafe offline exits still require a defensive relogin delay');
       assert(text.includes('function combatLogRuntimeSummary'), 'combat log runtime diagnostic summary not found');
       assert(text.includes('runtime: combatLogRuntimeSummary'), 'exit audit logs do not include runtime diagnostics');
@@ -1830,6 +1833,7 @@ function main() {
       assert(text.includes('function shouldShowInlineLogin'), 'inline login visibility helper not found');
       assert(text.includes('function waitReasonPrefersLastExit'), 'relogin wait reason helper not found');
       assert(text.includes('function panelReasonDetail'), 'panel reason detail helper not found');
+      assert(text.includes('function staminaExhaustedReasonDetail'), 'panel stamina exhaustion reason helper not found');
       assert(loginBody.includes('!shouldShowInlineLogin(status)'), 'inline login is still hidden solely by logged-in state');
       assert(functionBody(text, 'shouldShowInlineLogin').includes('waitReasonPrefersLastExit(status)'), 'inline login is not visible during relogin/no-self safety waits');
       assert(loginBody.includes('跳过重连等待并立即登录/加入游戏'), 'inline login title does not reflect relogin hold bypass');
@@ -1969,6 +1973,8 @@ function main() {
       assert(detailBody.includes('const actionDisplay = decisionActionDisplayReason(decision)'), 'reason detail does not prefer scoped action display reason');
       assert(detailBody.includes('if (!decisionAllowsExitReasonDetail(decision)) return \'\';'), 'reason detail can still fall through to stale exit detail for active actions');
       assert(text.includes('function panelReasonDetail') && functionBody(text, 'panelReasonDetail').includes('lastExitReasonDetail(status)'), 'panel reason does not prefer last exit detail during relogin waits');
+      assert(functionBody(text, 'lastExitReasonDetail').includes('staminaExhaustedReasonDetail(status?.lastDecision, status)'), 'panel last-exit reason does not prefer current stamina exhaustion evidence');
+      assert(detailBody.includes('const staminaReason = staminaExhaustedReasonDetail(decision, status)'), 'decision reason detail does not prefer current stamina exhaustion evidence');
       assert(!detailBody.includes('|| decision?.displayReason'), 'reason detail still accepts unscoped decision displayReason');
       assert(actionBody.includes("kind === 'coin' || kind === 'seek-coin'"), 'coin action display reason scope not found');
       assert(actionBody.includes('/金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/'), 'coin action display reason allow-list not found');
