@@ -429,7 +429,7 @@ function targetOverlaySource() {
     const point = targetOverlayWorldPoint(status?.point);
     const radius = targetOverlayLoginPointRadius(status);
     if (!point || !(radius > 0)) return null;
-    const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 12) || 12);
+    const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 3) || 3);
     const streak = Math.max(0, Number(status?.streak || 0) || 0);
     return {
       ...status,

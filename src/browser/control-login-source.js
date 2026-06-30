@@ -895,7 +895,7 @@ function controlLoginSource(helpers = {}) {
   }
 
   function loginPointSafetySuccessRequired() {
-    return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 12) || 12));
+    return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 3) || 3));
   }
 
   function optionalFiniteNumber(value) {
@@ -1509,19 +1509,8 @@ function controlLoginSource(helpers = {}) {
 	      status.liveSessionTakeover = options.liveSessionTakeover;
 	      return status;
 	    }
-	    const minProbeMs = Math.max(250, Number(cfg.loginSnapshotProbeMinMs ?? cfg.globalRefreshMs ?? 5000) || 5000);
-	    const sampleAge = Number(status.lastSampleAgeMs ?? Infinity);
-	    if (!Number.isFinite(sampleAge) || sampleAge >= minProbeMs) {
-	      try {
-	        await refreshGlobalState(true);
-	      } catch (err) {
-	        const message = err?.message || String(err);
-	        bot.globalState.error = message;
-	        noteLoginSnapshotProbe(false, { error: message });
-	      }
-	      status = snapshotLoginGateStatus();
-	    }
-	    status.blockReason = String(reason || 'login');
+    status.blockReason = String(reason || 'login');
+    status.passiveSnapshotOnly = true;
 	    if (!status.satisfied && allowTakeoverBypass && status.pointSafety?.satisfied) {
 	      status.liveSessionTakeoverBypass = true;
 	      status.liveSessionTakeover = options.liveSessionTakeover;

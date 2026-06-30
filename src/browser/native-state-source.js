@@ -679,7 +679,7 @@ function nativeStateSource() {
 
   function fetchJsonNoStore(url, timeoutMs = cfg.globalRefreshTimeoutMs) {
     const ms = Math.max(250, Number(timeoutMs) || cfg.globalRefreshTimeoutMs);
-    const options = { cache: 'no-store' };
+    const options = { cache: 'no-store', __graspRatBotFetch: true };
     let controller = null;
     let timer = 0;
     if (typeof AbortController === 'function') {
