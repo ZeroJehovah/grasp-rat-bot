@@ -6,3 +6,6 @@ grasp-rat-debug-events.log
 debug-artifacts/
 node_modules/
 .DS_Store
+.env
+.env.*
+!.env.example
