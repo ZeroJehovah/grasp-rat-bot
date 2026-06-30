@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.260`.
 - Latest manifest SHA-256: `c5473b237ce52a82560337f3b017a8c79d3127b000eda1ce31e162a94cf05ed9`.
-- Latest release commit: current release commit (`bootstrap-0.4.260` 3s leave request timeout), previous release commit (`bootstrap-0.4.259` Clash rescue for leave HTTP 403).
+- Latest release commit: `82b4a73` (`bootstrap-0.4.260` 3s leave request timeout), previous release commit `3c901fa` (`bootstrap-0.4.259` Clash rescue for leave HTTP 403).
 - Latest bootstrap A versions: Tampermonkey `0.4.66`, extension `0.1.45`.
 - `bootstrap-0.4.260` shortens every asynchronous `leave()` request timeout from 10s to 3s so the direct leave, `S2-自动` retry, and `S2-手动` retry fail over faster when the page/API is hung. The pending-exit retry floor remains `leaveRetryMinMs = 10000`, so ordinary later retries are still throttled to at least 10s; only the single in-flight leave request wait is shortened.
 - `bootstrap-0.4.259` treats leave HTTP 403 as the primary IP-ban rescue signal instead of confirming exit immediately. When optional Clash leave rescue is enabled and a local hook is available, a failed leave including HTTP 403 first asks Clash to switch `GRASP-RAT-GAME` to `S2-自动`, clears existing connections, and retries `leave()`; if that retry also fails or returns 403, it switches to `S2-手动`, clears connections, and retries once more. Stale 403 leave history is cleared before each retry, Clash stage attempts are persisted on the pending exit, and the old one-hour 403 risk-control fallback only applies after rescue is disabled, unavailable, or exhausted.
