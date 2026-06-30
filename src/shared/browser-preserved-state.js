@@ -47,6 +47,12 @@ function buildBrowserPreservedState(previousBot) {
     loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
     loginPointSafety: previousBot?.loginPointSafety && typeof previousBot.loginPointSafety === 'object' ? { ...previousBot.loginPointSafety } : null,
     leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
+    clashLeaveRescue: previousBot?.clashLeaveRescue && typeof previousBot.clashLeaveRescue === 'object'
+      ? {
+        ...previousBot.clashLeaveRescue,
+        attempts: Array.isArray(previousBot.clashLeaveRescue.attempts) ? previousBot.clashLeaveRescue.attempts.slice(-8) : []
+      }
+      : null,
     postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
     targetWhitelist: previousBot?.targetWhitelist && typeof previousBot.targetWhitelist === 'object'
       ? {

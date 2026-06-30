@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.44';
+  const BOOTSTRAP_VERSION = '0.1.45';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -18,6 +18,7 @@
   const ENEMY_LEAVE_STATE_KEY = 'graspRatEnemyLeaveState';
   const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
   const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
+  const CLASH_SECRET_KEY = 'clashControllerSecret';
   const REQUEST_CHANNEL = 'grasp-rat-extension-bridge-request';
   const RESPONSE_CHANNEL = 'grasp-rat-extension-bridge-response';
 
@@ -63,7 +64,14 @@
     combatLogEndpointConfigured: false,
     debugBootstrapLogging: false,
     cacheBust: true,
-    autoLogin: true
+    autoLogin: true,
+    clashLeaveRescueEnabled: false,
+    clashControllerUrl: 'http://127.0.0.1:9097',
+    clashGameProxyGroup: 'GRASP-RAT-GAME',
+    clashAutoProxyName: 'S2-自动',
+    clashManualProxyName: 'S2-手动',
+    clashDirectProxyName: 'DIRECT',
+    clashControllerTimeoutMs: 7000
   };
 
   let cfg = { ...DEFAULTS };
@@ -343,7 +351,9 @@
   }
 
   function writeStored(items) {
-    storedValues = { ...storedValues, ...(items || {}) };
+    const safeItems = { ...(items || {}) };
+    delete safeItems[CLASH_SECRET_KEY];
+    storedValues = { ...storedValues, ...safeItems };
     bridge('storageSet', { items }).catch(err => noteBootstrapError('storage write failed', err));
   }
 
@@ -405,7 +415,14 @@
       combatLogEndpoint: storedCombatLogEndpoint || DEFAULTS.combatLogEndpoint,
       combatLogEndpointConfigured: storedCombatLogEndpointConfigured,
       cacheBust: Boolean(storedBoolean(readStored('cacheBust', DEFAULTS.cacheBust))),
-      autoLogin: Boolean(storedBoolean(readStored('autoLogin', DEFAULTS.autoLogin)))
+      autoLogin: Boolean(storedBoolean(readStored('autoLogin', DEFAULTS.autoLogin))),
+      clashLeaveRescueEnabled: Boolean(storedBoolean(readStored('clashLeaveRescueEnabled', DEFAULTS.clashLeaveRescueEnabled))),
+      clashControllerUrl: String(readStored('clashControllerUrl', DEFAULTS.clashControllerUrl) || DEFAULTS.clashControllerUrl),
+      clashGameProxyGroup: String(readStored('clashGameProxyGroup', DEFAULTS.clashGameProxyGroup) || DEFAULTS.clashGameProxyGroup),
+      clashAutoProxyName: String(readStored('clashAutoProxyName', DEFAULTS.clashAutoProxyName) || DEFAULTS.clashAutoProxyName),
+      clashManualProxyName: String(readStored('clashManualProxyName', DEFAULTS.clashManualProxyName) || DEFAULTS.clashManualProxyName),
+      clashDirectProxyName: String(readStored('clashDirectProxyName', DEFAULTS.clashDirectProxyName) || DEFAULTS.clashDirectProxyName),
+      clashControllerTimeoutMs: Math.max(1000, Number(readStored('clashControllerTimeoutMs', DEFAULTS.clashControllerTimeoutMs)) || DEFAULTS.clashControllerTimeoutMs)
     };
   }
 
@@ -1970,6 +1987,70 @@
     };
   }
 
+  function configureClashLeaveRescue(options = {}) {
+    const next = options && typeof options === 'object' ? options : {};
+    const stored = {};
+    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) {
+      cfg.clashLeaveRescueEnabled = Boolean(next.enabled);
+      stored.clashLeaveRescueEnabled = cfg.clashLeaveRescueEnabled;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'controllerUrl')) {
+      cfg.clashControllerUrl = String(next.controllerUrl || DEFAULTS.clashControllerUrl);
+      stored.clashControllerUrl = cfg.clashControllerUrl;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'secret')) {
+      stored[CLASH_SECRET_KEY] = String(next.secret || '');
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'group')) {
+      cfg.clashGameProxyGroup = String(next.group || DEFAULTS.clashGameProxyGroup);
+      stored.clashGameProxyGroup = cfg.clashGameProxyGroup;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'autoProxy')) {
+      cfg.clashAutoProxyName = String(next.autoProxy || DEFAULTS.clashAutoProxyName);
+      stored.clashAutoProxyName = cfg.clashAutoProxyName;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'manualProxy')) {
+      cfg.clashManualProxyName = String(next.manualProxy || DEFAULTS.clashManualProxyName);
+      stored.clashManualProxyName = cfg.clashManualProxyName;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'directProxy')) {
+      cfg.clashDirectProxyName = String(next.directProxy || DEFAULTS.clashDirectProxyName);
+      stored.clashDirectProxyName = cfg.clashDirectProxyName;
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'timeoutMs')) {
+      cfg.clashControllerTimeoutMs = Math.max(1000, Number(next.timeoutMs || DEFAULTS.clashControllerTimeoutMs) || DEFAULTS.clashControllerTimeoutMs);
+      stored.clashControllerTimeoutMs = cfg.clashControllerTimeoutMs;
+    }
+    if (Object.keys(stored).length) writeStored(stored);
+    try {
+      const bot = window.__graspRatBot;
+      if (bot && typeof bot.configureClashLeaveRescue === 'function') {
+        bot.configureClashLeaveRescue({
+          enabled: Boolean(cfg.clashLeaveRescueEnabled),
+          timeoutMs: cfg.clashControllerTimeoutMs
+        });
+      }
+    } catch (_) {}
+    updateBootstrapPanel(true);
+    return {
+      enabled: Boolean(cfg.clashLeaveRescueEnabled),
+      controllerUrl: cfg.clashControllerUrl,
+      group: cfg.clashGameProxyGroup,
+      autoProxy: cfg.clashAutoProxyName,
+      manualProxy: cfg.clashManualProxyName,
+      directProxy: cfg.clashDirectProxyName,
+      timeoutMs: cfg.clashControllerTimeoutMs
+    };
+  }
+
+  function clashLeaveRescue(payload = {}) {
+    return bridge(
+      'clashLeaveRescue',
+      payload && typeof payload === 'object' ? payload : {},
+      Math.max(3000, Number(cfg.clashControllerTimeoutMs || DEFAULTS.clashControllerTimeoutMs) + 2000)
+    );
+  }
+
   function renderBootstrapPanel(force = false) {
     if (!isGamePage() || state.disabled) return;
     const t = Date.now();
@@ -2839,7 +2920,9 @@
       injectedBy: 'extension',
       combatLoggingEnabled: Boolean(cfg.combatLoggingEnabled && cfg.combatLogEndpointConfigured),
       combatLogEndpoint: cfg.combatLogEndpointConfigured ? cfg.combatLogEndpoint : '',
-      combatLogEndpointConfigured: Boolean(cfg.combatLogEndpointConfigured)
+      combatLogEndpointConfigured: Boolean(cfg.combatLogEndpointConfigured),
+      clashLeaveRescueEnabled: Boolean(cfg.clashLeaveRescueEnabled),
+      clashLeaveRescueTimeoutMs: Math.max(1000, Number(cfg.clashControllerTimeoutMs || DEFAULTS.clashControllerTimeoutMs) || DEFAULTS.clashControllerTimeoutMs)
     };
     const injectResult = await runInPage(source, manifest.scriptUrl);
     state.lastInstallStatus = `confirming ${manifest.version || manifest.sha256 || 'remote'}`;
@@ -3371,6 +3454,9 @@
       configureCombatLogging(options = {}) {
         return configureCombatLogging(options);
       },
+      configureClashLeaveRescue(options = {}) {
+        return configureClashLeaveRescue(options);
+      },
       setManifestUrl(url) {
         cfg.manifestUrl = String(url || '');
         writeStored({ manifestUrl: cfg.manifestUrl });
@@ -3378,6 +3464,7 @@
       }
     };
     window.__graspRatBotBootstrap = bootstrapApi;
+    window.__graspRatBotClashLeaveRescue = clashLeaveRescue;
   }
 
   async function start() {

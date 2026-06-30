@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.257"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.258"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -76,6 +76,12 @@
     loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === 'object' ? { ...previousBot.loginSnapshotGate } : null,
     loginPointSafety: previousBot?.loginPointSafety && typeof previousBot.loginPointSafety === 'object' ? { ...previousBot.loginPointSafety } : null,
     leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === 'object' ? { ...previousBot.leave403SnapshotRecovery } : null,
+    clashLeaveRescue: previousBot?.clashLeaveRescue && typeof previousBot.clashLeaveRescue === 'object'
+      ? {
+        ...previousBot.clashLeaveRescue,
+        attempts: Array.isArray(previousBot.clashLeaveRescue.attempts) ? previousBot.clashLeaveRescue.attempts.slice(-8) : []
+      }
+      : null,
     postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === 'object' ? { ...previousBot.postLoginZoom } : null,
     targetWhitelist: previousBot?.targetWhitelist && typeof previousBot.targetWhitelist === 'object'
       ? {
@@ -505,6 +511,8 @@
     offlineLeaveRetryMs: 600,
 	    leaveRetryMinMs: 10000,
 	    leaveCommandTimeoutMs: 10000,
+	    clashLeaveRescueEnabled: false,
+	    clashLeaveRescueTimeoutMs: 9000,
 	    pendingExitPersistMaxMs: 3600000,
 	    leaveSuccessReloadUnknownGraceMs: 12000,
 	    leave403ReloginDelayMs: 3600000,
@@ -1033,6 +1041,16 @@
       clearedAt: Number(preserved.leave403SnapshotRecovery?.clearedAt || 0) || 0,
       clearedReason: String(preserved.leave403SnapshotRecovery?.clearedReason || '')
     },
+    clashLeaveRescue: {
+      enabled: Boolean(cfg.clashLeaveRescueEnabled),
+      running: false,
+      lastAt: Number(preserved.clashLeaveRescue?.lastAt || 0) || 0,
+      lastStage: String(preserved.clashLeaveRescue?.lastStage || ''),
+      lastResult: preserved.clashLeaveRescue?.lastResult && typeof preserved.clashLeaveRescue.lastResult === 'object'
+        ? { ...preserved.clashLeaveRescue.lastResult }
+        : null,
+      attempts: Array.isArray(preserved.clashLeaveRescue?.attempts) ? preserved.clashLeaveRescue.attempts.slice(-8) : []
+    },
     postLoginZoom: {
       armed: preserved.postLoginZoom ? Boolean(preserved.postLoginZoom.armed) : true,
       missingSince: Number(preserved.postLoginZoom?.missingSince || 0) || 0,
@@ -1227,6 +1245,20 @@
 	    configureCombatLogging(options = {}) {
 	      return configureCombatLogging(options);
 	    },
+	    configureClashLeaveRescue(options = {}) {
+	      if (Object.prototype.hasOwnProperty.call(options || {}, 'enabled')) {
+	        cfg.clashLeaveRescueEnabled = Boolean(options.enabled);
+	      }
+	      if (Object.prototype.hasOwnProperty.call(options || {}, 'timeoutMs')) {
+	        cfg.clashLeaveRescueTimeoutMs = Math.max(1000, Number(options.timeoutMs || cfg.clashLeaveRescueTimeoutMs || 9000) || 9000);
+	      }
+	      this.clashLeaveRescue.enabled = Boolean(cfg.clashLeaveRescueEnabled);
+	      return {
+	        enabled: Boolean(cfg.clashLeaveRescueEnabled),
+	        timeoutMs: Math.max(1000, Number(cfg.clashLeaveRescueTimeoutMs || 9000) || 9000),
+	        lastResult: this.clashLeaveRescue.lastResult || null
+	      };
+	    },
 	    step(source = 'external') {
 	      return tick(source);
 	    },
@@ -1294,6 +1326,15 @@
 			        opportunityChoice: this.opportunityChoice,
 			        opportunitySwitchLock: this.opportunitySwitchLock,
 		        leave403SnapshotRecovery: this.leave403SnapshotRecovery,
+		        clashLeaveRescue: {
+		          enabled: Boolean(cfg.clashLeaveRescueEnabled),
+		          running: Boolean(this.clashLeaveRescue?.running),
+		          lastAt: Number(this.clashLeaveRescue?.lastAt || 0) || 0,
+		          lastAgeMs: this.clashLeaveRescue?.lastAt ? Math.max(0, Math.round(Date.now() - Number(this.clashLeaveRescue.lastAt || Date.now()))) : null,
+		          lastStage: this.clashLeaveRescue?.lastStage || '',
+		          lastResult: this.clashLeaveRescue?.lastResult || null,
+		          attempts: Array.isArray(this.clashLeaveRescue?.attempts) ? this.clashLeaveRescue.attempts.slice(-8) : []
+		        },
 		        sessionMismatchRecovery: summarizeSessionMismatchRecoveryStatus(),
 		        loginSnapshotGate: snapshotLoginGateStatus(),
 	        reloginGate: summarizeReloginGateStatus(),
@@ -8193,6 +8234,164 @@ function hpDisplay(value) {
     };
   }
 
+  function clashLeaveRescueHook() {
+    try {
+      return typeof window.__graspRatBotClashLeaveRescue === 'function'
+        ? window.__graspRatBotClashLeaveRescue
+        : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function leaveDetailFailedForClashRescue(detail) {
+    if (!cfg.clashLeaveRescueEnabled) return false;
+    if (!detail || typeof detail !== 'object') return false;
+    if (!detail.attempted || detail.leaveRequestPending) return false;
+    if (detail.exitConfirmed) return false;
+    if (!detail.error) return false;
+    if (leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return false;
+    return Boolean(clashLeaveRescueHook());
+  }
+
+  function clashLeaveRescueAttempts(detail) {
+    return Array.isArray(detail?.clashLeaveRescueAttempts)
+      ? detail.clashLeaveRescueAttempts.filter(item => item && typeof item === 'object')
+      : [];
+  }
+
+  function nextClashLeaveRescueStage(detail) {
+    const stages = new Set(clashLeaveRescueAttempts(detail).map(item => String(item.stage || '')));
+    if (!stages.has('auto')) return 'auto';
+    if (!stages.has('manual')) return 'manual';
+    return '';
+  }
+
+  function summarizeClashLeaveRescueResult(result, stage, error = '') {
+    const raw = result && typeof result === 'object' ? result : {};
+    return {
+      stage,
+      ok: Boolean(!error && raw.ok !== false),
+      target: raw.target || '',
+      group: raw.group || '',
+      at: Number(raw.at || Date.now()) || Date.now(),
+      durationMs: Math.max(0, Math.round(Number(raw.durationMs || 0) || 0)),
+      switched: raw.switched ? {
+        ok: Boolean(raw.switched.ok !== false),
+        status: Number(raw.switched.status || 0) || 0
+      } : null,
+      closeConnections: raw.closeConnections ? {
+        ok: Boolean(raw.closeConnections.ok !== false),
+        status: Number(raw.closeConnections.status || 0) || 0,
+        error: raw.closeConnections.error || ''
+      } : null,
+      error: error || raw.error || ''
+    };
+  }
+
+  function appendClashLeaveRescueAttempt(detail, attempt) {
+    if (!detail || !attempt) return;
+    const attempts = clashLeaveRescueAttempts(detail).concat([attempt]).slice(-6);
+    detail.clashLeaveRescueAttempts = attempts;
+    detail.clashLeaveRescue = attempt;
+    bot.clashLeaveRescue.lastAt = Number(attempt.at || Date.now()) || Date.now();
+    bot.clashLeaveRescue.lastStage = attempt.stage || '';
+    bot.clashLeaveRescue.lastResult = attempt;
+    bot.clashLeaveRescue.attempts = (Array.isArray(bot.clashLeaveRescue.attempts) ? bot.clashLeaveRescue.attempts : [])
+      .concat([attempt])
+      .slice(-8);
+  }
+
+  function clashLeaveRescueRetryDetail(detail, stage) {
+    const retryDetail = cloneForPendingExit(detail) || {};
+    retryDetail.at = Date.now();
+    retryDetail.attempted = false;
+    retryDetail.method = '';
+    retryDetail.error = '';
+    retryDetail.leaveRequestPending = false;
+    retryDetail.lastLeaveRequest = null;
+    retryDetail.pendingExitRetry = true;
+    retryDetail.clashLeaveRescueRetry = true;
+    retryDetail.clashLeaveRescueStage = stage;
+    retryDetail.clashLeaveRescueAttempts = clashLeaveRescueAttempts(detail);
+    retryDetail.summary = detail.summary || detail.exitSummary || detail.reason || '';
+    retryDetail.displayReason = detail.displayReason || pendingExitDisplayReason(retryDetail.summary);
+    return retryDetail;
+  }
+
+  async function runClashLeaveRescueRetry(detail) {
+    if (bot.clashLeaveRescue.running) return null;
+    if (!leaveDetailFailedForClashRescue(detail)) return null;
+    let stage = nextClashLeaveRescueStage(detail);
+    if (!stage) return null;
+    bot.clashLeaveRescue.running = true;
+    try {
+      while (stage) {
+        const hook = clashLeaveRescueHook();
+        if (!hook) return null;
+        let attempt = null;
+        try {
+          const result = await waitWithTimeout(
+            hook({
+              stage,
+              reason: detail.reason || '',
+              scope: detail.exitAuditScope || '',
+              source: detail.exitAuditSource || '',
+              exitAuditId: detail.exitAuditId || '',
+              requestId: detail.lastLeaveRequest?.requestId || ''
+            }),
+            Math.max(1000, Number(cfg.clashLeaveRescueTimeoutMs || 9000) || 9000),
+            'Clash leave rescue ' + stage
+          );
+          attempt = summarizeClashLeaveRescueResult(result, stage);
+        } catch (err) {
+          attempt = summarizeClashLeaveRescueResult(null, stage, err?.message || String(err));
+        }
+        appendClashLeaveRescueAttempt(detail, attempt);
+        recordExitAuditEvent('clash-leave-rescue', detail, {
+          at: attempt.at || Date.now(),
+          source: detail.exitAuditSource || 'leave-command',
+          scope: detail.exitAuditScope || '',
+          request: attempt
+        });
+        if (attempt.ok) {
+          logStatus('clash leave rescue switched ' + stage, { stage, clashLeaveRescue: attempt });
+          const retryDetail = clashLeaveRescueRetryDetail(detail, stage);
+          const pending = bot.pendingExit;
+          const retryAt = Number(retryDetail.at || Date.now()) || Date.now();
+          if (pending) {
+            bot.pendingExit = {
+              ...pending,
+              updatedAt: retryAt,
+              lastAttemptAt: retryAt,
+              retryCount: Number(pending.retryCount || 0) + 1,
+              lastResult: cloneForPendingExit(retryDetail)
+            };
+            writePersistentPendingExitState(bot.pendingExit);
+            retryDetail.pendingExit = summarizePendingExit(bot.pendingExit);
+          }
+          recordPendingExitResult(pending?.source || detail.exitAuditSource || 'offline', retryDetail, retryAt);
+          await issueLeaveCommand(retryDetail);
+          return retryDetail;
+        }
+        logStatus('clash leave rescue failed ' + stage, { stage, clashLeaveRescue: attempt });
+        stage = nextClashLeaveRescueStage(detail);
+      }
+    } finally {
+      bot.clashLeaveRescue.running = false;
+    }
+    return null;
+  }
+
+  function scheduleClashLeaveRescueRetry(detail) {
+    if (!leaveDetailFailedForClashRescue(detail)) return false;
+    if (!nextClashLeaveRescueStage(detail)) return false;
+    Promise.resolve()
+      .then(() => runClashLeaveRescueRetry(detail))
+      .catch(err => recordUnhandledTickError('clash-leave-rescue', err));
+    return true;
+  }
+
   function updatePendingExitLastResult(detail) {
     const pending = bot.pendingExit;
     if (!pending || !detail?.exitAuditId) return;
@@ -8264,6 +8463,7 @@ function hpDisplay(value) {
     });
     if (leaveDetailSucceeded(detail)) requestPendingExitLeaveSuccessReload(detail, 'leave-success');
     maybeConfirmPendingExitFromLeaveDetail(detail);
+    scheduleClashLeaveRescueRetry(detail);
     return detail;
   }
 
