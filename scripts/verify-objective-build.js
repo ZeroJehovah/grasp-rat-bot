@@ -1113,6 +1113,10 @@ function main() {
       assert(text.includes('function combatFinishPressureState'), 'finish-pressure retreating target helper not found');
       assert(text.includes('function combatRetreatingFighterCloseVector'), 'retreating fighter close helper not found');
       assert(text.includes('function combatOutOfRangeFinishPressureState'), 'out-of-range finish reengage helper not found');
+      assert(text.includes('function combatSafeCloseMoveOverride'), 'safe close movement override helper not found');
+      assert(text.includes('combatOutOfRangeDodgeAction(self, target, pressure, baseTarget, selfHp, targetHp, retreatingTarget, outOfRangeCloseMove)'), 'out-of-range dodge does not receive safe close move candidate');
+      assert(functionBody(text, 'combatOutOfRangeDodgeAction').includes('combatSafeCloseMoveOverride(self, target, pressure, closeMove)'), 'out-of-range dodge does not use safe close override');
+      assert(text.includes('safeCloseOverride: safePressureCloseOverride'), 'combat logs do not expose safe close override evidence');
       assert(text.includes('function combatRetreatIgnoreActive'), 'retreat-ignore helper not found');
       assert(text.includes('function rememberCombatRetreatIgnore'), 'retreat-ignore writer not found');
       assert(text.includes('function combatSustainedPressureDisadvantageState'), 'sustained pressure stop-loss helper not found');
@@ -1751,7 +1755,8 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'engaged out-of-range combat target waits instead of chasing'"), 'out-of-range combat hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'out-of-range incoming bullet dodges without shooting'"), 'out-of-range incoming bullet dodge self-test not found');
     assert(nodeSelfTestSource.includes("name: 'engaged slight out-of-range bullet pressure dodges without shooting'"), 'engaged out-of-range pressure dodge self-test not found');
-    assert(nodeSelfTestSource.includes("name: 'target-owned out-of-range pressure dodges before recoverable hp reengage'"), 'target-owned pressure dodge-before-reengage self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'target-owned recoverable out-of-range pressure dodges with safe close bias'"), 'target-owned pressure safe-close dodge self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'losing out-of-range pressure keeps pure dodge without safe close bias'"), 'losing pressure pure-dodge guard self-test not found');
     assert(nodeSelfTestSource.includes("name: 'non-pressure out-of-range reengage keeps base hp gap guard'"), 'non-pressure reengage HP-gap guard self-test not found');
     assert(nodeSelfTestSource.includes("name: 'retreating slight out-of-range target still holds without pressure'"), 'out-of-range retreat-only hold self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low hp out-of-range finish target reengages without shooting'"), 'out-of-range finish reengage self-test not found');

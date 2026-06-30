@@ -203,6 +203,49 @@ function targetRealBulletPressure(frame) {
   return Boolean(incomingRealBullet(frame) && targetId !== null && targetId !== undefined && String(ownerId ?? '') === String(targetId));
 }
 
+function incomingBulletFromFrame(frame) {
+  return frame?.entry?.incomingBullet || frame?.entry?.decision?.incomingBullet || null;
+}
+
+function combatMoveVelocityForDirection(dx, dy, options) {
+  const speedPerTick = Math.max(0, Number(options.combatTargetDodgeSpeedPerTick || 50));
+  const x = Math.sign(Number(dx) || 0);
+  const y = Math.sign(Number(dy) || 0);
+  if (x && y) return { vx: x * speedPerTick / Math.SQRT2, vy: y * speedPerTick / Math.SQRT2 };
+  return { vx: x * speedPerTick, vy: y * speedPerTick };
+}
+
+function safeCloseDirectionAllowed(frame, simulatedSelf, direction, options) {
+  const incoming = incomingBulletFromFrame(frame);
+  if (!incoming || incoming.synthetic) return true;
+  const dx = Math.sign(Number(direction?.x || 0));
+  const dy = Math.sign(Number(direction?.y || 0));
+  if (!(dx || dy)) return false;
+  const move = combatMoveVelocityForDirection(dx, dy, options);
+  const threats = Array.isArray(incoming.threats) && incoming.threats.length ? incoming.threats : [incoming];
+  const hitRadiusFallback = Math.max(0, Number(options.hitRadiusCm || DEFAULTS.hitRadiusCm || 90));
+  const minSafeCpa = hitRadiusFallback * 3;
+  for (const threat of threats.filter(Boolean).slice(0, 6)) {
+    const rx = Number(threat.x) - Number(simulatedSelf.x);
+    const ry = Number(threat.y) - Number(simulatedSelf.y);
+    const rvx = (Number(threat.vx) || 0) - move.vx;
+    const rvy = (Number(threat.vy) || 0) - move.vy;
+    const relSpeedSq = rvx * rvx + rvy * rvy;
+    const rawImpactTicks = Number(threat.impactTicks);
+    const horizonTicks = Math.max(0, Math.min(
+      Number.isFinite(rawImpactTicks) ? rawImpactTicks + 1 : 30,
+      Number(options.combatBulletLookaheadDistance || 42000) / Math.max(1, Number(options.bulletSpeedPerTick || DEFAULTS.bulletSpeedPerTick))
+    ));
+    const cpaTicks = relSpeedSq > 0.000001
+      ? Math.max(0, Math.min(horizonTicks, -(rx * rvx + ry * rvy) / relSpeedSq))
+      : 0;
+    const cpaDistance = Math.hypot(rx + rvx * cpaTicks, ry + rvy * cpaTicks);
+    const hitRadius = Math.max(0, Number(threat.hitRadius ?? hitRadiusFallback));
+    if (cpaDistance <= hitRadius || cpaDistance < Math.max(minSafeCpa, hitRadius * 3)) return false;
+  }
+  return true;
+}
+
 function stamina5s(frame) {
   const self = frame.entry?.self || frame.entry?.decision?.self || null;
   return numberOrNull(self?.stamina_5s_remaining_milli ?? self?.stamina5s);
@@ -312,7 +355,9 @@ function simulateFarNoDamageSelfSamples(frames, options) {
           const step = Math.min(Math.max(0, d - closeRange), speedPerMs * dt);
           if (step > 0) {
             const dir = unit(toTarget);
-            simulated = add(simulated, mul(dir, step));
+            if (dir && safeCloseDirectionAllowed(frame, simulated, dir, options)) {
+              simulated = add(simulated, mul(dir, step));
+            }
           }
         }
       }
