@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.254"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.255"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -17107,6 +17107,37 @@ function hpDisplay(value) {
     return choice;
   }
 
+  function currentHeldCoinChoice(t = now()) {
+    const choice = bot.opportunityChoice;
+    if (!choice || opportunityChoiceType(choice) !== 'coin') return null;
+    if (t >= Number(choice.until || 0)) return null;
+    const id = opportunityChoiceId(choice);
+    if (!id && id !== '0') return null;
+    return choice;
+  }
+
+  function coinRouteSkipsHeldSingleCoin(self, route, choice) {
+    if (!self || !route || !choice || opportunityChoiceType(choice) !== 'coin') return false;
+    if (String(choice.reason || '') === 'best-opportunity-coin-route' || coinRouteIdsFrom(choice).length) return false;
+    const choiceId = opportunityChoiceId(choice);
+    if (!choiceId && choiceId !== '0') return false;
+    if (coinRouteKey(route) === String(choiceId)) return false;
+    let heldDistance = Number(choice.distance);
+    if (!Number.isFinite(heldDistance)) {
+      const x = Number(choice.x);
+      const y = Number(choice.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) heldDistance = dist(self, { x, y });
+    }
+    const routeDistance = Number(route.distance ?? route.coinRoute?.firstDistance ?? Infinity);
+    if (!Number.isFinite(heldDistance) || !Number.isFinite(routeDistance)) return false;
+    const nearbyLimit = Math.max(0, Number(cfg.coinRouteNearbyFirstCoinDistance || 0));
+    if (!(nearbyLimit > 0) || heldDistance > nearbyLimit) return false;
+    const ratio = Math.max(1, Number(cfg.coinRouteFirstCoinDistanceRatio || 1));
+    const slack = Math.max(0, Number(cfg.coinRouteFirstCoinDistanceSlack || 0));
+    const allowedFirstDistance = Math.max(heldDistance * ratio, heldDistance + slack);
+    return routeDistance > allowedFirstDistance;
+  }
+
   function coinRouteMatchesHeldChoice(route, choice) {
     if (!route || !choice) return false;
     const firstKey = coinRouteKey(route);
@@ -17149,7 +17180,8 @@ function hpDisplay(value) {
       const key = coinRouteKey(coin);
       if (!anchors.some(item => coinRouteKey(item) === key)) anchors.push(coin);
     };
-    const heldChoice = currentHeldCoinRouteChoice();
+    const heldChoice = currentHeldCoinChoice();
+    const heldRouteChoice = currentHeldCoinRouteChoice();
     const heldAnchor = heldChoice ? candidates.find(coin => coinRouteKey(coin) === opportunityChoiceId(heldChoice)) : null;
     if (heldAnchor) addAnchor(heldAnchor);
     candidates.slice(0, Math.max(1, Number(cfg.coinRouteAnchorLimit || 22))).forEach(addAnchor);
@@ -17168,7 +17200,8 @@ function hpDisplay(value) {
       const route = buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats);
       if (!route) continue;
       if (coinRouteSkipsCloserFirstCoin(self, route, candidates)) continue;
-      if (coinRouteMatchesHeldChoice(route, heldChoice)) heldRoute = route;
+      if (coinRouteSkipsHeldSingleCoin(self, route, heldChoice)) continue;
+      if (coinRouteMatchesHeldChoice(route, heldRouteChoice || heldChoice)) heldRoute = route;
       const score = Number(route.opportunityScore || -Infinity);
       if (!best
         || score > Number(best.opportunityScore || -Infinity)
