@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.261`.
 - Latest manifest SHA-256: `e9fb2298c400670f614b62545d9cea0233fb7750868d3c481531b24bc767d415`.
-- Latest release commit: `60f29ee` (`bootstrap-0.4.261` Clash leave proxy order), previous release commit `82b4a73` (`bootstrap-0.4.260` 3s leave request timeout).
+- Latest release commit: `e377d33` (`bootstrap-0.4.261` Clash leave proxy order), previous release commit `82b4a73` (`bootstrap-0.4.260` 3s leave request timeout).
 - Latest bootstrap A versions: Tampermonkey `0.4.66`, extension `0.1.45`.
 - `bootstrap-0.4.261` makes the Clash leave rescue round match the normal game proxy default. When rescue is enabled, each new exit round first switches `GRASP-RAT-GAME` to `S2-自动`, closes Clash connections, and sends the first `leave()` through that auto group. If that request fails or returns 403, the same round switches to `DIRECT`, closes connections, and retries `leave()`; if direct also fails/403s, it switches to `S2-手动`, closes connections, and retries once more. Pending-exit retries clear the previous round's Clash stage attempts before retrying, so every later round repeats `S2-自动 -> DIRECT -> S2-手动` instead of continuing from the previous final proxy.
 - `bootstrap-0.4.260` shortens every asynchronous `leave()` request timeout from 10s to 3s so the direct leave, `S2-自动` retry, and `S2-手动` retry fail over faster when the page/API is hung. The pending-exit retry floor remains `leaveRetryMinMs = 10000`, so ordinary later retries are still throttled to at least 10s; only the single in-flight leave request wait is shortened.
