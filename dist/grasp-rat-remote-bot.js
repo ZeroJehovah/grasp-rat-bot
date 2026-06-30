@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.258"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.259"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -7874,6 +7874,21 @@ function hpDisplay(value) {
     const state = pendingExitSelfState(self);
     const lastDetail = pending.lastResult || {};
     if (leaveDetailHasHttp403(lastDetail)) {
+      if (scheduleClashLeaveRescueRetry(lastDetail)) {
+        bot.pursuit = null;
+        if (!applyCombatExitCover(pending, self)) stopMotionSafely('pending-exit-http-403-clash-rescue');
+        const detail = cloneForPendingExit(lastDetail) || {};
+        detail.exitPending = true;
+        detail.exitConfirmed = false;
+        detail.pendingExit = summarizePendingExit(pending);
+        detail.exitConfirmation = {
+          ...state,
+          source: bot.clashLeaveRescue.running ? 'leave-http-403-clash-rescue-running' : 'leave-http-403-clash-rescue-scheduled',
+          http403: true,
+          clashLeaveRescue: bot.clashLeaveRescue?.lastResult || null
+        };
+        return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, false);
+      }
       const detail = confirmPendingExit(pending, {
         ...state,
         known: true,
@@ -8249,8 +8264,9 @@ function hpDisplay(value) {
     if (!detail || typeof detail !== 'object') return false;
     if (!detail.attempted || detail.leaveRequestPending) return false;
     if (detail.exitConfirmed) return false;
-    if (!detail.error) return false;
-    if (leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return false;
+    const http403 = leaveDetailHasHttp403(detail);
+    if (!detail.error && !http403) return false;
+    if (leaveDetailSucceeded(detail)) return false;
     return Boolean(clashLeaveRescueHook());
   }
 
@@ -8310,6 +8326,7 @@ function hpDisplay(value) {
     retryDetail.error = '';
     retryDetail.leaveRequestPending = false;
     retryDetail.lastLeaveRequest = null;
+    retryDetail.leaveRequests = [];
     retryDetail.pendingExitRetry = true;
     retryDetail.clashLeaveRescueRetry = true;
     retryDetail.clashLeaveRescueStage = stage;
@@ -8348,6 +8365,7 @@ function hpDisplay(value) {
           attempt = summarizeClashLeaveRescueResult(null, stage, err?.message || String(err));
         }
         appendClashLeaveRescueAttempt(detail, attempt);
+        updatePendingExitLastResult(detail);
         recordExitAuditEvent('clash-leave-rescue', detail, {
           at: attempt.at || Date.now(),
           source: detail.exitAuditSource || 'leave-command',
@@ -8372,6 +8390,15 @@ function hpDisplay(value) {
           }
           recordPendingExitResult(pending?.source || detail.exitAuditSource || 'offline', retryDetail, retryAt);
           await issueLeaveCommand(retryDetail);
+          if (
+            !retryDetail.leaveRequestPending
+            && leaveDetailFailedForClashRescue(retryDetail)
+            && nextClashLeaveRescueStage(retryDetail)
+          ) {
+            detail = retryDetail;
+            stage = nextClashLeaveRescueStage(detail);
+            continue;
+          }
           return retryDetail;
         }
         logStatus('clash leave rescue failed ' + stage, { stage, clashLeaveRescue: attempt });
@@ -8386,6 +8413,7 @@ function hpDisplay(value) {
   function scheduleClashLeaveRescueRetry(detail) {
     if (!leaveDetailFailedForClashRescue(detail)) return false;
     if (!nextClashLeaveRescueStage(detail)) return false;
+    if (bot.clashLeaveRescue.running) return true;
     Promise.resolve()
       .then(() => runClashLeaveRescueRetry(detail))
       .catch(err => recordUnhandledTickError('clash-leave-rescue', err));
@@ -8414,6 +8442,7 @@ function hpDisplay(value) {
     const self = getSelf();
     const baseState = pendingExitSelfState(self);
     if (leaveDetailHasHttp403(detail)) {
+      if (scheduleClashLeaveRescueRetry(detail)) return null;
       return confirmPendingExit(pending, {
         ...baseState,
         known: true,
@@ -8446,14 +8475,16 @@ function hpDisplay(value) {
 	    request.pending = false;
 	    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
 	    detail.leaveRequests.push(request);
-	    detail.leaveRequests = detail.leaveRequests.slice(-20);
-	    detail.lastLeaveRequest = request;
-	    if (leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) {
-	      stopMotionAfterExit(leaveDetailHasHttp403(detail) ? 'leave-http-403' : 'leave-success');
-	      if (leaveDetailHasHttp403(detail)) {
-	        noteImportantSessionExit('leave-http-403:' + (detail.reason || ''), detail.self || bot.lastSelf, request.completedAt, { exit: detail });
-	      }
-	    }
+    detail.leaveRequests = detail.leaveRequests.slice(-20);
+    detail.lastLeaveRequest = request;
+    const http403 = leaveDetailHasHttp403(detail);
+    const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail));
+    if (leaveDetailSucceeded(detail) || http403) {
+      stopMotionAfterExit(http403 ? 'leave-http-403' : 'leave-success');
+      if (http403 && !clashRescuePending) {
+        noteImportantSessionExit('leave-http-403:' + (detail.reason || ''), detail.self || bot.lastSelf, request.completedAt, { exit: detail });
+      }
+    }
 	    updatePendingExitLastResult(detail);
 	    recordExitAuditEvent('leave-request', detail, {
 	      at: request.completedAt,
@@ -8462,8 +8493,8 @@ function hpDisplay(value) {
       scope: detail.exitAuditScope || ''
     });
     if (leaveDetailSucceeded(detail)) requestPendingExitLeaveSuccessReload(detail, 'leave-success');
-    maybeConfirmPendingExitFromLeaveDetail(detail);
-    scheduleClashLeaveRescueRetry(detail);
+    const rescueScheduled = scheduleClashLeaveRescueRetry(detail);
+    if (!rescueScheduled) maybeConfirmPendingExitFromLeaveDetail(detail);
     return detail;
   }
 

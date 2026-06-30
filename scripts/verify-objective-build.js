@@ -893,7 +893,9 @@ function main() {
       assert(maybeBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'leave success completion does not route to confirmation reload');
       assert(!/leaveDetailSucceeded\(detail\)[\s\S]{0,180}confirmPendingExit/.test(maybeBody), 'leave success completion still directly confirms pending exit');
       const completeBody = functionBody(text, 'completeLeaveRequest');
-      assert(completeBody.includes("if (leaveDetailHasHttp403(detail))"), 'leave completion does not isolate HTTP 403 session-end logging');
+      assert(completeBody.includes('const http403 = leaveDetailHasHttp403(detail)'), 'leave completion does not isolate HTTP 403 state');
+      assert(completeBody.includes('const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail))'), 'leave completion does not suppress 403 session-end logging while Clash rescue is pending');
+      assert(completeBody.includes('if (http403 && !clashRescuePending)'), 'leave completion can still close the session before exhausting Clash 403 rescue');
       assert(!completeBody.includes("noteImportantSessionExit((leaveDetailHasHttp403(detail) ? 'leave-http-403:' : 'leave-success:')"), 'normal leave success still writes session-end important log before reload confirmation');
       assert(completeBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'async leave completion does not request confirmation reload');
       const rememberBody = functionBody(text, 'rememberPendingExit');
@@ -924,7 +926,7 @@ function main() {
 	    check(`${file} stops native motion immediately after confirmed exits`, () => {
 	      const completeBody = functionBody(text, 'completeLeaveRequest');
 	      assert(
-	        completeBody.includes("stopMotionAfterExit(leaveDetailHasHttp403(detail) ? 'leave-http-403' : 'leave-success')"),
+	        completeBody.includes("stopMotionAfterExit(http403 ? 'leave-http-403' : 'leave-success')"),
 	        'successful/403 leave completion does not stop motion immediately'
 	      );
 	      const confirmBody = functionBody(text, 'confirmPendingExit');
@@ -1218,14 +1220,42 @@ function main() {
       assert(text.includes("pendingExitIntentForSkippedLeave('injury'"), 'injury skip intent is not logged on normal action');
       assert(text.includes("pendingExitIntentForSkippedLeave('pursuit'"), 'pursuit skip intent is not logged on normal action');
     });
-    check(`${file} treats leave HTTP 403 as confirmed exit with snapshot recovery`, () => {
+    check(`${file} rescues leave HTTP 403 before risk-control fallback`, () => {
       const requestBody = functionBody(text, 'leaveRequestHasHttp403');
       assert(requestBody.includes('status === 403'), 'leave 403 status detector not found');
+      const rescueBody = functionBody(text, 'leaveDetailFailedForClashRescue');
+      assert(!/leaveDetailSucceeded\(detail\)\s*\|\|\s*leaveDetailHasHttp403\(detail\)/.test(rescueBody), 'Clash leave rescue still excludes HTTP 403 after success check');
+      assert(!/if\s*\(\s*leaveDetailHasHttp403\(detail\)\s*\)\s*return false/.test(rescueBody), 'Clash leave rescue still returns false for HTTP 403');
+      assert(rescueBody.includes('const http403 = leaveDetailHasHttp403(detail)'), 'Clash leave rescue does not detect HTTP 403 as a first-class failure');
+      assert(rescueBody.includes('if (!detail.error && !http403) return false'), 'Clash leave rescue still requires a generic error even for HTTP 403');
+      assert(rescueBody.includes('if (leaveDetailSucceeded(detail)) return false'), 'Clash leave rescue does not reject successful leaves');
+      const retryDetailBody = functionBody(text, 'clashLeaveRescueRetryDetail');
+      assert(retryDetailBody.includes('retryDetail.leaveRequests = []'), 'Clash rescue retry does not clear stale 403 leave history before retrying');
+      const rescueRunBody = functionBody(text, 'runClashLeaveRescueRetry');
+      assert(rescueRunBody.includes('await issueLeaveCommand(retryDetail)'), 'Clash rescue does not retry leave after switching proxy');
+      assert(rescueRunBody.includes('updatePendingExitLastResult(detail)'), 'Clash rescue stage attempts are not persisted before fallback/next stage');
+      assert(rescueRunBody.includes('nextClashLeaveRescueStage(retryDetail)'), 'Clash rescue does not continue from auto to manual after synchronous retry failure');
+      const completeBody = functionBody(text, 'completeLeaveRequest');
+      assert(completeBody.includes('const rescueScheduled = scheduleClashLeaveRescueRetry(detail)'), 'completed failed leave does not schedule Clash rescue');
+      assert(completeBody.includes('if (!rescueScheduled) maybeConfirmPendingExitFromLeaveDetail(detail)'), 'completed failed leave can confirm before Clash rescue scheduling');
+      assert(completeBody.includes('const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail))'), 'HTTP 403 leave completion is not gated by Clash rescue availability');
+      const maybeBody = functionBody(text, 'maybeConfirmPendingExitFromLeaveDetail');
+      assert(
+        maybeBody.indexOf('scheduleClashLeaveRescueRetry(detail)') >= 0
+          && maybeBody.indexOf('scheduleClashLeaveRescueRetry(detail)') < maybeBody.indexOf("source: 'leave-http-403'"),
+        'HTTP 403 pending-exit confirmation does not try Clash rescue first'
+      );
+      const pendingBody = functionBody(text, 'handlePendingExit');
+      assert(
+        pendingBody.indexOf('scheduleClashLeaveRescueRetry(lastDetail)') >= 0
+          && pendingBody.indexOf('scheduleClashLeaveRescueRetry(lastDetail)') < pendingBody.indexOf("source: 'leave-http-403'"),
+        'pending HTTP 403 exit does not schedule Clash rescue before fallback confirmation'
+      );
+      assert(pendingBody.includes("source: bot.clashLeaveRescue.running ? 'leave-http-403-clash-rescue-running' : 'leave-http-403-clash-rescue-scheduled'"), 'pending HTTP 403 rescue state is not exposed while Clash rescue runs');
       const confirmBody = functionBody(text, 'confirmPendingExit');
       assert(confirmBody.includes('leave403ReloginDelayMs()'), '403 confirmation does not keep one hour fallback helper');
       assert(confirmBody.includes("minimumReason: 'leave HTTP 403 risk control'"), '403 risk-control minimum reason not recorded');
       assert(confirmBody.includes('detail.http403RiskControl = true'), '403 risk-control marker not recorded');
-      const pendingBody = functionBody(text, 'handlePendingExit');
       assert(pendingBody.includes("source: 'leave-http-403'"), 'pending exit does not confirm on leave HTTP 403');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(refreshBody.includes("timedFetchJsonNoStore('snapshot', '/snapshot')") || refreshBody.includes("fetchJsonNoStore('/snapshot')"), 'snapshot refresh request not found');
