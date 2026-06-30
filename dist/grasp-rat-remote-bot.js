@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.259"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.260"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -510,7 +510,7 @@
     offlinePassiveDangerRadius: 2500,
     offlineLeaveRetryMs: 600,
 	    leaveRetryMinMs: 10000,
-	    leaveCommandTimeoutMs: 10000,
+	    leaveCommandTimeoutMs: 3000,
 	    clashLeaveRescueEnabled: false,
 	    clashLeaveRescueTimeoutMs: 9000,
 	    pendingExitPersistMaxMs: 3600000,
@@ -8530,7 +8530,7 @@ function hpDisplay(value) {
 	        if (result && typeof result.then === 'function') {
           detail.leaveRequestPending = true;
           detail.leaveRequestSentAt = request.sentAt;
-          detail.leaveRequestTimeoutMs = Math.max(1000, Number(cfg.leaveCommandTimeoutMs || 0) || 10000);
+          detail.leaveRequestTimeoutMs = Math.max(1000, Number(cfg.leaveCommandTimeoutMs || 0) || 3000);
           request.attempted = true;
           request.method = detail.method;
           request.pending = true;
