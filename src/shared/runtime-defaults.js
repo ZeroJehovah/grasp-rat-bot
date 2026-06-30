@@ -452,7 +452,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatLogPendingPersistMinMs: 5000,
     combatLogMaxBulletEntries: 24,
     combatLogMaxEntityEntries: 12,
-    postLoginZoomOutClicks: 7,
+    postLoginZoomOutClicks: 5,
     postLoginZoomStartDelayMs: 350,
     postLoginZoomOutIntervalMs: 80,
     postLoginZoomArmMissingMs: 1000,
