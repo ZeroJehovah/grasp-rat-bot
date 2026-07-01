@@ -1973,20 +1973,27 @@ function main() {
       assert(text.includes('onClick: () => configureCombatLogging({ enabled: !remoteLogEnabled })'), 'remote-log dot toggle not found');
       assert(text.includes("logDot.setAttribute('aria-pressed', String(remoteLogEnabled))"), 'remote-log dot aria-pressed not found');
     });
-    check(`${file} displays network quality latency/loss on the clock row`, () => {
+    check(`${file} displays network quality latency/loss in the header pill`, () => {
       assert(text.includes('const networkQuality = status?.networkQuality || {}'), 'status.networkQuality source not found');
       assert(text.includes('function networkQualityLatencyText'), 'network latency formatter not found');
       assert(text.includes('function networkQualityLossText'), 'network loss formatter not found');
       assert(text.includes('function networkQualitySummaryText'), 'combined network quality formatter not found');
       assert(text.includes("return networkQualityLatencyText(summary) + '/' + networkQualityLossText(summary)"), 'combined network quality text does not use latency/loss slash format');
-      assert(text.includes('function networkQualitySummaryColor'), 'combined network quality color helper not found');
       assert(text.includes('function networkQualityLatencyTitle'), 'network latency tooltip not found');
       assert(text.includes('function networkQualityLossTitle'), 'network loss tooltip not found');
       assert(text.includes('function networkQualitySummaryTitle'), 'combined network quality tooltip not found');
       assert(text.includes('const appendClockNetworkLine = () => {'), 'clock/network row helper not found');
       assert(text.includes("time.textContent = '当前时间：' + formatClockTime()"), 'current clock text is not rendered in the network row');
-      assert(text.includes("networkText.textContent = networkQualitySummaryText(networkQuality)"), 'network quality text is not rendered as one combined field');
-      assert(text.includes("networkText.style.cssText = 'flex:0 0 96px;min-width:96px;text-align:right;color:' + networkColor"), 'combined network quality field is not fixed-width right-aligned');
+      assert(text.includes('const createNetworkQualityPill = () => {'), 'header network quality pill helper not found');
+      assert(text.includes('actions.appendChild(createNetworkQualityPill())'), 'network quality pill is not rendered after header status controls');
+      assert(text.includes('height:24px') && text.includes('border-radius:999px') && text.includes('background:rgba(15,23,42,.50)'), 'network quality pill does not match compact header control styling');
+      assert(text.includes("latency.textContent = networkQualityLatencyText(networkQuality)"), 'network latency text is not rendered in the header pill');
+      assert(text.includes("latency.style.cssText = 'color:' + networkQualityLatencyColor(networkQuality)"), 'network latency color is not independent');
+      assert(text.includes("slash.textContent = '/'") && text.includes("slash.style.cssText = 'color:#fff'"), 'network slash is not rendered in white');
+      assert(text.includes("loss.textContent = networkQualityLossText(networkQuality)"), 'network loss text is not rendered in the header pill');
+      assert(text.includes("loss.style.cssText = 'color:' + networkQualityLossColor(networkQuality)"), 'network loss color is not independent');
+      assert(!text.includes('networkText.textContent = networkQualitySummaryText(networkQuality)'), 'network quality still renders in the clock row');
+      assert(!text.includes('flex:0 0 96px;min-width:96px'), 'network quality still reserves a fixed width');
       assert(!text.includes("appendNetworkMetric('延迟'"), 'latency metric still renders a visible label');
       assert(!text.includes("appendNetworkMetric('丢包'"), 'loss metric still renders a visible label');
       assert(!text.includes('label: networkQualityLatencyText(networkQuality)'), 'network latency is still rendered as a header dot label');
