@@ -10,6 +10,7 @@ Read only what is needed for the current task:
 - [measured-parameters.md](measured-parameters.md): measured game constants and empirical timing/range notes.
 - [config-defaults.md](config-defaults.md): important runtime config defaults.
 - [combat-logging.md](combat-logging.md): combat-log service, analyzer, daily summary, and live monitoring notes.
+- [coin-balance-reporting.md](coin-balance-reporting.md): known-good Elysiver API method, auth variables, monthly coin report command, and fetch retry behavior.
 - [test-coverage.md](test-coverage.md): current self-test/static/replay coverage notes and known validation gaps.
 
 ## Maintenance Rules
