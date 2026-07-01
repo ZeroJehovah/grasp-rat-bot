@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.46';
+  const BOOTSTRAP_VERSION = '0.1.47';
   const BOOTSTRAP_OWNER = 'extension';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -780,73 +780,39 @@
     return /login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait/.test(reloginWaitReason(status));
   }
 
-  function lastExitReasonDetail(status) {
-    const staminaReason = staminaExhaustedReasonDetail(status?.lastDecision, status);
-    if (staminaReason) return staminaReason;
-    const persistent = activePersistentExitDetail(status);
-    return persistent?.displayReason
-      || persistent?.summary
-      || persistent?.exitSummary
-      || persistent?.enemyLeaveSummary
-      || status?.session?.exitSummary
-      || status?.session?.exitReason
-      || '';
+  function decisionReasonDetail(decision, status) {
+    if (!decision) return '';
+    if (decisionAllowsCurrentExitDetail(decision)) {
+      const staminaReason = staminaExhaustedReasonDetail(decision, status);
+      if (staminaReason) return staminaReason;
+      const currentDetail = currentDecisionExitDetail(decision);
+      if (currentDetail) return currentDetail;
+    }
+    const reason = String(decision?.reason || '').trim();
+    return reason ? reasonText(reason) : '';
   }
 
-  function decisionReasonDetail(decision, status) {
-    const actionDisplay = decisionActionDisplayReason(decision);
-    if (actionDisplay) return actionDisplay;
-    if (!decisionAllowsExitReasonDetail(decision)) return '';
-    const staminaReason = staminaExhaustedReasonDetail(decision, status);
-    if (staminaReason) return staminaReason;
-    const persistent = activePersistentExitDetail(status);
-    return decision?.leave?.displayReason
+  function panelReasonDetail(decision, status) {
+    return decisionReasonDetail(decision, status);
+  }
+
+  function decisionAllowsCurrentExitDetail(decision) {
+    if (!decision) return true;
+    const kind = String(decision?.kind || '');
+    return kind === 'leave' || kind === 'wait' || kind === 'idle';
+  }
+
+  function currentDecisionExitDetail(decision) {
+    return String(decision?.displayReason
+      || decision?.leave?.displayReason
       || decision?.enemyLeave?.displayReason
       || decision?.offlineLeave?.displayReason
-      || status?.enemyLeave?.displayReason
-      || status?.offlineLeave?.displayReason
-      || persistent?.displayReason
       || decision?.leave?.summary
       || decision?.exitSummary
       || decision?.leave?.exitSummary
       || decision?.leave?.enemyLeaveSummary
       || decision?.leave?.enemyLeaveReason
-      || '';
-  }
-
-  function panelReasonDetail(decision, status) {
-    if (waitReasonPrefersLastExit(status)) {
-      const lastExit = lastExitReasonDetail(status);
-      if (lastExit) return lastExit;
-    }
-    return decisionReasonDetail(decision, status);
-  }
-
-  function decisionAllowsExitReasonDetail(decision) {
-    if (!decision) return true;
-    const kind = String(decision?.kind || '');
-    const reason = String(decision?.reason || '');
-    return kind === 'leave'
-      || kind === 'wait'
-      || kind === 'idle'
-      || /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|session-mismatch|game-session/.test(reason);
-  }
-
-  function decisionActionDisplayReason(decision) {
-    const text = String(decision?.displayReason || '').trim();
-    if (!text) return '';
-    if (decisionAllowsExitReasonDetail(decision)) return text;
-    const kind = String(decision?.kind || '');
-    const reason = String(decision?.reason || '');
-    if (kind === 'coin' || kind === 'seek-coin' || (kind === 'patrol' && /coin/.test(reason))) {
-      return /金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/.test(text) ? text : '';
-    }
-    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop') {
-      return /战斗|攻击|目标|Drop|收益|挂机|白名单/.test(text) ? text : '';
-    }
-    if (kind === 'flee') return /避|危险|威胁|撤离|距离/.test(text) ? text : '';
-    if (kind === 'recover') return /恢复|回血|体力/.test(text) ? text : '';
-    return text;
+      || '').trim();
   }
 
   function cloudflareErrorInfo() {
@@ -2106,7 +2072,7 @@
     const status = getBotStatus();
     syncEntityControlLogin(status);
     const decision = status?.lastDecision || null;
-    const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || reasonText(decision?.reason);
+    const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || '';
     const todaySession = status?.todaySession || {};
     const self = status?.self || decision?.self || status?.lastSelf || lastDailyStaminaSelf(status) || null;
     const safety = status?.safety || {};
@@ -2377,10 +2343,12 @@
       { text: '当前目标：', style: 'color:#94a3b8' },
       ...targetSummaryParts(decision, status)
     ]);
-    appendRichLine([
-      { text: '原因：', style: 'color:#64748b' },
-      { text: reasonDetail, style: 'color:#94a3b8' }
-    ], 'font-size:11px;color:#94a3b8');
+    if (reasonDetail) {
+      appendRichLine([
+        { text: '原因：', style: 'color:#64748b' },
+        { text: reasonDetail, style: 'color:#94a3b8' }
+      ], 'font-size:11px;color:#94a3b8');
+    }
     if (reloginGateVisible(status, hold)) {
       for (const row of reloginGatePanelRows(status)) {
         appendLine(row.text, 'font-size:10.8px;color:' + reloginGateLineColor(row.ok, row.blocked) + ';font-variant-numeric:tabular-nums');

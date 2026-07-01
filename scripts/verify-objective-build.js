@@ -2050,24 +2050,25 @@ function main() {
       }
       assert(requiredMappings['best-opportunity-coin-route'] !== requiredMappings['best-opportunity-visible-coin'], 'route and visible coin labels are not distinct');
     });
-    check(`${file} filters stale exit detail from active action reasons`, () => {
+    check(`${file} scopes panel reason to current decision`, () => {
       const detailBody = functionBody(text, 'decisionReasonDetail');
-      const persistentBody = functionBody(text, 'activePersistentExitDetail');
-      const actionBody = functionBody(text, 'decisionActionDisplayReason');
-      const allowsBody = functionBody(text, 'decisionAllowsExitReasonDetail');
-      assert(detailBody.includes('const actionDisplay = decisionActionDisplayReason(decision)'), 'reason detail does not prefer scoped action display reason');
-      assert(detailBody.includes('if (!decisionAllowsExitReasonDetail(decision)) return \'\';'), 'reason detail can still fall through to stale exit detail for active actions');
-      assert(text.includes('function panelReasonDetail') && functionBody(text, 'panelReasonDetail').includes('lastExitReasonDetail(status)'), 'panel reason does not prefer last exit detail during relogin waits');
-      assert(functionBody(text, 'lastExitReasonDetail').includes('staminaExhaustedReasonDetail(status?.lastDecision, status)'), 'panel last-exit reason does not prefer current stamina exhaustion evidence');
-      assert(detailBody.includes('const staminaReason = staminaExhaustedReasonDetail(decision, status)'), 'decision reason detail does not prefer current stamina exhaustion evidence');
-      assert(!detailBody.includes('|| decision?.displayReason'), 'reason detail still accepts unscoped decision displayReason');
-      assert(text.includes('function activeExitDetailHasHold'), 'active exit hold helper not found');
-      assert(persistentBody.includes('const activeOfflineStatus = activeExitDetailHasHold(offlineStatus) ? offlineStatus : null'), 'active offline exit hold is not considered before stale enemy detail');
-      assert(persistentBody.includes('const activeEnemyStatus = activeExitDetailHasHold(enemyStatus) ? enemyStatus : null'), 'active enemy exit hold is not considered');
-      assert(persistentBody.indexOf('activeOfflineStatus') < persistentBody.indexOf('visibleStatus'), 'active offline hold can still lose to stale visible exit detail');
-      assert(actionBody.includes("kind === 'coin' || kind === 'seek-coin'"), 'coin action display reason scope not found');
-      assert(actionBody.includes('/金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/'), 'coin action display reason allow-list not found');
-      assert(allowsBody.includes("kind === 'leave'") && allowsBody.includes("kind === 'wait'"), 'exit detail scope does not preserve wait/leave reasons');
+      const currentDetailBody = functionBody(text, 'currentDecisionExitDetail');
+      const allowsBody = functionBody(text, 'decisionAllowsCurrentExitDetail');
+      const panelBody = functionBody(text, 'panelReasonDetail');
+      assert(detailBody.includes("if (!decision) return '';"), 'reason detail does not return empty without a current decision');
+      assert(detailBody.includes('decisionAllowsCurrentExitDetail(decision)'), 'reason detail does not gate exit details by current decision kind');
+      assert(detailBody.includes('currentDecisionExitDetail(decision)'), 'reason detail does not read current decision exit detail');
+      assert(detailBody.includes('return reason ? reasonText(reason) : \'\';'), 'reason detail does not fall back only to current reason mapping');
+      assert(!detailBody.includes('activePersistentExitDetail(status)'), 'reason detail can still read persistent historical exits');
+      assert(!detailBody.includes('status?.enemyLeave') && !detailBody.includes('status?.offlineLeave'), 'reason detail can still read status exit summaries');
+      assert(!detailBody.includes('session?.exit') && !detailBody.includes('lastExitReasonDetail'), 'reason detail can still read older session/last-exit summaries');
+      assert(currentDetailBody.includes('decision?.displayReason') && currentDetailBody.includes('decision?.leave?.displayReason'), 'current decision detail helper does not read current decision fields');
+      assert(!currentDetailBody.includes('status') && !currentDetailBody.includes('localStorage'), 'current decision detail helper can read non-current state');
+      assert(allowsBody.includes("return kind === 'leave' || kind === 'wait' || kind === 'idle';"), 'exit detail scope is not limited to current wait/leave/idle decisions');
+      assert(panelBody.includes('return decisionReasonDetail(decision, status);') && !panelBody.includes('lastExitReasonDetail'), 'panel reason still prefers historical exit detail');
+      assert(text.includes("const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || '';"), 'panel reason still has a reasonText fallback');
+      assert(!text.includes("const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || reasonText(decision?.reason);"), 'panel reason still falls back to reasonText directly');
+      assert(text.includes('if (reasonDetail) {') && text.includes("{ text: '原因：'"), 'panel still renders an empty reason row');
     });
     check(`${file} renders combat HP as a full-width fight panel`, () => {
       const body = functionBody(text, 'appendCombatHpPanel');
