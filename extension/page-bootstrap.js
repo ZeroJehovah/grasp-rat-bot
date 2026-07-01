@@ -1092,6 +1092,7 @@
       'control-ws-server-position-stalled': '服务端位置停止，按 WebSocket 离线处理',
       'control-global-sampling-outage': '网络采样超时，按 WebSocket 离线处理',
       'control-combat-tick-gap': '战斗主循环断档，按 WebSocket 离线处理',
+      'control-action-settlement-stalled': '移动/开火结算卡死，按 WebSocket 离线处理',
       'control-stamina-exhausted': '长周期体力耗尽，按 WebSocket 离线处理',
       'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
       'offline-leave': 'WebSocket 离线，正在退出',

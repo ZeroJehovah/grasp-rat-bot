@@ -77,6 +77,199 @@ function runtimeSummarySource() {
     bot.serverPositionStall = null;
   }
 
+  function summarizeActionSettlementStall(state = bot.actionSettlementStall) {
+    if (!state) return null;
+    const t = Date.now();
+    return {
+      active: Boolean(state.active),
+      stalled: Boolean(state.stalled),
+      reason: state.reason || '',
+      startedAt: state.startedAt || 0,
+      stalledAt: state.stalledAt || 0,
+      ageMs: state.startedAt ? Math.max(0, Math.round(t - Number(state.startedAt || 0))) : 0,
+      moveIntent: Boolean(state.moveIntent),
+      shootIntent: Boolean(state.shootIntent),
+      movementAckStale: Boolean(state.movementAckStale),
+      movementAckAgeMs: Number.isFinite(Number(state.movementAckAgeMs)) ? Math.round(Number(state.movementAckAgeMs)) : null,
+      noSelfProgress: Boolean(state.noSelfProgress),
+      noTargetProgress: Boolean(state.noTargetProgress),
+      selfMoved: Number.isFinite(Number(state.selfMoved)) ? Math.round(Number(state.selfMoved)) : null,
+      targetId: state.targetId || '',
+      targetHp: Number.isFinite(Number(state.targetHp)) ? Number(state.targetHp) : null,
+      actionKind: state.actionKind || '',
+      actionReason: state.actionReason || ''
+    };
+  }
+
+  function resetActionSettlementStall(reason = '') {
+    if (bot.actionSettlementStall) bot.actionSettlementStall.reason = reason || 'reset';
+    bot.actionSettlementStall = null;
+  }
+
+  function actionSettlementNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function actionSettlementEntityHp(entity) {
+    const candidates = [
+      entity?.hp,
+      entity?.knownHp,
+      entity?.displayHp,
+      entity?.health
+    ];
+    for (const value of candidates) {
+      const number = actionSettlementNumber(value);
+      if (number !== null) return number;
+    }
+    return null;
+  }
+
+  function actionSettlementTarget(action = {}) {
+    return action?.target || action?.combatTarget || bot.combatTarget || null;
+  }
+
+  function actionSettlementSample(self, action = {}) {
+    if (!self) return null;
+    const stamina = summarizeStamina(self);
+    const target = actionSettlementTarget(action);
+    const targetId = target?.id ?? target?.user_id ?? '';
+    return {
+      x: actionSettlementNumber(self.x),
+      y: actionSettlementNumber(self.y),
+      hp: actionSettlementNumber(self.hp),
+      stamina5s: actionSettlementNumber(stamina.stamina5s),
+      stamina1h: actionSettlementNumber(stamina.stamina1h),
+      stamina1d: actionSettlementNumber(stamina.stamina1d),
+      coins: actionSettlementNumber(self.coins),
+      drop: actionSettlementNumber(dropValue(self)),
+      targetId: targetId === null || targetId === undefined ? '' : String(targetId),
+      targetHp: actionSettlementEntityHp(target)
+    };
+  }
+
+  function actionSettlementStableNumber(a, b) {
+    if (a === null && b === null) return true;
+    if (a === null || b === null) return false;
+    return Math.abs(Number(a) - Number(b)) < 0.001;
+  }
+
+  function actionSettlementSelfProgress(origin, current, minMove) {
+    if (!origin || !current) return true;
+    const moved = pointDistance(origin, current);
+    const vitalChanged = !actionSettlementStableNumber(origin.hp, current.hp)
+      || !actionSettlementStableNumber(origin.stamina5s, current.stamina5s)
+      || !actionSettlementStableNumber(origin.stamina1h, current.stamina1h)
+      || !actionSettlementStableNumber(origin.stamina1d, current.stamina1d)
+      || !actionSettlementStableNumber(origin.coins, current.coins)
+      || !actionSettlementStableNumber(origin.drop, current.drop);
+    return Boolean(moved >= minMove || vitalChanged);
+  }
+
+  function actionSettlementTargetProgress(origin, current) {
+    if (!origin || !current) return true;
+    if (!origin.targetId && !current.targetId) return false;
+    if (origin.targetId !== current.targetId) return true;
+    if (origin.targetHp === null && current.targetHp === null) return false;
+    return !actionSettlementStableNumber(origin.targetHp, current.targetHp);
+  }
+
+  function assessActionSettlementStall(self, action = bot.lastDecision) {
+    if (!cfg.actionSettlementStallOfflineEnabled) {
+      resetActionSettlementStall('disabled');
+      return null;
+    }
+    const t = Date.now();
+    const dx = Number(action?.dx || 0);
+    const dy = Number(action?.dy || 0);
+    const moveIntent = Boolean(dx || dy || currentVelocityCommandActive());
+    const shootIntent = Boolean(action?.shoot && (action?.kind === 'attack' || action?.combat || action?.target));
+    if (!self || !isAlive(self) || (!moveIntent && !shootIntent) || bot.pendingExit) {
+      resetActionSettlementStall(!self ? 'no-self' : (!isAlive(self) ? 'not-alive' : 'no-action-intent'));
+      return null;
+    }
+    const sample = actionSettlementSample(self, action || {});
+    if (!sample || sample.x === null || sample.y === null) {
+      resetActionSettlementStall('missing-self-sample');
+      return null;
+    }
+    const minMove = Math.max(1, Number(cfg.actionSettlementStallMoveMinDistance || 80) || 80);
+    let state = bot.actionSettlementStall;
+    if (!state || !state.active || state.moveIntent !== moveIntent || state.shootIntent !== shootIntent) {
+      state = {
+        active: true,
+        stalled: false,
+        reason: 'tracking',
+        startedAt: t,
+        stalledAt: 0,
+        origin: sample,
+        latest: sample,
+        moveIntent,
+        shootIntent,
+        actionKind: action?.kind || '',
+        actionReason: action?.reason || ''
+      };
+      bot.actionSettlementStall = state;
+      return summarizeActionSettlementStall(state);
+    }
+
+    const selfProgress = actionSettlementSelfProgress(state.origin, sample, minMove);
+    const targetProgress = actionSettlementTargetProgress(state.origin, sample);
+    if (selfProgress || (shootIntent && targetProgress)) {
+      state = {
+        active: true,
+        stalled: false,
+        reason: selfProgress ? 'self-progress' : 'target-progress',
+        startedAt: t,
+        stalledAt: 0,
+        origin: sample,
+        latest: sample,
+        moveIntent,
+        shootIntent,
+        actionKind: action?.kind || '',
+        actionReason: action?.reason || ''
+      };
+      bot.actionSettlementStall = state;
+      return summarizeActionSettlementStall(state);
+    }
+
+    const ageMs = Math.max(0, t - Number(state.startedAt || t));
+    const network = summarizeNetworkQuality();
+    const actionQuality = network?.action || {};
+    const ackStaleMs = Math.max(1000, Number(cfg.actionSettlementStallAckStaleMs || 15000) || 15000);
+    const lastAckAge = Number(actionQuality.lastMovementAckAgeMs);
+    const movementCommands = Math.max(0, Number(actionQuality.movementCommands || 0) || 0);
+    const movementAckStale = !moveIntent
+      ? false
+      : (Number.isFinite(lastAckAge) ? lastAckAge >= ackStaleMs : (movementCommands > 0 && ageMs >= ackStaleMs));
+    const settleMs = Math.max(1000, Number(cfg.actionSettlementStallMs || 15000) || 15000);
+    const noSelfProgress = !selfProgress;
+    const noTargetProgress = !targetProgress;
+    const stalled = ageMs >= settleMs
+      && noSelfProgress
+      && ((moveIntent && movementAckStale) || (shootIntent && noTargetProgress));
+    Object.assign(state, {
+      stalled,
+      reason: stalled ? 'action-settlement-stalled' : 'tracking',
+      stalledAt: stalled ? (state.stalledAt || t) : 0,
+      latest: sample,
+      moveIntent,
+      shootIntent,
+      movementAckStale,
+      movementAckAgeMs: Number.isFinite(lastAckAge) ? lastAckAge : null,
+      noSelfProgress,
+      noTargetProgress,
+      selfMoved: pointDistance(state.origin, sample),
+      targetId: sample.targetId,
+      targetHp: sample.targetHp,
+      actionKind: action?.kind || '',
+      actionReason: action?.reason || ''
+    });
+    if (stalled) bot.control.lastError = 'action settlement stalled';
+    else if (bot.control.lastError === 'action settlement stalled') bot.control.lastError = '';
+    return summarizeActionSettlementStall(state);
+  }
+
   function assessServerPositionStall(self) {
     if (!cfg.serverPositionStallEnabled) {
       resetServerPositionStall('disabled');
