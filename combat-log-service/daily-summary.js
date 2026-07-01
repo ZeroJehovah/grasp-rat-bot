@@ -301,7 +301,8 @@ function normalizeKill(kill) {
   const playerCategory = normalizePlayerCategory(kill);
   const rawRewardCoins = Number.isFinite(Number(kill.rewardCoins ?? kill.drop)) ? Math.max(0, Math.round(Number(kill.rewardCoins ?? kill.drop))) : 0;
   const targetDropCoins = Number.isFinite(Number(kill.targetDropCoins ?? kill.targetDrop ?? kill.drop ?? kill.rewardCoins)) ? Math.max(0, Math.round(Number(kill.targetDropCoins ?? kill.targetDrop ?? kill.drop ?? kill.rewardCoins))) : 0;
-  const rewardConfirmed = Boolean(kill.rewardConfirmed || kill.dropMatched);
+  const rewardCapped = Boolean(kill.rewardCapped || kill.rewardCapReason);
+  const rewardConfirmed = !rewardCapped && Boolean(kill.rewardConfirmed || kill.dropMatched);
   const killConfirmed = Boolean(kill.killConfirmed || kill.chatConfirmed || kill.dropMatched || kill.rewardConfirmed);
   const rewardCoins = rewardConfirmed ? rawRewardCoins : 0;
   const battleStartedAt = number(kill.battleStartedAt ?? kill.startedAt);
@@ -319,6 +320,8 @@ function normalizeKill(kill) {
     rewardConfirmed,
     killConfirmed,
     pickupConfirmed: rewardConfirmed,
+    rewardCapped,
+    rewardCapReason: kill.rewardCapReason || '',
     playerCategory,
     afk: playerCategory === 'afk',
     active: playerCategory === 'active',
@@ -377,7 +380,8 @@ function mergeKill(previous, next) {
   const category = a.playerCategory === 'active' || b.playerCategory === 'active'
     ? 'active'
     : (a.playerCategory === 'afk' || b.playerCategory === 'afk' ? 'afk' : 'unknown');
-  const rewardConfirmed = Boolean(a.rewardConfirmed || b.rewardConfirmed || a.dropMatched || b.dropMatched);
+  const rewardCapped = Boolean(a.rewardCapped || b.rewardCapped);
+  const rewardConfirmed = !rewardCapped && Boolean(a.rewardConfirmed || b.rewardConfirmed || a.dropMatched || b.dropMatched);
   const rawRewardCoins = Math.max(number(a.reportedRewardCoins), number(b.reportedRewardCoins), number(a.rewardCoins), number(b.rewardCoins));
   const targetDropCoins = Math.max(number(a.targetDropCoins), number(b.targetDropCoins));
   const battleStartedAt = [a.battleStartedAt, b.battleStartedAt].map(number).filter(Boolean).sort((x, y) => x - y)[0] || 0;
@@ -404,6 +408,8 @@ function mergeKill(previous, next) {
     rewardConfirmed,
     killConfirmed: Boolean(a.killConfirmed || b.killConfirmed || a.chatConfirmed || b.chatConfirmed || rewardConfirmed),
     pickupConfirmed: rewardConfirmed,
+    rewardCapped,
+    rewardCapReason: a.rewardCapReason || b.rewardCapReason || '',
     playerCategory: category,
     afk: category === 'afk',
     active: category === 'active',
@@ -846,6 +852,229 @@ function attachExitEvidenceToCombats(combatList, sessionList, exitEvents) {
   }
 }
 
+function sourceWithInferredReward(source) {
+  const parts = String(source || '').split('+').filter(Boolean);
+  if (!parts.includes('daily-visible-coin-inferred')) parts.push('daily-visible-coin-inferred');
+  return parts.join('+');
+}
+
+function sourceWithRewardCap(source) {
+  const parts = String(source || '').split('+').filter(Boolean);
+  if (!parts.includes('daily-session-cap')) parts.push('daily-session-cap');
+  return parts.join('+');
+}
+
+function killPickupEvidenceRank(kill) {
+  let score = 0;
+  const source = String(kill?.source || '');
+  if (kill?.rewardInferred || source.includes('daily-visible-coin-inferred')) score += 600;
+  if (kill?.rewardConfirmed && !kill?.dropMatched) score += 500;
+  if (kill?.dropMatched) score += 100;
+  if (kill?.chatConfirmed) score += 10;
+  return score;
+}
+
+function demotePickedKillReward(kill) {
+  const rawRewardCoins = Math.max(number(kill.reportedRewardCoins), number(kill.rewardCoins), number(kill.targetDropCoins));
+  kill.reportedRewardCoins = Math.max(number(kill.reportedRewardCoins), rawRewardCoins);
+  kill.unconfirmedDropCoins = Math.max(number(kill.unconfirmedDropCoins), number(kill.targetDropCoins), rawRewardCoins);
+  kill.rewardCoins = 0;
+  kill.rewardConfirmed = false;
+  kill.pickupConfirmed = false;
+  kill.rewardCapped = true;
+  kill.rewardCapReason = 'session-collected-coins';
+  kill.source = sourceWithRewardCap(kill.source);
+}
+
+function capPickedKillRewardsToCollectedCoins(kills, collectedCoins) {
+  const capacity = Math.max(0, Math.round(number(collectedCoins)));
+  const confirmed = (kills || []).filter(kill => number(kill.rewardCoins) > 0);
+  const total = confirmed.reduce((sum, kill) => sum + number(kill.rewardCoins), 0);
+  if (total <= capacity) return;
+  let remaining = capacity;
+  const keep = new Set();
+  confirmed
+    .slice()
+    .sort((a, b) => {
+      const evidence = killPickupEvidenceRank(b) - killPickupEvidenceRank(a);
+      if (evidence) return evidence;
+      const amount = number(a.rewardCoins) - number(b.rewardCoins);
+      if (amount) return amount;
+      return number(a.at) - number(b.at);
+    })
+    .forEach(kill => {
+      const amount = number(kill.rewardCoins);
+      if (amount <= remaining) {
+        keep.add(kill);
+        remaining -= amount;
+      }
+    });
+  for (const kill of confirmed) {
+    if (!keep.has(kill)) demotePickedKillReward(kill);
+  }
+}
+
+function sameId(a, b) {
+  if (a === null || a === undefined || a === '' || b === null || b === undefined || b === '') return false;
+  return String(a) === String(b);
+}
+
+function visibleRealtimeCoinEvidence(entry, amount, coinId = null) {
+  const lists = [
+    entry?.decision?.coinDiagnostics?.nearestRealtimeCoins,
+    entry?.coinDiagnostics?.nearestRealtimeCoins
+  ].filter(Array.isArray);
+  let best = null;
+  for (const list of lists) {
+    for (const coin of list) {
+      if (number(coin?.amount) !== amount) continue;
+      if (coinId !== null && coinId !== undefined && coinId !== '' && !sameId(coin?.id, coinId)) continue;
+      if (coin?.snapshot === true || coin?.native === false) continue;
+      const distance = Number.isFinite(Number(coin?.distance)) ? Math.max(0, Math.round(Number(coin.distance))) : null;
+      const evidence = {
+        coinId: coin?.id ?? coinId ?? null,
+        amount,
+        distance,
+        native: coin?.native === true,
+        snapshot: coin?.snapshot === true
+      };
+      if (!best || number(evidence.distance, Infinity) < number(best.distance, Infinity)) best = evidence;
+    }
+  }
+  return best;
+}
+
+function coinFocusEvidence(focus, amount) {
+  if (!focus || typeof focus !== 'object') return null;
+  if (String(focus.type || focus.kind || '').toLowerCase() !== 'coin') return null;
+  if (number(focus.amount ?? focus.target?.amount) !== amount) return null;
+  return {
+    coinId: focus.id ?? focus.target?.id ?? null,
+    amount,
+    distance: Number.isFinite(Number(focus.distance ?? focus.target?.distance)) ? Math.max(0, Math.round(Number(focus.distance ?? focus.target?.distance))) : null,
+    reason: focus.reason || focus.target?.reason || ''
+  };
+}
+
+function coinDecisionEvidence(entry, amount) {
+  const decision = entry?.decision || {};
+  if (String(decision.kind || '').toLowerCase() !== 'coin') return null;
+  const target = decision.target && typeof decision.target === 'object' ? decision.target : {};
+  if (number(target.amount) !== amount) return null;
+  const visible = visibleRealtimeCoinEvidence(entry, amount, target.id);
+  if (!visible) return null;
+  const reason = decision.reason || target.reason || '';
+  if (!/coin|drop/i.test(String(reason || ''))) return null;
+  return {
+    at: number(entry?.__at || entry?.at || entry?.receivedAt),
+    source: 'decision-target-visible-realtime-coin',
+    coinId: target.id ?? visible.coinId ?? null,
+    amount,
+    distance: Math.min(number(target.distance, Infinity), number(visible.distance, Infinity)),
+    reason
+  };
+}
+
+function targetSwitchCoinEvidence(entry, amount) {
+  const targetSwitch = entry?.type === 'target-switch' ? entry : entry?.targetSwitch;
+  if (!targetSwitch || typeof targetSwitch !== 'object') return null;
+  const candidates = [
+    coinFocusEvidence(targetSwitch.to, amount),
+    coinFocusEvidence(targetSwitch.from, amount),
+    coinFocusEvidence(targetSwitch.previousDecision?.target, amount)
+  ].filter(Boolean);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => number(a.distance, Infinity) - number(b.distance, Infinity));
+  const best = candidates[0];
+  return {
+    at: number(entry?.__at || entry?.at || entry?.receivedAt || targetSwitch.at),
+    source: 'target-switch-coin-focus',
+    coinId: best.coinId,
+    amount,
+    distance: best.distance,
+    reason: best.reason || targetSwitch.to?.reason || targetSwitch.from?.reason || ''
+  };
+}
+
+function visibleCoinRewardEvidenceForKill(kill, entries) {
+  const amount = number(kill?.targetDropCoins || kill?.reportedRewardCoins || kill?.rewardCoins);
+  if (amount < 5) return null;
+  const at = number(kill?.at);
+  const endedAt = number(kill?.battleEndedAt) || at;
+  const center = at || endedAt;
+  if (!center) return null;
+  const windowStart = Math.min(at || center, endedAt || center) - 20000;
+  const windowEnd = Math.max(at || center, endedAt || center) + 15000;
+  let best = null;
+  for (const entry of entries || []) {
+    const entryAt = number(entry?.__at || entry?.at || entry?.receivedAt);
+    if (!entryAt || entryAt < windowStart || entryAt > windowEnd) continue;
+    const evidence = coinDecisionEvidence(entry, amount) || targetSwitchCoinEvidence(entry, amount);
+    if (!evidence) continue;
+    if (number(evidence.distance, Infinity) > 1500) continue;
+    if (!best || number(evidence.distance, Infinity) < number(best.distance, Infinity)) best = evidence;
+  }
+  return best;
+}
+
+function inferPickedKillRewardsFromVisibleCoins(kills, session, entries, collectedCoins) {
+  let available = Math.max(0, number(collectedCoins) - kills.reduce((sum, kill) => sum + number(kill.rewardCoins), 0));
+  for (const kill of kills || []) {
+    const amount = number(kill.targetDropCoins || kill.reportedRewardCoins || kill.rewardCoins);
+    if (!kill.killConfirmed || kill.rewardConfirmed || number(kill.rewardCoins) > 0 || amount <= 0) continue;
+    if (amount > available) continue;
+    const evidence = visibleCoinRewardEvidenceForKill(kill, entries);
+    if (!evidence) continue;
+    kill.rewardCoins = amount;
+    kill.reportedRewardCoins = Math.max(number(kill.reportedRewardCoins), amount);
+    kill.unconfirmedDropCoins = 0;
+    kill.rewardConfirmed = true;
+    kill.pickupConfirmed = true;
+    kill.rewardInferred = true;
+    kill.inferredRewardEvidence = evidence;
+    kill.source = sourceWithInferredReward(kill.source);
+    available -= amount;
+  }
+}
+
+function combatKillDedupKey(combat, sessions) {
+  if (!combat) return '';
+  const sessionKill = findKillForCombat(combat, sessions || []);
+  const kill = combineCombatKill(combat, sessionKill);
+  if (!(combat.result === 'won' || kill.killConfirmed)) return '';
+  return killOutcomeKey(kill);
+}
+
+function duplicateCombatRank(combat) {
+  return (number(combat?.durationMs) > 0 ? 10 ** 12 : 0)
+    + (combat?.engagementObserved ? 10 ** 10 : 0)
+    + number(combat?.durationMs)
+    + number(combat?.staminaSpentMs)
+    + number(combat?.sampleCount);
+}
+
+function dedupeCombatsByKillOutcome(combats, sessions) {
+  const out = [];
+  const byKillKey = new Map();
+  for (const combat of combats || []) {
+    const key = combatKillDedupKey(combat, sessions || []);
+    if (!key) {
+      out.push(combat);
+      continue;
+    }
+    const previousIndex = byKillKey.get(key);
+    if (previousIndex === undefined) {
+      byKillKey.set(key, out.length);
+      out.push(combat);
+      continue;
+    }
+    if (duplicateCombatRank(combat) > duplicateCombatRank(out[previousIndex])) {
+      out[previousIndex] = combat;
+    }
+  }
+  return out.sort((a, b) => number(a.startedAt) - number(b.startedAt));
+}
+
 function buildReport(entries, options = {}) {
   const importantEventsById = new Map();
   const sessionEndEvents = [];
@@ -887,6 +1116,10 @@ function buildReport(entries, options = {}) {
     const session = sessionList[i];
     const nextLoginAt = number(sessionList[i + 1]?.loginAt, Infinity);
     const kills = mergeKillLists(session.kills || [], killEvents.get(session.sessionId) || []);
+    const collectedCoins = sessionCollectedCoins(session);
+    capPickedKillRewardsToCollectedCoins(kills, collectedCoins);
+    inferPickedKillRewardsFromVisibleCoins(kills, session, entries, collectedCoins);
+    capPickedKillRewardsToCollectedCoins(kills, collectedCoins);
     session.kills = kills;
     session.rewardKillCount = kills.filter(kill => number(kill.rewardCoins) > 0).length;
     session.attributedKillRewardCoins = kills.reduce((sum, kill) => sum + number(kill.rewardCoins), 0);
@@ -922,7 +1155,6 @@ function buildReport(entries, options = {}) {
       session.unknownUnconfirmedKillCount = number(session.unknownUnconfirmedKillCount);
       session.unknownUnconfirmedDropCoins = number(session.unknownUnconfirmedDropCoins);
     }
-    const collectedCoins = sessionCollectedCoins(session);
     session.coinsGained = collectedCoins;
     session.pureRefreshCoins = Math.max(0, collectedCoins - number(session.attributedKillRewardCoins || session.killRewardCoins));
     session.dropMatchedKillCount = kills.filter(kill => kill.dropMatched).length;
@@ -944,7 +1176,7 @@ function buildReport(entries, options = {}) {
       }
     }
   }
-  const combatList = Array.from(combats.values()).filter(Boolean).sort((a, b) => number(a.startedAt) - number(b.startedAt));
+  let combatList = Array.from(combats.values()).filter(Boolean).sort((a, b) => number(a.startedAt) - number(b.startedAt));
   for (const combat of combatList) {
     if (combat.sessionId) continue;
     const matched = sessionList.find(session => {
@@ -956,6 +1188,7 @@ function buildReport(entries, options = {}) {
   }
   attachExitEvidenceToSessions(sessionList, exitEvents);
   attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
+  combatList = dedupeCombatsByKillOutcome(combatList, sessionList);
   const rawWindow = reportDayWindow(options.day || '');
   const window = rawWindow && sessionList.some(session => sessionOverlapsWindow(session, rawWindow)) ? rawWindow : null;
   const reportSessions = sessionList
@@ -1362,7 +1595,8 @@ function combineCombatKill(combat, sessionKill) {
     };
   }
   const targetDropCoins = Math.max(number(combat?.enemy?.drop), number(combatKill?.targetDropCoins), number(sessionKill?.targetDropCoins));
-  const rewardConfirmed = Boolean(combatKill?.rewardConfirmed || sessionKill?.rewardConfirmed || combatKill?.dropMatched || sessionKill?.dropMatched);
+  const rewardRejected = Boolean(sessionKill?.rewardCapped || sessionKill?.rewardCapReason);
+  const rewardConfirmed = !rewardRejected && Boolean(combatKill?.rewardConfirmed || sessionKill?.rewardConfirmed || combatKill?.dropMatched || sessionKill?.dropMatched);
   const killConfirmed = Boolean(rewardConfirmed || combatKill?.killConfirmed || sessionKill?.killConfirmed || combat?.result === 'won');
   const rawRewardCoins = Math.max(number(combatKill?.reportedRewardCoins), number(sessionKill?.reportedRewardCoins), targetDropCoins);
   let playerCategory = normalizePlayerCategory(sessionKill || combatKill || {});
@@ -1377,6 +1611,9 @@ function combineCombatKill(combat, sessionKill) {
     rewardConfirmed,
     killConfirmed,
     rewardCoins: rewardConfirmed ? Math.max(number(combatKill?.rewardCoins), number(sessionKill?.rewardCoins), rawRewardCoins) : 0,
+    pickupConfirmed: rewardConfirmed,
+    rewardCapped: rewardRejected || Boolean(sessionKill?.rewardCapped),
+    rewardCapReason: rewardRejected ? (sessionKill?.rewardCapReason || 'session-collected-coins') : '',
     playerCategory,
     afk: playerCategory === 'afk',
     active: playerCategory === 'active'
@@ -1413,11 +1650,18 @@ function outcomePlayerCategory(combat, kill) {
 function buildBattleOutcomes(sessions, combats) {
   const outcomes = [];
   const usedKills = new Set();
+  const emittedKillOutcomes = new Set();
   for (const combat of combats || []) {
     const sessionKill = findKillForCombat(combat, sessions || []);
     const kill = combineCombatKill(combat, sessionKill);
-    if (sessionKill) usedKills.add(killOutcomeKey(sessionKill));
     if (combat.result === 'won' || kill.killConfirmed) {
+      const outcomeKey = killOutcomeKey(kill);
+      if (outcomeKey && emittedKillOutcomes.has(outcomeKey)) {
+        if (sessionKill) usedKills.add(killOutcomeKey(sessionKill));
+        continue;
+      }
+      if (outcomeKey) emittedKillOutcomes.add(outcomeKey);
+      if (sessionKill) usedKills.add(killOutcomeKey(sessionKill));
       const playerCategory = outcomePlayerCategory(combat, kill);
       outcomes.push({
         type: 'kill',
@@ -1458,6 +1702,7 @@ function buildBattleOutcomes(sessions, combats) {
     for (const kill of (Array.isArray(session.kills) ? session.kills.map(normalizeKill).filter(Boolean) : [])) {
       const key = killOutcomeKey(kill);
       if (!kill.killConfirmed || usedKills.has(key)) continue;
+      if (key && emittedKillOutcomes.has(key)) continue;
       outcomes.push({
         type: 'kill',
         startedAt: number(kill.battleStartedAt) || number(kill.at),
@@ -1475,6 +1720,7 @@ function buildBattleOutcomes(sessions, combats) {
         source: 'kill'
       });
       usedKills.add(key);
+      if (key) emittedKillOutcomes.add(key);
     }
   }
   return outcomes.sort((a, b) => number(a.startedAt) - number(b.startedAt) || number(a.endedAt) - number(b.endedAt));
@@ -1746,8 +1992,8 @@ function runSelfTest() {
         exitAt: 5000,
         loginDurationMs: 4000,
         staminaSpentMs: 123000,
-        pickedCoins: 20,
-        coinsGained: 20,
+        pickedCoins: 25,
+        coinsGained: 25,
         pureRefreshCoins: 7,
         killRewardCoins: 13,
         version: 'bootstrap-0.4.141',
@@ -1782,6 +2028,37 @@ function runSelfTest() {
     },
     {
       type: 'important-log',
+      importantType: 'kill',
+      importantLogId: `${s1}:kill-active-visible-coin`,
+      at: 4100,
+      sessionId: s1,
+      kill: { at: 4100, name: 'visible-coin-target', id: 12, rewardCoins: 12, targetDrop: 12, playerCategory: 'active', combat: true, chatConfirmed: true, dropMatched: false, battleStartedAt: 3900, battleEndedAt: 4100, battleDurationMs: 200, battleStaminaSpentMs: 250 }
+    },
+    {
+      type: 'important-log',
+      importantType: 'kill',
+      importantLogId: `${s1}:kill-over-cap`,
+      at: 4300,
+      sessionId: s1,
+      kill: { at: 4300, name: 'over-cap-target', id: 13, rewardCoins: 40, targetDrop: 40, playerCategory: 'afk', matchedAttack: true, dropMatched: true, chatConfirmed: true, battleStartedAt: 4200, battleEndedAt: 4300, battleDurationMs: 100, battleStaminaSpentMs: 150 }
+    },
+    {
+      type: 'combat-frame',
+      at: 4200,
+      phase: 'post',
+      decision: {
+        kind: 'coin',
+        reason: 'high-value-visible-coin-priority',
+        target: { id: 99, x: 10, y: 10, amount: 12, distance: 240 },
+        coinDiagnostics: {
+          nearestRealtimeCoins: [
+            { id: 99, amount: 12, distance: 240, x: 10, y: 10, native: true, snapshot: false, nativeSource: 'state.coinDrops' }
+          ]
+        }
+      }
+    },
+    {
+      type: 'important-log',
       importantType: 'combat-summary',
       importantLogId: `${s1}:combat:summary`,
       at: 3600,
@@ -1803,6 +2080,31 @@ function runSelfTest() {
         result: 'won',
         resultReason: 'kill',
         sampleCount: 12
+      }
+    },
+    {
+      type: 'important-log',
+      importantType: 'combat-summary',
+      importantLogId: `${s1}:combat:duplicate-summary`,
+      at: 3500,
+      sessionId: s1,
+      combat: {
+        combatSummaryId: `${s1}:combat-duplicate`,
+        sessionId: s1,
+        startedAt: 3500,
+        endedAt: 3500,
+        durationMs: 0,
+        staminaSpentMs: 0,
+        enemy: { id: 8, name: 'active-target', mode: 'Active' },
+        selfHpStart: 82,
+        selfHpEnd: 82,
+        selfHpDelta: 0,
+        enemyHpStart: 0,
+        enemyHpEnd: 0,
+        enemyHpDelta: 0,
+        result: 'won',
+        resultReason: 'kill',
+        sampleCount: 1
       }
     },
     {
@@ -1915,19 +2217,23 @@ function runSelfTest() {
   assertSelfTest(report.sessions.length === 4, `expected 4 sessions, got ${report.sessions.length}`);
   assertSelfTest(report.sessions[0].exitAt === 5000, 'cross-file session-end was not merged');
   assertSelfTest(report.sessions[0].staminaSpentMs === 123000, 'cross-file stamina was not preserved');
-  assertSelfTest(report.sessions[0].pureRefreshCoins === 7, 'pure refreshed coin total was not preserved');
+  assertSelfTest(report.sessions[0].pureRefreshCoins === 0, 'visible post-kill coin was not removed from pure refresh total');
   assertSelfTest(report.sessions[0].afkKillCount === 1 && report.sessions[0].afkKillRewardCoins === 9, 'AFK kill bucket was not computed');
-  assertSelfTest(report.sessions[0].activeKillCount === 1 && report.sessions[0].activeKillRewardCoins === 4, 'active kill confirmed reward bucket was not computed');
+  assertSelfTest(report.sessions[0].activeKillCount === 2 && report.sessions[0].activeKillRewardCoins === 16, 'active kill confirmed reward bucket was not computed');
   const mergedActiveKill = report.sessions[0].kills.find(kill => kill.name === 'active-target');
   assertSelfTest(mergedActiveKill?.playerCategory === 'active' && mergedActiveKill.chatConfirmed === false && mergedActiveKill.dropMatched === true, 'duplicate kill merge did not preserve the stronger active classification');
   assertSelfTest(report.sessions[0].activeUnconfirmedKillCount === 1, 'active unconfirmed kill count was not computed');
   assertSelfTest(report.sessions[0].activeUnconfirmedDropCoins === 30, 'active unconfirmed drop bucket was not computed');
+  const visibleCoinKill = report.sessions[0].kills.find(kill => kill.name === 'visible-coin-target');
+  assertSelfTest(visibleCoinKill?.rewardConfirmed === true && visibleCoinKill.rewardInferred === true && visibleCoinKill.rewardCoins === 12, 'visible post-kill coin evidence did not infer picked reward');
+  const overCapKill = report.sessions[0].kills.find(kill => kill.name === 'over-cap-target');
+  assertSelfTest(overCapKill?.killConfirmed === true && overCapKill.rewardConfirmed === false && overCapKill.rewardCoins === 0 && overCapKill.unconfirmedDropCoins === 40, 'over-cap picked kill reward was not demoted to unpicked drop');
   assertSelfTest(report.sessions[0].afkKillRewardCoins + report.sessions[0].activeKillRewardCoins <= report.sessions[0].coinsGained, 'confirmed kill rewards exceed total gained coins');
   assertSelfTest(report.sessions[1].exitReason === 'leave-success:combat hp disadvantage', 'more specific combat exit reason was overwritten by later no-self closeout');
   const placeholderSession = report.sessions.find(item => item.sessionId === s3);
   assertSelfTest(placeholderSession?.coinsGained === 0, 'explicit zero pickedCoins incorrectly fell back to raw coinsGained');
   assertSelfTest(placeholderSession?.pureRefreshCoins === 0, 'explicit zero pickedCoins incorrectly produced refresh coins');
-  assertSelfTest(report.totals.coinsGained === 20, `expected normalized total coins to stay at 20, got ${report.totals.coinsGained}`);
+  assertSelfTest(report.totals.coinsGained === 25, `expected normalized total coins to stay at 25, got ${report.totals.coinsGained}`);
   const inferredTotals = totalsForScope([
     { exitAt: 1, loginDurationMs: 1000, staminaSpentMs: 2000, coinsGained: 3, pureRefreshCoins: 2, activeKillCount: 1, activeKillRewardCoins: 1 },
     { exitAt: 2, inferredExit: true, loginDurationMs: 4000, staminaSpentMs: 5000, coinsGained: 7, pureRefreshCoins: 4, activeKillCount: 2, activeKillRewardCoins: 3 },
@@ -1949,10 +2255,11 @@ function runSelfTest() {
   assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:safety-avoid`), 'safety avoidance was incorrectly counted as combat');
   assertSelfTest(report.combats[0].staminaSpentMs === 2500, 'combat stamina was not preserved');
   assertSelfTest(report.combats[0].selfHpDelta === -18 && report.combats[0].enemyHpDelta === -100, 'combat HP deltas were not preserved');
-  assertSelfTest(report.battleOutcomes.length === 4, `expected 4 battle outcomes, got ${report.battleOutcomes.length}`);
-  assertSelfTest(report.totals.battleOutcomeKills === 3 && report.totals.battleOutcomeFailures === 1, 'battle outcome kill/failure totals are wrong');
-  assertSelfTest(report.totals.battleOutcomeRewardCoins === 13, `expected 13 picked battle reward coins, got ${report.totals.battleOutcomeRewardCoins}`);
-  assertSelfTest(report.totals.battleOutcomeMissedDropCoins === 30, 'unpicked confirmed kill drop was not tracked');
+  assertSelfTest(report.battleOutcomes.length === 6, `expected 6 battle outcomes, got ${report.battleOutcomes.length}`);
+  assertSelfTest(report.totals.battleOutcomeKills === 5 && report.totals.battleOutcomeFailures === 1, 'battle outcome kill/failure totals are wrong');
+  assertSelfTest(report.totals.battleOutcomeRewardCoins === 25, `expected 25 picked battle reward coins, got ${report.totals.battleOutcomeRewardCoins}`);
+  assertSelfTest(report.battleOutcomes.filter(item => item.enemy.name === 'active-target').length === 1, 'duplicate combat-summary kill outcome was not de-duplicated');
+  assertSelfTest(report.totals.battleOutcomeMissedDropCoins === 70, 'unpicked confirmed kill drop was not tracked');
   assertSelfTest(report.totals.battleOutcomeFailedDropCoins === 11, 'failed battle drop exposure was not tracked');
   assertSelfTest(report.lifecycles.length === 3, `expected 3 death-count lifecycles, got ${report.lifecycles.length}`);
   assertSelfTest(report.lifecycles[0].previousBoundaryDeath?.drop === 40 && report.lifecycles[0].previousBoundaryDeath?.loss === 20, 'cross-day death-count transition did not preserve previous-day loss');
@@ -1962,6 +2269,8 @@ function runSelfTest() {
   const unpickedOutcome = report.battleOutcomes.find(item => item.enemy.name === 'unpicked-active-target');
   assertSelfTest(unpickedOutcome?.status === '确认击杀' && unpickedOutcome.rewardCoins === 0 && unpickedOutcome.rewardStatus === '未拾取', 'chat-confirmed unpicked kill was not rendered as confirmed zero-profit kill');
   assertSelfTest(unpickedOutcome?.staminaSpentMs === 600, 'standalone kill battle stamina was not preserved');
+  const overCapOutcome = report.battleOutcomes.find(item => item.enemy.name === 'over-cap-target');
+  assertSelfTest(overCapOutcome?.status === '确认击杀' && overCapOutcome.rewardCoins === 0 && overCapOutcome.rewardStatus === '未拾取', 'over-cap kill reward was revived in battle outcomes');
   const failedOutcome = report.battleOutcomes.find(item => item.enemy.name === 'login-threat');
   assertSelfTest(failedOutcome?.status === '劣势离场' && failedOutcome.rewardStatus === '未击杀', 'combat disadvantage exit was not rendered as failed battle outcome');
   const waitCombat = report.combats.find(item => item.combatSummaryId === `${s2}:immediate-exit`);

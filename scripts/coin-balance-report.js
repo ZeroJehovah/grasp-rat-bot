@@ -2,6 +2,7 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -11,6 +12,7 @@ const DEFAULT_OUT_DIR = path.join(ROOT, 'docs', 'coin-reports');
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_DELAY_MS = 4000;
 const DEFAULT_TIMEOUT_MS = 20000;
+// Full log type keeps death-loss records; type=1 is useful only for pickup-only debugging.
 const DEFAULT_LOG_TYPE = '0';
 const COIN_QUOTA_UNIT = 500000;
 
@@ -59,6 +61,7 @@ function printHelp() {
 
 Fetches game coin balance-change logs from Elysiver and writes a monthly Markdown report.
 A local .env file is loaded automatically when present.
+The settled fetch method is documented in docs/agent/coin-balance-reporting.md.
 
 Auth environment variables:
   ELYSIVER_COOKIE          Full Cookie header value, or use the three vars below.
@@ -124,6 +127,15 @@ function monthDays(month) {
   return Array.from({ length: days }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`);
 }
 
+function reportDaysForMonth(month) {
+  const days = monthDays(month);
+  const today = nowBeijingDay();
+  const currentMonth = today.slice(0, 7);
+  if (month === currentMonth) return days.filter(day => day <= today);
+  if (month > currentMonth) return [];
+  return days;
+}
+
 function nowBeijingDay() {
   const date = new Date(Date.now() + 8 * 60 * 60 * 1000);
   return date.toISOString().slice(0, 10);
@@ -155,31 +167,25 @@ class ApiClient {
     try {
       this.requestCount += 1;
       process.stderr.write(`[coin-report] ${day} page ${page} request ${this.requestCount}\n`);
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          accept: 'application/json, text/plain, */*',
-          'accept-language': 'zh-CN,zh;q=0.9',
-          cookie: this.auth.cookie,
-          'new-api-user': this.auth.newApiUser,
-          referer: 'https://elysiver.h-e.top/console/log',
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
-        }
-      });
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`);
-      }
-      let payload;
+      let response;
+      let text;
       try {
-        payload = JSON.parse(text);
+        response = await fetch(url, {
+          signal: controller.signal,
+          headers: requestHeaders(this.auth)
+        });
+        text = await response.text();
       } catch (err) {
-        throw new Error(`Invalid JSON response: ${text.slice(0, 200)}`);
+        process.stderr.write(`[coin-report] ${day} page ${page} retrying with curl after fetch error: ${err.message || err}\n`);
+        return parseApiResponse(fetchPageWithCurl(url, this.auth, this.options.timeoutMs), 200);
       }
-      if (!payload || !payload.data || !Array.isArray(payload.data.items)) {
-        throw new Error(`Unexpected response shape: ${text.slice(0, 200)}`);
+      try {
+        return parseApiResponse(text, response.status);
+      } catch (err) {
+        if (!shouldRetryWithCurl(response.status, text)) throw err;
+        process.stderr.write(`[coin-report] ${day} page ${page} retrying with curl after HTTP ${response.status}\n`);
+        return parseApiResponse(fetchPageWithCurl(url, this.auth, this.options.timeoutMs), 200);
       }
-      return payload.data;
     } finally {
       clearTimeout(timeout);
       this.lastRequestAt = Date.now();
@@ -192,6 +198,79 @@ class ApiClient {
     const remaining = this.options.delayMs - elapsed;
     if (remaining > 0) await sleep(remaining);
   }
+}
+
+function requestHeaders(auth) {
+  return {
+    accept: 'application/json, text/plain, */*',
+    'accept-language': 'zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7',
+    'cache-control': 'no-store',
+    cookie: auth.cookie,
+    dnt: '1',
+    'new-api-user': auth.newApiUser,
+    pragma: 'no-cache',
+    priority: 'u=1, i',
+    referer: 'https://elysiver.h-e.top/console/log',
+    'sec-ch-ua': '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+  };
+}
+
+function parseApiResponse(text, status) {
+  if (status < 200 || status >= 300) throw new Error(`HTTP ${status}: ${String(text || '').slice(0, 200)}`);
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Invalid JSON response: ${String(text || '').slice(0, 200)}`);
+  }
+  if (!payload || !payload.data || !Array.isArray(payload.data.items)) {
+    throw new Error(`Unexpected response shape: ${String(text || '').slice(0, 200)}`);
+  }
+  return payload.data;
+}
+
+function shouldRetryWithCurl(status, text) {
+  return status === 403 && /Just a moment|cloudflare/i.test(String(text || ''));
+}
+
+function fetchPageWithCurl(url, auth, timeoutMs) {
+  const args = [
+    '--silent',
+    '--show-error',
+    '--location',
+    '--max-time',
+    String(Math.max(1, Math.ceil(numberOr(timeoutMs, DEFAULT_TIMEOUT_MS) / 1000))),
+    '--retry',
+    '2',
+    '--retry-delay',
+    '2',
+    String(url)
+  ];
+  for (const [key, value] of Object.entries(requestHeaders(auth))) {
+    if (key === 'cookie') continue;
+    args.push('-H', `${key}: ${value}`);
+  }
+  args.push('-b', auth.cookie);
+  const result = spawnSync('curl', args, {
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`curl failed with exit ${result.status}: ${String(result.stderr || result.stdout || '').slice(0, 200)}`);
+  }
+  return result.stdout;
+}
+
+function numberOr(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function sleep(ms) {
@@ -525,7 +604,9 @@ async function run(options) {
     return;
   }
   const days = [];
-  for (const day of monthDays(options.month)) {
+  const reportDays = reportDaysForMonth(options.month);
+  if (!reportDays.length) throw new Error(`No reportable days for month ${options.month}.`);
+  for (const day of reportDays) {
     days.push(await fetchDay(client, day));
   }
   const report = renderMonthlyMarkdown(options.month, days);
