@@ -212,6 +212,7 @@
 - `targetWhitelistPollMs = 10000`
 - `targetWhitelistTimeoutMs = 7000`
 - `targetWhitelistMaxNames = 100`
+- Target whitelist matching is username-only and normalizes names by removing common zero-width/bidirectional format controls before trimming, so hidden marks such as `U+200E` do not bypass a plain username entry.
 - `opportunityStickBonus = 0`
 - `opportunitySwitchMargin = 3000`
 - `opportunitySwitchRelativeMargin = 0.1`

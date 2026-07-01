@@ -355,6 +355,7 @@ function main() {
 
   check('target whitelist helper parses usernames and derives same-directory remote URL', () => {
     assert(functionBody(sharedTargetWhitelistSource, 'normalizeTargetWhitelistName').includes('.trim()'), 'target whitelist names are not trimmed');
+    assert(functionBody(sharedTargetWhitelistSource, 'normalizeTargetWhitelistName').includes('\\u200B-\\u200F'), 'target whitelist names do not strip zero-width/bidi controls');
     assert(functionBody(sharedTargetWhitelistSource, 'parseTargetWhitelistNames').includes('payload?.names'), 'target whitelist parser does not accept names');
     assert(functionBody(sharedTargetWhitelistSource, 'parseTargetWhitelistNames').includes('payload?.usernames'), 'target whitelist parser does not accept usernames alias');
     assert(!functionBody(sharedTargetWhitelistSource, 'parseTargetWhitelistNames').includes('ids'), 'target whitelist parser still accepts ids');
