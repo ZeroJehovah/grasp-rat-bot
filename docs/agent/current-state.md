@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.269`.
 - Latest manifest SHA-256: `9910b16f6d94bb7f9c0c8d38b4f765657e134d6c554391c92c96d0216752579f`.
-- Latest release commit: `2814aec` (`bootstrap-0.4.269` post-login zoom settle band and compact network quality display), previous release commit `41ae35f` (`bootstrap-0.4.268` daily stamina reporting and final visible-coin run).
+- Latest release commit: `754cec2` (`bootstrap-0.4.269` post-login zoom settle band and compact network quality display), previous release commit `41ae35f` (`bootstrap-0.4.268` daily stamina reporting and final visible-coin run).
 - Latest bootstrap A versions: Tampermonkey `0.4.70`, extension `0.1.49`.
 - Tampermonkey `0.4.70` / extension `0.1.49` changes the clock-row network-quality display from separate visible `延迟` / `丢包` labels to one right-aligned compact value such as `123ms/0.00%`; unknown samples render as `??ms/??.??%`. Detailed latency/loss explanations remain in the tooltip, and the visible color still follows the worse latency/loss severity.
 - `bootstrap-0.4.269` adds a near-fit settle band to the post-login visible-range zoom pass. The hard target remains the configured `postLoginZoomFitTargetRatio = 0.96` with `postLoginZoomFitTolerance = 0.03`, but measurements just outside that band now finish with `near-fit` instead of taking another opposite-direction wheel step. This should stop the small in/out oscillation seen when a discrete wheel step jumps over the ideal size, while larger underfit/clipped cases still continue zooming or fall back to native buttons.
