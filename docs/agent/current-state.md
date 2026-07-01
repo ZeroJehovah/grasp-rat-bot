@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.273`.
 - Latest manifest SHA-256: `782e1ff155c472820a8612df7eade37c7016b9defab7891f9ab9bf62a84767f0`.
-- Latest release commit: pending (`bootstrap-0.4.273` action-settlement stall offline exit and wider post-login zoom fit tolerance), previous release commit `220a317` (`bootstrap-0.4.272` post-login zoom fit tolerance).
+- Latest release commit: `48c1d7c` (`bootstrap-0.4.273` action-settlement stall offline exit and wider post-login zoom fit tolerance), previous release commit `220a317` (`bootstrap-0.4.272` post-login zoom fit tolerance).
 - Latest bootstrap A versions: Tampermonkey `0.4.71`, extension `0.1.50`.
 - `bootstrap-0.4.273` adds an action-settlement stall detector for the WS-open stuck state where local movement/shot intent continues but self position, HP, stamina, coins/Drop, target HP, and movement acknowledgements do not advance. When detected, it enters the normal offline leave path with the same safe/unsafe wait timing as websocket offline, exposes `status().actionSettlementStall`, and logs the canonical reason `action settlement stalled`. This release also raises `postLoginZoomFitTolerance` from `0.04` to `0.05` to further reduce the extra post-login zoom-out step at the fit boundary.
 - `bootstrap-0.4.272` raises the post-login visible-range fit tolerance from `0.03` to `0.04`, so the one-way zoom-out pass stops once the configured blue view circle fully fits the available map-shell room (`maxRatio = 1.00`) instead of taking one extra zoom-out step for the old `0.99` boundary. The fixed `postLoginZoomOutClicks = 5` path remains only the measurement-failure fallback.
