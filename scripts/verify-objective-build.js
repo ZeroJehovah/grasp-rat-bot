@@ -2051,6 +2051,7 @@ function main() {
     });
     check(`${file} filters stale exit detail from active action reasons`, () => {
       const detailBody = functionBody(text, 'decisionReasonDetail');
+      const persistentBody = functionBody(text, 'activePersistentExitDetail');
       const actionBody = functionBody(text, 'decisionActionDisplayReason');
       const allowsBody = functionBody(text, 'decisionAllowsExitReasonDetail');
       assert(detailBody.includes('const actionDisplay = decisionActionDisplayReason(decision)'), 'reason detail does not prefer scoped action display reason');
@@ -2059,6 +2060,10 @@ function main() {
       assert(functionBody(text, 'lastExitReasonDetail').includes('staminaExhaustedReasonDetail(status?.lastDecision, status)'), 'panel last-exit reason does not prefer current stamina exhaustion evidence');
       assert(detailBody.includes('const staminaReason = staminaExhaustedReasonDetail(decision, status)'), 'decision reason detail does not prefer current stamina exhaustion evidence');
       assert(!detailBody.includes('|| decision?.displayReason'), 'reason detail still accepts unscoped decision displayReason');
+      assert(text.includes('function activeExitDetailHasHold'), 'active exit hold helper not found');
+      assert(persistentBody.includes('const activeOfflineStatus = activeExitDetailHasHold(offlineStatus) ? offlineStatus : null'), 'active offline exit hold is not considered before stale enemy detail');
+      assert(persistentBody.includes('const activeEnemyStatus = activeExitDetailHasHold(enemyStatus) ? enemyStatus : null'), 'active enemy exit hold is not considered');
+      assert(persistentBody.indexOf('activeOfflineStatus') < persistentBody.indexOf('visibleStatus'), 'active offline hold can still lose to stale visible exit detail');
       assert(actionBody.includes("kind === 'coin' || kind === 'seek-coin'"), 'coin action display reason scope not found');
       assert(actionBody.includes('/金币|拾取|前往|路线|可见|快照|迁移|扫描|贴身|近处|远处|收益|体力预算|等待快照|卡住|脱离/'), 'coin action display reason allow-list not found');
       assert(allowsBody.includes("kind === 'leave'") && allowsBody.includes("kind === 'wait'"), 'exit detail scope does not preserve wait/leave reasons');

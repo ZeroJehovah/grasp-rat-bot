@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.66
+// @version      0.4.67
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.66';
+  const BOOTSTRAP_VERSION = '0.4.67';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
@@ -632,14 +632,58 @@
     return detail;
   }
 
+  function activeExitDetailHasHold(detail) {
+    const t = Date.now();
+    return Boolean(detail && (
+      Number(detail.holdRemainingMs || 0) > 0
+      || Number(detail.holdUntil || detail.reloginUntil || 0) > t
+    ));
+  }
+
+  function exitDetailTimestamp(detail) {
+    if (!detail) return 0;
+    return Math.max(
+      Number(detail.lastAt || 0) || 0,
+      Number(detail.at || 0) || 0,
+      Number(detail.updatedAt || 0) || 0,
+      Number(detail.lastResult?.at || 0) || 0,
+      Number(detail.holdUntil || detail.reloginUntil || 0) || 0
+    );
+  }
+
+  function exitDetailHasText(detail) {
+    return Boolean(detail && (
+      detail.displayReason
+      || detail.summary
+      || detail.exitSummary
+      || detail.enemyLeaveSummary
+      || detail.reason
+    ));
+  }
+
+  function pickNewestExitDetail(candidates) {
+    return candidates
+      .filter(Boolean)
+      .sort((a, b) => exitDetailTimestamp(b) - exitDetailTimestamp(a))[0] || null;
+  }
+
   function activePersistentExitDetail(status) {
     const enemyStatus = status?.enemyLeave || null;
     const offlineStatus = status?.offlineLeave || null;
-    if (Number(enemyStatus?.holdRemainingMs || 0) > 0 || enemyStatus?.displayReason) return enemyStatus;
-    if (Number(offlineStatus?.holdRemainingMs || 0) > 0 || offlineStatus?.displayReason) return offlineStatus;
+    const activeOfflineStatus = activeExitDetailHasHold(offlineStatus) ? offlineStatus : null;
+    const activeEnemyStatus = activeExitDetailHasHold(enemyStatus) ? enemyStatus : null;
+    const activeStatus = pickNewestExitDetail([activeOfflineStatus, activeEnemyStatus]);
+    if (activeStatus) return activeStatus;
+    const visibleStatus = pickNewestExitDetail([offlineStatus, enemyStatus].filter(exitDetailHasText));
+    if (visibleStatus) return visibleStatus;
+    const offlineStored = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
     const enemyStored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-    if (enemyStored) return enemyStored;
-    return readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+    const activeStored = pickNewestExitDetail([
+      activeExitDetailHasHold(offlineStored) ? offlineStored : null,
+      activeExitDetailHasHold(enemyStored) ? enemyStored : null
+    ]);
+    if (activeStored) return activeStored;
+    return pickNewestExitDetail([offlineStored, enemyStored].filter(exitDetailHasText));
   }
 
   function reloginWaitReason(status) {
