@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.270"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.271"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -5470,29 +5470,12 @@ function hpDisplay(value) {
   function postLoginZoomFitDecision(measure) {
     if (!measure?.ok) return { done: false, direction: 'out', reason: measure?.error || 'unmeasured' };
     const ratio = Number(measure.fitRatio);
-    const minRatio = Number(measure.minRatio);
     const maxRatio = Number(measure.maxRatio);
-    if (!Number.isFinite(ratio) || !Number.isFinite(minRatio) || !Number.isFinite(maxRatio)) {
+    if (!Number.isFinite(ratio) || !Number.isFinite(maxRatio)) {
       return { done: false, direction: 'out', reason: 'invalid-ratio' };
     }
-    // Wheel zoom is discrete; settle just outside the hard band to avoid in/out oscillation.
-    const settleSlack = Math.min(0.025, Math.max(0.01, (maxRatio - minRatio) / 3));
-    const settleMinRatio = Math.max(0.1, minRatio - settleSlack);
-    const settleMaxRatio = Math.min(1.01, maxRatio + settleSlack);
-    if (ratio >= settleMinRatio && ratio <= settleMaxRatio) {
-      const nearFit = ratio < minRatio || ratio > maxRatio;
-      return {
-        done: true,
-        direction: '',
-        reason: nearFit ? 'near-fit' : 'fit',
-        settleSlack: Number(settleSlack.toFixed(3)),
-        settleMinRatio: Number(settleMinRatio.toFixed(3)),
-        settleMaxRatio: Number(settleMaxRatio.toFixed(3))
-      };
-    }
     if (ratio > maxRatio) return { done: false, direction: 'out', reason: 'circle-clipped' };
-    if (ratio < minRatio) return { done: false, direction: 'in', reason: 'circle-too-small' };
-    return { done: true, direction: '', reason: 'fit' };
+    return { done: true, direction: '', reason: 'visible-range-fit' };
   }
 
   function postLoginZoomWheelTarget() {
@@ -5535,9 +5518,7 @@ function hpDisplay(value) {
     const afterRatio = Number(after.fitRatio);
     if (!Number.isFinite(beforeRatio) || !Number.isFinite(afterRatio)) return false;
     const minimumChange = 0.004;
-    return String(direction || 'out') === 'in'
-      ? afterRatio >= beforeRatio + minimumChange
-      : afterRatio <= beforeRatio - minimumChange;
+    return String(direction || 'out') !== 'in' && afterRatio <= beforeRatio - minimumChange;
   }
 
   function finishPostLoginZoomResult(state, status, detail = {}) {
