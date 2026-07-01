@@ -456,7 +456,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     postLoginZoomOutClicks: 5,
     postLoginZoomFitRadiusCm: 50000,
     postLoginZoomFitTargetRatio: 0.96,
-    postLoginZoomFitTolerance: 0.03,
+    postLoginZoomFitTolerance: 0.04,
     postLoginZoomFitPaddingPx: 16,
     postLoginZoomFitMaxSteps: 24,
     postLoginZoomWheelDeltaY: 100,
