@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.49';
+  const BOOTSTRAP_VERSION = '0.1.50';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -1207,19 +1207,6 @@
     return '#fca5a5';
   }
 
-  function networkQualityColorRank(color) {
-    if (color === '#fca5a5') return 3;
-    if (color === '#fde68a') return 2;
-    if (color === '#86efac') return 1;
-    return 0;
-  }
-
-  function networkQualitySummaryColor(summary) {
-    const latency = networkQualityLatencyColor(summary);
-    const loss = networkQualityLossColor(summary);
-    return networkQualityColorRank(loss) > networkQualityColorRank(latency) ? loss : latency;
-  }
-
   function networkQualityLatencyTitle(summary) {
     if (!summary?.enabled) return '延迟：暂无运行时网络质量样本';
     if (!Number.isFinite(Number(summary.displayLatencyMs))) return '延迟：等待运行时网络质量样本';
@@ -2106,7 +2093,6 @@
     const wsColor = control.wsOpen ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
     const wsTitle = 'WS ' + wsLabel;
     const networkQuality = status?.networkQuality || {};
-    const networkColor = networkQualitySummaryColor(networkQuality);
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
@@ -2232,12 +2218,6 @@
       time.textContent = '当前时间：' + formatClockTime();
       time.style.cssText = 'flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8';
       line.appendChild(time);
-      const networkText = document.createElement('span');
-      networkText.title = networkQualitySummaryTitle(networkQuality);
-      networkText.setAttribute('aria-label', networkQualitySummaryTitle(networkQuality));
-      networkText.textContent = networkQualitySummaryText(networkQuality);
-      networkText.style.cssText = 'flex:0 0 96px;min-width:96px;text-align:right;color:' + networkColor + ';font-weight:700;overflow:hidden;text-overflow:clip;white-space:nowrap;letter-spacing:0';
-      line.appendChild(networkText);
       appendParent.appendChild(line);
       return line;
     };
@@ -2306,6 +2286,43 @@
       }
       return control;
     };
+    const createNetworkQualityPill = () => {
+      const pill = document.createElement('span');
+      pill.title = networkQualitySummaryTitle(networkQuality);
+      pill.setAttribute('aria-label', networkQualitySummaryTitle(networkQuality));
+      pill.style.cssText = [
+        'flex:0 0 auto',
+        'width:auto',
+        'min-width:0',
+        'height:24px',
+        'box-sizing:border-box',
+        'padding:0 8px',
+        'border:1px solid rgba(148,163,184,.24)',
+        'border-radius:999px',
+        'background:rgba(15,23,42,.50)',
+        'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)',
+        'display:inline-flex',
+        'align-items:center',
+        'gap:0',
+        'font:700 10.5px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace',
+        'font-variant-numeric:tabular-nums',
+        'letter-spacing:0',
+        'white-space:nowrap'
+      ].join(';');
+      const latency = document.createElement('span');
+      latency.textContent = networkQualityLatencyText(networkQuality);
+      latency.style.cssText = 'color:' + networkQualityLatencyColor(networkQuality);
+      const slash = document.createElement('span');
+      slash.textContent = '/';
+      slash.style.cssText = 'color:#fff';
+      const loss = document.createElement('span');
+      loss.textContent = networkQualityLossText(networkQuality);
+      loss.style.cssText = 'color:' + networkQualityLossColor(networkQuality);
+      pill.appendChild(latency);
+      pill.appendChild(slash);
+      pill.appendChild(loss);
+      return pill;
+    };
     const createRepositoryLink = () => {
       const link = document.createElement('a');
       link.href = REPOSITORY_URL;
@@ -2358,6 +2375,7 @@
       logDot.setAttribute('aria-pressed', String(remoteLogEnabled));
       actions.appendChild(logDot);
     }
+    actions.appendChild(createNetworkQualityPill());
     header.appendChild(actions);
     header.appendChild(createRepositoryLink());
     appendParent.appendChild(header);
