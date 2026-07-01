@@ -449,7 +449,8 @@ function controlLoginSource(helpers = {}) {
       offlineSafety?.unsafe
         || offlineSafety?.reconnectChurn
         || offlineSafety?.noSelfGameSession
-        || /websocket|offline|disconnect|reconnect|server position|missing self|stamina|pending unsafe/i.test(text)
+        || offlineSafety?.actionSettlementStall
+        || /websocket|offline|disconnect|reconnect|server position|action settlement|missing self|stamina|pending unsafe/i.test(text)
     );
     if (!unsafe) return null;
     return {

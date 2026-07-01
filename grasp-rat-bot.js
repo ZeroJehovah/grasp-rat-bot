@@ -601,6 +601,7 @@ function browserBotSource(config) {
 	    lastOfflineLeaveWaitMs: Number(restoredOfflineLeaveState?.reloginDelayMs || restoredOfflineLeaveState?.holdRemainingMs || 0),
     lastOfflineSafety: null,
 	    serverPositionStall: null,
+	    actionSettlementStall: null,
 	    networkQuality: null,
 	    lastPursuitLeaveAt: 0,
     lastPursuitLeaveResult: null,
@@ -1037,6 +1038,7 @@ function browserBotSource(config) {
 		        },
         control: summarizeControl(),
         serverPositionStall: summarizeServerPositionStall(),
+        actionSettlementStall: summarizeActionSettlementStall(),
         login: {
           lastAt: this.lastLoginAt || 0,
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
@@ -1934,6 +1936,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 				    if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
 				    if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
 				    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
+			    if (text.includes('action settlement') || offlineSafety?.actionSettlementStall) return '移动/开火结算卡死，按离线处理，退出等待重连';
 			    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
 			    if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
 			    return '网络连接离线，退出等待重连';
@@ -13244,6 +13247,8 @@ ${importantLogSource()}
 	      ensureControlWs();
       const serverPositionStall = assessServerPositionStall(self);
       const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
+      const actionSettlementStall = assessActionSettlementStall(self, bot.lastDecision);
+      const actionSettlementStallOffline = Boolean(cfg.actionSettlementStallOfflineEnabled && actionSettlementStall?.stalled);
       const reconnectChurn = Boolean(bot.control.nativeReconnectChurn);
 	      const reconnectChurnDetail = reconnectChurn ? {
 	        count: Number(bot.control.nativeReconnectEventCount || 0),
@@ -13252,16 +13257,17 @@ ${importantLogSource()}
       const samplingOutage = globalSamplingOutageOfflineState(self);
       const combatTickGap = combatTickGapOfflineState(self, { source });
       bot.lastCombatTickGap = combatTickGap;
-      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
       const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
 		    if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
 		      bot.pursuit = null;
-		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (combatTickGap ? 'combat-tick-gap' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline'))));
+		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (combatTickGap ? 'combat-tick-gap' : (actionSettlementStallOffline ? 'action-settlement-stalled' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline')))));
 		      if (!bot.offlineSince) bot.offlineSince = Date.now();
 		      const offlineAgeMs = Date.now() - bot.offlineSince;
         const offlineSafety = {
           ...assessOfflineSafety(self),
           reconnectChurn: reconnectChurnDetail,
+          actionSettlementStall,
           samplingOutage,
           combatTickGap
         };
@@ -13273,7 +13279,9 @@ ${importantLogSource()}
           ? 'global sampling outage'
           : (combatTickGap
             ? 'combat tick gap'
-            : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline')));
+            : (actionSettlementStallOffline
+              ? 'action settlement stalled'
+              : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline'))));
         const leaveResult = offlineAgeMs >= leaveDelayMs
 			        ? await leaveOffline(offlineLeaveReason, currentSummary, offlineSafety)
 			        : null;
@@ -13284,11 +13292,13 @@ ${importantLogSource()}
             ? 'control-global-sampling-outage'
           : (combatTickGap
             ? 'control-combat-tick-gap'
+          : (actionSettlementStallOffline
+            ? 'control-action-settlement-stalled'
           : (serverPositionStallOffline
             ? 'control-ws-server-position-stalled'
             : (reconnectChurn
               ? 'control-ws-reconnect-churn'
-              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')))));
+              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait'))))));
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: offlineWaitReason,
@@ -13298,15 +13308,16 @@ ${importantLogSource()}
           leaveDelayMs,
           offlineSafety,
           reconnectChurn: reconnectChurnDetail,
+          actionSettlementStall,
           serverPositionStall,
           samplingOutage,
           combatTickGap,
-	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : '')))),
+	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (actionSettlementStallOffline ? '动作结算卡死，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))))),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
 	        if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
-	          requestReload(samplingOutage ? 'global sampling outage too long' : (combatTickGap ? 'combat tick gap too long' : 'websocket offline too long'));
+	          requestReload(samplingOutage ? 'global sampling outage too long' : (combatTickGap ? 'combat tick gap too long' : (actionSettlementStallOffline ? 'action settlement stalled too long' : 'websocket offline too long')));
 	        }
         if (cfg.once) bot.stop('once');
         return;

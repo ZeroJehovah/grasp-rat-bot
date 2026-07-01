@@ -29,7 +29,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomOutClicks', value: 5 },
   { key: 'postLoginZoomFitRadiusCm', value: 50000 },
   { key: 'postLoginZoomFitTargetRatio', value: 0.96 },
-  { key: 'postLoginZoomFitTolerance', value: 0.04 },
+  { key: 'postLoginZoomFitTolerance', value: 0.05 },
   { key: 'postLoginZoomFitPaddingPx', value: 16 },
   { key: 'postLoginZoomFitMaxSteps', value: 24 },
   { key: 'postLoginZoomWheelDeltaY', value: 100 },
@@ -482,6 +482,9 @@ function main() {
       assert(defaultConfigSource.includes('globalSamplingOutageCombatOnly: true'), 'sampling outage offline gate is not combat-only by default');
       assert(expectObjectNumber(defaultConfigSource, 'globalRefreshTimeoutMs', 3000), 'global refresh timeout is not configured at 3000ms');
       assert(defaultConfigSource.includes('combatTickGapOfflineEnabled: true'), 'combat tick gap offline gate is not enabled by default');
+      assert(defaultConfigSource.includes('actionSettlementStallOfflineEnabled: true'), 'action settlement stall offline gate is not enabled by default');
+      assert(expectObjectNumber(defaultConfigSource, 'actionSettlementStallMs', 15000), 'action settlement stall threshold is not configured at 15000ms');
+      assert(expectObjectNumber(defaultConfigSource, 'actionSettlementStallAckStaleMs', 15000), 'action settlement stale ack threshold is not configured at 15000ms');
       const refreshBody = functionBody(text, 'refreshGlobalState');
       assert(!refreshBody.includes("'/snapshot'") && !refreshBody.includes('"/snapshot"'), 'active global refresh still fetches snapshot');
       assert(!refreshBody.includes("'/minimap'") && !refreshBody.includes('"/minimap"'), 'active global refresh still fetches minimap');
@@ -508,18 +511,25 @@ function main() {
       assert(tickBody.includes('await handleTickReentryCombatGap(source)'), 'main tick does not evaluate reentry combat gap while a tick is already running');
       assert(tickBody.includes('const samplingOutage = globalSamplingOutageOfflineState(self)'), 'main tick does not evaluate sampling outage offline state');
       assert(tickBody.includes('const combatTickGap = combatTickGapOfflineState(self'), 'main tick does not evaluate combat tick gap offline state');
-      assert(tickBody.includes('!bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap)'), 'sampling outage or combat tick gap is not part of the offline branch gate');
+      assert(tickBody.includes('const actionSettlementStall = assessActionSettlementStall(self, bot.lastDecision)'), 'main tick does not evaluate action settlement stall state');
+      assert(tickBody.includes('!bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap)'), 'action settlement / sampling outage / combat tick gap is not part of the offline branch gate');
       assert(tickBody.includes('leaveDelayMs = reconnectChurn || samplingOutage || combatTickGap ? 0'), 'sampling outage / combat tick gap offline leave is not immediate');
       assert(tickBody.includes("offlineLeaveReason = samplingOutage") && tickBody.includes("'global sampling outage'"), 'sampling outage leave reason is not canonical');
       assert(tickBody.includes("? 'combat tick gap'"), 'combat tick gap leave reason is not canonical');
+      assert(tickBody.includes("? 'action settlement stalled'"), 'action settlement stall leave reason is not canonical');
       assert(tickBody.includes("'control-global-sampling-outage'"), 'sampling outage wait reason is not exposed');
       assert(tickBody.includes("'control-combat-tick-gap'"), 'combat tick gap wait reason is not exposed');
+      assert(tickBody.includes("'control-action-settlement-stalled'"), 'action settlement wait reason is not exposed');
+      assert(text.includes('actionSettlementStall: summarizeActionSettlementStall()'), 'status does not expose action settlement stall state');
+      assert(functionBody(text, 'assessActionSettlementStall').includes('lastMovementAckAgeMs'), 'action settlement stall does not check movement ack staleness');
+      assert(functionBody(text, 'assessActionSettlementStall').includes('action-settlement-stalled'), 'action settlement stall does not expose the canonical reason');
       assert(text.includes('samplingOutage: this.globalState.samplingOutage || null'), 'status does not expose global sampling outage state');
       assert(text.includes('combatTickGap: this.lastCombatTickGap || null'), 'status does not expose combat tick gap state');
       assert(text.includes('lastTickGapMs: this.lastTickGapMs'), 'status does not expose last tick gap');
       assert(text.includes('lastTickReentryGapAt: this.lastTickReentryGapAt || 0'), 'status does not expose tick reentry gap timestamp');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
       assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
+      assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.actionSettlementStall'), 'runtime offline leave summary does not mention action settlement stall');
       const leaveOfflineBody = functionBody(text, 'leaveOffline');
       assert(leaveOfflineBody.includes('const summary = offlineLeaveSummary(reason, offlineSafety);'), 'offline leave retry cooldown does not compute the current offline summary');
       assert(leaveOfflineBody.includes('summary: summary || active?.summary'), 'offline leave retry cooldown can still prefer a stale active summary over the current reason');
@@ -776,7 +786,7 @@ function main() {
         : functionBody(text, 'combatLogExitSummaryFromDecision');
       assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
       assert(body.includes('exitishDecisionReason'), 'decision exit reason fallback not found for cooldown leave detail');
-      assert(body.includes('control-(?:ws|global|combat)'), 'control outage decision reasons are not all treated as exit summaries');
+      assert(body.includes('control-(?:ws|global|combat|action)'), 'control outage decision reasons are not all treated as exit summaries');
       assert(body.includes("pendingExit ? 'pending-exit-active'"), 'pending exit fallback not found for active pending exit frames');
       assert(body.includes('safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed)'), 'safe relogin marker not included in top-level exit summary');
       assert(body.includes('offlineSafety: detail.offlineSafety || decision?.offlineSafety || null'), 'offline safety not included in top-level exit summary');
@@ -2078,7 +2088,8 @@ function main() {
         'post-attack-drop-wait-position': '战斗后等待掉落刷新',
         'combat-disengage-range': '战斗：目标远离，脱离观察',
         'target-whitelisted': '目标在白名单内，跳过攻击',
-        'control-combat-tick-gap': '战斗主循环断档，按 WebSocket 离线处理'
+        'control-combat-tick-gap': '战斗主循环断档，按 WebSocket 离线处理',
+        'control-action-settlement-stalled': '移动/开火结算卡死，按 WebSocket 离线处理'
       };
       for (const [reason, label] of Object.entries(requiredMappings)) {
         assert(text.includes(`'${reason}': '${label}'`), `${reason} mapping missing`);

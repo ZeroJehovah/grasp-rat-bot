@@ -162,10 +162,12 @@ function nativeStateSource() {
 	    const control = bot.control;
 	    const native = getNativeControl();
 	    if (native) syncNativeControl(native);
-	    const nativeState = native?.state || null;
+    const nativeState = native?.state || null;
     const serverPositionStall = summarizeServerPositionStall();
     const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
-    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline);
+    const actionSettlementStall = summarizeActionSettlementStall();
+    const actionSettlementStallOffline = Boolean(cfg.actionSettlementStallOfflineEnabled && actionSettlementStall?.stalled);
+    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline && !actionSettlementStallOffline);
 	    const nativeCurrentVel = nativeState?.currentVel
 	      ? (Number(nativeState.currentVel.dx || 0) + ' ' + Number(nativeState.currentVel.dy || 0))
 	      : '';
@@ -189,9 +191,11 @@ function nativeStateSource() {
 	      nativeReconnectWindowMs: Number(control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0),
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
-	      lastError: serverPositionStallOffline
-          ? 'server position stalled'
-          : (control.lastError === 'server position stalled' ? '' : (control.lastError || '')),
+	      lastError: actionSettlementStallOffline
+          ? 'action settlement stalled'
+          : (serverPositionStallOffline
+            ? 'server position stalled'
+            : (control.lastError === 'server position stalled' || control.lastError === 'action settlement stalled' ? '' : (control.lastError || ''))),
 	      lastVelocity: control.lastVelocity || '',
       nonZeroVelocityAgeMs: control.lastNonZeroVelocityAt ? Date.now() - Number(control.lastNonZeroVelocityAt || 0) : null,
       nonZeroVelocityDurationMs: control.nonZeroVelocitySince ? Date.now() - Number(control.nonZeroVelocitySince || 0) : null,
@@ -202,8 +206,9 @@ function nativeStateSource() {
       directWsServerMarkerProbe: Boolean(cfg.directWsServerMarkerProbe),
       directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
       lastDirectVelocity: bot.lastDirectVelocity || '',
-      lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Date.now() - Number(bot.lastDirectVelocityAt || 0) : null,
-      serverPositionStall
+      lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Math.max(0, Math.round(now() - Number(bot.lastDirectVelocityAt || 0))) : null,
+      serverPositionStall,
+      actionSettlementStall
 	    };
 	  }
 

@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.272"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.273"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -473,6 +473,10 @@
     networkQualityLogLatencyMs: 350,
     networkQualityLogLossPercent: 5,
     networkQualityLogStallMs: 1000,
+    actionSettlementStallOfflineEnabled: true,
+    actionSettlementStallMs: 15000,
+    actionSettlementStallAckStaleMs: 15000,
+    actionSettlementStallMoveMinDistance: 80,
     nativeTickMinMs: 120,
     combatNativeTickMinMs: 80,
     attackMinStamina: 0,
@@ -557,7 +561,7 @@
     postLoginZoomOutClicks: 5,
     postLoginZoomFitRadiusCm: 50000,
     postLoginZoomFitTargetRatio: 0.96,
-    postLoginZoomFitTolerance: 0.04,
+    postLoginZoomFitTolerance: 0.05,
     postLoginZoomFitPaddingPx: 16,
     postLoginZoomFitMaxSteps: 24,
     postLoginZoomWheelDeltaY: 100,
@@ -970,6 +974,7 @@
 	    lastOfflineLeaveWaitMs: Number(restoredOfflineLeaveState?.reloginDelayMs || restoredOfflineLeaveState?.holdRemainingMs || 0),
     lastOfflineSafety: null,
 	    serverPositionStall: null,
+	    actionSettlementStall: null,
 	    networkQuality: null,
 	    lastPursuitLeaveAt: 0,
     lastPursuitLeaveResult: null,
@@ -1406,6 +1411,7 @@
 		        },
         control: summarizeControl(),
         serverPositionStall: summarizeServerPositionStall(),
+        actionSettlementStall: summarizeActionSettlementStall(),
         login: {
           lastAt: this.lastLoginAt || 0,
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
@@ -2598,9 +2604,10 @@ function hpDisplay(value) {
 			      'control-ws-offline-safe-wait': '网络连接离线，安全区短暂等待重连',
 			      'control-ws-reconnect-churn': '网络连接反复重连，立即退出',
 			      'control-ws-no-self-game-session': '已登录但自身实体不可见，立即退出',
-			      'control-ws-server-position-stalled': '服务端位置停止，按网络连接离线处理',
+		      'control-ws-server-position-stalled': '服务端位置停止，按网络连接离线处理',
 		      'control-global-sampling-outage': '网络采样超时，按网络连接离线处理',
 		      'control-combat-tick-gap': '战斗主循环断档，按网络连接离线处理',
+		      'control-action-settlement-stalled': '移动/开火结算卡死，按网络连接离线处理',
 		      'control-stamina-exhausted': '长周期体力耗尽，按网络连接离线处理',
 		      'stamina-exhausted-leave': '长周期体力耗尽，正在退出',
 	      'offline-leave': '网络连接离线，正在退出',
@@ -3861,7 +3868,7 @@ function hpDisplay(value) {
   const decisionReason = String(decision?.reason || '');
   const pendingExit = decision?.pendingExit && typeof decision.pendingExit === 'object' ? decision.pendingExit : null;
   const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : '';
-  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat)|stamina-exhausted/.test(decisionReason)
+  const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat|action)|stamina-exhausted/.test(decisionReason)
     ? decisionReason
     : '';
   const reason = canonicalCombatReason
@@ -3873,7 +3880,7 @@ function hpDisplay(value) {
   const isExit = Boolean(leave)
     || Boolean(pendingExit)
     || decision?.kind === 'leave'
-    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat)|stamina-exhausted/.test(reason);
+    || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat|action)|stamina-exhausted/.test(reason);
   if (!isExit) return null;
   return {
     reason,
@@ -3995,7 +4002,7 @@ function hpDisplay(value) {
         if (!reason) return '';
 	        if (/^(paused|cloudflare-error-refresh|no-self|not-alive|auto-login|manual-login|login-suppressed|login-cooldown|login-snapshot-gate|login-control-missing|session-mismatch-refresh|session-mismatch-recovery|game-session-connecting|exit-log-flush-pending|important-log-flush-pending)$/.test(reason)) return reason;
 	        if (/^(enemy-leave-wait|pursuit-leave-wait|offline-leave-wait)$/.test(reason)) return reason;
-		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
+		        if (/^(offline-leave|control-ws-offline|control-ws-offline-unsafe|control-ws-offline-safe-wait|control-ws-reconnect-churn|control-ws-no-self-game-session|control-ws-server-position-stalled|control-global-sampling-outage|control-combat-tick-gap|control-action-settlement-stalled|control-stamina-exhausted|stamina-exhausted-leave)$/.test(reason)) return reason;
         return '';
       }
 
@@ -5015,7 +5022,8 @@ function hpDisplay(value) {
       offlineSafety?.unsafe
         || offlineSafety?.reconnectChurn
         || offlineSafety?.noSelfGameSession
-        || /websocket|offline|disconnect|reconnect|server position|missing self|stamina|pending unsafe/i.test(text)
+        || offlineSafety?.actionSettlementStall
+        || /websocket|offline|disconnect|reconnect|server position|action settlement|missing self|stamina|pending unsafe/i.test(text)
     );
     if (!unsafe) return null;
     return {
@@ -7164,6 +7172,7 @@ function hpDisplay(value) {
 				    if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
 				    if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
 				    if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
+			    if (text.includes('action settlement') || offlineSafety?.actionSettlementStall) return '移动/开火结算卡死，按离线处理，退出等待重连';
 			    if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
 			    if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
 			    return '网络连接离线，退出等待重连';
@@ -9750,10 +9759,12 @@ function hpDisplay(value) {
 	    const control = bot.control;
 	    const native = getNativeControl();
 	    if (native) syncNativeControl(native);
-	    const nativeState = native?.state || null;
+    const nativeState = native?.state || null;
     const serverPositionStall = summarizeServerPositionStall();
     const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
-    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline);
+    const actionSettlementStall = summarizeActionSettlementStall();
+    const actionSettlementStallOffline = Boolean(cfg.actionSettlementStallOfflineEnabled && actionSettlementStall?.stalled);
+    const effectiveWsOpen = Boolean(control.wsOpen && !serverPositionStallOffline && !actionSettlementStallOffline);
 	    const nativeCurrentVel = nativeState?.currentVel
 	      ? (Number(nativeState.currentVel.dx || 0) + ' ' + Number(nativeState.currentVel.dy || 0))
 	      : '';
@@ -9777,9 +9788,11 @@ function hpDisplay(value) {
 	      nativeReconnectWindowMs: Number(control.nativeReconnectWindowMs || cfg.offlineReconnectChurnWindowMs || 0),
 	      lastOpenAgeMs: control.lastOpenAt ? Date.now() - control.lastOpenAt : null,
 	      lastMessageAgeMs: control.lastMessageAt ? Date.now() - control.lastMessageAt : null,
-	      lastError: serverPositionStallOffline
-          ? 'server position stalled'
-          : (control.lastError === 'server position stalled' ? '' : (control.lastError || '')),
+	      lastError: actionSettlementStallOffline
+          ? 'action settlement stalled'
+          : (serverPositionStallOffline
+            ? 'server position stalled'
+            : (control.lastError === 'server position stalled' || control.lastError === 'action settlement stalled' ? '' : (control.lastError || ''))),
 	      lastVelocity: control.lastVelocity || '',
       nonZeroVelocityAgeMs: control.lastNonZeroVelocityAt ? Date.now() - Number(control.lastNonZeroVelocityAt || 0) : null,
       nonZeroVelocityDurationMs: control.nonZeroVelocitySince ? Date.now() - Number(control.nonZeroVelocitySince || 0) : null,
@@ -9790,8 +9803,9 @@ function hpDisplay(value) {
       directWsServerMarkerProbe: Boolean(cfg.directWsServerMarkerProbe),
       directVelocityRepeatMs: Number(cfg.directWsVelocityRepeatMs || 0),
       lastDirectVelocity: bot.lastDirectVelocity || '',
-      lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Date.now() - Number(bot.lastDirectVelocityAt || 0) : null,
-      serverPositionStall
+      lastDirectVelocityAgeMs: bot.lastDirectVelocityAt ? Math.max(0, Math.round(now() - Number(bot.lastDirectVelocityAt || 0))) : null,
+      serverPositionStall,
+      actionSettlementStall
 	    };
 	  }
 
@@ -10369,6 +10383,199 @@ function hpDisplay(value) {
   function resetServerPositionStall(reason = '') {
     if (bot.serverPositionStall) bot.serverPositionStall.reason = reason || 'reset';
     bot.serverPositionStall = null;
+  }
+
+  function summarizeActionSettlementStall(state = bot.actionSettlementStall) {
+    if (!state) return null;
+    const t = Date.now();
+    return {
+      active: Boolean(state.active),
+      stalled: Boolean(state.stalled),
+      reason: state.reason || '',
+      startedAt: state.startedAt || 0,
+      stalledAt: state.stalledAt || 0,
+      ageMs: state.startedAt ? Math.max(0, Math.round(t - Number(state.startedAt || 0))) : 0,
+      moveIntent: Boolean(state.moveIntent),
+      shootIntent: Boolean(state.shootIntent),
+      movementAckStale: Boolean(state.movementAckStale),
+      movementAckAgeMs: Number.isFinite(Number(state.movementAckAgeMs)) ? Math.round(Number(state.movementAckAgeMs)) : null,
+      noSelfProgress: Boolean(state.noSelfProgress),
+      noTargetProgress: Boolean(state.noTargetProgress),
+      selfMoved: Number.isFinite(Number(state.selfMoved)) ? Math.round(Number(state.selfMoved)) : null,
+      targetId: state.targetId || '',
+      targetHp: Number.isFinite(Number(state.targetHp)) ? Number(state.targetHp) : null,
+      actionKind: state.actionKind || '',
+      actionReason: state.actionReason || ''
+    };
+  }
+
+  function resetActionSettlementStall(reason = '') {
+    if (bot.actionSettlementStall) bot.actionSettlementStall.reason = reason || 'reset';
+    bot.actionSettlementStall = null;
+  }
+
+  function actionSettlementNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function actionSettlementEntityHp(entity) {
+    const candidates = [
+      entity?.hp,
+      entity?.knownHp,
+      entity?.displayHp,
+      entity?.health
+    ];
+    for (const value of candidates) {
+      const number = actionSettlementNumber(value);
+      if (number !== null) return number;
+    }
+    return null;
+  }
+
+  function actionSettlementTarget(action = {}) {
+    return action?.target || action?.combatTarget || bot.combatTarget || null;
+  }
+
+  function actionSettlementSample(self, action = {}) {
+    if (!self) return null;
+    const stamina = summarizeStamina(self);
+    const target = actionSettlementTarget(action);
+    const targetId = target?.id ?? target?.user_id ?? '';
+    return {
+      x: actionSettlementNumber(self.x),
+      y: actionSettlementNumber(self.y),
+      hp: actionSettlementNumber(self.hp),
+      stamina5s: actionSettlementNumber(stamina.stamina5s),
+      stamina1h: actionSettlementNumber(stamina.stamina1h),
+      stamina1d: actionSettlementNumber(stamina.stamina1d),
+      coins: actionSettlementNumber(self.coins),
+      drop: actionSettlementNumber(dropValue(self)),
+      targetId: targetId === null || targetId === undefined ? '' : String(targetId),
+      targetHp: actionSettlementEntityHp(target)
+    };
+  }
+
+  function actionSettlementStableNumber(a, b) {
+    if (a === null && b === null) return true;
+    if (a === null || b === null) return false;
+    return Math.abs(Number(a) - Number(b)) < 0.001;
+  }
+
+  function actionSettlementSelfProgress(origin, current, minMove) {
+    if (!origin || !current) return true;
+    const moved = pointDistance(origin, current);
+    const vitalChanged = !actionSettlementStableNumber(origin.hp, current.hp)
+      || !actionSettlementStableNumber(origin.stamina5s, current.stamina5s)
+      || !actionSettlementStableNumber(origin.stamina1h, current.stamina1h)
+      || !actionSettlementStableNumber(origin.stamina1d, current.stamina1d)
+      || !actionSettlementStableNumber(origin.coins, current.coins)
+      || !actionSettlementStableNumber(origin.drop, current.drop);
+    return Boolean(moved >= minMove || vitalChanged);
+  }
+
+  function actionSettlementTargetProgress(origin, current) {
+    if (!origin || !current) return true;
+    if (!origin.targetId && !current.targetId) return false;
+    if (origin.targetId !== current.targetId) return true;
+    if (origin.targetHp === null && current.targetHp === null) return false;
+    return !actionSettlementStableNumber(origin.targetHp, current.targetHp);
+  }
+
+  function assessActionSettlementStall(self, action = bot.lastDecision) {
+    if (!cfg.actionSettlementStallOfflineEnabled) {
+      resetActionSettlementStall('disabled');
+      return null;
+    }
+    const t = Date.now();
+    const dx = Number(action?.dx || 0);
+    const dy = Number(action?.dy || 0);
+    const moveIntent = Boolean(dx || dy || currentVelocityCommandActive());
+    const shootIntent = Boolean(action?.shoot && (action?.kind === 'attack' || action?.combat || action?.target));
+    if (!self || !isAlive(self) || (!moveIntent && !shootIntent) || bot.pendingExit) {
+      resetActionSettlementStall(!self ? 'no-self' : (!isAlive(self) ? 'not-alive' : 'no-action-intent'));
+      return null;
+    }
+    const sample = actionSettlementSample(self, action || {});
+    if (!sample || sample.x === null || sample.y === null) {
+      resetActionSettlementStall('missing-self-sample');
+      return null;
+    }
+    const minMove = Math.max(1, Number(cfg.actionSettlementStallMoveMinDistance || 80) || 80);
+    let state = bot.actionSettlementStall;
+    if (!state || !state.active || state.moveIntent !== moveIntent || state.shootIntent !== shootIntent) {
+      state = {
+        active: true,
+        stalled: false,
+        reason: 'tracking',
+        startedAt: t,
+        stalledAt: 0,
+        origin: sample,
+        latest: sample,
+        moveIntent,
+        shootIntent,
+        actionKind: action?.kind || '',
+        actionReason: action?.reason || ''
+      };
+      bot.actionSettlementStall = state;
+      return summarizeActionSettlementStall(state);
+    }
+
+    const selfProgress = actionSettlementSelfProgress(state.origin, sample, minMove);
+    const targetProgress = actionSettlementTargetProgress(state.origin, sample);
+    if (selfProgress || (shootIntent && targetProgress)) {
+      state = {
+        active: true,
+        stalled: false,
+        reason: selfProgress ? 'self-progress' : 'target-progress',
+        startedAt: t,
+        stalledAt: 0,
+        origin: sample,
+        latest: sample,
+        moveIntent,
+        shootIntent,
+        actionKind: action?.kind || '',
+        actionReason: action?.reason || ''
+      };
+      bot.actionSettlementStall = state;
+      return summarizeActionSettlementStall(state);
+    }
+
+    const ageMs = Math.max(0, t - Number(state.startedAt || t));
+    const network = summarizeNetworkQuality();
+    const actionQuality = network?.action || {};
+    const ackStaleMs = Math.max(1000, Number(cfg.actionSettlementStallAckStaleMs || 15000) || 15000);
+    const lastAckAge = Number(actionQuality.lastMovementAckAgeMs);
+    const movementCommands = Math.max(0, Number(actionQuality.movementCommands || 0) || 0);
+    const movementAckStale = !moveIntent
+      ? false
+      : (Number.isFinite(lastAckAge) ? lastAckAge >= ackStaleMs : (movementCommands > 0 && ageMs >= ackStaleMs));
+    const settleMs = Math.max(1000, Number(cfg.actionSettlementStallMs || 15000) || 15000);
+    const noSelfProgress = !selfProgress;
+    const noTargetProgress = !targetProgress;
+    const stalled = ageMs >= settleMs
+      && noSelfProgress
+      && ((moveIntent && movementAckStale) || (shootIntent && noTargetProgress));
+    Object.assign(state, {
+      stalled,
+      reason: stalled ? 'action-settlement-stalled' : 'tracking',
+      stalledAt: stalled ? (state.stalledAt || t) : 0,
+      latest: sample,
+      moveIntent,
+      shootIntent,
+      movementAckStale,
+      movementAckAgeMs: Number.isFinite(lastAckAge) ? lastAckAge : null,
+      noSelfProgress,
+      noTargetProgress,
+      selfMoved: pointDistance(state.origin, sample),
+      targetId: sample.targetId,
+      targetHp: sample.targetHp,
+      actionKind: action?.kind || '',
+      actionReason: action?.reason || ''
+    });
+    if (stalled) bot.control.lastError = 'action settlement stalled';
+    else if (bot.control.lastError === 'action settlement stalled') bot.control.lastError = '';
+    return summarizeActionSettlementStall(state);
   }
 
   function assessServerPositionStall(self) {
@@ -20352,6 +20559,8 @@ function hpDisplay(value) {
 	      ensureControlWs();
       const serverPositionStall = assessServerPositionStall(self);
       const serverPositionStallOffline = Boolean(cfg.serverPositionStallOfflineEnabled && serverPositionStall?.stalled);
+      const actionSettlementStall = assessActionSettlementStall(self, bot.lastDecision);
+      const actionSettlementStallOffline = Boolean(cfg.actionSettlementStallOfflineEnabled && actionSettlementStall?.stalled);
       const reconnectChurn = Boolean(bot.control.nativeReconnectChurn);
 	      const reconnectChurnDetail = reconnectChurn ? {
 	        count: Number(bot.control.nativeReconnectEventCount || 0),
@@ -20360,16 +20569,17 @@ function hpDisplay(value) {
       const samplingOutage = globalSamplingOutageOfflineState(self);
       const combatTickGap = combatTickGapOfflineState(self, { source });
       bot.lastCombatTickGap = combatTickGap;
-      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
+      const controlOffline = !bot.control.wsOpen || serverPositionStallOffline || actionSettlementStallOffline || reconnectChurn || Boolean(samplingOutage) || Boolean(combatTickGap);
       const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self));
 		    if (!cfg.dryRun && controlOffline && !pendingExitAlive) {
 		      bot.pursuit = null;
-		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (combatTickGap ? 'combat-tick-gap' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline'))));
+		      stopMotionSafely(samplingOutage ? 'global-sampling-outage' : (combatTickGap ? 'combat-tick-gap' : (actionSettlementStallOffline ? 'action-settlement-stalled' : (serverPositionStallOffline ? 'server-position-stalled' : (reconnectChurn ? 'control-ws-reconnect-churn' : 'control-ws-offline')))));
 		      if (!bot.offlineSince) bot.offlineSince = Date.now();
 		      const offlineAgeMs = Date.now() - bot.offlineSince;
         const offlineSafety = {
           ...assessOfflineSafety(self),
           reconnectChurn: reconnectChurnDetail,
+          actionSettlementStall,
           samplingOutage,
           combatTickGap
         };
@@ -20381,7 +20591,9 @@ function hpDisplay(value) {
           ? 'global sampling outage'
           : (combatTickGap
             ? 'combat tick gap'
-            : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline')));
+            : (actionSettlementStallOffline
+              ? 'action settlement stalled'
+              : (serverPositionStallOffline ? 'server position stalled' : (reconnectChurn ? 'websocket reconnect churn' : 'websocket offline'))));
         const leaveResult = offlineAgeMs >= leaveDelayMs
 			        ? await leaveOffline(offlineLeaveReason, currentSummary, offlineSafety)
 			        : null;
@@ -20392,11 +20604,13 @@ function hpDisplay(value) {
             ? 'control-global-sampling-outage'
           : (combatTickGap
             ? 'control-combat-tick-gap'
+          : (actionSettlementStallOffline
+            ? 'control-action-settlement-stalled'
           : (serverPositionStallOffline
             ? 'control-ws-server-position-stalled'
             : (reconnectChurn
               ? 'control-ws-reconnect-churn'
-              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait')))));
+              : (offlineSafety.unsafe ? 'control-ws-offline-unsafe' : 'control-ws-offline-safe-wait'))))));
 	        bot.lastDecision = {
 	          kind: 'wait',
 	          reason: offlineWaitReason,
@@ -20406,15 +20620,16 @@ function hpDisplay(value) {
           leaveDelayMs,
           offlineSafety,
           reconnectChurn: reconnectChurnDetail,
+          actionSettlementStall,
           serverPositionStall,
           samplingOutage,
           combatTickGap,
-	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : '')))),
+	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (actionSettlementStallOffline ? '动作结算卡死，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))))),
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
 	        if (!leaveResult?.attempted && offlineAgeMs > cfg.reloadAfterOfflineMs) {
-	          requestReload(samplingOutage ? 'global sampling outage too long' : (combatTickGap ? 'combat tick gap too long' : 'websocket offline too long'));
+	          requestReload(samplingOutage ? 'global sampling outage too long' : (combatTickGap ? 'combat tick gap too long' : (actionSettlementStallOffline ? 'action settlement stalled too long' : 'websocket offline too long')));
 	        }
         if (cfg.once) bot.stop('once');
         return;
