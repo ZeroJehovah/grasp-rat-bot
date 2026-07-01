@@ -300,6 +300,8 @@ function importantLogSource() {
       kills,
       baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
       currentCoins: Number(selfSummary?.coins ?? bot.lastSelf?.coins ?? 0) || 0,
+      stamina1dObservedMax: Number.isFinite(Number(session.stamina1dObservedMax)) ? Number(session.stamina1dObservedMax) : null,
+      stamina1dObservedMin: Number.isFinite(Number(session.stamina1dObservedMin)) ? Number(session.stamina1dObservedMin) : null,
       stamina1dLastRemaining: Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : null,
       stamina1dLastLimit: Number.isFinite(Number(session.stamina1dLastLimit)) ? Number(session.stamina1dLastLimit) : null,
       version: cfg.version,

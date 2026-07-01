@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.267"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.268"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -1147,6 +1147,8 @@
       stamina1dSpentMs: Math.max(0, Number(preserved.session?.stamina1dSpentMs || 0) || 0),
       stamina1dSegmentStartedAt: Number(preserved.session?.stamina1dSegmentStartedAt || 0) || 0,
       stamina1dSegmentBase: Number.isFinite(Number(preserved.session?.stamina1dSegmentBase)) ? Number(preserved.session.stamina1dSegmentBase) : null,
+      stamina1dObservedMax: Number.isFinite(Number(preserved.session?.stamina1dObservedMax)) ? Number(preserved.session.stamina1dObservedMax) : null,
+      stamina1dObservedMin: Number.isFinite(Number(preserved.session?.stamina1dObservedMin)) ? Number(preserved.session.stamina1dObservedMin) : null,
       stamina1dLastRemaining: Number.isFinite(Number(preserved.session?.stamina1dLastRemaining)) ? Number(preserved.session.stamina1dLastRemaining) : null,
       stamina1dLastLimit: Number.isFinite(Number(preserved.session?.stamina1dLastLimit)) ? Number(preserved.session.stamina1dLastLimit) : null,
       combatLogSentBase: Number.isFinite(Number(preserved.session?.combatLogSentBase)) ? Number(preserved.session.combatLogSentBase) : null,
@@ -10488,13 +10490,17 @@ function hpDisplay(value) {
   function resetSessionStaminaStats(session, selfSummary, t = Date.now()) {
     const remaining = Number(selfSummary?.stamina1d ?? selfSummary?.stamina?.stamina1d ?? NaN);
     const limit = Number(selfSummary?.stamina1dLimit ?? selfSummary?.stamina?.stamina1dLimit ?? NaN);
-    const base = Number.isFinite(remaining) ? remaining : null;
+    const cleanLimit = Number.isFinite(limit) && limit > 0 ? limit : null;
+    const maxObserved = Number.isFinite(remaining) ? remaining : null;
+    const minObserved = Number.isFinite(remaining) ? remaining : null;
     session.stamina1dSpentBeforeSegment = 0;
     session.stamina1dSpentMs = 0;
     session.stamina1dSegmentStartedAt = dailyStaminaWindowStartAt(t);
-    session.stamina1dSegmentBase = base;
-    session.stamina1dLastRemaining = base;
-    session.stamina1dLastLimit = Number.isFinite(limit) && limit > 0 ? limit : null;
+    session.stamina1dSegmentBase = maxObserved;
+    session.stamina1dObservedMax = maxObserved;
+    session.stamina1dObservedMin = minObserved;
+    session.stamina1dLastRemaining = minObserved;
+    session.stamina1dLastLimit = cleanLimit;
   }
 
   function updateSessionStaminaStats(session, selfSummary, t = Date.now()) {
@@ -10504,26 +10510,44 @@ function hpDisplay(value) {
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : null;
     const dayStart = dailyStaminaWindowStartAt(t);
     let segmentStart = Number(session.stamina1dSegmentStartedAt || 0);
-    let segmentBase = Number(session.stamina1dSegmentBase);
-    if (!segmentStart || !Number.isFinite(segmentBase)) {
+    let observedMax = Number(session.stamina1dObservedMax);
+    let observedMin = Number(session.stamina1dObservedMin);
+    if (!Number.isFinite(observedMax)) observedMax = Number(session.stamina1dSegmentBase);
+    if (!Number.isFinite(observedMin)) observedMin = Number(session.stamina1dLastRemaining);
+    if (!segmentStart || !Number.isFinite(observedMax)) {
       session.stamina1dSegmentStartedAt = dayStart;
       session.stamina1dSegmentBase = remaining;
+      session.stamina1dObservedMax = remaining;
+      session.stamina1dObservedMin = remaining;
       session.stamina1dLastRemaining = remaining;
       session.stamina1dLastLimit = limit;
       session.stamina1dSpentBeforeSegment = Math.max(0, Number(session.stamina1dSpentBeforeSegment || 0) || 0);
-      session.stamina1dSpentMs = Math.max(0, Number(session.stamina1dSpentMs || 0) || 0);
+      session.stamina1dSpentMs = Math.max(0, Math.round(Number(session.stamina1dSpentBeforeSegment || 0) || 0));
       return;
     }
     if (segmentStart !== dayStart) {
-      const lastRemaining = Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : segmentBase;
-      const previousSpent = Math.max(0, segmentBase - lastRemaining);
+      const previousMin = Number.isFinite(observedMin)
+        ? observedMin
+        : (Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : observedMax);
+      const previousSpent = Math.max(0, observedMax - previousMin);
       session.stamina1dSpentBeforeSegment = Math.max(0, Number(session.stamina1dSpentBeforeSegment || 0) || 0) + previousSpent;
       session.stamina1dSegmentStartedAt = dayStart;
-      session.stamina1dSegmentBase = limit || Math.max(remaining, 0);
-      segmentStart = dayStart;
-      segmentBase = Number(session.stamina1dSegmentBase);
+      session.stamina1dSegmentBase = remaining;
+      session.stamina1dObservedMax = remaining;
+      session.stamina1dObservedMin = remaining;
+      observedMax = Number(session.stamina1dObservedMax);
+      observedMin = remaining;
+    } else {
+      observedMax = Math.max(
+        Number.isFinite(observedMax) ? observedMax : remaining,
+        remaining
+      );
+      observedMin = Number.isFinite(observedMin) ? Math.min(observedMin, remaining) : remaining;
+      session.stamina1dSegmentBase = observedMax;
+      session.stamina1dObservedMax = observedMax;
+      session.stamina1dObservedMin = observedMin;
     }
-    const segmentSpent = Math.max(0, segmentBase - remaining);
+    const segmentSpent = Math.max(0, observedMax - observedMin);
     const totalSpent = Math.max(0, Number(session.stamina1dSpentBeforeSegment || 0) || 0) + segmentSpent;
     session.stamina1dSpentMs = Math.max(0, Math.round(totalSpent));
     session.stamina1dLastRemaining = remaining;
@@ -10611,6 +10635,8 @@ function hpDisplay(value) {
       kills: Math.max(0, Number(session.kills || 0) || 0),
       stamina1dSpentMs: Math.max(0, Math.round(Number(session.stamina1dSpentMs || 0) || 0)),
       stamina1dSegmentStartedAt: Number(session.stamina1dSegmentStartedAt || 0) || 0,
+      stamina1dObservedMax: Number.isFinite(Number(session.stamina1dObservedMax)) ? Number(session.stamina1dObservedMax) : null,
+      stamina1dObservedMin: Number.isFinite(Number(session.stamina1dObservedMin)) ? Number(session.stamina1dObservedMin) : null,
       stamina1dLastRemaining: Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : null,
       stamina1dLastLimit: Number.isFinite(Number(session.stamina1dLastLimit)) ? Number(session.stamina1dLastLimit) : null,
       combatLogSent: Math.max(0, Math.round((Number(bot.combatLogging?.sent || 0) || 0) - (Number(session.combatLogSentBase || 0) || 0))),
@@ -10643,6 +10669,13 @@ function hpDisplay(value) {
     out.stamina1dLastRemaining = remaining;
     out.stamina1dLastLimit = Number.isFinite(limit) && limit > 0 ? limit : null;
     latestAtRef.value = stamp;
+  }
+
+  function dailyStaminaSpentFromRemaining(out) {
+    const remaining = Number(out?.stamina1dLastRemaining);
+    const limit = Number(out?.stamina1dLastLimit);
+    if (!Number.isFinite(remaining) || !(Number.isFinite(limit) && limit > 0)) return null;
+    return Math.max(0, Math.round(limit - remaining));
   }
 
   function addTodaySessionRecord(out, record, latestAtRef) {
@@ -10695,6 +10728,8 @@ function hpDisplay(value) {
       out.stamina1dLastRemaining = selfRemaining;
       out.stamina1dLastLimit = Number.isFinite(selfLimit) && selfLimit > 0 ? selfLimit : out.stamina1dLastLimit;
     }
+    const actualSpent = dailyStaminaSpentFromRemaining(out);
+    if (actualSpent !== null) out.stamina1dSpentMs = Math.max(out.stamina1dSpentMs, actualSpent);
     return out;
   }
 
@@ -11325,6 +11360,8 @@ function hpDisplay(value) {
       kills,
       baseCoins: Number.isFinite(Number(session.baseCoins)) ? Number(session.baseCoins) : null,
       currentCoins: Number(selfSummary?.coins ?? bot.lastSelf?.coins ?? 0) || 0,
+      stamina1dObservedMax: Number.isFinite(Number(session.stamina1dObservedMax)) ? Number(session.stamina1dObservedMax) : null,
+      stamina1dObservedMin: Number.isFinite(Number(session.stamina1dObservedMin)) ? Number(session.stamina1dObservedMin) : null,
       stamina1dLastRemaining: Number.isFinite(Number(session.stamina1dLastRemaining)) ? Number(session.stamina1dLastRemaining) : null,
       stamina1dLastLimit: Number.isFinite(Number(session.stamina1dLastLimit)) ? Number(session.stamina1dLastLimit) : null,
       version: cfg.version,
@@ -15433,6 +15470,15 @@ function hpDisplay(value) {
 	    return Math.min(...values);
 	  }
 
+	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
+	    const cost = Math.max(0, Number(staminaCost) || 0);
+	    const oneHour = opportunityWindowStaminaBudget(self, '1h');
+	    const oneDay = opportunityWindowStaminaBudget(self, '1d');
+	    return Number.isFinite(oneDay)
+	      && cost > oneDay
+	      && (!Number.isFinite(oneHour) || cost <= oneHour);
+	  }
+
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
     if (!Number.isFinite(cost) || cost <= 0) return true;
@@ -15522,6 +15568,34 @@ function hpDisplay(value) {
 	      reloginDelayMs: staminaBudgetReloginDelayMs(),
 	      snapshot: Boolean(coin.snapshot),
 	      native: Boolean(coin.native)
+	    };
+	  }
+
+	  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
+	    const candidates = safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self)
+	      .filter(coin => !isSnapshotOnlyCoin(coin))
+	      .filter(coin => dailyStaminaBudgetIsLimiting(self, opportunityCoinStaminaCost(coin)))
+	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+	        || Number(b.amount || 0) - Number(a.amount || 0));
+	    return candidates[0] || null;
+	  }
+
+	  function dailyStaminaFinalCoinAction(self, coin) {
+	    if (!coin) return null;
+	    const action = buildCoinAction(
+	      self,
+	      coin,
+	      'daily-stamina-final-visible-coin',
+	      coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
+	    );
+	    return {
+	      ...action,
+	      dailyStaminaFinalRun: {
+	        staminaCost: Math.round(opportunityCoinStaminaCost(coin)),
+	        budgetMs: Math.max(0, Math.round(opportunityWindowStaminaBudget(self, '1d'))),
+	        distance: Math.round(Number(coin.distance || 0)),
+	        amount: Math.max(0, Math.round(Number(coin.amount || 0)))
+	      }
 	    };
 	  }
 
@@ -19687,6 +19761,18 @@ function hpDisplay(value) {
         dy: dir.dy,
         ...coinMotionMeta(dir)
       }, self, realtimeEntities, { recovery });
+    }
+
+    const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
+    if (dailyStaminaFinalCoin) {
+      bot.fleeLock = null;
+      clearOpportunityChoiceFor('coin');
+      return attachOpportunisticShot(
+        dailyStaminaFinalCoinAction(self, dailyStaminaFinalCoin),
+        self,
+        realtimeEntities,
+        { recovery }
+      );
     }
 
     const localRealtimeCoin = pickRealtimeLocalCoin(self, realtimeCoins, coinThreats);

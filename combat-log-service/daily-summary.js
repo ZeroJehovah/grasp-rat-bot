@@ -238,6 +238,19 @@ function sessionScore(session) {
     + number(session.killRewardCoins);
 }
 
+function actualDailyStaminaSpentMsFromSessions(sessions) {
+  const candidates = (sessions || [])
+    .map(session => ({
+      at: Math.max(number(session.updatedAt), number(session.exitAt), number(session.loginAt)),
+      limit: number(session.stamina1dLastLimit, NaN),
+      remaining: number(session.stamina1dLastRemaining, NaN)
+    }))
+    .filter(item => item.at && Number.isFinite(item.limit) && item.limit > 0 && Number.isFinite(item.remaining));
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.at - a.at);
+  return Math.max(0, Math.round(candidates[0].limit - candidates[0].remaining));
+}
+
 function exitReasonPriority(reason, summary = '') {
   const value = `${String(reason || '')} ${String(summary || '')}`.toLowerCase();
   if (!value.trim()) return 0;
@@ -283,6 +296,13 @@ function mergeSession(previous, next) {
   }
   if (!base.exitAt) base.exitAt = previous.exitAt || next.exitAt || 0;
   if (!base.loginAt) base.loginAt = previous.loginAt || next.loginAt || 0;
+  const latestStamina = [previous, next]
+    .filter(item => Number.isFinite(Number(item?.stamina1dLastRemaining)))
+    .sort((a, b) => Math.max(number(b.updatedAt), number(b.exitAt), number(b.loginAt)) - Math.max(number(a.updatedAt), number(a.exitAt), number(a.loginAt)))[0] || null;
+  if (latestStamina) {
+    base.stamina1dLastRemaining = latestStamina.stamina1dLastRemaining;
+    base.stamina1dLastLimit = latestStamina.stamina1dLastLimit;
+  }
   return base;
 }
 
@@ -1275,13 +1295,15 @@ function totalsForScope(sessions, combats, battleOutcomes) {
   const settled = sessionList.filter(item => number(item.exitAt));
   const open = sessionList.filter(item => !number(item.exitAt));
   const battleTotals = battleOutcomeTotals(outcomes);
+  const summedStaminaSpentMs = settled.reduce((sum, item) => sum + number(item.staminaSpentMs), 0);
+  const actualStaminaSpentMs = actualDailyStaminaSpentMsFromSessions(settled);
   return {
     sessions: sessionList.length,
     completed: completed.length,
     inferred: inferred.length,
     incomplete: open.length,
     loginDurationMs: settled.reduce((sum, item) => sum + number(item.reportLoginDurationMs ?? item.loginDurationMs), 0),
-    staminaSpentMs: settled.reduce((sum, item) => sum + number(item.staminaSpentMs), 0),
+    staminaSpentMs: actualStaminaSpentMs === null ? summedStaminaSpentMs : Math.max(summedStaminaSpentMs, actualStaminaSpentMs),
     coinsGained: settled.reduce((sum, item) => sum + number(item.coinsGained), 0),
     pureRefreshCoins: settled.reduce((sum, item) => sum + number(item.pureRefreshCoins), 0),
     killRewardCoins: settled.reduce((sum, item) => sum + number(item.killRewardCoins), 0),
@@ -2242,6 +2264,10 @@ function runSelfTest() {
   assertSelfTest(inferredTotals.completed === 1 && inferredTotals.inferred === 1 && inferredTotals.incomplete === 1, 'inferred session counts are wrong');
   assertSelfTest(inferredTotals.loginDurationMs === 5000 && inferredTotals.staminaSpentMs === 7000, 'inferred closed sessions were not included in duration/stamina totals');
   assertSelfTest(inferredTotals.coinsGained === 10 && inferredTotals.pureRefreshCoins === 6 && inferredTotals.activeKillCount === 3 && inferredTotals.activeKillRewardCoins === 4, 'inferred closed sessions were not included in reward totals');
+  const actualDailyStaminaTotals = totalsForScope([
+    { exitAt: 1, loginAt: 1, updatedAt: 2, staminaSpentMs: 19200, stamina1dLastLimit: 20000, stamina1dLastRemaining: 0 }
+  ], [], []);
+  assertSelfTest(actualDailyStaminaTotals.staminaSpentMs === 20000, 'daily stamina totals did not use actual 1d remaining delta');
   const clippedSession = applyReportDayWindow(
     { loginAt: Date.parse('2026-06-12T15:00:00Z'), exitAt: Date.parse('2026-06-13T01:30:00Z'), loginDurationMs: 10.5 * 60 * 60 * 1000 },
     reportDayWindow(day)

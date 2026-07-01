@@ -779,6 +779,8 @@ function browserBotSource(config) {
       stamina1dSpentMs: Math.max(0, Number(preserved.session?.stamina1dSpentMs || 0) || 0),
       stamina1dSegmentStartedAt: Number(preserved.session?.stamina1dSegmentStartedAt || 0) || 0,
       stamina1dSegmentBase: Number.isFinite(Number(preserved.session?.stamina1dSegmentBase)) ? Number(preserved.session.stamina1dSegmentBase) : null,
+      stamina1dObservedMax: Number.isFinite(Number(preserved.session?.stamina1dObservedMax)) ? Number(preserved.session.stamina1dObservedMax) : null,
+      stamina1dObservedMin: Number.isFinite(Number(preserved.session?.stamina1dObservedMin)) ? Number(preserved.session.stamina1dObservedMin) : null,
       stamina1dLastRemaining: Number.isFinite(Number(preserved.session?.stamina1dLastRemaining)) ? Number(preserved.session.stamina1dLastRemaining) : null,
       stamina1dLastLimit: Number.isFinite(Number(preserved.session?.stamina1dLastLimit)) ? Number(preserved.session.stamina1dLastLimit) : null,
       combatLogSentBase: Number.isFinite(Number(preserved.session?.combatLogSentBase)) ? Number(preserved.session.combatLogSentBase) : null,
@@ -8357,6 +8359,15 @@ ${importantLogSource()}
 	    return Math.min(...values);
 	  }
 
+	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
+	    const cost = Math.max(0, Number(staminaCost) || 0);
+	    const oneHour = opportunityWindowStaminaBudget(self, '1h');
+	    const oneDay = opportunityWindowStaminaBudget(self, '1d');
+	    return Number.isFinite(oneDay)
+	      && cost > oneDay
+	      && (!Number.isFinite(oneHour) || cost <= oneHour);
+	  }
+
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
     if (!Number.isFinite(cost) || cost <= 0) return true;
@@ -8446,6 +8457,34 @@ ${importantLogSource()}
 	      reloginDelayMs: staminaBudgetReloginDelayMs(),
 	      snapshot: Boolean(coin.snapshot),
 	      native: Boolean(coin.native)
+	    };
+	  }
+
+	  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
+	    const candidates = safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self)
+	      .filter(coin => !isSnapshotOnlyCoin(coin))
+	      .filter(coin => dailyStaminaBudgetIsLimiting(self, opportunityCoinStaminaCost(coin)))
+	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+	        || Number(b.amount || 0) - Number(a.amount || 0));
+	    return candidates[0] || null;
+	  }
+
+	  function dailyStaminaFinalCoinAction(self, coin) {
+	    if (!coin) return null;
+	    const action = buildCoinAction(
+	      self,
+	      coin,
+	      'daily-stamina-final-visible-coin',
+	      coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
+	    );
+	    return {
+	      ...action,
+	      dailyStaminaFinalRun: {
+	        staminaCost: Math.round(opportunityCoinStaminaCost(coin)),
+	        budgetMs: Math.max(0, Math.round(opportunityWindowStaminaBudget(self, '1d'))),
+	        distance: Math.round(Number(coin.distance || 0)),
+	        amount: Math.max(0, Math.round(Number(coin.amount || 0)))
+	      }
 	    };
 	  }
 
@@ -12611,6 +12650,18 @@ ${importantLogSource()}
         dy: dir.dy,
         ...coinMotionMeta(dir)
       }, self, realtimeEntities, { recovery });
+    }
+
+    const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
+    if (dailyStaminaFinalCoin) {
+      bot.fleeLock = null;
+      clearOpportunityChoiceFor('coin');
+      return attachOpportunisticShot(
+        dailyStaminaFinalCoinAction(self, dailyStaminaFinalCoin),
+        self,
+        realtimeEntities,
+        { recovery }
+      );
     }
 
     const localRealtimeCoin = pickRealtimeLocalCoin(self, realtimeCoins, coinThreats);

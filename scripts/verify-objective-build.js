@@ -1565,9 +1565,10 @@ function main() {
     assert(dailySummary.includes('## 实际战斗收益统计') && dailySummary.includes('buildBattleOutcomes'), 'daily summary does not print actual battle profit outcomes');
     assert(dailySummary.includes('formatStaminaSpent(session.staminaSpentMs)') && dailySummary.includes('formatStaminaSpent(combat.staminaSpentMs)'), 'daily summary stamina columns are not formatted through unitless helper');
     assert(!dailySummary.includes('staminaSpentMs) / 1000)}s') && !dailySummary.includes('combatStaminaSpentMs / 1000)}s'), 'daily summary stamina output still includes seconds unit');
-    assert(dailySummary.includes('activeKillCount === 1') && dailySummary.includes('afkKillCount === 1') && dailySummary.includes('activeUnconfirmedKillCount === 1') && dailySummary.includes('activeUnconfirmedDropCoins === 30'), 'daily summary self-test does not cover AFK/active confirmed and unconfirmed kill buckets');
+    assert(dailySummary.includes('activeKillCount === 2') && dailySummary.includes('afkKillCount === 1') && dailySummary.includes('activeUnconfirmedKillCount === 1') && dailySummary.includes('activeUnconfirmedDropCoins === 30'), 'daily summary self-test does not cover AFK/active confirmed and unconfirmed kill buckets');
+    assert(dailySummary.includes('actualDailyStaminaTotals.staminaSpentMs === 20000'), 'daily summary self-test does not cover actual 1d stamina delta totals');
     assert(dailySummary.includes('report.combats[0].staminaSpentMs === 2500'), 'daily summary self-test does not cover combat stamina');
-    assert(dailySummary.includes('battleOutcomeKills === 3') && dailySummary.includes('battleOutcomeFailures === 1') && dailySummary.includes('chat-confirmed unpicked kill'), 'daily summary self-test does not cover actual battle profit outcomes');
+    assert(dailySummary.includes('report.battleOutcomes.length === 6') && dailySummary.includes('battleOutcomeKills === 5') && dailySummary.includes('battleOutcomeFailures === 1') && dailySummary.includes('chat-confirmed unpicked kill'), 'daily summary self-test does not cover actual battle profit outcomes');
     assert(dailySummary.includes('combatHasActualEngagement(combat)'), 'daily summary does not filter non-engaged combat summaries');
     assert(dailySummary.includes('engaged enemy-leave-wait combat was incorrectly filtered out'), 'daily summary self-test does not cover engaged immediate exit combats');
     assert(dailySummary.includes('combatIsNonCombatSafetyClosure(combat)'), 'daily summary does not filter non-combat safety avoidance closures');
@@ -1711,6 +1712,13 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low long stamina target-only budget block waits for visible coin refresh'"), 'target-only stamina budget wait reason self-test not found');
+    assert(sourceBot.includes('function dailyStaminaBudgetIsLimiting'), 'daily stamina final-run budget helper not found');
+    assert(sourceBot.includes('function pickNearestDailyStaminaFinalCoin'), 'daily stamina final-run coin picker not found');
+    assert(sourceBot.includes("'daily-stamina-final-visible-coin'"), 'daily stamina final-run action reason not found');
+    assert(sourceBot.includes('!isSnapshotOnlyCoin(coin)') || sourceBot.includes('filter(coin => !isSnapshotOnlyCoin(coin))'), 'daily stamina final-run does not exclude snapshot-only coins');
+    assert(sourceBot.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') > 0 && sourceBot.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') < sourceBot.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
+    assert(nodeSelfTestSource.includes("name: 'low daily stamina goes to nearest visible coin instead of waiting for roi'"), 'low daily stamina final-run visible coin self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'low daily stamina does not use snapshot-only final coin'"), 'low daily stamina snapshot-only exclusion self-test not found');
 	    assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
 	    assert(sourceBot.includes('function visibleCoinSourcesConfirmTargetMissing'), 'visible missing coin confirmation helper not found');
 	    assert(sourceBot.includes('function clearMissingVisibleCoinTarget'), 'visible missing coin clear helper not found');

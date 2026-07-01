@@ -1420,6 +1420,14 @@ function runSelfTest() {
     if (!values.length) return Infinity;
     return Math.min(...values);
   }
+  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
+    const cost = Math.max(0, Number(staminaCost) || 0);
+    const oneHour = opportunityWindowStaminaBudget(self, '1h');
+    const oneDay = opportunityWindowStaminaBudget(self, '1d');
+    return Number.isFinite(oneDay)
+      && cost > oneDay
+      && (!Number.isFinite(oneHour) || cost <= oneHour);
+  }
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
     if (!Number.isFinite(cost) || cost <= 0) return true;
@@ -1613,6 +1621,13 @@ function runSelfTest() {
       .filter(c => c.amount > 0 && c.distance <= maxDistance)
       .filter(c => !activeThreats.some(t => coinBlockedByThreat(self, c, t)))
       .sort(compareCoinOpportunity);
+  }
+
+  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
+    return safeCoins(self, (coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, cfg.globalCoinMaxDistance)
+      .filter(coin => dailyStaminaBudgetIsLimiting(self, opportunityCoinStaminaCost(coin)))
+      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
+        || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
   }
 
   function highValueCoinPriorityAmount() {
@@ -5103,6 +5118,19 @@ function runSelfTest() {
     }
     const stamina5s = Number(self.stamina_5s_remaining_milli || 0);
     if (footCoin) return attachOpportunisticShot({ kind: 'coin', reason: 'foot-coin-priority', id: footCoin.drop_id, amount: footCoin.amount }, self, entities, !recovery);
+    const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
+    if (dailyStaminaFinalCoin) {
+      const dir = directionTo(self, dailyStaminaFinalCoin);
+      return attachOpportunisticShot({
+        kind: dailyStaminaFinalCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
+        reason: 'daily-stamina-final-visible-coin',
+        id: dailyStaminaFinalCoin.drop_id,
+        amount: dailyStaminaFinalCoin.amount,
+        dx: dir.dx,
+        dy: dir.dy,
+        target: { distance: Math.round(dir.distance) }
+      }, self, entities, !recovery);
+    }
     const localRealtimeCoin = pickRealtimeLocalCoin(self, realtimeCoins, coinThreats);
     const fieldCompetitionCoin = stamina5s >= cfg.fieldMigrationStaminaThreshold
       ? pickField(self, realtimeCoins, coinThreats)
@@ -8540,6 +8568,28 @@ function runSelfTest() {
       want: 'stamina-budget-coin-leave'
     },
     {
+      name: 'low daily stamina goes to nearest visible coin instead of waiting for roi',
+      got: (() => {
+        const action = choose({
+          self: {
+            user_id: 1,
+            x: 0,
+            y: 0,
+            hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 100000,
+            stamina_1d_remaining_milli: 3500
+          },
+          coins: [
+            { drop_id: 1, x: 12000, y: 0, amount: 1 },
+            { drop_id: 2, x: 20000, y: 0, amount: 100 }
+          ]
+        });
+        return action.reason + ':' + action.id;
+      })(),
+      want: 'daily-stamina-final-visible-coin:1'
+    },
+    {
       name: 'low long stamina still takes foot coin',
       got: choose({
         self: {
@@ -8587,6 +8637,23 @@ function runSelfTest() {
           stamina_1d_remaining_milli: 3500
         },
         coins: [{ drop_id: 2, x: 52000, y: 0, amount: 1, snapshot: true }],
+        snapshotWaitAgeMs: 60000
+      }).reason,
+      want: 'wait-for-visible-coin-refresh'
+    },
+    {
+      name: 'low daily stamina does not use snapshot-only final coin',
+      got: choose({
+        self: {
+          user_id: 1,
+          x: 0,
+          y: 0,
+          hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_1h_remaining_milli: 100000,
+          stamina_1d_remaining_milli: 3500
+        },
+        coins: [{ drop_id: 2, x: 12000, y: 0, amount: 1, snapshot: true }],
         snapshotWaitAgeMs: 60000
       }).reason,
       want: 'wait-for-visible-coin-refresh'
