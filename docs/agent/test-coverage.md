@@ -142,7 +142,8 @@
   - bot self-tests cover target whitelist username normalization stripping invisible format controls, including a firing `Firefox\u200e` target matching the plain `Firefox` whitelist entry and parser deduplication against the plain spelling;
   - movement axis handoff/brake cases remain covered;
   - coin pickup pulse length now decreases by near-distance band and repeated pickup failures;
-  - low-Drop in-range Active targets are ignored for proactive combat without incoming-fire evidence, but enter combat before low-value coins when they own an incoming bullet;
+  - low-Drop in-range Active targets at `Drop <= 4` are ignored for proactive combat without incoming-fire evidence, but enter combat before low-value coins when they own an incoming bullet;
+  - proactive Active combat waits for enough long-cycle stamina to cover the configured `100000ms` kill budget, while incoming-bullet evidence still allows defensive combat under that budget;
   - high-value visible coins override active combat, recovery wait, incoming-bullet pressure, close non-invulnerable combat, and non-idle invulnerable avoidance when HP is healthy, while low-HP pickups still require no incoming bullet/current combat/nearby non-invulnerable real threat;
   - stationary full-stamina join-mode Active targets are not treated as AFK and beat coin pickup;
   - Active combat HP gap/low HP disadvantage exits fire before taking a bullet;
