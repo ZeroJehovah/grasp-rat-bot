@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.68
+// @version      0.4.69
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,8 +27,9 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.68';
+  const BOOTSTRAP_VERSION = '0.4.69';
   const BOOTSTRAP_OWNER = 'tampermonkey';
+  const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
   const MIN_REMOTE_BOT_VERSION = 'bootstrap-0.4.0';
   const PANEL_ID = 'grasp-rat-bot-panel';
@@ -2276,11 +2277,40 @@
       }
       return control;
     };
+    const createRepositoryLink = () => {
+      const link = document.createElement('a');
+      link.href = REPOSITORY_URL;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.title = 'GitHub: ZeroJehovah/grasp-rat-bot';
+      link.setAttribute('aria-label', 'Open Grasp Rat Bot GitHub repository');
+      link.style.cssText = [
+        'display:inline-flex',
+        'align-items:center',
+        'justify-content:center',
+        'flex:0 0 auto',
+        'width:24px',
+        'height:24px',
+        'box-sizing:border-box',
+        'border:1px solid rgba(148,163,184,.24)',
+        'border-radius:50%',
+        'background:rgba(15,23,42,.50)',
+        'color:#e5edf7',
+        'text-decoration:none',
+        'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)',
+        'cursor:pointer'
+      ].join(';');
+      link.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" focusable="false"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.4 11.4 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z"/></svg>';
+      link.addEventListener('click', event => {
+        event.stopPropagation();
+      });
+      return link;
+    };
     appendSection();
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:flex-start;gap:7px;margin-bottom:0;min-width:0;overflow:hidden';
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:0;min-width:0;overflow:hidden';
     const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;align-items:center;gap:5px;row-gap:5px;flex:0 1 auto;min-width:0;overflow:visible;flex-wrap:wrap';
+    actions.style.cssText = 'display:flex;align-items:center;gap:5px;row-gap:5px;flex:1 1 auto;min-width:0;overflow:visible;flex-wrap:wrap';
     const statusDot = createDot(statusTitle, statusColor, statusHalo, statusGlow, {
       label: 'BOT',
       onClick: () => setPaused(!isPaused(), 'panel bot dot')
@@ -2300,6 +2330,7 @@
       actions.appendChild(logDot);
     }
     header.appendChild(actions);
+    header.appendChild(createRepositoryLink());
     appendParent.appendChild(header);
     if (state.userscriptUpdateAvailable) {
       appendLine(
