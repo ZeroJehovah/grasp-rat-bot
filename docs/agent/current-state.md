@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.267`.
 - Latest manifest SHA-256: `d9d5580162d293ca0738c34376b24b44b7f47bdd700f0a0a1cfad65d4aeabe61`.
-- Latest release commit: `PENDING` (`bootstrap-0.4.267` target whitelist invisible-control normalization), previous release commit `3221bbd` (Tampermonkey `0.4.67` / extension `0.1.46` active exit-hold reason priority).
+- Latest release commit: `75bfa38` (`bootstrap-0.4.267` target whitelist invisible-control normalization), previous release commit `3221bbd` (Tampermonkey `0.4.67` / extension `0.1.46` active exit-hold reason priority).
 - Latest bootstrap A versions: Tampermonkey `0.4.67`, extension `0.1.46`.
 - `bootstrap-0.4.267` fixes the Firefox whitelist miss seen at 2026-07-01 08:32 CST. The game exposed the target name as `Firefox` plus an invisible `U+200E` left-to-right mark, while the remote whitelist contained plain `Firefox`; the previous normalizer only trimmed whitespace, so `nameSet.has()` did not match. Target whitelist normalization now strips common zero-width and bidirectional format controls before trimming, and self-tests cover both matching a firing target named `Firefox\u200e` and deduplicating that spelling against plain `Firefox`.
 - Tampermonkey `0.4.67` / extension `0.1.46` fixes the screenshot case where a current 30-minute `stamina-budget-coin-leave` cooldown still showed an older `colloq168` combat-disadvantage reason in the embedded panel. The panel now chooses exit details with an active hold before stale visible enemy/offline details, so the `原因` line should match the current stamina-budget/offline cooldown while preserving timestamp-based fallback for older zero-hold summaries.
