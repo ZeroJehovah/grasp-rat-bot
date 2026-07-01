@@ -49,6 +49,7 @@
   - estimated damage is about `3HP` per accepted shot;
   - non-survival actions are skipped when estimated cost cannot fit the 1h/1d stamina budget.
   - if the 1h budget cannot afford the nearest safe coin candidate, the bot exits immediately with `stamina-budget-coin-leave` instead of waiting in game; this exit waits a fixed 30 minutes before relogin.
+  - if only the 1d budget is limiting a safe native/realtime visible coin while the 1h budget can still afford it, the bot does not wait for a better or closer refresh. It goes toward the nearest safe visible coin with reason `daily-stamina-final-visible-coin` and lets the daily stamina run out naturally. Snapshot-only coins are excluded from this final run.
   - AFK Drop targets enter opportunity scoring from Drop `3`; active/profit combat still uses the higher attack gates.
   - AFK Drop eligibility is suppressed for `afkRecentActivityCooldownMs = 12000` after observed movement, firing, or 5s stamina consumption. This prevents recently active players who briefly stand still from being treated as AFK profit targets.
   - out-of-range AFK Drop targets are skipped for 60s after the bot observes their 5s stamina decreasing. In-range AFK targets keep the old immediate attack behavior after they pass the recent-activity gate, and newly visible AFK-like targets without observed recent activity can still be approached immediately.
