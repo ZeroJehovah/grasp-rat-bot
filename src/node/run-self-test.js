@@ -7727,7 +7727,7 @@ function runSelfTest() {
       name: 'whitelisted firing target is not shot defensively',
       got: choose({
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
-        local: [{ user_id: 9, name: 'Firefox', x: 10000, y: 0, current_join_mode: 'Passive', firing: true, hp: 100, death_reward_preview: 100 }]
+        local: [{ user_id: 9, name: 'Firefox\u200e', x: 10000, y: 0, current_join_mode: 'Passive', firing: true, hp: 100, death_reward_preview: 100 }]
       }).kind,
       want: 'wait'
     },
@@ -7738,7 +7738,7 @@ function runSelfTest() {
     },
     {
       name: 'target whitelist parser trims and deduplicates usernames',
-      got: JSON.stringify(parseTargetWhitelistNames({ usernames: [' 文月 ', 'Firefox', '文月', '', null] }, cfg.targetWhitelistMaxNames)),
+      got: JSON.stringify(parseTargetWhitelistNames({ usernames: [' 文月 ', 'Firefox\u200e', 'Firefox', '文月', '', null] }, cfg.targetWhitelistMaxNames)),
       want: JSON.stringify(['文月', 'Firefox'])
     },
     {

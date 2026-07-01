@@ -1,7 +1,9 @@
 'use strict';
 
 function normalizeTargetWhitelistName(value) {
-  return String(value ?? '').trim();
+  return String(value ?? '')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
+    .trim();
 }
 
 function parseTargetWhitelistNames(payload, maxNames = 100) {
