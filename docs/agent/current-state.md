@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.271`.
 - Latest manifest SHA-256: `ba9ad6df181ca93fc1c7455031d00990786369d1e5ff247b94deb7274d99c94f`.
-- Latest release commit: `10c4cdd` (`bootstrap-0.4.271` one-way post-login zoom fit), previous release commit `dff407a` (`bootstrap-0.4.270` Active combat ROI and stamina gates).
+- Latest release commit: `c567846` (Tampermonkey `0.4.71` / extension `0.1.50` header network-quality pill), previous release commit `10c4cdd` (`bootstrap-0.4.271` one-way post-login zoom fit).
 - Latest bootstrap A versions: Tampermonkey `0.4.71`, extension `0.1.50`.
 - Tampermonkey `0.4.71` / extension `0.1.50` moves the network-quality value back into the panel header after `BOT` / `WS` / optional `Log` as one compact pill. The visible text remains `latency/loss` such as `123ms/0.00%` or `??ms/??.??%`; latency and loss are colored independently, the slash is white, and the pill uses dynamic width instead of a reserved 96px clock-row field. The current-time row now only shows the clock.
 - `bootstrap-0.4.271` changes the post-login visible-range zoom fit to one-way zoom-out convergence. After each wheel/button zoom-out step, the bot measures whether the configured blue view-circle radius fits inside the available `.map-shell` room around self; if `fitRatio <= maxRatio`, it finishes with `visible-range-fit`. It no longer zooms back in when the circle is smaller than the old target band, so discrete wheel steps cannot bounce between zoom-in and zoom-out near the threshold. Static verification now rejects a login zoom fit decision that returns `direction: 'in'` or accepts zoom-in progress.
