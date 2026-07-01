@@ -804,7 +804,7 @@ function controlLoginSource(helpers = {}) {
 
   function postLoginZoomFitBounds() {
     const targetRatio = Math.min(0.99, Math.max(0.5, Number(cfg.postLoginZoomFitTargetRatio || 0.96) || 0.96));
-    const tolerance = Math.max(0.005, Number(cfg.postLoginZoomFitTolerance || 0.03) || 0.03);
+    const tolerance = Math.max(0.005, Number(cfg.postLoginZoomFitTolerance || 0.04) || 0.04);
     return {
       targetRatio,
       minRatio: Math.max(0.1, targetRatio - tolerance),

@@ -29,7 +29,7 @@ const NUMERIC_INVARIANTS = [
   { key: 'postLoginZoomOutClicks', value: 5 },
   { key: 'postLoginZoomFitRadiusCm', value: 50000 },
   { key: 'postLoginZoomFitTargetRatio', value: 0.96 },
-  { key: 'postLoginZoomFitTolerance', value: 0.03 },
+  { key: 'postLoginZoomFitTolerance', value: 0.04 },
   { key: 'postLoginZoomFitPaddingPx', value: 16 },
   { key: 'postLoginZoomFitMaxSteps', value: 24 },
   { key: 'postLoginZoomWheelDeltaY', value: 100 },

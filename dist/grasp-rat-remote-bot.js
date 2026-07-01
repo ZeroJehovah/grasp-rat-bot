@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.271"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.272"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -557,7 +557,7 @@
     postLoginZoomOutClicks: 5,
     postLoginZoomFitRadiusCm: 50000,
     postLoginZoomFitTargetRatio: 0.96,
-    postLoginZoomFitTolerance: 0.03,
+    postLoginZoomFitTolerance: 0.04,
     postLoginZoomFitPaddingPx: 16,
     postLoginZoomFitMaxSteps: 24,
     postLoginZoomWheelDeltaY: 100,
@@ -5370,7 +5370,7 @@ function hpDisplay(value) {
 
   function postLoginZoomFitBounds() {
     const targetRatio = Math.min(0.99, Math.max(0.5, Number(cfg.postLoginZoomFitTargetRatio || 0.96) || 0.96));
-    const tolerance = Math.max(0.005, Number(cfg.postLoginZoomFitTolerance || 0.03) || 0.03);
+    const tolerance = Math.max(0.005, Number(cfg.postLoginZoomFitTolerance || 0.04) || 0.04);
     return {
       targetRatio,
       minRatio: Math.max(0.1, targetRatio - tolerance),
