@@ -1919,7 +1919,11 @@ function main() {
       assert(text.includes('if (remoteLogVisible) {'), 'remote-log dot is not hidden before endpoint configuration');
       assert(text.includes('const logDot = createDot(remoteLogTitle, remoteLogColor, remoteLogHalo, remoteLogGlow'), 'remote-log dot not found');
       assert(text.includes("label: 'Log'"), 'remote-log dot visible label not found');
-      assert(text.includes('justify-content:flex-start'), 'status dots are not left aligned');
+      assert(text.includes("const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot'"), 'GitHub repository URL constant not found');
+      assert(text.includes('const createRepositoryLink = () => {'), 'GitHub repository panel link helper not found');
+      assert(text.includes("link.setAttribute('aria-label', 'Open Grasp Rat Bot GitHub repository')"), 'GitHub repository link aria label not found');
+      assert(text.includes("header.appendChild(createRepositoryLink())"), 'GitHub repository link is not appended to the panel header');
+      assert(text.includes('justify-content:space-between'), 'panel header does not place the GitHub link on the right');
       const loginBody = functionBody(text, 'syncEntityControlLogin');
       assert(text.includes('function reloginHoldRemainingFromStatus'), 'relogin hold inline-login helper not found');
       assert(text.includes('function shouldShowInlineLogin'), 'inline login visibility helper not found');
