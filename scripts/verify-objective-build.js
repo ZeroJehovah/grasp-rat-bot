@@ -688,8 +688,8 @@ function main() {
       assert(measureBody.includes('availablePx') && measureBody.includes('fitRatio'), 'fit measurement does not compare circle radius with available viewport room');
       const decisionBody = functionBody(text, 'postLoginZoomFitDecision');
       assert(decisionBody.includes("ratio > maxRatio") && decisionBody.includes("direction: 'out'"), 'fit decision does not zoom out when the blue circle is clipped');
-      assert(decisionBody.includes("ratio < minRatio") && decisionBody.includes("direction: 'in'"), 'fit decision does not zoom in when the blue circle is too small');
-      assert(decisionBody.includes("reason: nearFit ? 'near-fit' : 'fit'") && decisionBody.includes('settleMinRatio') && decisionBody.includes('settleMaxRatio'), 'fit decision does not settle near the hard band to avoid zoom oscillation');
+      assert(decisionBody.includes("reason: 'visible-range-fit'"), 'fit decision does not finish once the visible range fits');
+      assert(!decisionBody.includes("direction: 'in'") && !decisionBody.includes('circle-too-small'), 'fit decision must not zoom back in after the visible range fits');
       const wheelBody = functionBody(text, 'dispatchPostLoginZoomWheel');
       assert(wheelBody.includes("new WheelEvent('wheel'"), 'post-login zoom does not use wheel events for fine adjustment');
       assert(wheelBody.includes('cfg.postLoginZoomWheelDeltaY'), 'wheel delta config not used');
@@ -698,6 +698,8 @@ function main() {
       assert(stepBody.includes('postLoginZoomStepImproved(before, after, decision.direction)'), 'fit loop does not verify wheel progress');
       assert(stepBody.includes('clickZoomControl(decision.direction)'), 'fit loop does not fall back to native zoom buttons');
       assert(stepBody.includes('latest.wheelSteps') && stepBody.includes('current.completedClicks'), 'zoom fit result counters not updated');
+      const improvedBody = functionBody(text, 'postLoginZoomStepImproved');
+      assert(improvedBody.includes("String(direction || 'out') !== 'in'") && !improvedBody.includes('afterRatio >= beforeRatio'), 'zoom progress check should only accept zoom-out progress');
 
       const findBody = functionBody(text, 'findZoomControl');
       assert(findBody.includes('#zoomOutBtn') && findBody.includes('[data-testid="zoom-out"]'), 'native zoom-out selectors not found');
