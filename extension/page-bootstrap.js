@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.48';
+  const BOOTSTRAP_VERSION = '0.1.49';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -1175,12 +1175,16 @@
 
   function networkQualityLatencyText(summary) {
     const n = Number(summary?.displayLatencyMs);
-    return Number.isFinite(n) ? Math.max(0, Math.round(n)) + 'ms' : '-';
+    return Number.isFinite(n) ? Math.max(0, Math.round(n)) + 'ms' : '??ms';
   }
 
   function networkQualityLossText(summary) {
     const n = Number(summary?.lossPercent);
-    return Number.isFinite(n) ? Math.max(0, n).toFixed(2) + '%' : '-';
+    return Number.isFinite(n) ? Math.max(0, n).toFixed(2) + '%' : '??.??%';
+  }
+
+  function networkQualitySummaryText(summary) {
+    return networkQualityLatencyText(summary) + '/' + networkQualityLossText(summary);
   }
 
   function networkQualityLatencyColor(summary) {
@@ -1203,6 +1207,19 @@
     return '#fca5a5';
   }
 
+  function networkQualityColorRank(color) {
+    if (color === '#fca5a5') return 3;
+    if (color === '#fde68a') return 2;
+    if (color === '#86efac') return 1;
+    return 0;
+  }
+
+  function networkQualitySummaryColor(summary) {
+    const latency = networkQualityLatencyColor(summary);
+    const loss = networkQualityLossColor(summary);
+    return networkQualityColorRank(loss) > networkQualityColorRank(latency) ? loss : latency;
+  }
+
   function networkQualityLatencyTitle(summary) {
     if (!summary?.enabled) return '延迟：暂无运行时网络质量样本';
     if (!Number.isFinite(Number(summary.displayLatencyMs))) return '延迟：等待运行时网络质量样本';
@@ -1222,6 +1239,10 @@
       + '；估算丢帧 ' + (summary.estimatedLostFrames ?? '-')
       + ' / 预期帧 ' + (summary.expectedFrames ?? '-')
       + (summary.stalled ? '，当前状态帧停滞' : '');
+  }
+
+  function networkQualitySummaryTitle(summary) {
+    return networkQualityLatencyTitle(summary) + '\n' + networkQualityLossTitle(summary);
   }
 
   function targetSummaryParts(decision, status) {
@@ -2085,8 +2106,7 @@
     const wsColor = control.wsOpen ? '#86efac' : (control.connecting ? '#fde68a' : '#fca5a5');
     const wsTitle = 'WS ' + wsLabel;
     const networkQuality = status?.networkQuality || {};
-    const latencyColor = networkQualityLatencyColor(networkQuality);
-    const lossColor = networkQualityLossColor(networkQuality);
+    const networkColor = networkQualitySummaryColor(networkQuality);
     const nearestActive = safety.nearestActive
       ? (safety.nearestActive.name || ('#' + safety.nearestActive.id)) + ' ' + formatDistance(safety.nearestActive.distance)
       : '-';
@@ -2212,23 +2232,12 @@
       time.textContent = '当前时间：' + formatClockTime();
       time.style.cssText = 'flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8';
       line.appendChild(time);
-      const appendNetworkMetric = (label, value, color, title, width) => {
-        const group = document.createElement('span');
-        group.title = title;
-        group.setAttribute('aria-label', title);
-        group.style.cssText = 'display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;min-width:0;white-space:nowrap;color:#94a3b8';
-        const name = document.createElement('span');
-        name.textContent = label;
-        name.style.cssText = 'color:#94a3b8';
-        const text = document.createElement('span');
-        text.textContent = value;
-        text.style.cssText = 'display:inline-block;width:' + width + ';text-align:right;color:' + color + ';font-weight:700;overflow:hidden;text-overflow:clip;white-space:nowrap';
-        group.appendChild(name);
-        group.appendChild(text);
-        line.appendChild(group);
-      };
-      appendNetworkMetric('延迟', networkQualityLatencyText(networkQuality), latencyColor, networkQualityLatencyTitle(networkQuality), '48px');
-      appendNetworkMetric('丢包', networkQualityLossText(networkQuality), lossColor, networkQualityLossTitle(networkQuality), '50px');
+      const networkText = document.createElement('span');
+      networkText.title = networkQualitySummaryTitle(networkQuality);
+      networkText.setAttribute('aria-label', networkQualitySummaryTitle(networkQuality));
+      networkText.textContent = networkQualitySummaryText(networkQuality);
+      networkText.style.cssText = 'flex:0 0 96px;min-width:96px;text-align:right;color:' + networkColor + ';font-weight:700;overflow:hidden;text-overflow:clip;white-space:nowrap;letter-spacing:0';
+      line.appendChild(networkText);
       appendParent.appendChild(line);
       return line;
     };
