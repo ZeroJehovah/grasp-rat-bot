@@ -52,7 +52,8 @@ function runSelfTest() {
     combatAttackRange: 14500,
     combatDodgeRangeBuffer: 1000,
     combatDisengageRange: 17000,
-    combatLowValueActiveDropMax: 3,
+    combatLowValueActiveDropMax: 4,
+    combatProactiveActiveKillStaminaBudgetMs: 100000,
     highValueCoinPriorityAmount: 10,
     highValueCoinPriorityHealthyHp: 50,
     combatCriticalHpLeaveThreshold: 20,
@@ -2645,7 +2646,7 @@ function runSelfTest() {
       knownHp: knownHpValue(target)
     };
     const { ownerId: incomingOwnerId, unknownIncoming } = incomingBulletInfo(self, bullets);
-    if (isLowValueActiveCombatTarget(decorated) && !lowValueActiveThreatensSelf(decorated, incomingOwnerId, unknownIncoming)) {
+    if (activeCombatRequiresThreatEvidence(self, decorated) && !activeCombatThreatensSelf(decorated, incomingOwnerId, unknownIncoming)) {
       bot.combatTarget = null;
       return null;
     }
@@ -2680,13 +2681,35 @@ function runSelfTest() {
   }
 
   function lowValueActiveDropMax() {
-    const value = Number(cfg.combatLowValueActiveDropMax ?? 3);
-    return Math.max(0, Number.isFinite(value) ? value : 3);
+    const value = Number(cfg.combatLowValueActiveDropMax ?? 4);
+    return Math.max(0, Number.isFinite(value) ? value : 4);
   }
 
   function isLowValueActiveCombatTarget(target) {
     if (!target || isAfkProfitTarget(target)) return false;
     return hasCombatActivitySignalForTest(target) && Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax();
+  }
+
+  function proactiveActiveKillStaminaBudgetMs() {
+    const value = Number(cfg.combatProactiveActiveKillStaminaBudgetMs ?? 100000);
+    return Math.max(0, Number.isFinite(value) ? value : 100000);
+  }
+
+  function proactiveActiveCombatStaminaAffordable(self) {
+    const required = proactiveActiveKillStaminaBudgetMs();
+    if (!(required > 0)) return true;
+    const budget = opportunityLongStaminaBudget(self);
+    return !Number.isFinite(budget) || budget >= required;
+  }
+
+  function activeCombatBudgetBlocked(self, target) {
+    if (!target || isAfkProfitTarget(target) || !hasCombatActivitySignalForTest(target)) return false;
+    if (Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax()) return false;
+    return !proactiveActiveCombatStaminaAffordable(self);
+  }
+
+  function activeCombatRequiresThreatEvidence(self, target) {
+    return isLowValueActiveCombatTarget(target) || activeCombatBudgetBlocked(self, target);
   }
 
   function incomingOwnerMatchesTarget(target, incomingOwnerId) {
@@ -2695,10 +2718,14 @@ function runSelfTest() {
     return targetId !== null && targetId !== undefined && String(targetId) === String(incomingOwnerId);
   }
 
-  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
-    if (!isLowValueActiveCombatTarget(target)) return true;
+  function activeCombatThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
     if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
     return Boolean(unknownIncoming && isFiringEntity(target));
+  }
+
+  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!isLowValueActiveCombatTarget(target)) return true;
+    return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
   }
 
   function incomingBulletInfo(self, bullets = []) {
@@ -2721,10 +2748,10 @@ function runSelfTest() {
       + Number(target.drop || 0) * 1000000
       - Number(target.distance || 0);
   }
-  function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
+  function isDefensiveCombatTarget(self, target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
-    if (isLowValueActiveCombatTarget(target)) return lowValueActiveThreatensSelf(target, incomingOwnerId, unknownIncoming);
+    if (activeCombatRequiresThreatEvidence(self, target)) return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
     if (isFiringEntity(target)) return true;
     if (isActive(target)) return true;
     return Boolean(unknownIncoming && isActive(target));
@@ -2733,8 +2760,14 @@ function runSelfTest() {
     const attackRange = Math.max(0, Number(cfg.combatAttackRange || cfg.attackRange || 0));
     return attackRange + Math.max(0, Number(cfg.combatDodgeRangeBuffer || 0));
   }
-  function isProfitableCombatTarget(target) {
-    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isActive(target) && Number(target.drop || 0) > lowValueActiveDropMax());
+  function isProfitableCombatTarget(self, target) {
+    return Boolean(target
+      && !isWhitelistedTarget(target)
+      && !isAfkProfitTarget(target)
+      && !isInvulnerable(target)
+      && isActive(target)
+      && Number(target.drop || 0) > lowValueActiveDropMax()
+      && proactiveActiveCombatStaminaAffordable(self));
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -2771,11 +2804,11 @@ function runSelfTest() {
       .filter(e => !(Number(e.distance || 0) > attackRange) || incomingOwnerMatchesTarget(e, incomingOwnerId) || (unknownIncoming && isFiringEntity(e)))
       .filter(e => !combatRetreatIgnoreActive(e));
     const defensiveTargets = eligibleTargets
-      .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
+      .filter(target => isDefensiveCombatTarget(self, target, incomingOwnerId, unknownIncoming))
       .sort((a, b) => combatTargetPriority(b, incomingOwnerId, unknownIncoming) - combatTargetPriority(a, incomingOwnerId, unknownIncoming));
     if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
     const profitableTargets = eligibleTargets
-      .filter(isProfitableCombatTarget)
+      .filter(target => isProfitableCombatTarget(self, target))
       .filter(target => options.mode !== 'profit' || !profitCombatDisadvantaged(self, target))
       .sort((a, b) => {
         const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
@@ -4971,7 +5004,7 @@ function runSelfTest() {
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
       .filter(threat => hasCombatActivitySignalForTest(threat))
-      .filter(threat => !isLowValueActiveCombatTarget(threat) || lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming))
+      .filter(threat => !activeCombatRequiresThreatEvidence(self, threat) || activeCombatThreatensSelf(threat, incomingOwnerId, unknownIncoming))
       .filter(threat => {
         const distance = Number(threat.distance || 0);
         if (!(distance > attackRange)) return distance <= attackRange;
@@ -5312,6 +5345,44 @@ function runSelfTest() {
         self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
         local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, death_reward_preview: 10 }],
         coins: [{ drop_id: 1, x: 5000, y: 0, amount: 1 }]
+      }).kind,
+      want: 'attack'
+    },
+    {
+      name: 'active combat waits for long stamina budget before proactive fight',
+      got: (() => {
+        const action = choose({
+          self: {
+            user_id: 1,
+            x: 0,
+            y: 0,
+            hp: 100,
+            stamina_5s_remaining_milli: 10000,
+            stamina_1h_remaining_milli: 50000,
+            stamina_1d_remaining_milli: 1000000
+          },
+          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100, death_reward_preview: 50 }],
+          coins: [{ drop_id: 1, x: 10, y: 0, amount: 999 }]
+        });
+        return action.kind + ':' + action.reason;
+      })(),
+      want: 'coin:foot-coin-priority'
+    },
+    {
+      name: 'active combat long stamina budget still allows incoming bullet defense',
+      got: choose({
+        self: {
+          user_id: 1,
+          x: 0,
+          y: 0,
+          hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_1h_remaining_milli: 50000,
+          stamina_1d_remaining_milli: 1000000
+        },
+        local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', firing: true, hp: 100, death_reward_preview: 50 }],
+        coins: [{ drop_id: 1, x: 10, y: 0, amount: 1 }],
+        bullets: [{ ownerId: 2 }]
       }).kind,
       want: 'attack'
     },

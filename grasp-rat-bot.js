@@ -6397,7 +6397,7 @@ ${importantLogSource()}
     return (activeThreats || [])
       .filter(threat => !isWhitelistedTarget(threat) && !isInvulnerable(threat))
       .filter(threat => hasCombatActivitySignal(threat))
-      .filter(threat => !isLowValueActiveCombatTarget(threat) || lowValueActiveThreatensSelf(threat, incomingOwnerId, unknownIncoming))
+      .filter(threat => !activeCombatRequiresThreatEvidence(self, threat) || activeCombatThreatensSelf(threat, incomingOwnerId, unknownIncoming))
       .filter(threat => {
         const distance = Number(threat.distance || 0);
         if (!(distance > attackRange)) return distance <= attackRange;
@@ -6778,13 +6778,35 @@ ${importantLogSource()}
   }
 
   function lowValueActiveDropMax() {
-    const value = Number(cfg.combatLowValueActiveDropMax ?? 3);
-    return Math.max(0, Number.isFinite(value) ? value : 3);
+    const value = Number(cfg.combatLowValueActiveDropMax ?? 4);
+    return Math.max(0, Number.isFinite(value) ? value : 4);
   }
 
   function isLowValueActiveCombatTarget(target) {
     if (!target || isAfkProfitTarget(target)) return false;
     return hasCombatActivitySignal(target) && Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax();
+  }
+
+  function proactiveActiveKillStaminaBudgetMs() {
+    const value = Number(cfg.combatProactiveActiveKillStaminaBudgetMs ?? 100000);
+    return Math.max(0, Number.isFinite(value) ? value : 100000);
+  }
+
+  function proactiveActiveCombatStaminaAffordable(self) {
+    const required = proactiveActiveKillStaminaBudgetMs();
+    if (!(required > 0)) return true;
+    const budget = opportunityLongStaminaBudget(self);
+    return !Number.isFinite(budget) || budget >= required;
+  }
+
+  function activeCombatBudgetBlocked(self, target) {
+    if (!target || isAfkProfitTarget(target) || !hasCombatActivitySignal(target)) return false;
+    if (Number(target.drop ?? dropValue(target) ?? 0) <= lowValueActiveDropMax()) return false;
+    return !proactiveActiveCombatStaminaAffordable(self);
+  }
+
+  function activeCombatRequiresThreatEvidence(self, target) {
+    return isLowValueActiveCombatTarget(target) || activeCombatBudgetBlocked(self, target);
   }
 
   function incomingOwnerMatchesTarget(target, incomingOwnerId) {
@@ -6793,11 +6815,15 @@ ${importantLogSource()}
     return targetId !== null && targetId !== undefined && String(targetId) === String(incomingOwnerId);
   }
 
-  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
-    if (!isLowValueActiveCombatTarget(target)) return true;
+  function activeCombatThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
     if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
     if (unknownIncoming && isFiringEntity(target)) return true;
     return Boolean(recentCombatInjuryActive() && (isFiringEntity(target) || isCurrentlyActive(target)));
+  }
+
+  function lowValueActiveThreatensSelf(target, incomingOwnerId = null, unknownIncoming = false) {
+    if (!isLowValueActiveCombatTarget(target)) return true;
+    return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
   }
 
   function combatDodgeThreatRange() {
@@ -6817,18 +6843,24 @@ ${importantLogSource()}
       - Number(target.distance || 0);
   }
 
-  function isDefensiveCombatTarget(target, incomingOwnerId = null, unknownIncoming = false) {
+  function isDefensiveCombatTarget(self, target, incomingOwnerId = null, unknownIncoming = false) {
     if (!target || isWhitelistedTarget(target) || isAfkProfitTarget(target) || isInvulnerable(target)) return false;
     if (incomingOwnerMatchesTarget(target, incomingOwnerId)) return true;
-    if (isLowValueActiveCombatTarget(target)) return lowValueActiveThreatensSelf(target, incomingOwnerId, unknownIncoming);
+    if (activeCombatRequiresThreatEvidence(self, target)) return activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming);
     if (isFiringEntity(target)) return true;
     if (isCurrentlyActive(target)) return true;
     if (unknownIncoming && isCurrentlyActive(target)) return true;
     return Boolean(recentCombatInjuryActive() && isCurrentlyActive(target));
   }
 
-  function isProfitableCombatTarget(target) {
-    return Boolean(target && !isWhitelistedTarget(target) && !isAfkProfitTarget(target) && !isInvulnerable(target) && isCurrentlyActive(target) && Number(target.drop || 0) > lowValueActiveDropMax());
+  function isProfitableCombatTarget(self, target) {
+    return Boolean(target
+      && !isWhitelistedTarget(target)
+      && !isAfkProfitTarget(target)
+      && !isInvulnerable(target)
+      && isCurrentlyActive(target)
+      && Number(target.drop || 0) > lowValueActiveDropMax()
+      && proactiveActiveCombatStaminaAffordable(self));
   }
   function combatHpGapDisadvantaged(self, target) {
     const knownSelfHp = knownHpValue(self);
@@ -6861,11 +6893,11 @@ ${importantLogSource()}
       .filter(target => !combatRetreatIgnoreActive(target));
     if (!eligibleTargets.length) return null;
     const defensiveTargets = eligibleTargets
-      .filter(target => isDefensiveCombatTarget(target, incomingOwnerId, unknownIncoming))
+      .filter(target => isDefensiveCombatTarget(self, target, incomingOwnerId, unknownIncoming))
       .sort((a, b) => combatTargetPriority(b, incomingOwnerId, unknownIncoming) - combatTargetPriority(a, incomingOwnerId, unknownIncoming));
     if (options.mode === 'defensive') return defensiveTargets[0] ? { ...defensiveTargets[0], combatIntent: 'defensive' } : null;
     const profitableTargets = eligibleTargets
-      .filter(isProfitableCombatTarget)
+      .filter(target => isProfitableCombatTarget(self, target))
       .filter(target => options.mode !== 'profit' || !profitCombatDisadvantaged(self, target))
       .sort((a, b) => {
         const scoreA = scoreEnemyOpportunity(a) ?? -Infinity;
@@ -6933,8 +6965,8 @@ ${importantLogSource()}
       const incoming = incomingBulletThreat(self, null, bullets);
       const incomingOwnerId = incoming?.ownerId;
       const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
-      if (isLowValueActiveCombatTarget(target) && !lowValueActiveThreatensSelf(target, incomingOwnerId, unknownIncoming)) {
-        clearCombatEngagement('low-value-active-not-threatening');
+      if (activeCombatRequiresThreatEvidence(self, target) && !activeCombatThreatensSelf(target, incomingOwnerId, unknownIncoming)) {
+        clearCombatEngagement(isLowValueActiveCombatTarget(target) ? 'low-value-active-not-threatening' : 'active-combat-stamina-budget');
         return null;
       }
       return {
@@ -6973,8 +7005,8 @@ ${importantLogSource()}
     const incoming = incomingBulletThreat(self, null, bullets);
     const incomingOwnerId = incoming?.ownerId;
     const unknownIncoming = Boolean(incoming && (incomingOwnerId === null || incomingOwnerId === undefined));
-    if (isLowValueActiveCombatTarget(reengageTarget) && !lowValueActiveThreatensSelf(reengageTarget, incomingOwnerId, unknownIncoming)) {
-      clearCombatEngagement('low-value-active-not-threatening');
+    if (activeCombatRequiresThreatEvidence(self, reengageTarget) && !activeCombatThreatensSelf(reengageTarget, incomingOwnerId, unknownIncoming)) {
+      clearCombatEngagement(isLowValueActiveCombatTarget(reengageTarget) ? 'low-value-active-not-threatening' : 'active-combat-stamina-budget');
       return null;
     }
     return {

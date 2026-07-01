@@ -72,7 +72,8 @@ const NUMERIC_INVARIANTS = [
   { key: 'page403ErrorReloadMs', value: 600000 },
   { key: 'combatAttackRange', value: 14500 },
   { key: 'combatDisengageRange', value: 17000 },
-  { key: 'combatLowValueActiveDropMax', value: 3 },
+  { key: 'combatLowValueActiveDropMax', value: 4 },
+  { key: 'combatProactiveActiveKillStaminaBudgetMs', value: 100000 },
   { key: 'highValueCoinPriorityAmount', value: 10 },
   { key: 'highValueCoinPriorityHealthyHp', value: 50 },
   { key: 'combatRetreatEdgeRange', value: 13800 },
@@ -744,8 +745,10 @@ function main() {
         'combat target priority does not include join-mode Active'
       );
       assert(
-        countMatches(text, /!isAfkProfitTarget\(target\) && !isInvulnerable\(target\) && is(?:Currently)?Active\(target\) && Number\(target\.drop \|\| 0\) > lowValueActiveDropMax\(\)/g) >= expectedMin,
-        'profitable combat can still select low-value or passive Active profit targets'
+        countMatches(text, /function isProfitableCombatTarget\(self, target\)/g) >= expectedMin
+          && countMatches(text, /Number\(target\.drop \|\| 0\) > lowValueActiveDropMax\(\)/g) >= expectedMin
+          && countMatches(text, /proactiveActiveCombatStaminaAffordable\(self\)/g) >= expectedMin,
+        'profitable combat can still select low-value, passive, or long-stamina-unaffordable Active targets'
       );
       assert(
         countMatches(text, /filter\(isAfkProfitTarget\)/g) >= expectedMin,
@@ -1690,10 +1693,13 @@ function main() {
 
   check('run-self-test module covers low-value active and high-value coin priority self-tests', () => {
     assert(sourceBot.includes('function isLowValueActiveCombatTarget'), 'low-value Active combat gate not found');
+    assert(sourceBot.includes('function proactiveActiveCombatStaminaAffordable'), 'active combat long-stamina budget gate not found');
     assert(sourceBot.includes('function highValueVisibleCoinPriorityNeeded'), 'high-value coin priority gate not found');
     assert(sourceBot.includes("'high-value-visible-coin-priority'"), 'high-value visible coin action reason not found');
     assert(nodeSelfTestSource.includes("name: 'low-drop active incoming bullet beats low-value coin inside attack range'"), 'low-drop incoming bullet combat self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low-drop active in range does not beat foot coin without incoming fire'"), 'low-drop no-incoming coin self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'active combat waits for long stamina budget before proactive fight'"), 'active combat long-stamina budget self-test not found');
+    assert(nodeSelfTestSource.includes("name: 'active combat long stamina budget still allows incoming bullet defense'"), 'active combat budget defensive exception self-test not found');
     assert(nodeSelfTestSource.includes("name: 'ordinary one coin near realtime active remains selectable'"), 'ordinary 1-coin Active non-blocking self-test not found');
     assert(nodeSelfTestSource.includes("name: 'healthy high-value coin near realtime active uses normal opportunity path'"), 'high-value coin ordinary Active normal-path self-test not found');
     assert(nodeSelfTestSource.includes("name: 'healthy high-value visible coin beats active combat state'"), 'healthy high-value coin combat override self-test not found');
