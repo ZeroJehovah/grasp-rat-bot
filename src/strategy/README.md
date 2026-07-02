@@ -1,0 +1,178 @@
+# Strategy Module Architecture
+
+## Overview
+
+The `src/strategy/` directory contains extracted decision-making logic organized by functional area. These modules provide reusable, testable components for the bot's AI system.
+
+## Module Hierarchy
+
+```
+src/strategy/
+├── action-priority.js          # Action priority band definitions
+├── action-arbitration.js       # Final action arbitration logic
+├── combat-constants.js         # Combat system configuration
+├── combat-target-selection.js  # Combat target eligibility and priority
+├── combat-movement.js          # Combat positioning and dodge
+├── combat-fire-discipline.js   # Combat shooting state machine
+├── opportunity-constants.js    # Profit/coin system configuration
+└── self-test.js               # Strategy module test suite
+```
+
+## Module Descriptions
+
+### Action System
+
+#### `action-priority.js`
+Defines the priority hierarchy for action arbitration:
+- **Exit** (band 0): Immediate leave/exit actions
+- **Safety** (band 1): Flee from threats, avoidance
+- **Combat** (band 2): Combat engagements
+- **Profit** (band 3): Coin collection, opportunities
+- **Recover** (band 4): Recovery/waiting
+- **Wait** (band 5): Idle waiting
+
+#### `action-arbitration.js`
+Prevents rapid target oscillation by holding higher-priority actions for a configured window (default 480ms). Rules:
+- Exit is never held back
+- Safety can hold over profit
+- Combat can hold over profit/recover
+- Profit cannot hold over combat/safety
+- Hold expires after configured time
+
+### Combat System
+
+#### `combat-constants.js`
+Centralizes all combat numeric configuration:
+- Range thresholds (attack: 14.5m, disengage: 15m, dodge buffer: 1m)
+- HP thresholds (critical: 20, low: 60, disadvantage gap: 20)
+- Fire discipline (cadence: 160ms, reserve band: 360ms, hard reserve: 1.2s)
+- Spacing behavior (close: 4.5m, target: 4.5-6.5m)
+- Special windows (opponent probe: 6s, finish pressure, passive runner)
+
+#### `combat-target-selection.js`
+Target eligibility and selection:
+- `isCombatEligibleThreat()`: Filters invulnerable/whitelisted targets
+- `calculateCombatTargetPriority()`: Scores by distance, bullets, HP, Drop
+- `checkProactiveActiveCombatGates()`: Drop ≥5 and stamina budget gates
+- `selectBestCombatTarget()`: Returns highest priority eligible target
+- `isIdleInvulnerable()`: Detects stationary invulnerable (no threat)
+
+#### `combat-movement.js`
+Positioning and dodge logic:
+- `calculateCombatSpacing()`: Dynamic spacing 4.5-6.5m based on pressure
+- `calculateDodgeDirection()`: 8-direction threat field evaluation
+- `applyCombatMovementModifiers()`: Combines dodge/back-away/close-in
+- `isRecoverableOutOfRangeTarget()`: Reengage eligibility for 14.5-16m targets
+
+#### `combat-fire-discipline.js`
+Shooting state machine based on stamina reserves:
+- **Disabled**: Below 1.2s hard reserve
+- **Paused**: Recovering dodge stamina
+- **Probe**: Early engagement (520ms cadence, 5.6s reserve)
+- **Finish**: Low threat finish (160ms, 1.8s reserve)
+- **Pressure**: Target pressure fire (160ms, 2.4s reserve)
+- **Reserve Band**: Low stamina throttle (360ms)
+- **Normal**: Standard fire (160ms, 2.4s reserve)
+
+Also handles retreating edge suppression and low-confidence throttling.
+
+### Profit System
+
+#### `opportunity-constants.js`
+Profit/coin system configuration:
+- Coin distances (near: 8m, foot: 2m, global: 200m)
+- Coin routing (min 3 coins, route margins, switch thresholds)
+- High value priority (≥10 coins, ≥50 HP)
+- AFK targeting (activity cooldown: 12s, stamina cooldown: 60s)
+- ROI calculation helpers (1ms/cm movement, 500ms/shot)
+
+### Testing
+
+#### `self-test.js`
+Automated test suite:
+- Priority band classification (4 tests)
+- Action focus building (1 test)
+- Arbitration logic (4 tests)
+- Constants validation (2 tests)
+- ROI calculations (2 tests)
+- **Total: 13 tests, all passing**
+
+## Usage Example
+
+```javascript
+// In main decision loop (grasp-rat-bot.js)
+
+const { applyFinalActionArbitration, buildArbitrationStatus } = require('./src/strategy/action-arbitration');
+const { COMBAT_CONSTANTS } = require('./src/strategy/combat-constants');
+const { selectBestCombatTarget } = require('./src/strategy/combat-target-selection');
+const { determineCombatFireState } = require('./src/strategy/combat-fire-discipline');
+
+// Select combat target
+const target = selectBestCombatTarget(self, combatCandidates, {
+  whitelistCheck: (entity) => targetWhitelistState.nameSet.has(entity.name),
+  incomingBulletOwnerId: safetyIncomingBullet?.ownerId,
+  recentInjury: bot.recentInjury,
+  opportunityStaminaBudget: remainingStaminaBudget
+});
+
+// Determine fire state
+const fireState = determineCombatFireState(self, target, {
+  opponentProbe: !target.realBulletEvidenceSeenMs,
+  finishLowThreat: target.hp < 75 && self.hp > 60,
+  passiveRunner: isPassiveRunner(target),
+  targetPressureFire: hasRealBulletPressure(target)
+});
+
+// Apply arbitration
+const { action, held, arbitration } = applyFinalActionArbitration(
+  currentAction,
+  bot.lastFinalAction,
+  bot.finalActionArbitrationState,
+  { finalActionArbitrationHoldMs: 480 }
+);
+
+// Use arbitrated action
+if (held) {
+  action.finalActionArbitration = arbitration;
+}
+executeAction(action);
+```
+
+## Integration Strategy
+
+1. **Phase 1** (Current): Modules created, self-tests passing
+2. **Phase 2**: Import modules into main file
+3. **Phase 3**: Replace inline implementations with module calls
+4. **Phase 4**: Verify via offline combat replay
+5. **Phase 5**: Live validation and performance check
+
+## Design Principles
+
+- **Pure functions where possible**: Easier to test and reason about
+- **Clear contracts**: JSDoc comments document parameters/returns
+- **No side effects**: Modules don't modify global state
+- **Composable**: Functions can be combined in different ways
+- **Self-documenting**: Module/function names describe purpose
+- **Testable**: Each module has dedicated test coverage
+
+## Backward Compatibility
+
+- Modules are additive, not replacing
+- Main file continues to work unchanged
+- No breaking changes to existing API
+- Gradual migration path with validation at each step
+
+## Performance Considerations
+
+- No runtime overhead (direct function calls)
+- Constants remain in memory after first require
+- No additional object creation vs inline code
+- Same execution path as before
+
+## Future Enhancements
+
+1. **Profit Module**: Extract coin routing and opportunity selection
+2. **Safety Module**: Extract flee/avoidance logic
+3. **State Management**: Centralize bot state handling
+4. **Decision Tree**: Explicit decision tree structure
+5. **Replay System**: Integrate with combat log replay validation
