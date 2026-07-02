@@ -668,9 +668,10 @@ function main() {
     });
     check(`${file} lets high-value combat drops interrupt recovery`, () => {
       const body = functionBody(text, 'pickPostAttackDropCoin');
+      const coinCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : text;
       assert(body.includes('options.maxDistance ?? cfg.postAttackDropCoinMaxDistance'), 'post-attack drop picker does not accept maxDistance override');
       assert(body.includes('options.minScore ?? 0'), 'post-attack drop picker does not accept minScore override');
-      assert(body.includes('if (score < minScore) continue'), 'post-attack drop picker does not filter by recovery ROI score');
+      assert(body.includes('if (score < minScore) continue') || coinCoreSource.includes('if (score < minScore) continue'), 'post-attack drop picker does not filter by recovery ROI score');
       assert(text.includes('maxDistance: recovery ? cfg.postAttackRecoveryDropMaxDistance : cfg.postAttackDropCoinMaxDistance'), 'recovery post-attack drop max distance not wired');
       assert(text.includes('minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0'), 'recovery post-attack drop min score not wired');
     });
@@ -1918,12 +1919,19 @@ function main() {
 
   check('post-attack drop wait uses strategy module core', () => {
     assert(strategyPostAttackDropSource.includes('function postAttackVisibleCoinExistsCore'), 'strategy post-attack visible coin core not found');
+    assert(strategyPostAttackDropSource.includes('function resolvedRecentPostAttackDropsCore'), 'strategy post-attack resolved attack core not found');
+    assert(strategyPostAttackDropSource.includes('function pickPostAttackDropCoinCore'), 'strategy post-attack drop coin picker core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropWaitTargetCore'), 'strategy post-attack wait picker core not found');
     assert(sourceBot.includes("require('./src/strategy/post-attack-drop')"), 'source bot does not import post-attack drop strategy module');
     assert(sourceBot.includes('postAttackVisibleCoinExistsCore.toString()'), 'source bot does not inject post-attack visible coin core');
+    assert(sourceBot.includes('resolvedRecentPostAttackDropsCore.toString()'), 'source bot does not inject post-attack resolved attack core');
+    assert(sourceBot.includes('buildPostAttackDropCoinCandidateCore.toString()'), 'source bot does not inject post-attack drop coin metadata core');
+    assert(sourceBot.includes('pickPostAttackDropCoinCore.toString()'), 'source bot does not inject post-attack drop coin picker core');
     assert(sourceBot.includes('pickPostAttackDropWaitTargetCore.toString()'), 'source bot does not inject post-attack wait picker core');
+    assert(sourceBot.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
     assert(sourceBot.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
     assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
+    assert(distSource.includes('function pickPostAttackDropCoinCore'), 'generated runtime does not inline post-attack drop coin picker core');
     assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
   });
 

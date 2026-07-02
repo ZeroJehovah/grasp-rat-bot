@@ -31,6 +31,7 @@ const {
 } = require('./opportunity-candidates');
 const {
   postAttackVisibleCoinExistsCore,
+  pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
@@ -657,6 +658,75 @@ function runStrategyModuleSelfTests() {
         { x: 1000, y: 0 },
         { dist: postAttackDist, dropCoinRadius: 50 }
       ) === false
+  });
+
+  const postAttackCoinOptions = {
+    nowMs: 10000,
+    dist: postAttackDist,
+    priorityMs: 5000,
+    includeSingle: false,
+    minAmount: 1,
+    minScore: 10,
+    dropCoinRadius: 3500,
+    resolveAttack: item => Number(item.resolvedAt || 0),
+    scoreCoin: coin => Number(coin.score || 0)
+  };
+  const postAttackCoinPicked = pickPostAttackDropCoinCore([
+    { id: 'old', x: 2000, y: 0, at: 4000, resolvedAt: 9700, drop: 50, afk: true, action: 'attack' },
+    { id: 'target-low', x: 2000, y: 0, at: 9000, resolvedAt: 9700, drop: 12, afk: true, action: 'attack' },
+    {
+      id: 'target-high',
+      name: 'HighDrop',
+      x: 2100,
+      y: 0,
+      at: 9100,
+      resolvedAt: 9800,
+      drop: 20,
+      afk: true,
+      action: 'opportunistic-shot',
+      combat: true,
+      battleStaminaSpentStartMs: 123.4,
+      staminaSpentMs: 567.8
+    }
+  ], [
+    { drop_id: 'coin-a', x: 2050, y: 0, amount: 3, distance: 2050, score: 30 }
+  ], postAttackCoinOptions);
+  results.push({
+    name: 'post-attack-drop-coin-picks-matched-visible-drop',
+    passed: postAttackCoinPicked.selected?.drop_id === 'coin-a'
+      && postAttackCoinPicked.selected?.postAttackTarget?.id === 'target-high'
+      && postAttackCoinPicked.selected?.postAttackTarget?.name === 'HighDrop'
+      && postAttackCoinPicked.selected?.postAttackTarget?.action === 'opportunistic-shot'
+      && postAttackCoinPicked.selected?.postAttackTarget?.coinDistanceToTarget === 50
+      && postAttackCoinPicked.selected?.postAttackTarget?.battleStaminaSpentStartMs === 123
+      && postAttackCoinPicked.selected?.postAttackTarget?.staminaSpentMs === 568
+      && postAttackCoinPicked.candidates.length === 1
+  });
+
+  const postAttackCoinFiltered = pickPostAttackDropCoinCore([
+    { id: 'target', x: 2000, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
+  ], [
+    { drop_id: 'single', x: 2000, y: 0, amount: 1, distance: 2000, score: 100 },
+    { drop_id: 'low-score', x: 2100, y: 0, amount: 2, distance: 2100, score: 5 },
+    { drop_id: 'far', x: 9000, y: 0, amount: 4, distance: 9000, score: 100 }
+  ], postAttackCoinOptions);
+  results.push({
+    name: 'post-attack-drop-coin-filters-amount-score-radius',
+    passed: postAttackCoinFiltered.selected === null
+      && postAttackCoinFiltered.candidates.length === 0
+  });
+
+  const postAttackCoinBest = pickPostAttackDropCoinCore([
+    { id: 'target', x: 2000, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
+  ], [
+    { drop_id: 'score-win', x: 2100, y: 0, amount: 2, distance: 2100, score: 50 },
+    { drop_id: 'lower-score', x: 2050, y: 0, amount: 2, distance: 2050, score: 20 },
+    { drop_id: 'amount-win', x: 2500, y: 0, amount: 3, distance: 2500, score: 10 }
+  ], postAttackCoinOptions);
+  results.push({
+    name: 'post-attack-drop-coin-selects-amount-before-score',
+    passed: postAttackCoinBest.selected?.drop_id === 'amount-win'
+      && postAttackCoinBest.candidates.length === 3
   });
 
   const postAttackWaitOptions = {

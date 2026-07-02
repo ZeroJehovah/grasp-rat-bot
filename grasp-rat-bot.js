@@ -116,6 +116,9 @@ const {
 } = require('./src/strategy/opportunity-candidates');
 const {
   postAttackVisibleCoinExistsCore,
+  resolvedRecentPostAttackDropsCore,
+  buildPostAttackDropCoinCandidateCore,
+  pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./src/strategy/post-attack-drop');
 
@@ -10839,64 +10842,35 @@ ${importantLogSource()}
 
   function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
     const t = Date.now();
-    const recentAttacks = bot.attackHistory
-      .slice()
-      .reverse()
-      .filter(item => t - Number(item.at || 0) <= cfg.postAttackDropCoinPriorityMs
-        && Number.isFinite(Number(item.x))
-        && Number.isFinite(Number(item.y)));
-    const resolvedAttacks = recentAttacks.filter(attack => postAttackDropResolvedAt(attack, entities, t));
-    if (!resolvedAttacks.length) return null;
     const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
     const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
     const minScore = Math.max(0, Number(options.minScore ?? 0) || 0);
-    const candidates = [];
-    for (const coin of safeCoinCandidates(coins, activeThreats, maxDistance, self)
+    const candidateCoins = safeCoinCandidates(coins, activeThreats, maxDistance, self)
       .filter(coin => Number(coin.amount || 0) > minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)))
-      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin))) {
-      const attack = resolvedAttacks
-        .filter(item => dist(coin, item) <= cfg.postAttackDropCoinRadius)
-        .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(b.at || 0) - Number(a.at || 0))[0] || null;
-      if (!attack) continue;
-      const score = scoreCoinOpportunity(coin);
-      if (score < minScore) continue;
-      const candidate = {
-        ...coin,
-        postAttackScore: score,
-        postAttackTarget: {
-          id: attack.id,
-          name: attack.name || '',
-          drop: attack.drop,
-          x: attack.x,
-          y: attack.y,
-          action: attack.action || '',
-          distance: Number.isFinite(Number(attack.distance)) ? Math.round(Number(attack.distance)) : null,
-          coinDistance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
-          coinDistanceToTarget: Math.round(dist(coin, attack)),
-          ageMs: Math.max(0, Math.round(t - Number(attack.at || t))),
-          playerCategory: attack.playerCategory || (attack.afk === false ? 'active' : 'afk'),
-          afk: attack.afk !== false,
-          active: attack.active === true || attack.playerCategory === 'active',
-          combat: Boolean(attack.combat),
-          combatIntent: attack.combatIntent || '',
-          mode: attack.mode || '',
-          currentlyActive: Boolean(attack.currentlyActive),
-          moving: Boolean(attack.moving),
-          firing: Boolean(attack.firing),
-          battleStartedAt: attack.battleStartedAt || attack.at || 0,
-          battleStaminaSpentStartMs: Number.isFinite(Number(attack.battleStaminaSpentStartMs)) ? Math.max(0, Math.round(Number(attack.battleStaminaSpentStartMs))) : null,
-          staminaSpentMs: Number.isFinite(Number(attack.staminaSpentMs)) ? Math.max(0, Math.round(Number(attack.staminaSpentMs))) : null
-        }
-      };
+      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin));
+    const result = pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {
+      nowMs: t,
+      dist,
+      priorityMs: cfg.postAttackDropCoinPriorityMs,
+      includeSingle: options.includeSingle,
+      minAmount,
+      maxDistance,
+      minScore,
+      dropCoinRadius: cfg.postAttackDropCoinRadius,
+      resolveAttack: attack => postAttackDropResolvedAt(attack, entities, t),
+      scoreCoin: scoreCoinOpportunity
+    });
+    for (const candidate of result.candidates || []) {
       recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), 'post-attack-drop-visible');
-      candidates.push(candidate);
     }
-    return candidates
-      .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || b.postAttackScore - a.postAttackScore || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
+    return result.selected || null;
   }
 
   ${postAttackVisibleCoinExistsCore.toString()}
+  ${resolvedRecentPostAttackDropsCore.toString()}
+  ${buildPostAttackDropCoinCandidateCore.toString()}
+  ${pickPostAttackDropCoinCore.toString()}
   ${pickPostAttackDropWaitTargetCore.toString()}
 
   function postAttackVisibleCoinExists(coins, attack) {
