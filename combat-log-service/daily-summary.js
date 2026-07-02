@@ -6,12 +6,15 @@ const os = require('os');
 const path = require('path');
 
 const DEFAULT_DIR = path.join(__dirname, 'logs');
+const DEFAULT_REPORT_ROOT = path.join(__dirname, '..', 'docs', 'reports');
 const JSONL_READ_CHUNK_BYTES = 1024 * 1024;
 
 function parseArgs(args) {
   const out = {
     dir: DEFAULT_DIR,
     day: '',
+    out: '',
+    stdout: false,
     json: false,
     selfTest: false
   };
@@ -19,6 +22,8 @@ function parseArgs(args) {
     const arg = args[i];
     if (arg === '--dir') out.dir = path.resolve(args[++i] || out.dir);
     else if (arg === '--day') out.day = String(args[++i] || '');
+    else if (arg === '--out') out.out = path.resolve(args[++i] || out.out);
+    else if (arg === '--stdout') out.stdout = true;
     else if (arg === '--json') out.json = true;
     else if (arg === '--self-test') out.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
@@ -37,9 +42,17 @@ function printHelp() {
 Options:
   --dir <dir>   Log root directory. Default: ./logs
   --day <day>   Day directory, e.g. 2026-06-13. Default: latest day
+  --out <file>  Output Markdown path. Default: ../docs/reports/YYYY-MM/daily-YYYY-MM-DD.md
+  --stdout      Print Markdown to stdout instead of writing the default report file
   --json        Print machine-readable JSON
   --self-test   Run daily-summary regression checks
 `);
+}
+
+function defaultDailyReportPath(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) throw new Error(`Invalid day: ${day}`);
+  const month = day.slice(0, 7);
+  return path.join(DEFAULT_REPORT_ROOT, month, `daily-${day}.md`);
 }
 
 function latestDay(root) {
@@ -1894,6 +1907,18 @@ function printReport(report) {
   printLifecycleSections(report);
 }
 
+function renderReport(report) {
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    printReport(report);
+  } finally {
+    console.log = originalLog;
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 function assertSelfTest(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -2301,6 +2326,7 @@ function runSelfTest() {
   assertSelfTest(clippedSession.reportExitAt === Date.parse('2026-06-13T01:30:00Z'), 'in-day session exit was clipped incorrectly');
   assertSelfTest(totalsForScope([clippedSession], [], []).loginDurationMs === 9.5 * 60 * 60 * 1000, 'login totals did not use clipped report duration');
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
+  assertSelfTest(defaultDailyReportPath('2026-06-13') === path.join(__dirname, '..', 'docs', 'reports', '2026-06', 'daily-2026-06-13.md'), 'default daily report path is not under docs/reports/YYYY-MM');
   assertSelfTest(
     sessionStatusText({
       inferredExit: true,
@@ -2416,8 +2442,19 @@ function main() {
   const previousEntry = readLastDeathCountEntry(previousDayDir);
   const previousEntries = previousEntry ? [previousEntry] : [];
   const report = buildReport(readEntries(dayDir), { day, previousEntries });
-  if (options.json) console.log(JSON.stringify(report, null, 2));
-  else printReport(report);
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  const markdown = renderReport(report);
+  if (options.stdout) {
+    process.stdout.write(markdown);
+    return;
+  }
+  const outPath = options.out || defaultDailyReportPath(day);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, markdown, 'utf8');
+  console.log(JSON.stringify({ outPath, day, files: report.files.length, entries: report.entries, totals: report.totals }, null, 2));
 }
 
 if (require.main === module) main();

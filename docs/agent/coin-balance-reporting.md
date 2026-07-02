@@ -10,7 +10,7 @@ Generate or refresh the natural-month report:
 node scripts/coin-balance-report.js --month YYYY-MM --timeout-ms 60000
 ```
 
-The default output is `docs/coin-reports/YYYY-MM.md`. For today's daily report workflow, also run the same command for the matching Beijing natural month after generating `combat-log-service/logs/YYYY-MM-DD/daily-YYYY-MM-DD.md`.
+The default output is `docs/reports/YYYY-MM/monthly-YYYY-MM.md`. For today's daily report workflow, also run the same command for the matching Beijing natural month after generating `docs/reports/YYYY-MM/daily-YYYY-MM-DD.md`.
 
 For a current month, the script intentionally fetches only days up to Beijing today. It does not query future days.
 

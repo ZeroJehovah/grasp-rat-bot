@@ -1589,6 +1589,18 @@ function main() {
     assert(dailySummary.includes('engaged enemy-leave-wait combat was incorrectly filtered out'), 'daily summary self-test does not cover engaged immediate exit combats');
     assert(dailySummary.includes('combatIsNonCombatSafetyClosure(combat)'), 'daily summary does not filter non-combat safety avoidance closures');
     assert(dailySummary.includes('safety avoidance was incorrectly counted as combat'), 'daily summary self-test does not cover safety avoidance filtering');
+    assert(dailySummary.includes("const DEFAULT_REPORT_ROOT = path.join(__dirname, '..', 'docs', 'reports')"), 'daily summary default report root is not docs/reports');
+    assert(dailySummary.includes('function defaultDailyReportPath(day)') && dailySummary.includes('`daily-${day}.md`'), 'daily summary default output path helper is missing');
+    assert(dailySummary.includes('--stdout') && dailySummary.includes('process.stdout.write(markdown)'), 'daily summary cannot print markdown explicitly after default file output change');
+    assert(dailySummary.includes('default daily report path is not under docs/reports/YYYY-MM'), 'daily summary self-test does not cover default report path');
+  });
+
+  check('coin balance reports default to unified reports directory', () => {
+    const coinReport = readText('scripts/coin-balance-report.js');
+    assert(coinReport.includes("const DEFAULT_REPORT_ROOT = path.join(ROOT, 'docs', 'reports')"), 'coin report default root is not docs/reports');
+    assert(coinReport.includes('function defaultMonthlyReportPath(month)') && coinReport.includes('`monthly-${month}.md`'), 'coin report default monthly output helper is missing');
+    assert(coinReport.includes('docs/reports/YYYY-MM/monthly-YYYY-MM.md'), 'coin report help text does not mention unified monthly path');
+    assert(coinReport.includes("defaultMonthlyReportPath('2026-06')"), 'coin report self-test does not cover unified monthly path');
   });
 
   check('combat-log daily summary exposes incomplete exits and no-self text', () => {

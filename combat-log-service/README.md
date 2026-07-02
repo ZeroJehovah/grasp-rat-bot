@@ -191,6 +191,12 @@ npm run daily
 npm run daily -- --day 2026-06-13
 ```
 
+默认会写入仓库统一报告目录 `docs/reports/YYYY-MM/daily-YYYY-MM-DD.md`，并在终端输出路径和汇总 JSON。需要直接打印 Markdown 时使用：
+
+```bash
+npm run daily -- --day 2026-06-13 --stdout
+```
+
 输出包含三类统计：
 
 - 登录统计：登录时间、退出时间、耗时、消耗体力、拾取刷新金币、挂机击杀次数/收益、活跃击杀次数/收益、总收益、退出原因；
