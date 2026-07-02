@@ -42,6 +42,8 @@ const { controlLoginSource } = require('./src/browser/control-login-source');
 const { nativeStateSource } = require('./src/browser/native-state-source');
 const { runtimeSummarySource } = require('./src/browser/runtime-summary-source');
 const { runSelfTest } = require('./src/node/run-self-test');
+const { COMBAT_CONSTANTS } = require('./src/strategy/combat-constants');
+const { OPPORTUNITY_CONSTANTS } = require('./src/strategy/opportunity-constants');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';

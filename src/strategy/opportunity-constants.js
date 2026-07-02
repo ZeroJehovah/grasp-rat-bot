@@ -8,8 +8,8 @@
 
 const OPPORTUNITY_CONSTANTS = {
   // Coin priorities and distances
-  NEAR_COIN_PRIORITY_DISTANCE: 8000,      // nearCoinPriorityDistance - near coin threshold
-  FOOT_COIN_PRIORITY_DISTANCE: 2000,      // footCoinPriorityDistance - foot coin threshold
+  NEAR_COIN_PRIORITY_DISTANCE: 13500,     // nearCoinPriorityDistance - near coin threshold
+  FOOT_COIN_PRIORITY_DISTANCE: 1200,      // footCoinPriorityDistance - foot coin threshold
   GLOBAL_COIN_MAX_DISTANCE: 200000,       // globalCoinMaxDistance - far coin limit
 
   // Coin routing
