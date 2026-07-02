@@ -572,6 +572,24 @@ function main() {
       assert(sessionBody.includes('uptimeMs: startedAt ? Math.max(0, (stoppedAt || Date.now()) - startedAt) : 0'), 'session uptime does not freeze at missingSince');
       assert(sessionBody.includes('uptimeStoppedAt: stoppedAt'), 'session uptime stopped-at status is not exposed');
     });
+    check(`${file} records incidental native coin pickups in session stats`, () => {
+      assert(text.includes('lastNativeCoinSnapshot'), 'native coin pickup snapshot state not found');
+      assert(text.includes('function nativeCoinSnapshot'), 'native coin snapshot helper not found');
+      assert(text.includes('function recordIncidentalCoinPickups'), 'incidental coin pickup recorder not found');
+      const incidentalBody = functionBody(text, 'recordIncidentalCoinPickups');
+      assert(incidentalBody.includes('nativeCoinSnapshot()'), 'incidental pickup recorder does not read native coin state');
+      assert(incidentalBody.includes('currentKeys.has(String(coin.key))'), 'incidental pickup recorder does not compare disappeared coins');
+      assert(incidentalBody.includes('pointToSegmentDistance(coin, previousSelf, currentSummary)'), 'incidental pickup recorder does not check self movement path');
+      assert(incidentalBody.includes("'incidental-coin-disappeared'"), 'incidental pickup reason not recorded');
+      assert(incidentalBody.includes('rememberNativeCoinSnapshot(currentSnapshot)'), 'incidental pickup recorder does not refresh native snapshot');
+      assert(functionBody(text, 'markCoinCollected').includes('rememberNativeCoinSnapshot();'), 'tracked pickup path does not refresh native snapshot');
+      const preservedBody = functionBody(file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text, 'buildBrowserPreservedState');
+      assert(preservedBody.includes('lastNativeCoinSnapshot'), 'preserved-state helper does not preserve native coin snapshots');
+      const tickBody = functionBody(text, 'tick');
+      assert(tickBody.includes('coinMarked = markCoinCollected(self, currentSummary, previousCoins)'), 'tick does not record tracked coin pickups first');
+      assert(tickBody.includes('coinMarked = recordIncidentalCoinPickups(self, currentSummary, bot.lastSelf, previousCoins)'), 'tick does not record incidental coin pickups');
+      assert(tickBody.includes('rememberNativeCoinSnapshot();'), 'tick does not seed native coin snapshots without previous self');
+    });
     check(`${file} limits ordinary profit to realtime/native visible state`, () => {
       const classifyBody = functionBody(text, 'classify');
       const chooseBody = functionBody(text, 'chooseAction');

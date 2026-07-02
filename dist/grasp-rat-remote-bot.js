@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.273"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.274"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -36,6 +36,7 @@
     seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
     session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
     lastSelf: previousBot?.lastSelf && typeof previousBot.lastSelf === 'object' ? { ...previousBot.lastSelf } : null,
+    lastNativeCoinSnapshot: Array.isArray(previousBot?.lastNativeCoinSnapshot) ? previousBot.lastNativeCoinSnapshot.slice(-160) : [],
     combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
     combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
     combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
@@ -1117,6 +1118,7 @@
     staleCoinEscape: null,
     coinProgress: null,
     lastCoinCollected: null,
+    lastNativeCoinSnapshot: Array.isArray(preserved.lastNativeCoinSnapshot) ? preserved.lastNativeCoinSnapshot.slice(-160) : [],
     coinAttempts: new Map(),
     ignoredCoins: new Map(restoredFailures
       .filter(([, item]) => Number(item?.ignoreUntil || 0) > performance.now())
@@ -19592,6 +19594,46 @@ function hpDisplay(value) {
       .some(coin => coinMatchesTrackedTarget(coin, target));
   }
 
+  function nativeCoinSnapshot() {
+    const nativeCoinList = getNativeCoinList();
+    if (!Array.isArray(nativeCoinList)) return null;
+    const t = Date.now();
+    return nativeCoinList
+      .map(coin => normalizeCoinDrop(coin, 'native'))
+      .filter(Boolean)
+      .map(coin => ({
+        id: coin.drop_id ?? coin.id ?? coin.coin_id ?? '',
+        key: coinTargetKey(coin),
+        amount: Math.max(0, Math.round(Number(coin.amount || 0) || 0)),
+        x: Number(coin.x),
+        y: Number(coin.y),
+        at: t
+      }))
+      .filter(coin => coin.key && coin.amount > 0 && Number.isFinite(coin.x) && Number.isFinite(coin.y));
+  }
+
+  function rememberNativeCoinSnapshot(snapshot = null) {
+    const next = Array.isArray(snapshot) ? snapshot : nativeCoinSnapshot();
+    if (Array.isArray(next)) bot.lastNativeCoinSnapshot = next.slice(-160);
+    return next;
+  }
+
+  function pointToSegmentDistance(point, a, b) {
+    const px = Number(point?.x);
+    const py = Number(point?.y);
+    const ax = Number(a?.x);
+    const ay = Number(a?.y);
+    const bx = Number(b?.x);
+    const by = Number(b?.y);
+    if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return Infinity;
+    const vx = bx - ax;
+    const vy = by - ay;
+    const lenSq = vx * vx + vy * vy;
+    if (!(lenSq > 0)) return dist(point, a);
+    const ratio = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / lenSq));
+    return dist(point, { x: ax + vx * ratio, y: ay + vy * ratio });
+  }
+
   function recordSessionCoinPickup(target, amount, currentSummary, previousCoins, reason) {
     const value = Math.max(0, Math.round(Number(amount || 0)));
     if (!value) return false;
@@ -19617,6 +19659,48 @@ function hpDisplay(value) {
     );
     upsertImportantSessionRecord(session, currentSummary, { at: t });
     return true;
+  }
+
+  function recordIncidentalCoinPickups(self, currentSummary, previousSelf, previousCoins) {
+    const previousSnapshot = Array.isArray(bot.lastNativeCoinSnapshot) ? bot.lastNativeCoinSnapshot : [];
+    const currentSnapshot = nativeCoinSnapshot();
+    if (!Array.isArray(currentSnapshot)) return false;
+    const t = Date.now();
+    const memoryMs = Math.max(500, Number(cfg.incidentalCoinPickupMemoryMs || 3000) || 3000);
+    const currentKeys = new Set(currentSnapshot.map(coin => String(coin.key || '')));
+    const radius = Math.max(0, Number(cfg.coinCollectedConfirmDistance || 0) || 0);
+    let recorded = false;
+    for (const coin of previousSnapshot) {
+      if (!coin || !coin.key || currentKeys.has(String(coin.key))) continue;
+      if (t - Number(coin.at || 0) > memoryMs) continue;
+      const currentDistance = dist(currentSummary, coin);
+      const previousDistance = previousSelf ? dist(previousSelf, coin) : Infinity;
+      const pathDistance = previousSelf ? pointToSegmentDistance(coin, previousSelf, currentSummary) : currentDistance;
+      if (Math.min(currentDistance, previousDistance, pathDistance) > radius) continue;
+      const sessionRecorded = recordSessionCoinPickup({
+        id: coin.id || coin.key,
+        amount: coin.amount,
+        x: coin.x,
+        y: coin.y,
+        distance: currentDistance
+      }, coin.amount, currentSummary, previousCoins, 'incidental-coin-disappeared');
+      recorded = Boolean(recorded || sessionRecorded);
+      if (sessionRecorded) {
+        bot.lastCoinCollected = {
+          id: coin.id || coin.key,
+          amount: coin.amount,
+          distance: Number.isFinite(currentDistance) ? Math.round(currentDistance) : null,
+          previousCoins,
+          currentCoins: Number(currentSummary?.coins || 0),
+          pruned: 0,
+          confirmReason: 'incidental-coin-disappeared',
+          sessionRecorded,
+          at: t
+        };
+      }
+    }
+    rememberNativeCoinSnapshot(currentSnapshot);
+    return recorded;
   }
 
   function pruneCollectedSnapshotCoin(target) {
@@ -19669,6 +19753,7 @@ function hpDisplay(value) {
       at: Date.now()
     };
     clearCoinTracking(confirmReason);
+    rememberNativeCoinSnapshot();
     return true;
   }
 
@@ -20537,7 +20622,15 @@ function hpDisplay(value) {
         if (cfg.once) bot.stop('once');
         return;
       }
-      const coinMarked = hadPreviousSelf && markCoinCollected(self, currentSummary, previousCoins);
+      let coinMarked = false;
+      if (hadPreviousSelf) {
+        coinMarked = markCoinCollected(self, currentSummary, previousCoins);
+        if (!coinMarked) {
+          coinMarked = recordIncidentalCoinPickups(self, currentSummary, bot.lastSelf, previousCoins);
+        }
+      } else {
+        rememberNativeCoinSnapshot();
+      }
 	      if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
 	        clearCoinTracking('drop-increased');
 	      }
