@@ -4,7 +4,7 @@ Update this file for every remote bot release or handoff-relevant version change
 
 - Latest remote bot: `bootstrap-0.4.277`.
 - Latest manifest SHA-256: `52321851462801f672c350733ae580c9aaf434a255a1a6b64110900fc2f5ea2f`.
-- Latest release commit: `TBD` (`bootstrap-0.4.277` coin diagnostics strategy module integration), previous release commit `bc81dfc` (`bootstrap-0.4.276` target-switch diagnostics strategy module integration).
+- Latest release commit: `5d93a32` (`bootstrap-0.4.277` coin diagnostics strategy module integration), previous release commit `bc81dfc` (`bootstrap-0.4.276` target-switch diagnostics strategy module integration).
 - Latest bootstrap A versions: Tampermonkey `0.4.73`, extension `0.1.52`.
 - Tampermonkey `0.4.73` / extension `0.1.52` tightens the embedded panel `原因` row during relogin/no-self safety waits. Preserved enemy/offline exit text now prefers concrete `summary` / `exitSummary` / last-result summaries over `displayReason`, and wait-only/gate text such as `等待登录点安全快照`, `等待重连`, or `已登录，等待游戏连接/自身实体` is treated as empty. This keeps the last real exit reason visible while the duplicated wait details stay in `当前行为`, `冷却时间`, and `登录点安全`.
 - Local report outputs are unified under `docs/reports/YYYY-MM/`: daily summaries default to `daily-YYYY-MM-DD.md`, and Elysiver coin balance reports default to `monthly-YYYY-MM.md`. Existing generated daily/monthly Markdown reports have been moved out of ignored log directories and `docs/coin-reports/`.
