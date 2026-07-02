@@ -668,6 +668,15 @@ function knownReasonText(reason) {
   return '';
 }
 
+function specificExitEvidenceText(evidence) {
+  if (!evidence) return '';
+  const reason = String(evidence.reason || '').toLowerCase();
+  const summary = String(evidence.summary || '');
+  if (!reason && !summary) return '';
+  if (/login-before-session-end|session-interrupted-before-next-login/.test(reason)) return '';
+  return verboseExitText(evidence.reason, evidence.summary, evidence);
+}
+
 function parsedTradeExitSummary(text, evidence = null) {
   const value = stripReconnectSuffix(text);
   const match = value.match(/^与(.+?)战斗，交换比劣势(?:，预计承伤倒计时([^，]+))?(?:，预计击杀需([^，]+))?，提前退出$/);
@@ -735,9 +744,9 @@ function verboseExitText(reason, summary, evidence = null) {
   const text = String(summary || reason || '');
   const reasonValue = String(reason || '').toLowerCase();
   if (!text) return '原因未记录';
-  if (/login-before-session-end/.test(reasonValue)) return knownReasonText(reason);
+  if (/login-before-session-end/.test(reasonValue)) return specificExitEvidenceText(evidence) || knownReasonText(reason);
   if (/session-interrupted-before-next-login/.test(reasonValue) || /上次登录未记录退出|下一次登录时发现上一局已结束/.test(text)) {
-    return '下一次登录时发现上一局已结束，按下一次登录时间收口';
+    return specificExitEvidenceText(evidence) || '下一次登录时发现上一局已结束，按下一次登录时间收口';
   }
   const tradeText = parsedTradeExitSummary(text, evidence);
   if (tradeText) return tradeText;
@@ -1208,6 +1217,7 @@ function buildReport(entries, options = {}) {
   }
   attachExitEvidenceToSessions(sessionList, exitEvents);
   attachExitEvidenceToCombats(combatList, sessionList, exitEvents);
+  attachConfirmedKillsToCombats(sessionList, combatList);
   combatList = dedupeCombatsByKillOutcome(combatList, sessionList);
   const rawWindow = reportDayWindow(options.day || '');
   const window = rawWindow && sessionList.some(session => sessionOverlapsWindow(session, rawWindow)) ? rawWindow : null;
@@ -1667,6 +1677,21 @@ function outcomePlayerCategory(combat, kill) {
   if (mode === 'active') return 'active';
   if (mode === 'passive') return 'afk';
   return 'unknown';
+}
+
+function attachConfirmedKillsToCombats(sessions, combats) {
+  for (const combat of combats || []) {
+    if (!combat || combat.result === 'won') continue;
+    const sessionKill = findKillForCombat(combat, sessions || []);
+    if (!sessionKill?.killConfirmed) continue;
+    combat.kill = combineCombatKill(combat, sessionKill);
+    combat.result = 'won';
+    combat.resultReason = 'kill';
+    if (!combat.endedAt) combat.endedAt = number(sessionKill.at);
+    if (!combat.durationMs && combat.startedAt && combat.endedAt) {
+      combat.durationMs = Math.max(0, number(combat.endedAt) - number(combat.startedAt));
+    }
+  }
 }
 
 function buildBattleOutcomes(sessions, combats) {
@@ -2276,6 +2301,56 @@ function runSelfTest() {
   assertSelfTest(clippedSession.reportExitAt === Date.parse('2026-06-13T01:30:00Z'), 'in-day session exit was clipped incorrectly');
   assertSelfTest(totalsForScope([clippedSession], [], []).loginDurationMs === 9.5 * 60 * 60 * 1000, 'login totals did not use clipped report duration');
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
+  assertSelfTest(
+    sessionStatusText({
+      inferredExit: true,
+      exitReason: 'session-interrupted-before-next-login',
+      exitSummary: '下一次登录时发现上一局已结束，按下一次登录时间收口',
+      exitEvidence: {
+        reason: 'combat hp disadvantage',
+        summary: '与具体敌人战斗，血量70，对方血量95，差距25，劣势退出'
+      }
+    }).includes('与具体敌人战斗，因血量劣势而主动退出'),
+    'inferred session closeout did not render attached combat exit evidence'
+  );
+  assertSelfTest(
+    sessionStatusText({
+      inferredExit: true,
+      exitReason: 'login-before-session-end:no-self',
+      exitSummary: '重新登录前上一局已不可用，按登录前收口',
+      exitEvidence: {
+        reason: 'websocket reconnect churn',
+        summary: '网络连接反复重连，退出等待重连'
+      }
+    }).includes('网络连接反复重连，主动退出'),
+    'login-before closeout did not render attached concrete exit evidence'
+  );
+  const reconciledCombat = {
+    sessionId: 'reconcile-session',
+    enemy: { id: 99, name: 'matched-kill', mode: 'Active', drop: 7 },
+    startedAt: 1000,
+    endedAt: 2000,
+    durationMs: 1000,
+    result: 'disengaged',
+    resultReason: 'target-switched'
+  };
+  attachConfirmedKillsToCombats([
+    {
+      sessionId: 'reconcile-session',
+      loginAt: 1,
+      exitAt: 3000,
+      kills: [{
+        at: 2000,
+        id: 99,
+        name: 'matched-kill',
+        killConfirmed: true,
+        rewardConfirmed: true,
+        rewardCoins: 7,
+        targetDropCoins: 7
+      }]
+    }
+  ], [reconciledCombat]);
+  assertSelfTest(reconciledCombat.result === 'won' && reconciledCombat.resultReason === 'kill' && reconciledCombat.kill?.rewardCoins === 7, 'confirmed session kill did not reconcile non-win combat summary');
   assertSelfTest(report.combats.length === 2, `expected 2 combats, got ${report.combats.length}`);
   assertSelfTest(report.combats.some(item => item.combatSummaryId === `${s2}:immediate-exit`), 'engaged enemy-leave-wait combat was incorrectly filtered out');
   assertSelfTest(!report.combats.some(item => item.combatSummaryId === `${s2}:safety-avoid`), 'safety avoidance was incorrectly counted as combat');

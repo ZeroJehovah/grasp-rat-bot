@@ -2101,6 +2101,8 @@ function main() {
       const currentDetailBody = functionBody(text, 'currentDecisionExitDetail');
       const allowsBody = functionBody(text, 'decisionAllowsCurrentExitDetail');
       const panelBody = functionBody(text, 'panelReasonDetail');
+      const exitTextBody = functionBody(text, 'exitDetailText');
+      const waitOnlyBody = functionBody(text, 'waitOnlyExitDetailText');
       assert(detailBody.includes("if (!decision) return '';"), 'reason detail does not return empty without a current decision');
       assert(detailBody.includes('decisionAllowsCurrentExitDetail(decision)'), 'reason detail does not gate exit details by current decision kind');
       assert(detailBody.includes('currentDecisionExitDetail(decision)'), 'reason detail does not read current decision exit detail');
@@ -2112,6 +2114,10 @@ function main() {
       assert(!currentDetailBody.includes('status') && !currentDetailBody.includes('localStorage'), 'current decision detail helper can read non-current state');
       assert(allowsBody.includes("return kind === 'leave' || kind === 'wait' || kind === 'idle';"), 'exit detail scope is not limited to current wait/leave/idle decisions');
       assert(text.includes('function exitDetailText'), 'panel has no shared exit detail text helper');
+      assert(text.includes('function waitOnlyExitDetailText'), 'panel has no wait-only exit detail filter');
+      assert(waitOnlyBody.includes('登录点安全快照') && waitOnlyBody.includes('game-session-connecting'), 'wait-only exit detail filter misses relogin gate reasons');
+      assert(exitTextBody.indexOf('detail?.summary') >= 0 && exitTextBody.indexOf('detail?.summary') < exitTextBody.indexOf('detail?.displayReason'), 'panel exit detail still prefers display wait text over exit summary');
+      assert(exitTextBody.includes('!waitOnlyExitDetailText(text)'), 'panel exit detail does not filter duplicated wait/gate text');
       assert(panelBody.includes('waitReasonPrefersLastExit(status)'), 'panel reason does not detect relogin/no-self wait states');
       assert(panelBody.includes('exitDetailText(activePersistentExitDetail(status))'), 'panel reason does not prefer preserved exit detail during relogin/no-self waits');
       assert(panelBody.includes('return decisionReasonDetail(decision, status);') && !panelBody.includes('lastExitReasonDetail'), 'panel reason fallback is not scoped to current decision detail');

@@ -1,8 +1,8 @@
 # Current Test Coverage Notes
 
 
-- Latest bot self-test count: `308`.
-- Latest combat-log analyzer self-test count: `84`.
+- Latest bot self-test count: `310`.
+- Latest combat-log analyzer self-test count: `88`.
 - Latest combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
@@ -116,15 +116,17 @@
   - daily-summary self-test folds post-combat recovery waits and generic post-combat timeouts into `敌方逃离` instead of exposing `战后恢复` or `交火停止` as combat results;
   - daily-summary self-test covers mutually exclusive top-level active-combat outcomes for HP disadvantage, low HP, critical HP, enemy flee, target switch, and relogin-wait exit closures;
   - combat-log analyzer `npm test` covers `ambiguous-opportunity-wait` and `coin-action-with-active-player-in-range` behavior-regression detection;
+  - combat-log analyzer self-tests cover the current Active-near-coin policy exceptions: low-Drop non-threat Active players, high-value visible coin priority, attack-range boundary Active players with no threat evidence, and continued detection for real high-Drop moving Active blockers;
   - combat-log analyzer `npm test` covers exit/behavior reason-count summaries;
   - combat-log analyzer `npm test` covers exit safety delay summaries for safe exits, unsafe exits under the default zero minimum, and reason-specific required delays;
-  - combat-log analyzer `npm test` covers reason-specific required-delay auditing for `stamina-budget-coin-leave`, including `exit-delay-below-required`;
+  - combat-log analyzer `npm test` covers reason-specific required-delay auditing for `stamina-budget-coin-leave`, including `exit-delay-below-required`; missing reason-specific delay evidence is now counted under `requiredDelayMissing` instead of being treated as below required;
   - combat-log analyzer `npm test` covers manifest source-hash match, missing-hash, and mismatch evidence issues;
   - daily-summary self-test covers explicit `pickedCoins=0` placeholder sessions not falling back to raw `coinsGained`, preventing fake `1000币` refresh/total收益 rows in the daily report;
   - daily-summary self-test covers the `实际战斗收益统计` section: it renders as a Markdown table, keeps confirmed picked kills, keeps chat-confirmed unpicked kills as `0币（未拾取）`, and keeps HP-disadvantage exits as failed/zero-profit battle rows while excluding enemy-flee/target-switch outcomes;
   - daily-summary self-test covers over-budget picked kill rewards: if drop-match/chat evidence exceeds normalized session collected coins, the extra reward is demoted to confirmed-but-unpicked Drop and is not revived in actual battle profit rows;
   - daily-summary self-test covers death-count lifecycle reporting: current-day and cross-day `self.death_count` increments add a `生命周期统计` section, split the login / actual battle profit / active-combat tables by lifecycle, and render death loss from the last pre-death Drop and Loss preview fields;
   - daily-summary self-test covers inferred closeout sessions contributing to login totals for duration, stamina, refreshed coins, active-player kill count, and reward while keeping completed/inferred/incomplete counts separate;
+  - daily-summary self-test covers inferred closeouts rendering attached concrete combat/offline exit evidence instead of generic next-login closeout text, and non-win active-combat summaries being reconciled to `胜利：击杀确认` when the same session has a confirmed kill;
   - daily-summary self-test covers actual 1d remaining/limit stamina delta overriding undercounted per-login stamina totals;
   - daily-summary command-line generation now shares the chunked JSONL reader for current-day entries and previous-day death-count lookup, covering large retained daily logs that exceed Node's single-string limit;
   - combat replay self-tests still cover historical 2026-06-14/15/16 combat windows for analyzer continuity when those local detailed logs are present, including the old authority-divergence and stale-snapshot cases. After detailed-log retention cleanup removes old ignored JSONL, the replay self-test reports those local samples under `skipped` instead of failing. The replay loader streams selected JSONL ranges instead of reading entire large log files into one string, and replay reports now include hypothetical finish-pressure shots for old low-HP retreating-edge windows. Current live combat behavior is covered by bot/static checks that require native/realtime/render aim only and no snapshot-authority fields.
@@ -134,6 +136,7 @@
   - static objective build verifier also checks the current compact network quality display: one header `latency/loss` pill after `BOT` / `WS` / `Log`, `??ms/??.??%` unknown placeholders, independent latency/loss colors, a white slash, dynamic width, two-decimal loss text, and no visible `延迟` / `丢包` labels on the clock row.
   - static objective build verifier also checks the post-login one-way zoom-out fit and the `postLoginZoomFitTolerance = 0.05` default, so the login fit pass finishes once the visible range fits and cannot zoom back in at the threshold.
   - static objective build verifier checks the action-settlement stall offline gate defaults, main tick integration, exposed status, canonical wait/leave reasons, and offline summary text so a WS-open-but-actions-not-settling state is routed through the same safe/unsafe offline leave timing as websocket offline.
+  - static objective build verifier checks Tampermonkey/extension panel reason filtering for relogin/no-self waits: wait-only gate text is filtered from `原因`, concrete exit summaries are preferred over `displayReason`, and the metadata/runtime bootstrap versions match.
   - bot self-tests cover preserving the outer specific top-level combat-log `exit.reason` when leave detail reason is generic `cooldown`;
   - bot self-tests cover top-level combat-log `exit.safeReloginAllowed` / `exit.offlineSafety` for safe offline immediate relogin evidence;
   - bot self-tests cover the session-mismatch recovery login gate staying subject to the learned login-point snapshot safety check instead of bypassing it;
