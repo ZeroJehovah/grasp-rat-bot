@@ -11,6 +11,9 @@ const DEFAULTS = {
   minUnsafeDelayMs: 0,
   staminaBudgetDelayMs: 1800000,
   combatAttackRange: 14500,
+  combatLowValueActiveDropMax: 4,
+  highValueCoinPriorityAmount: 10,
+  activeCoinBoundaryTolerance: 100,
   eventGapMs: 30000,
   eventLineGap: 100,
   latest: 20,
@@ -549,11 +552,47 @@ function activePlayersInAttackRange(entry, options, filters = {}) {
   return out;
 }
 
+function loggedEntityDrop(entity) {
+  const value = Number(entity?.drop ?? entity?.death_reward_preview ?? entity?.deathRewardPreview ?? entity?.targetDrop ?? 0);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function loggedEntityThreatEvidence(entity) {
+  const intent = String(entity?.combatIntent || entity?.combatOriginIntent || entity?.intent || '').toLowerCase();
+  return loggedEntityFiring(entity)
+    || /defensive|engaged|combat|pressure|incoming|attack/.test(intent)
+    || loggedTruthyFlag(entity?.incomingBullet)
+    || loggedTruthyFlag(entity?.incoming)
+    || loggedTruthyFlag(entity?.recentInjury);
+}
+
+function allowedCoinNearActivePlayer(entry, activePlayer, options) {
+  const decision = entry?.decision || {};
+  const reason = String(decision.reason || '').toLowerCase();
+  const drop = loggedEntityDrop(activePlayer);
+  const lowValueMax = Math.max(0, Number(options.combatLowValueActiveDropMax ?? DEFAULTS.combatLowValueActiveDropMax) || 0);
+  if (drop <= lowValueMax && !loggedEntityThreatEvidence(activePlayer)) return true;
+  if (reason === 'post-attack-drop-coin') return true;
+  const highValueAmount = Math.max(0, Number(options.highValueCoinPriorityAmount ?? DEFAULTS.highValueCoinPriorityAmount) || 0);
+  const amount = Number(decision.target?.amount ?? decision.target?.drop ?? 0);
+  if (reason === 'high-value-visible-coin-priority' && amount >= highValueAmount) return true;
+  const range = Math.max(0, Number(options.combatAttackRange || DEFAULTS.combatAttackRange) || 0);
+  const tolerance = Math.max(0, Number(options.activeCoinBoundaryTolerance ?? DEFAULTS.activeCoinBoundaryTolerance) || 0);
+  const distance = Number(activePlayer?.distance);
+  if (Number.isFinite(distance) && range > 0 && distance >= range - tolerance && !loggedEntityThreatEvidence(activePlayer)) return true;
+  return false;
+}
+
+function blockingActivePlayersForCoinAction(entry, options) {
+  return activePlayersInAttackRange(entry, options, { actionableOnly: true })
+    .filter(activePlayer => !allowedCoinNearActivePlayer(entry, activePlayer, options));
+}
+
 function behaviorIssues(entry, options) {
   const issues = [];
   if (isAmbiguousOpportunityWait(entry)) issues.push('ambiguous-opportunity-wait');
-  const actionableActivePlayers = activePlayersInAttackRange(entry, options, { actionableOnly: true });
-  if (!isCombatDecision(entry) && isCoinDecision(entry) && actionableActivePlayers.length) {
+  const blockingActivePlayers = blockingActivePlayersForCoinAction(entry, options);
+  if (!isCombatDecision(entry) && isCoinDecision(entry) && blockingActivePlayers.length) {
     issues.push('coin-action-with-active-player-in-range');
   }
   return issues;
@@ -561,6 +600,27 @@ function behaviorIssues(entry, options) {
 
 function hpDisadvantageExitReason(reason) {
   return /combat-(?:hp-disadvantage|low-hp)-leave/.test(String(reason || ''));
+}
+
+function hasNumericField(obj, keys) {
+  if (!obj || typeof obj !== 'object') return false;
+  return keys.some(key => Object.prototype.hasOwnProperty.call(obj, key) && Number.isFinite(Number(obj[key])));
+}
+
+function delayEvidenceKnown(entry) {
+  const decision = entry?.decision || {};
+  const leave = decision?.leave || {};
+  const exit = entry?.exit || {};
+  const enemyExit = entry?.enemyExit || {};
+  const pendingCombatLeave = entry?.pendingCombatLeave || {};
+  const delayKeys = ['pendingLoginSuppressDelayMs', 'reloginDelayMs', 'holdRemainingMs'];
+  return hasNumericField(exit, delayKeys)
+    || hasNumericField(leave, delayKeys)
+    || hasNumericField(decision, delayKeys)
+    || hasNumericField(enemyExit, ['reloginDelayMs', 'holdRemainingMs'])
+    || hasNumericField(pendingCombatLeave, ['holdRemainingMs'])
+    || hasNumericField(entry?.login, ['suppressRemainingMs', 'enemyHoldRemainingMs', 'offlineHoldRemainingMs'])
+    || hasNumericField(entry?.decision?.login, ['suppressRemainingMs', 'enemyHoldRemainingMs', 'offlineHoldRemainingMs']);
 }
 
 function delayMs(entry) {
@@ -725,7 +785,7 @@ function auditFile(file, rootDir, options) {
     }
     const currentBehaviorIssues = behaviorIssues(entry, options);
     if (currentBehaviorIssues.length) {
-      const activeTarget = activePlayersInAttackRange(entry, options, { actionableOnly: true })[0] || null;
+      const activeTarget = blockingActivePlayersForCoinAction(entry, options)[0] || null;
       const activeTargetLabel = activeTarget ? String(activeTarget.name || activeTarget.id || activeTarget.user_id || '') : '';
       const decision = entry?.decision || {};
       const reason = String(decision.reason || decision.kind || currentBehaviorIssues[0] || '');
@@ -823,6 +883,7 @@ function auditFile(file, rootDir, options) {
     const topLevelExit = hasTopLevelExit(entry);
     const unsafe = isUnsafeExit(entry);
     const eventDelayMs = delayMs(entry);
+    const eventDelayKnown = delayEvidenceKnown(entry);
     const eventRequiredDelayMs = requiredDelayMs(entry, options);
     const currentSafeReloginAllowed = safeReloginAllowed(entry);
     const issues = [];
@@ -846,6 +907,7 @@ function auditFile(file, rootDir, options) {
       unsafe,
       safeReloginAllowed: currentSafeReloginAllowed,
       delayMs: eventDelayMs,
+      delayKnown: eventDelayKnown,
       requiredDelayMs: eventRequiredDelayMs,
       login: loginContext(entry),
       count: 0,
@@ -862,6 +924,7 @@ function auditFile(file, rootDir, options) {
     event.unsafe = event.unsafe || unsafe;
     event.safeReloginAllowed = Boolean(event.safeReloginAllowed || currentSafeReloginAllowed);
     event.delayMs = Math.max(event.delayMs, eventDelayMs);
+    event.delayKnown = Boolean(event.delayKnown || eventDelayKnown);
     event.requiredDelayMs = Math.max(Number(event.requiredDelayMs || 0), eventRequiredDelayMs);
     const currentLogin = loginContext(entry);
     event.login = {
@@ -888,7 +951,7 @@ function auditFile(file, rootDir, options) {
   });
   for (const event of exitEvents) {
     const baseRequiredMs = event.unsafe ? Math.max(0, Number(options.minUnsafeDelayMs || 0) || 0) : 0;
-    if (Number(event.requiredDelayMs || 0) > baseRequiredMs && Number(event.delayMs || 0) < Number(event.requiredDelayMs || 0)) {
+    if (event.delayKnown && Number(event.requiredDelayMs || 0) > baseRequiredMs && Number(event.delayMs || 0) < Number(event.requiredDelayMs || 0)) {
       if (!event.issues.includes('exit-delay-below-required')) event.issues.push('exit-delay-below-required');
     }
   }
@@ -1098,6 +1161,7 @@ function summarizeExitSafety(events, minUnsafeDelayMs) {
     requiredDelayEvents: 0,
     requiredDelayOk: 0,
     requiredDelayBelowRequired: 0,
+    requiredDelayMissing: 0,
     minUnsafeDelayMs: minDelay,
     maxRequiredDelayMs: 0,
     maxObservedDelayMs: 0
@@ -1110,7 +1174,8 @@ function summarizeExitSafety(events, minUnsafeDelayMs) {
     out.maxRequiredDelayMs = Math.max(out.maxRequiredDelayMs, requiredDelay);
     if (requiredDelay > 0) {
       out.requiredDelayEvents += 1;
-      if (delay >= requiredDelay) out.requiredDelayOk += 1;
+      if (!event?.delayKnown) out.requiredDelayMissing += 1;
+      else if (delay >= requiredDelay) out.requiredDelayOk += 1;
       else out.requiredDelayBelowRequired += 1;
     }
     if (!event?.unsafe) {
@@ -1138,6 +1203,7 @@ function formatExitSafetyCounts(counts) {
     `unsafeDelayMissing=${Number(c.unsafeDelayMissing || 0)}`,
     `requiredDelayOk=${Number(c.requiredDelayOk || 0)}/${Number(c.requiredDelayEvents || 0)}`,
     `requiredDelayBelowRequired=${Number(c.requiredDelayBelowRequired || 0)}`,
+    `requiredDelayMissing=${Number(c.requiredDelayMissing || 0)}`,
     `minUnsafeDelay=${Number(c.minUnsafeDelayMs || 0)}ms`,
     `maxRequiredDelay=${Number(c.maxRequiredDelayMs || 0)}ms`,
     `maxObservedDelay=${Number(c.maxObservedDelayMs || 0)}ms`
@@ -1811,6 +1877,7 @@ function runSelfTest() {
             life: 'Alive',
             active: true,
             moving: true,
+            drop: 20,
             invulnerable: false,
             native: true,
             realtime: true,
@@ -1847,6 +1914,100 @@ function runSelfTest() {
             realtime: false,
             render: false,
             distance: 9000,
+            stamina_5s_remaining_milli: 8500,
+            stamina_5s_limit_milli: 10000
+          }
+        ]
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 7700,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'move',
+          reason: 'visible-coin',
+          target: {
+            type: 'coin',
+            id: 126,
+            distance: 800
+          }
+        },
+        nearbyEntities: [
+          {
+            id: 45,
+            name: 'LowDropActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            moving: true,
+            drop: 4,
+            invulnerable: false,
+            native: true,
+            realtime: true,
+            distance: 8000,
+            stamina_5s_remaining_milli: 8500,
+            stamina_5s_limit_milli: 10000
+          }
+        ]
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 7800,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'coin',
+          reason: 'high-value-visible-coin-priority',
+          target: {
+            type: 'coin',
+            id: 127,
+            amount: 25,
+            distance: 1000
+          }
+        },
+        nearbyEntities: [
+          {
+            id: 46,
+            name: 'HighValueCoinAllowedActive',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            moving: true,
+            drop: 30,
+            invulnerable: false,
+            native: true,
+            realtime: true,
+            distance: 6000,
+            stamina_5s_remaining_milli: 8500,
+            stamina_5s_limit_milli: 10000
+          }
+        ]
+      },
+      {
+        type: 'combat-frame',
+        at: baseAt + 7900,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'move',
+          reason: 'visible-coin',
+          target: {
+            type: 'coin',
+            id: 128,
+            distance: 1000
+          }
+        },
+        nearbyEntities: [
+          {
+            id: 47,
+            name: 'BoundaryActiveEnemy',
+            mode: 'Active',
+            life: 'Alive',
+            active: true,
+            moving: true,
+            drop: 30,
+            invulnerable: false,
+            native: true,
+            realtime: true,
+            distance: 14450,
             stamina_5s_remaining_milli: 8500,
             stamina_5s_limit_milli: 10000
           }
@@ -1917,6 +2078,12 @@ function runSelfTest() {
     cases += 1;
     assertSelfTest(behaviorReport.behaviorEvents.some(event => event.target === 'MovingActiveEnemy' && event.activeEvidence === 'realtime'), 'expected realtime Active coin issue to expose realtime evidence');
     cases += 1;
+    assertSelfTest(!behaviorReport.behaviorEvents.some(event => event.target === 'LowDropActiveEnemy'), 'expected low-drop Active coin action to follow current strategy policy');
+    cases += 1;
+    assertSelfTest(!behaviorReport.behaviorEvents.some(event => event.target === 'HighValueCoinAllowedActive'), 'expected high-value visible coin priority to follow current strategy policy');
+    cases += 1;
+    assertSelfTest(!behaviorReport.behaviorEvents.some(event => event.target === 'BoundaryActiveEnemy'), 'expected attack-range boundary Active coin action to follow current strategy policy');
+    cases += 1;
     assertSelfTest(issueCount(behaviorReport, 'missing-top-level-exit') === 0, 'expected behavior issues not to require top-level exit');
     cases += 1;
     assertSelfTest(reportHasAuditFailures(behaviorReport), 'expected behavior report to count as audit failure');
@@ -1977,6 +2144,20 @@ function runSelfTest() {
           summary: 'full stamina delay',
           reloginDelayMs: 1800000
         }
+      },
+      {
+        type: 'combat-end',
+        at: baseAt + 10100,
+        version: 'bootstrap-0.4.97',
+        decision: {
+          kind: 'leave',
+          reason: 'stamina-budget-coin-leave',
+          displayReason: '1h体力预算不足，退出等待恢复'
+        },
+        exit: {
+          reason: 'stamina-budget-coin-leave',
+          summary: 'missing delay evidence'
+        }
       }
     ];
     fs.writeFileSync(
@@ -1985,15 +2166,17 @@ function runSelfTest() {
     );
     const requiredDelayReport = auditLogs({ dir: requiredDelayLogsDir, manifestPath });
     cases += 1;
-    assertSelfTest(requiredDelayReport.exitEvents.length === 2, `expected 2 required-delay exits, got ${requiredDelayReport.exitEvents.length}`);
+    assertSelfTest(requiredDelayReport.exitEvents.length === 3, `expected 3 required-delay exits, got ${requiredDelayReport.exitEvents.length}`);
     cases += 1;
     assertSelfTest(issueCount(requiredDelayReport, 'exit-delay-below-required') === 1, 'expected one exit below reason-specific required delay');
     cases += 1;
-    assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayEvents === 2, `expected 2 required-delay events, got ${requiredDelayReport.exitSafetyCounts.requiredDelayEvents}`);
+    assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayEvents === 3, `expected 3 required-delay events, got ${requiredDelayReport.exitSafetyCounts.requiredDelayEvents}`);
     cases += 1;
     assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayOk === 1, `expected 1 required-delay ok event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayOk}`);
     cases += 1;
     assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayBelowRequired === 1, `expected 1 required-delay below event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayBelowRequired}`);
+    cases += 1;
+    assertSelfTest(requiredDelayReport.exitSafetyCounts.requiredDelayMissing === 1, `expected 1 required-delay missing event, got ${requiredDelayReport.exitSafetyCounts.requiredDelayMissing}`);
 
     fs.writeFileSync(
       path.join(hashOkLogsDir, 'hash-ok.jsonl'),

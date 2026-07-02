@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.72
+// @version      0.4.73
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.72';
+  const BOOTSTRAP_VERSION = '0.4.73';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -656,18 +656,35 @@
     return Boolean(exitDetailText(detail));
   }
 
+  function waitOnlyExitDetailText(value) {
+    const text = String(value || '').trim();
+    if (!text) return true;
+    if (/^(?:login|relogin|snapshot-gate|no-self|not-alive|session-mismatch|game-session-connecting|offline-leave-wait|enemy-leave-wait|pursuit-leave-wait|exit-log-flush-pending|important-log-flush-pending|auto-login|login-cooldown|login-control-missing)$/.test(text)) return true;
+    return /^等待(?:登录点安全快照|重连|退出日志发送完成|会话结束日志发送完成|游戏连接|登录控件|页面跳转)/.test(text)
+      || /^已登录，等待游戏连接/.test(text)
+      || /^界面显示未登录但原生会话仍在线，等待/.test(text)
+      || /^登录已触发，等待页面跳转/.test(text)
+      || /^自动触发登录\/加入/.test(text);
+  }
+
   function exitDetailText(detail) {
-    return String(detail?.displayReason
-      || detail?.summary
-      || detail?.exitSummary
-      || detail?.enemyLeaveSummary
-      || detail?.lastResult?.displayReason
-      || detail?.lastResult?.summary
-      || detail?.lastResult?.exitSummary
-      || detail?.lastResult?.enemyLeaveSummary
-      || detail?.reason
-      || detail?.lastResult?.reason
-      || '').trim();
+    const candidates = [
+      detail?.summary,
+      detail?.exitSummary,
+      detail?.enemyLeaveSummary,
+      detail?.lastResult?.summary,
+      detail?.lastResult?.exitSummary,
+      detail?.lastResult?.enemyLeaveSummary,
+      detail?.displayReason,
+      detail?.lastResult?.displayReason,
+      detail?.reason,
+      detail?.lastResult?.reason
+    ];
+    for (const candidate of candidates) {
+      const text = String(candidate || '').trim();
+      if (text && !waitOnlyExitDetailText(text)) return text;
+    }
+    return '';
   }
 
   function pickNewestExitDetail(candidates) {
