@@ -271,6 +271,7 @@ function main() {
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
+  const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -684,12 +685,15 @@ function main() {
     });
     check(`${file} waits at killed high-drop target position before drop refresh`, () => {
       const body = functionBody(text, 'pickPostAttackDropWaitTarget');
+      const waitCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : text;
       assert(body.includes('cfg.postAttackDropWaitMs'), 'post-attack wait window not used');
       assert(body.includes('cfg.postAttackDropResolveMaxMs'), 'post-attack wait resolve window not used');
       assert(body.includes('cfg.postAttackDropWaitMinDrop'), 'post-attack wait minimum drop not used');
       assert(body.includes('postAttackDropResolvedAt'), 'post-attack wait is not anchored to target resolution');
-      assert(body.includes('postAttackVisibleCoinExists'), 'post-attack wait does not skip already-visible drops');
-      assert(body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"), 'post-attack wait can trigger without a recent shot/attack');
+      assert(body.includes('postAttackVisibleCoinExists') || waitCoreSource.includes('postAttackVisibleCoinExistsCore'), 'post-attack wait does not skip already-visible drops');
+      assert((body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"))
+        || (waitCoreSource.includes("item.action === 'attack'") && waitCoreSource.includes("item.action === 'opportunistic-shot'")),
+      'post-attack wait can trigger without a recent shot/attack');
       assert(body.includes('postAttackDropResolvedAt') || body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target resolution');
       assert(text.includes("reason: 'post-attack-drop-wait-position'"), 'post-attack wait action reason not found');
       const actionBody = functionBody(text, 'buildPostAttackDropWaitAction');
@@ -1910,6 +1914,17 @@ function main() {
     assert(sourceBot.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
     assert(distSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
     assert(distSource.includes('function opportunityCandidateCoreOptions'), 'generated runtime opportunity candidate wrapper options not found');
+  });
+
+  check('post-attack drop wait uses strategy module core', () => {
+    assert(strategyPostAttackDropSource.includes('function postAttackVisibleCoinExistsCore'), 'strategy post-attack visible coin core not found');
+    assert(strategyPostAttackDropSource.includes('function pickPostAttackDropWaitTargetCore'), 'strategy post-attack wait picker core not found');
+    assert(sourceBot.includes("require('./src/strategy/post-attack-drop')"), 'source bot does not import post-attack drop strategy module');
+    assert(sourceBot.includes('postAttackVisibleCoinExistsCore.toString()'), 'source bot does not inject post-attack visible coin core');
+    assert(sourceBot.includes('pickPostAttackDropWaitTargetCore.toString()'), 'source bot does not inject post-attack wait picker core');
+    assert(sourceBot.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
+    assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
+    assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {

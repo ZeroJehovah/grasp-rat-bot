@@ -114,6 +114,10 @@ const {
   buildOpportunityCandidatesCore,
   bestCoinOpportunityScoreCore
 } = require('./src/strategy/opportunity-candidates');
+const {
+  postAttackVisibleCoinExistsCore,
+  pickPostAttackDropWaitTargetCore
+} = require('./src/strategy/post-attack-drop');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -10892,39 +10896,32 @@ ${importantLogSource()}
       .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || b.postAttackScore - a.postAttackScore || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
   }
 
+  ${postAttackVisibleCoinExistsCore.toString()}
+  ${pickPostAttackDropWaitTargetCore.toString()}
+
   function postAttackVisibleCoinExists(coins, attack) {
-    return (coins || [])
-      .map(c => ({ ...c, distanceToAttack: dist(c, attack), amount: Number(c.amount || 0) }))
-      .some(c => c.amount > 0 && c.distanceToAttack <= cfg.postAttackDropCoinRadius);
+    return postAttackVisibleCoinExistsCore(coins, attack, {
+      dist,
+      dropCoinRadius: cfg.postAttackDropCoinRadius
+    });
   }
 
   function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
     const t = Date.now();
     const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
-    if (!waitMs) return null;
-    const minDrop = Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0);
-    const resolveMaxMs = Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs);
-    const maxDistance = Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0));
-    const stopDistance = Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0));
-    return bot.attackHistory
-      .slice()
-      .reverse()
-      .filter(item => t - Number(item.at || 0) <= resolveMaxMs)
-      .filter(item => Number(item.drop || 0) >= minDrop)
-      .filter(item => Number.isFinite(Number(item.x)) && Number.isFinite(Number(item.y)))
-      .filter(item => item.afk !== false)
-      .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
-      .map(item => {
-        const resolvedAt = postAttackDropResolvedAt(item, entities, t);
-        return resolvedAt ? { ...item, postAttackDropResolvedAt: resolvedAt } : null;
-      })
-      .filter(Boolean)
-      .filter(item => t - Number(item.postAttackDropResolvedAt || 0) <= waitMs)
-      .filter(item => !postAttackVisibleCoinExists(coins, item))
-      .map(item => ({ ...item, distance: dist(self, item) }))
-      .filter(item => item.distance > stopDistance && item.distance <= maxDistance)
-      .filter(item => !activeThreats.some(threat => coinBlockedByThreat(self, item, threat)))
-      .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
+    return pickPostAttackDropWaitTargetCore(bot.attackHistory, coins, activeThreats, {
+      nowMs: t,
+      self,
+      dist,
+      waitMs,
+      minDrop: Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0),
+      resolveMaxMs: Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs),
+      maxDistance: Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0)),
+      stopDistance: Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0)),
+      dropCoinRadius: cfg.postAttackDropCoinRadius,
+      resolveAttack: item => postAttackDropResolvedAt(item, entities, t),
+      coinBlockedByThreat: (origin, item, threat) => coinBlockedByThreat(origin, item, threat)
+    });
   }
 
   function buildPostAttackDropWaitAction(self, target) {

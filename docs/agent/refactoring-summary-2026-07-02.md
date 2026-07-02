@@ -182,6 +182,17 @@ This is intended as an equivalent extraction of choice metadata construction onl
 
 This is intended as an equivalent extraction of missing-held candidate construction only; top-level opportunity selection and action execution remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2K Post-Attack Drop Wait Integration
+
+`bootstrap-0.4.283` extracts post-attack drop wait target selection:
+
+- `src/strategy/post-attack-drop.js` now owns visible coin coverage checks, wait-window filtering, drop/action eligibility, stop/max-distance gates, threat blocking, and drop-first sorting for post-attack wait targets.
+- The browser runtime still owns attack-history resolution state, config access, threat callbacks, and `buildPostAttackDropWaitAction()` action construction.
+- `src/strategy/self-test.js` now has 38 tests, including three post-attack drop wait cases covering visible coin coverage, resolved wait target selection, and covered/threat-blocked skips.
+- Static verification checks both the strategy source module and generated remote runtime for the post-attack drop wait core and wrapper wiring.
+
+This is intended as an equivalent extraction of target selection only; post-attack drop coin pickup, attack history mutation, and action execution remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -193,9 +204,10 @@ This is intended as an equivalent extraction of missing-held candidate construct
 6. Opportunity candidate construction: integrated in `bootstrap-0.4.280`
 7. Opportunity choice persistence construction: integrated in `bootstrap-0.4.281`
 8. Missing-held opportunity construction: integrated in `bootstrap-0.4.282`
-9. Constants: partially integrated for high-value coin defaults
-10. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-11. Run live validation sessions after each behavior-touching replacement
+9. Post-attack drop wait selection: integrated in `bootstrap-0.4.283`
+10. Constants: partially integrated for high-value coin defaults
+11. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+12. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

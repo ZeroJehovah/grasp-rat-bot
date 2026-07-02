@@ -19,6 +19,7 @@ src/strategy/
 ├── combat-fire-discipline.js   # Combat shooting state machine
 ├── opportunity-choice.js       # Opportunity choice stability/persistence/missing-held core
 ├── opportunity-candidates.js   # Opportunity candidate construction core
+├── post-attack-drop.js         # Post-attack drop wait selection core
 ├── opportunity-constants.js    # Profit/coin system configuration
 └── self-test.js               # Strategy module test suite
 ```
@@ -151,6 +152,16 @@ Builds opportunity candidate descriptors:
 
 This module is authoritative for opportunity candidate construction as of `bootstrap-0.4.280`; the browser runtime wrapper still owns route picking, runtime callbacks, action construction, missing-held cleanup, and persisted opportunity choice state.
 
+#### `post-attack-drop.js`
+Builds post-attack drop wait selections:
+- Visible coin coverage checks around resolved attack targets
+- Wait-window and resolve-window filtering
+- Drop/action eligibility gates
+- Stop/max-distance and threat-blocking gates
+- Drop-first target sorting
+
+This module is authoritative for post-attack drop wait target selection as of `bootstrap-0.4.283`; the browser runtime wrapper still owns attack-history resolution state, config access, threat callbacks, and action construction.
+
 ### Testing
 
 #### `self-test.js`
@@ -163,9 +174,10 @@ Automated test suite:
 - Coin route planning (3 tests)
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
+- Post-attack drop wait selection (3 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 35 tests, all passing**
+- **Total: 38 tests, all passing**
 
 ## Usage Example
 
@@ -220,8 +232,9 @@ executeAction(action);
 8. **Phase 2H**: Opportunity candidate construction integrated into runtime and strategy self-tests
 9. **Phase 2I**: Opportunity choice persistence construction integrated into runtime and strategy self-tests
 10. **Phase 2J**: Missing-held opportunity construction integrated into runtime and strategy self-tests
-11. **Next**: Replace additional helpers only in small, provably equivalent slices
-12. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+11. **Phase 2K**: Post-attack drop wait selection integrated into runtime and strategy self-tests
+12. **Next**: Replace additional helpers only in small, provably equivalent slices
+13. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 

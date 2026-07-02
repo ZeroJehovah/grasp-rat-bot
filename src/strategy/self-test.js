@@ -29,6 +29,10 @@ const {
   buildOpportunityCandidatesCore,
   bestCoinOpportunityScoreCore
 } = require('./opportunity-candidates');
+const {
+  postAttackVisibleCoinExistsCore,
+  pickPostAttackDropWaitTargetCore
+} = require('./post-attack-drop');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -638,6 +642,61 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'opportunity-candidates-best-coin-score-includes-route',
     passed: bestCoinRouteScore === 9
+  });
+
+  const postAttackDist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+  results.push({
+    name: 'post-attack-drop-visible-coin-exists-core',
+    passed: postAttackVisibleCoinExistsCore(
+      [{ x: 1010, y: 0, amount: 1 }, { x: 9000, y: 0, amount: 20 }],
+      { x: 1000, y: 0 },
+      { dist: postAttackDist, dropCoinRadius: 50 }
+    ) === true
+      && postAttackVisibleCoinExistsCore(
+        [{ x: 1010, y: 0, amount: 0 }],
+        { x: 1000, y: 0 },
+        { dist: postAttackDist, dropCoinRadius: 50 }
+      ) === false
+  });
+
+  const postAttackWaitOptions = {
+    nowMs: 10000,
+    self: { x: 0, y: 0 },
+    dist: postAttackDist,
+    waitMs: 1000,
+    resolveMaxMs: 5000,
+    minDrop: 8,
+    maxDistance: 50000,
+    stopDistance: 900,
+    dropCoinRadius: 3500,
+    resolveAttack: item => Number(item.resolvedAt || 0),
+    coinBlockedByThreat: () => false
+  };
+  const postAttackPicked = pickPostAttackDropWaitTargetCore([
+    { id: 'low', x: 1200, y: 0, at: 9000, resolvedAt: 9700, drop: 7, afk: true, action: 'attack' },
+    { id: 'near', x: 850, y: 0, at: 9000, resolvedAt: 9700, drop: 30, afk: true, action: 'attack' },
+    { id: 'best', x: 2200, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'opportunistic-shot' },
+    { id: 'older', x: 1200, y: 0, at: 9000, resolvedAt: 9700, drop: 12, afk: true, action: 'attack' }
+  ], [], [], postAttackWaitOptions);
+  results.push({
+    name: 'post-attack-drop-wait-picks-resolved-target',
+    passed: postAttackPicked?.id === 'best'
+      && postAttackPicked?.postAttackDropResolvedAt === 9700
+      && Math.round(postAttackPicked?.distance || 0) === 2200
+  });
+
+  const postAttackCovered = pickPostAttackDropWaitTargetCore([
+    { id: 'covered', x: 2200, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
+  ], [{ x: 2200, y: 100, amount: 1 }], [], postAttackWaitOptions);
+  const postAttackThreatBlocked = pickPostAttackDropWaitTargetCore([
+    { id: 'blocked', x: 2200, y: 0, at: 9000, resolvedAt: 9700, drop: 20, afk: true, action: 'attack' }
+  ], [], [{ x: 2000, y: 0 }], {
+    ...postAttackWaitOptions,
+    coinBlockedByThreat: () => true
+  });
+  results.push({
+    name: 'post-attack-drop-wait-skips-covered-or-threat-blocked',
+    passed: postAttackCovered === null && postAttackThreatBlocked === null
   });
 
   // Test combat constants validation
