@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.282"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.283"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -18667,39 +18667,74 @@ function hpDisplay(value) {
       .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || b.postAttackScore - a.postAttackScore || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
   }
 
+  function postAttackVisibleCoinExistsCore(coins, attack, options = {}) {
+  const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const radius = Math.max(0, Number(options.dropCoinRadius || 0));
+  return (coins || [])
+    .map(c => ({ ...c, distanceToAttack: dist(c, attack), amount: Number(c?.amount || 0) }))
+    .some(c => c.amount > 0 && c.distanceToAttack <= radius);
+}
+  function pickPostAttackDropWaitTargetCore(attacks, coins, activeThreats, options = {}) {
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const waitMs = Math.max(0, Number(options.waitMs || 0));
+  if (!waitMs) return null;
+  const minDrop = Math.max(0, Number(options.minDrop || 0));
+  const resolveMaxMs = Math.max(waitMs, Number(options.resolveMaxMs || waitMs) || waitMs);
+  const maxDistance = Math.max(0, Number(options.maxDistance || 0));
+  const stopDistance = Math.max(0, Number(options.stopDistance || 0));
+  const self = options.self || null;
+  const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const resolveAttack = typeof options.resolveAttack === 'function'
+    ? options.resolveAttack
+    : item => Number(item?.postAttackDropResolvedAt || 0);
+  const visibleCoinExists = typeof options.visibleCoinExists === 'function'
+    ? options.visibleCoinExists
+    : (list, item) => postAttackVisibleCoinExistsCore(list, item, options);
+  const coinBlockedByThreat = typeof options.coinBlockedByThreat === 'function' ? options.coinBlockedByThreat : () => false;
+  return (attacks || [])
+    .slice()
+    .reverse()
+    .filter(item => t - Number(item?.at || 0) <= resolveMaxMs)
+    .filter(item => Number(item?.drop || 0) >= minDrop)
+    .filter(item => Number.isFinite(Number(item?.x)) && Number.isFinite(Number(item?.y)))
+    .filter(item => item.afk !== false)
+    .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
+    .map(item => {
+      const resolvedAt = resolveAttack(item);
+      return resolvedAt ? { ...item, postAttackDropResolvedAt: resolvedAt } : null;
+    })
+    .filter(Boolean)
+    .filter(item => t - Number(item.postAttackDropResolvedAt || 0) <= waitMs)
+    .filter(item => !visibleCoinExists(coins, item))
+    .map(item => ({ ...item, distance: dist(self, item) }))
+    .filter(item => item.distance > stopDistance && item.distance <= maxDistance)
+    .filter(item => !(activeThreats || []).some(threat => coinBlockedByThreat(self, item, threat)))
+    .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
+}
+
   function postAttackVisibleCoinExists(coins, attack) {
-    return (coins || [])
-      .map(c => ({ ...c, distanceToAttack: dist(c, attack), amount: Number(c.amount || 0) }))
-      .some(c => c.amount > 0 && c.distanceToAttack <= cfg.postAttackDropCoinRadius);
+    return postAttackVisibleCoinExistsCore(coins, attack, {
+      dist,
+      dropCoinRadius: cfg.postAttackDropCoinRadius
+    });
   }
 
   function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
     const t = Date.now();
     const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
-    if (!waitMs) return null;
-    const minDrop = Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0);
-    const resolveMaxMs = Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs);
-    const maxDistance = Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0));
-    const stopDistance = Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0));
-    return bot.attackHistory
-      .slice()
-      .reverse()
-      .filter(item => t - Number(item.at || 0) <= resolveMaxMs)
-      .filter(item => Number(item.drop || 0) >= minDrop)
-      .filter(item => Number.isFinite(Number(item.x)) && Number.isFinite(Number(item.y)))
-      .filter(item => item.afk !== false)
-      .filter(item => item.action === 'attack' || item.action === 'opportunistic-shot')
-      .map(item => {
-        const resolvedAt = postAttackDropResolvedAt(item, entities, t);
-        return resolvedAt ? { ...item, postAttackDropResolvedAt: resolvedAt } : null;
-      })
-      .filter(Boolean)
-      .filter(item => t - Number(item.postAttackDropResolvedAt || 0) <= waitMs)
-      .filter(item => !postAttackVisibleCoinExists(coins, item))
-      .map(item => ({ ...item, distance: dist(self, item) }))
-      .filter(item => item.distance > stopDistance && item.distance <= maxDistance)
-      .filter(item => !activeThreats.some(threat => coinBlockedByThreat(self, item, threat)))
-      .sort((a, b) => Number(b.drop || 0) - Number(a.drop || 0) || Number(a.distance || 0) - Number(b.distance || 0))[0] || null;
+    return pickPostAttackDropWaitTargetCore(bot.attackHistory, coins, activeThreats, {
+      nowMs: t,
+      self,
+      dist,
+      waitMs,
+      minDrop: Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0),
+      resolveMaxMs: Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs),
+      maxDistance: Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0)),
+      stopDistance: Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0)),
+      dropCoinRadius: cfg.postAttackDropCoinRadius,
+      resolveAttack: item => postAttackDropResolvedAt(item, entities, t),
+      coinBlockedByThreat: (origin, item, threat) => coinBlockedByThreat(origin, item, threat)
+    });
   }
 
   function buildPostAttackDropWaitAction(self, target) {
