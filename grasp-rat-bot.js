@@ -62,6 +62,12 @@ const {
   buildPreviousDecisionSummary,
   recordActionSwitchDiagnosticsCore
 } = require('./src/strategy/action-switch-diagnostics');
+const {
+  coinDiagnosticsSummary,
+  summarizeCoinDiagnosticsList,
+  addCoinFilterDiagnostic,
+  buildCoinDiagnostics
+} = require('./src/strategy/coin-diagnostics');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -6510,20 +6516,7 @@ ${importantLogSource()}
 	    return Math.max(1, Math.round(Number(cfg.coinDiagnosticsMaxEntries || 8) || 8));
 	  }
 
-	  function coinDiagnosticsSummary(coin, extra = {}) {
-	    if (!coin) return null;
-	    return {
-	      id: coin.drop_id ?? coin.id ?? null,
-	      amount: Number.isFinite(Number(coin.amount)) ? Number(coin.amount) : null,
-	      distance: Number.isFinite(Number(coin.distance)) ? Math.round(Number(coin.distance)) : null,
-	      x: Number.isFinite(Number(coin.x)) ? Math.round(Number(coin.x)) : null,
-	      y: Number.isFinite(Number(coin.y)) ? Math.round(Number(coin.y)) : null,
-	      native: Boolean(coin.native),
-	      snapshot: Boolean(coin.snapshot),
-	      nativeSource: coin.nativeSource || '',
-	      ...extra
-	    };
-	  }
+	  ${coinDiagnosticsSummary.toString()}
 
 	  function coinThreatDiagnostics(threat) {
 	    if (!threat) return null;
@@ -6537,85 +6530,24 @@ ${importantLogSource()}
 	    };
 	  }
 
+	  ${summarizeCoinDiagnosticsList.toString()}
+
+	  ${addCoinFilterDiagnostic.toString()}
+
+	  ${buildCoinDiagnostics.toString()}
+
 	  function recordCoinFilterDiagnostic(coin, reason, detail = {}) {
-	    const distance = Number(coin?.distance);
-	    const nearDistance = coinDiagnosticsNearDistance();
-	    if (!(nearDistance > 0) || !Number.isFinite(distance) || distance > nearDistance) return;
-	    if (!bot.coinDiagnostics || typeof bot.coinDiagnostics !== 'object') return;
-	    const filtered = Array.isArray(bot.coinDiagnostics.filteredNearCoins) ? bot.coinDiagnostics.filteredNearCoins : [];
-	    const entry = coinDiagnosticsSummary(coin, { reason, ...detail });
-	    if (!entry) return;
-	    const key = String(entry.id ?? '') + ':' + reason;
-	    const existing = filtered.find(item => String(item.id ?? '') + ':' + String(item.reason || '') === key);
-	    if (existing) {
-	      if (entry.distance !== null && (existing.distance === null || entry.distance < existing.distance)) Object.assign(existing, entry);
-	    } else if (filtered.length < coinDiagnosticsLimit()) {
-	      filtered.push(entry);
-	    }
-	    bot.coinDiagnostics.filteredNearCoins = filtered;
+	    addCoinFilterDiagnostic(bot.coinDiagnostics, coin, reason, {
+	      nearDistance: coinDiagnosticsNearDistance(),
+	      limit: coinDiagnosticsLimit(),
+	      detail
+	    });
 	  }
 
 	  function coinStaminaAffordableWithDiagnostic(self, coin, staminaCost = opportunityCoinStaminaCost(coin), reason = 'stamina-unaffordable') {
 	    const affordable = opportunityStaminaAffordable(self, staminaCost);
 	    if (!affordable) recordCoinFilterDiagnostic(coin, reason, { staminaCost: Math.round(Number(staminaCost) || 0) });
 	    return affordable;
-	  }
-
-	  function summarizeCoinDiagnosticsList(coins, maxDistance, limit = coinDiagnosticsLimit()) {
-	    return (coins || [])
-	      .filter(coin => Number(coin?.distance) <= maxDistance)
-	      .slice()
-	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
-	        || Number(b.amount || 0) - Number(a.amount || 0))
-	      .slice(0, limit)
-	      .map(coin => coinDiagnosticsSummary(coin))
-	      .filter(Boolean);
-	  }
-
-	  function buildCoinDiagnostics(self, groups = {}) {
-	    const nearDistance = coinDiagnosticsNearDistance();
-	    const limit = coinDiagnosticsLimit();
-	    const realtimeCoins = groups.realtimeCoins || [];
-	    const snapshotCoins = groups.snapshotCoins || [];
-	    const ignoredNearCoins = [];
-	    const snapshotOnlyNearCoins = [];
-	    const t = now();
-	    for (const coin of realtimeCoins || []) {
-	      const distance = Number(coin?.distance);
-	      if (!Number.isFinite(distance) || !(distance <= nearDistance)) continue;
-	      const ignoredUntil = bot.ignoredCoins.get(String(coin.drop_id));
-	      if (!ignoredUntil) continue;
-	      const summary = coinDiagnosticsSummary(coin, {
-	        reason: 'ignored',
-	        remainingMs: Math.max(0, Math.round(Number(ignoredUntil || 0) - t))
-	      });
-	      if (summary) ignoredNearCoins.push(summary);
-	      if (ignoredNearCoins.length >= limit) break;
-	    }
-	    for (const coin of snapshotCoins || []) {
-	      const distance = Number(coin?.distance);
-	      if (!Number.isFinite(distance) || !(distance <= nearDistance)) continue;
-	      const summary = coinDiagnosticsSummary(coin, { reason: 'snapshot-only' });
-	      if (summary) snapshotOnlyNearCoins.push(summary);
-	      if (snapshotOnlyNearCoins.length >= limit) break;
-	    }
-	    return {
-	      at: Date.now(),
-	      self: self ? {
-	        x: Number.isFinite(Number(self.x)) ? Math.round(Number(self.x)) : null,
-	        y: Number.isFinite(Number(self.y)) ? Math.round(Number(self.y)) : null
-	      } : null,
-	      nearDistance: Math.round(nearDistance),
-	      realtimeNearCount: arrayCount(groups.realtimeNearCoins),
-	      realtimeCount: arrayCount(realtimeCoins),
-	      realtimeGlobalCount: arrayCount(groups.realtimeGlobalCoins),
-	      realtimePatrolCount: arrayCount(groups.realtimePatrolCoins),
-	      snapshotCount: arrayCount(groups.snapshotCoins),
-	      nearestRealtimeCoins: summarizeCoinDiagnosticsList(realtimeCoins, nearDistance, limit),
-	      ignoredNearCoins,
-	      snapshotOnlyNearCoins,
-	      filteredNearCoins: []
-	    };
 	  }
 
 	  function attachCoinDiagnostics(action) {
@@ -12326,6 +12258,11 @@ ${importantLogSource()}
       realtimeGlobalCoins,
       realtimePatrolCoins,
       snapshotCoins
+    }, {
+      nearDistance: coinDiagnosticsNearDistance(),
+      limit: coinDiagnosticsLimit(),
+      nowMs: now(),
+      ignoredCoinUntil: coin => bot.ignoredCoins.get(String(coin?.drop_id))
     });
     bot.lastActionEntities = entities;
     updateOpportunityAfkStaminaObservations(realtimeEntities);
