@@ -9,6 +9,7 @@
 const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = require('./action-priority');
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
+const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -176,6 +177,60 @@ function runStrategyModuleSelfTests() {
     passed: oscillationResult.event
       && oscillationResult.event.pairSwitchCount === 2
       && oscillationResult.event.oscillating === true
+  });
+
+  // Test coin diagnostics
+  const coinDiag = buildCoinDiagnostics(
+    { x: 10.2, y: 20.6 },
+    {
+      realtimeNearCoins: [{ drop_id: 'near', amount: 1, distance: 100 }],
+      realtimeCoins: [
+        { drop_id: 'ignored', amount: 2, distance: 300, x: 10, y: 20, native: true },
+        { drop_id: 'far', amount: 9, distance: 20000 }
+      ],
+      realtimeGlobalCoins: [{ drop_id: 'global', amount: 1, distance: 400 }],
+      realtimePatrolCoins: [],
+      snapshotCoins: [{ drop_id: 'snap', amount: 5, distance: 500, snapshot: true }]
+    },
+    {
+      nearDistance: 1000,
+      limit: 4,
+      nowMs: 1000,
+      ignoredCoinUntil: coin => coin?.drop_id === 'ignored' ? 2500 : 0
+    }
+  );
+  results.push({
+    name: 'coin-diagnostics-builds-near-summaries',
+    passed: coinDiag
+      && coinDiag.nearDistance === 1000
+      && coinDiag.realtimeNearCount === 1
+      && coinDiag.realtimeCount === 2
+      && coinDiag.ignoredNearCoins[0]?.id === 'ignored'
+      && coinDiag.ignoredNearCoins[0]?.remainingMs === 1500
+      && coinDiag.snapshotOnlyNearCoins[0]?.id === 'snap'
+      && coinDiag.nearestRealtimeCoins[0]?.id === 'ignored'
+  });
+
+  addCoinFilterDiagnostic(coinDiag, { drop_id: 'blocked', amount: 1, distance: 900 }, 'threat-blocked', {
+    nearDistance: 1000,
+    limit: 4,
+    detail: { threat: { id: 7 } }
+  });
+  addCoinFilterDiagnostic(coinDiag, { drop_id: 'blocked', amount: 1, distance: 700 }, 'threat-blocked', {
+    nearDistance: 1000,
+    limit: 4,
+    detail: { threat: { id: 7 } }
+  });
+  addCoinFilterDiagnostic(coinDiag, { drop_id: 'too-far', amount: 1, distance: 3000 }, 'max-distance', {
+    nearDistance: 1000,
+    limit: 4
+  });
+  results.push({
+    name: 'coin-diagnostics-filter-entries-dedupe',
+    passed: coinDiag.filteredNearCoins.length === 1
+      && coinDiag.filteredNearCoins[0].id === 'blocked'
+      && coinDiag.filteredNearCoins[0].distance === 700
+      && coinDiag.filteredNearCoins[0].threat.id === 7
   });
 
   // Test combat constants validation

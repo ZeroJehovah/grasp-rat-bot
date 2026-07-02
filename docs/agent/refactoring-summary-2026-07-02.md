@@ -116,14 +116,26 @@ Combat target selection, movement, and fire-discipline modules remain conservati
 
 This is still a diagnostics-only migration. Combat target selection, movement, and fire-discipline modules remain staged until separately validated.
 
+## 2026-07-02 Follow-up: Phase 2E Coin Diagnostics Integration
+
+`bootstrap-0.4.277` extracts pure coin diagnostics construction:
+
+- `src/strategy/coin-diagnostics.js` now owns coin summary normalization, nearest realtime coin sorting, ignored/snapshot-only near-coin lists, count fields, and filtered-entry de-duplication.
+- The browser runtime still owns config/state access, including `cfg` defaults, `bot.ignoredCoins`, stamina affordability checks, and threat-specific diagnostics.
+- `src/strategy/self-test.js` now has 17 tests, including two coin diagnostics cases.
+- Static verification checks both the strategy source module and generated remote runtime for the coin diagnostics helpers.
+
+This is a diagnostics/data-shaping migration only; it does not change coin selection or movement decisions.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
 1. Action arbitration and focus summary: integrated in `bootstrap-0.4.275`
 2. Target-switch diagnostics: integrated in `bootstrap-0.4.276`
-3. Constants: partially integrated for high-value coin defaults
-4. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-5. Run live validation sessions after each behavior-touching replacement
+3. Coin diagnostics construction: integrated in `bootstrap-0.4.277`
+4. Constants: partially integrated for high-value coin defaults
+5. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+6. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

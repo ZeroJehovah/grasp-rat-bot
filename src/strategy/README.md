@@ -11,6 +11,7 @@ src/strategy/
 ├── action-priority.js          # Action priority band definitions
 ├── action-arbitration.js       # Final action arbitration logic
 ├── action-switch-diagnostics.js # Target/focus switch diagnostics
+├── coin-diagnostics.js         # Coin diagnostics summaries
 ├── combat-constants.js         # Combat system configuration
 ├── combat-target-selection.js  # Combat target eligibility and priority
 ├── combat-movement.js          # Combat positioning and dodge
@@ -56,6 +57,16 @@ Builds the final target/focus switch diagnostic events used by combat logs and `
 - Bounded event history updates
 
 This module is authoritative for runtime target-switch diagnostics as of `bootstrap-0.4.276`; the browser runtime keeps a small wrapper around the module core.
+
+#### `coin-diagnostics.js`
+Builds the diagnostic summaries used for visible/realtime coin filtering:
+- Coin summary normalization
+- Nearest realtime coin list sorting
+- Ignored and snapshot-only near-coin lists
+- Filtered-entry de-duplication by coin/reason
+- Count fields for visible/realtime coin groups
+
+This module is authoritative for pure coin diagnostics construction as of `bootstrap-0.4.277`; runtime-specific config, ignored-coin storage, stamina-affordability checks, and threat diagnostics stay in the browser wrapper.
 
 ### Combat System
 
@@ -112,9 +123,10 @@ Automated test suite:
 - Action focus building (1 test)
 - Arbitration logic (4 tests)
 - Target-switch diagnostics (2 tests)
+- Coin diagnostics (2 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 15 tests, all passing**
+- **Total: 17 tests, all passing**
 
 ## Usage Example
 
@@ -163,8 +175,9 @@ executeAction(action);
 2. **Phase 2A/2B**: Constants imported and high-value coin defaults migrated
 3. **Phase 2C**: Action focus and final-action arbitration integrated into runtime and self-tests
 4. **Phase 2D**: Target-switch diagnostics integrated into runtime and strategy self-tests
-5. **Next**: Replace additional helpers only in small, provably equivalent slices
-6. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+5. **Phase 2E**: Coin diagnostics construction integrated into runtime and strategy self-tests
+6. **Next**: Replace additional helpers only in small, provably equivalent slices
+7. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 

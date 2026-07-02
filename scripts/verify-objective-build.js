@@ -266,6 +266,7 @@ function main() {
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
+  const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -1832,12 +1833,18 @@ function main() {
   });
 
   check('coin diagnostics expose filtered visible coin candidates', () => {
-    assert(sourceBot.includes('function buildCoinDiagnostics'), 'coin diagnostics builder not found');
+    assert(strategyCoinDiagnosticsSource.includes('function buildCoinDiagnostics'), 'strategy coin diagnostics builder not found');
+    assert(strategyCoinDiagnosticsSource.includes('function addCoinFilterDiagnostic'), 'strategy coin filter diagnostic recorder not found');
+    assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'"), 'strategy snapshot-only coin diagnostics not exposed');
+    assert(distSource.includes('function buildCoinDiagnostics'), 'generated runtime does not inline coin diagnostics builder');
+    assert(distSource.includes('function addCoinFilterDiagnostic'), 'generated runtime does not inline coin filter diagnostic recorder');
+    assert(distSource.includes("reason: 'snapshot-only'"), 'generated runtime snapshot-only coin diagnostics not exposed');
+    assert(sourceBot.includes('buildCoinDiagnostics.toString()'), 'coin diagnostics builder is not injected from module');
     assert(sourceBot.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
     assert(sourceBot.includes("recordCoinFilterDiagnostic(c, 'ignored'"), 'ignored coin diagnostics not recorded');
     assert(sourceBot.includes("recordCoinFilterDiagnostic(c, 'threat-blocked'"), 'threat-blocked coin diagnostics not recorded');
     assert(sourceBot.includes("reason = 'stamina-unaffordable'") && sourceBot.includes('coinStaminaAffordableWithDiagnostic'), 'stamina-unaffordable coin diagnostics not recorded');
-    assert(sourceBot.includes("reason: 'snapshot-only'"), 'snapshot-only coin diagnostics not exposed');
+    assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'") && distSource.includes("reason: 'snapshot-only'"), 'snapshot-only coin diagnostics not exposed');
     assert(sourceBot.includes('coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics)'), 'last decision does not carry coin diagnostics');
     assert(combatLogSourceModule.includes('coinDiagnostics: decision?.coinDiagnostics || bot.coinDiagnostics || null'), 'combat logs do not expose coin diagnostics');
     assert(combatLogSourceModule.includes("type: 'coin-diagnostics'"), 'standalone coin diagnostic log entry not found');
