@@ -11,6 +11,12 @@ const { applyFinalActionArbitration } = require('./action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const {
+  coinAxisLockShouldHoldCore,
+  coinDirectionToCore,
+  coinMotionMetaCore,
+  coinPickupPrecisionPulseMsCore
+} = require('./coin-motion');
+const {
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
   pickCoinRouteOpportunityCore
@@ -261,6 +267,146 @@ function runStrategyModuleSelfTests() {
       && coinDiag.filteredNearCoins[0].id === 'blocked'
       && coinDiag.filteredNearCoins[0].distance === 700
       && coinDiag.filteredNearCoins[0].threat.id === 7
+  });
+
+  // Test coin motion
+  const coinMotionOptions = {
+    tolerance: 60,
+    coinPrecisionTolerance: 60,
+    coinAxisApproachMinDistance: 5000,
+    coinAxisApproachRatio: 4,
+    coinAxisApproachLaneTolerance: 1800,
+    coinPickupStopDistance: 30,
+    coinPickupStopPulseMs: 45,
+    coinPickupMicroDistance: 120,
+    coinPickupMicroPulseMs: 60,
+    coinPickupFineDistance: 320,
+    coinPickupFinePulseMs: 75,
+    coinPickupBrakeDistance: 650,
+    coinPickupBrakePulseMs: 90,
+    coinPickupSweepDistance: 900,
+    coinPickupSweepPulseMs: 150,
+    coinPickupPulseMs: 180,
+    coinPickupExactTolerance: 0,
+    coinPickupFailureSlowStepMs: 10,
+    coinPickupFailureMinPulseMs: 35,
+    coinApproachBrakeDistance: 700,
+    coinApproachLockMs: 900,
+    nearCoinStuckDistance: 5000,
+    nowMs: 1000
+  };
+  const axisCoinMotion = coinDirectionToCore(
+    { x: 0, y: 0 },
+    { drop_id: 'axis', x: 15000, y: 500 },
+    coinMotionOptions
+  );
+  results.push({
+    name: 'coin-motion-axis-approach-dominant-gap',
+    passed: axisCoinMotion.direction.dx === 1
+      && axisCoinMotion.direction.dy === 0
+      && axisCoinMotion.direction.axisApproach === 'x'
+      && axisCoinMotion.lockUpdate?.lock?.id === 'axis'
+  });
+
+  const nearCoinMotion = coinDirectionToCore(
+    { x: 0, y: 0 },
+    { drop_id: 'near-axis', x: 4800, y: 500 },
+    coinMotionOptions
+  );
+  results.push({
+    name: 'coin-motion-near-stuck-uses-single-axis',
+    passed: nearCoinMotion.direction.dx === 1
+      && nearCoinMotion.direction.dy === 0
+      && !nearCoinMotion.direction.axisApproach
+      && nearCoinMotion.lockUpdate?.action === 'set'
+  });
+
+  results.push({
+    name: 'coin-motion-axis-lock-release-threshold',
+    passed: coinAxisLockShouldHoldCore({ dx: 1, dy: 0 }, 500, 0, coinMotionOptions) === false
+      && coinAxisLockShouldHoldCore({ dx: 1, dy: 0 }, 1200, 0, coinMotionOptions) === true
+  });
+
+  results.push({
+    name: 'coin-motion-pickup-pulse-tiers',
+    passed: (() => {
+      const stop = coinPickupPrecisionPulseMsCore(20, 0, coinMotionOptions);
+      const micro = coinPickupPrecisionPulseMsCore(80, 0, coinMotionOptions);
+      const fine = coinPickupPrecisionPulseMsCore(250, 0, coinMotionOptions);
+      const brake = coinPickupPrecisionPulseMsCore(500, 0, coinMotionOptions);
+      const sweep = coinPickupPrecisionPulseMsCore(800, 0, coinMotionOptions);
+      return stop === 45 && micro === 60 && fine === 75 && brake === 90 && sweep === 150;
+    })()
+  });
+
+  results.push({
+    name: 'coin-motion-pickup-failures-reduce-pulse',
+    passed: coinPickupPrecisionPulseMsCore(500, 3, coinMotionOptions) < coinPickupPrecisionPulseMsCore(500, 0, coinMotionOptions)
+      && coinPickupPrecisionPulseMsCore(500, 100, coinMotionOptions) === coinMotionOptions.coinPickupFailureMinPulseMs
+  });
+
+  const closeCoinMotion = coinDirectionToCore(
+    { x: 0, y: 0 },
+    { drop_id: 'close', x: 40, y: 0 },
+    { ...coinMotionOptions, pickupFailureCount: 2, pickupAttemptSlowCount: 1 }
+  );
+  results.push({
+    name: 'coin-motion-close-pickup-pushes-through',
+    passed: closeCoinMotion.direction.dx === 1
+      && closeCoinMotion.direction.dy === 0
+      && closeCoinMotion.direction.exactTarget === true
+      && closeCoinMotion.direction.pickupMicro === true
+      && closeCoinMotion.direction.precisionPulseMs === 35
+      && closeCoinMotion.lockUpdate?.lock?.until === 1180
+  });
+
+  const exactCoinMotion = coinDirectionToCore(
+    { x: 10, y: -5 },
+    { drop_id: 'exact', x: 10, y: -5 },
+    { ...coinMotionOptions, lock: { id: 'exact', dx: 1, dy: 0, until: 2000 } }
+  );
+  results.push({
+    name: 'coin-motion-exact-coordinate-stops-and-clears-own-lock',
+    passed: exactCoinMotion.direction.dx === 0
+      && exactCoinMotion.direction.dy === 0
+      && exactCoinMotion.direction.exactTarget === true
+      && exactCoinMotion.lockUpdate?.action === 'clear'
+      && exactCoinMotion.lockUpdate?.id === 'exact'
+      && exactCoinMotion.lockUpdate?.all === false
+  });
+
+  const diagonalCoinMotion = coinDirectionToCore(
+    { x: 0, y: 0 },
+    { drop_id: 'diagonal', x: 15000, y: 6000 },
+    { ...coinMotionOptions, lock: { id: 'other', dx: 1, dy: 0, until: 2000 } }
+  );
+  results.push({
+    name: 'coin-motion-diagonal-fallback-clears-stale-lock',
+    passed: diagonalCoinMotion.direction.dx === 1
+      && diagonalCoinMotion.direction.dy === 1
+      && !diagonalCoinMotion.direction.axisApproach
+      && diagonalCoinMotion.lockUpdate?.action === 'clear'
+      && diagonalCoinMotion.lockUpdate?.all === true
+  });
+
+  const motionMeta = coinMotionMetaCore({
+    pickupSweep: true,
+    pickupFine: true,
+    pickupFailureCount: 2,
+    pickupAttemptSlowCount: 1,
+    precisionPulseMs: 70.6,
+    locked: true,
+    pushThrough: true
+  });
+  results.push({
+    name: 'coin-motion-meta-summarizes-pickup-state',
+    passed: motionMeta.pickupMode === 'fine'
+      && motionMeta.pickupSlowCount === 3
+      && motionMeta.pickupFailureCount === 2
+      && motionMeta.pickupAttemptSlowCount === 1
+      && motionMeta.precisionPulseMs === 71
+      && motionMeta.motionLocked === true
+      && motionMeta.pushThrough === true
   });
 
   // Test coin route planning

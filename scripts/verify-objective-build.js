@@ -268,6 +268,7 @@ function main() {
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
+  const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
@@ -1870,6 +1871,25 @@ function main() {
     assert(combatLogSourceModule.includes("type: 'coin-diagnostics'"), 'standalone coin diagnostic log entry not found');
     assert(combatLogSourceModule.includes('recordCoinDiagnosticsLog(source, decision || {})'), 'coin diagnostics are not recorded on each log tick');
     assert(combatLogSourceModule.includes('coinDiagnosticsHasLoggableEntry'), 'coin diagnostics log gate not found');
+  });
+
+  check('coin motion uses strategy module core', () => {
+    assert(strategyCoinMotionSource.includes('function coinDirectionToCore'), 'strategy coin direction core not found');
+    assert(strategyCoinMotionSource.includes('function coinPickupPrecisionPulseMsCore'), 'strategy coin pickup pulse core not found');
+    assert(strategyCoinMotionSource.includes('function coinAxisLockShouldHoldCore'), 'strategy coin axis lock core not found');
+    assert(strategyCoinMotionSource.includes('function coinMotionMetaCore'), 'strategy coin motion metadata core not found');
+    assert(sourceBot.includes("require('./src/strategy/coin-motion')"), 'source bot does not import coin motion strategy module');
+    assert(sourceBot.includes('coinDirectionToCore.toString()'), 'source bot does not inject coin direction core');
+    assert(sourceBot.includes('coinMotionMetaCore.toString()'), 'source bot does not inject coin motion metadata core');
+    assert(sourceBot.includes('function coinMotionCoreOptions'), 'source bot coin motion runtime wrapper options not found');
+    assert(sourceBot.includes('function applyCoinApproachLockUpdate'), 'source bot coin approach lock wrapper not found');
+    assert(sourceBot.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'source bot coin direction wrapper does not call strategy core');
+    assert(sourceBot.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'source bot coin direction wrapper does not apply lock updates');
+    assert(sourceBot.includes('return coinMotionMetaCore(dir);'), 'source bot coin motion metadata wrapper does not call strategy core');
+    assert(distSource.includes('function coinDirectionToCore'), 'generated runtime does not inline coin direction core');
+    assert(distSource.includes('function coinPickupPrecisionPulseMsCore'), 'generated runtime does not inline coin pickup pulse core');
+    assert(distSource.includes('function coinMotionCoreOptions'), 'generated runtime coin motion wrapper options not found');
+    assert(distSource.includes('function applyCoinApproachLockUpdate'), 'generated runtime coin approach lock wrapper not found');
   });
 
   check('coin route planner uses strategy module core', () => {
