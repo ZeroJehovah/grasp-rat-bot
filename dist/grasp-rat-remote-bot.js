@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.289"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.290"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -19539,40 +19539,74 @@ function hpDisplay(value) {
 		    }
 		  }
 
+  function coinFailureIgnoreCore(previous = {}, reason = '', nowMs = 0, options = {}) {
+  const t = Number(nowMs) || 0;
+  const lastAt = Number(previous?.lastAt || 0);
+  const decayMs = Number(options.coinFailureDecayMs || 0);
+  const count = lastAt && t - lastAt > decayMs ? 1 : Number(previous?.count || 0) + 1;
+  const base = reason === 'close' ? options.coinCloseFailureIgnoreMs
+    : (reason === 'near' ? options.coinNearFailureIgnoreMs : options.coinNoProgressIgnoreMs);
+  const ignoreMs = Math.min(
+    Number(options.coinFailureMaxIgnoreMs || 0),
+    Math.round(Number(base || 0) * Math.max(1, count))
+  );
+  const ignoreUntil = t + ignoreMs;
+  return { count, reason, lastAt: t, ignoreMs, ignoreUntil };
+}
+  function staleCoinEscapeDirectionCore(action, self, nowMs = 0, options = {}) {
+  let awayDx = Math.sign(Number(self?.x) - Number(action?.target?.x)) || -(Number(action?.dx) || 0);
+  let awayDy = Math.sign(Number(self?.y) - Number(action?.target?.y)) || -(Number(action?.dy) || 0);
+  if (!(awayDx || awayDy)) {
+    const phase = Math.floor((Number(nowMs) || 0) / 1000) % 4;
+    const pattern = [
+      { dx: 1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: -1 }
+    ][phase];
+    awayDx = pattern.dx;
+    awayDy = pattern.dy;
+  }
+  return {
+    dx: awayDx,
+    dy: awayDy,
+    state: {
+      id: String(action?.target?.id),
+      dx: awayDx,
+      dy: awayDy,
+      until: (Number(nowMs) || 0) + Number(options.staleCoinEscapeMs || 0)
+    }
+  };
+}
+
+  function coinProgressCoreOptions(extra = {}) {
+    return {
+      coinFailureDecayMs: cfg.coinFailureDecayMs,
+      coinCloseFailureIgnoreMs: cfg.coinCloseFailureIgnoreMs,
+      coinNearFailureIgnoreMs: cfg.coinNearFailureIgnoreMs,
+      coinNoProgressIgnoreMs: cfg.coinNoProgressIgnoreMs,
+      coinFailureMaxIgnoreMs: cfg.coinFailureMaxIgnoreMs,
+      staleCoinEscapeMs: cfg.staleCoinEscapeMs,
+      ...extra
+    };
+  }
+
 	  function coinFailureIgnore(id, reason, t) {
-    const previous = bot.coinFailures.get(id) || {};
-    const lastAt = Number(previous.lastAt || 0);
-    const count = lastAt && t - lastAt > cfg.coinFailureDecayMs ? 1 : Number(previous.count || 0) + 1;
-    const base = reason === 'close' ? cfg.coinCloseFailureIgnoreMs
-      : (reason === 'near' ? cfg.coinNearFailureIgnoreMs : cfg.coinNoProgressIgnoreMs);
-    const ignoreMs = Math.min(cfg.coinFailureMaxIgnoreMs, Math.round(base * Math.max(1, count)));
-    const ignoreUntil = t + ignoreMs;
-    bot.coinFailures.set(id, { count, reason, lastAt: t, ignoreUntil });
-    bot.ignoredCoins.set(id, ignoreUntil);
-    return { count, ignoreMs, ignoreUntil };
+    const result = coinFailureIgnoreCore(bot.coinFailures.get(id) || {}, reason, t, coinProgressCoreOptions());
+    bot.coinFailures.set(id, {
+      count: result.count,
+      reason: result.reason,
+      lastAt: result.lastAt,
+      ignoreUntil: result.ignoreUntil
+    });
+    bot.ignoredCoins.set(id, result.ignoreUntil);
+    return { count: result.count, ignoreMs: result.ignoreMs, ignoreUntil: result.ignoreUntil };
   }
 
   function staleCoinEscapeDirection(action, self, t) {
-    let awayDx = Math.sign(Number(self?.x) - Number(action.target.x)) || -(action.dx || 0);
-    let awayDy = Math.sign(Number(self?.y) - Number(action.target.y)) || -(action.dy || 0);
-    if (!(awayDx || awayDy)) {
-      const phase = Math.floor(t / 1000) % 4;
-      const pattern = [
-        { dx: 1, dy: 0 },
-        { dx: 0, dy: 1 },
-        { dx: -1, dy: 0 },
-        { dx: 0, dy: -1 }
-      ][phase];
-      awayDx = pattern.dx;
-      awayDy = pattern.dy;
-    }
-    bot.staleCoinEscape = {
-      id: String(action.target.id),
-      dx: awayDx,
-      dy: awayDy,
-      until: t + cfg.staleCoinEscapeMs
-    };
-    return { dx: awayDx, dy: awayDy };
+    const result = staleCoinEscapeDirectionCore(action, self, t, coinProgressCoreOptions());
+    bot.staleCoinEscape = result.state;
+    return { dx: result.dx, dy: result.dy };
   }
 
   function trackCoinProgress(action, self) {
