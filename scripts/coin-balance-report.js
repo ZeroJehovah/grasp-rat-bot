@@ -167,32 +167,11 @@ class ApiClient {
     url.searchParams.set('group', '');
     url.searchParams.set('request_id', '');
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
       this.requestCount += 1;
-      process.stderr.write(`[coin-report] ${day} page ${page} request ${this.requestCount}\n`);
-      let response;
-      let text;
-      try {
-        response = await fetch(url, {
-          signal: controller.signal,
-          headers: requestHeaders(this.auth)
-        });
-        text = await response.text();
-      } catch (err) {
-        process.stderr.write(`[coin-report] ${day} page ${page} retrying with curl after fetch error: ${err.message || err}\n`);
-        return await fetchPageWithCurlRetry(url, this.auth, this.options.timeoutMs, day, page);
-      }
-      try {
-        return parseApiResponse(text, response.status);
-      } catch (err) {
-        if (!shouldRetryWithCurl(response.status, text)) throw err;
-        process.stderr.write(`[coin-report] ${day} page ${page} retrying with curl after HTTP ${response.status}\n`);
-        return await fetchPageWithCurlRetry(url, this.auth, this.options.timeoutMs, day, page);
-      }
+      process.stderr.write(`[coin-report] ${day} page ${page} curl request ${this.requestCount}\n`);
+      return await fetchPageWithCurlRetry(url, this.auth, this.options.timeoutMs, day, page);
     } finally {
-      clearTimeout(timeout);
       this.lastRequestAt = Date.now();
     }
   }
@@ -238,10 +217,6 @@ function parseApiResponse(text, status) {
     throw new Error(`Unexpected response shape: ${String(text || '').slice(0, 200)}`);
   }
   return payload.data;
-}
-
-function shouldRetryWithCurl(status, text) {
-  return status === 403 && /Just a moment|cloudflare/i.test(String(text || ''));
 }
 
 async function fetchPageWithCurlRetry(url, auth, timeoutMs, day, page) {

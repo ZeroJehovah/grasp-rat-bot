@@ -52,8 +52,8 @@ The stable implementation is `scripts/coin-balance-report.js`:
 - Request headers mirror the successful browser request: `accept`, `accept-language`, `cache-control`, `dnt`, `new-api-user`, `pragma`, `priority`, `referer`, `sec-ch-ua*`, `sec-fetch-*`, `user-agent`, and Cookie.
 - Requests are paginated from page 1 using API `total` and `page_size`.
 - Requests are rate limited by default with a 4s delay between API calls. Keep this in the requested 3-5s range unless debugging.
-- Node `fetch` is tried first. On fetch error, or Cloudflare-style HTTP 403/HTML challenge, the script retries the same URL through `curl` with the same browser-like headers, `--location`, `--max-time`, `--connect-timeout`, `--retry 2`, and `--retry-all-errors`. If curl returns a transient Cloudflare challenge or TLS/connection error, the page-level fallback retries before failing the monthly report.
-- Progress goes to stderr as `[coin-report] YYYY-MM-DD page N request M`, so long monthly pulls are not silent.
+- The script fetches pages directly through `curl` with the same browser-like headers, `--location`, `--max-time`, `--connect-timeout`, `--retry 2`, and `--retry-all-errors`. Node `fetch` is intentionally not used because the API currently returns Cloudflare challenge HTML to Node while curl can receive JSON with the same auth. If curl returns a transient Cloudflare challenge or TLS/connection error, the page-level request retries before failing the monthly report.
+- Progress goes to stderr as `[coin-report] YYYY-MM-DD page N curl request M`, so long monthly pulls are not silent.
 
 The report parser uses the JSON `other` payload and content text to classify:
 
