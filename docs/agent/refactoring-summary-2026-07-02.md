@@ -193,6 +193,17 @@ This is intended as an equivalent extraction of missing-held candidate construct
 
 This is intended as an equivalent extraction of target selection only; post-attack drop coin pickup, attack history mutation, and action execution remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2L Post-Attack Drop Coin Integration
+
+`bootstrap-0.4.284` extracts post-attack drop coin matching and candidate metadata:
+
+- `src/strategy/post-attack-drop.js` now also owns resolved recent attack filtering, visible drop coin-to-attack matching, ROI/min-score filtering, postAttackTarget metadata construction, candidate lists, and selected coin sorting.
+- The browser runtime still owns safe coin filtering, stamina diagnostics, attack-history resolution mutation, kill-reward attribution via `recordDropMatchedKill()`, config access, and `buildCoinAction()` action construction.
+- `src/strategy/self-test.js` now has 41 tests, including three post-attack drop coin cases covering matched visible drops, amount/score/radius filtering, and amount-first selection.
+- Static verification checks both the strategy source module and generated remote runtime for the post-attack drop coin core and wrapper wiring.
+
+This is intended as an equivalent extraction of post-attack drop coin selection only; action execution and attribution side effects remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -205,9 +216,10 @@ This is intended as an equivalent extraction of target selection only; post-atta
 7. Opportunity choice persistence construction: integrated in `bootstrap-0.4.281`
 8. Missing-held opportunity construction: integrated in `bootstrap-0.4.282`
 9. Post-attack drop wait selection: integrated in `bootstrap-0.4.283`
-10. Constants: partially integrated for high-value coin defaults
-11. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-12. Run live validation sessions after each behavior-touching replacement
+10. Post-attack drop coin matching: integrated in `bootstrap-0.4.284`
+11. Constants: partially integrated for high-value coin defaults
+12. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+13. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module
