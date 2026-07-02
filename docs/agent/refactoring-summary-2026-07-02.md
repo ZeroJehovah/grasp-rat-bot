@@ -237,6 +237,17 @@ This is intended as an equivalent extraction of coin pickup/motion computation o
 
 This is intended as an equivalent extraction of coin identity/matching logic only; collection confirmation, ignored-coin updates, session accounting, and snapshot pruning remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2P Incidental Coin Pickup Detection
+
+`bootstrap-0.4.288` extends coin target extraction with incidental pickup detection:
+
+- `src/strategy/coin-target.js` now also owns point-to-segment distance, disappeared native coin filtering, memory-window checks, current/self-path distance checks, and incidental pickup candidate metadata.
+- The browser runtime still owns native coin source access, session accounting, `bot.lastCoinCollected`, and snapshot memory writes.
+- `src/strategy/self-test.js` now has 62 tests, including three incidental pickup cases covering segment distance, current-radius pickup, and self-path pickup.
+- Static verification checks both the strategy source module and generated remote runtime for the incidental pickup core and wrapper wiring.
+
+This is intended as an equivalent extraction of incidental pickup candidate selection only; recording session totals and updating bot collection state remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -253,9 +264,10 @@ This is intended as an equivalent extraction of coin identity/matching logic onl
 11. Stamina budget summary/selector logic: integrated in `bootstrap-0.4.285`
 12. Coin motion direction/pulse/metadata logic: integrated in `bootstrap-0.4.286`
 13. Coin target identity/matching logic: integrated in `bootstrap-0.4.287`
-14. Constants: partially integrated for high-value coin defaults
-15. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-16. Run live validation sessions after each behavior-touching replacement
+14. Incidental coin pickup detection: integrated in `bootstrap-0.4.288`
+15. Constants: partially integrated for high-value coin defaults
+16. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+17. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

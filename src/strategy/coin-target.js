@@ -81,10 +81,52 @@ function buildNativeCoinSnapshotCore(coins, options = {}) {
     .filter(coin => coin.key && coin.amount > 0 && Number.isFinite(coin.x) && Number.isFinite(coin.y));
 }
 
+function pointToSegmentDistanceCore(point, a, b, options = {}) {
+  const px = Number(point?.x);
+  const py = Number(point?.y);
+  const ax = Number(a?.x);
+  const ay = Number(a?.y);
+  const bx = Number(b?.x);
+  const by = Number(b?.y);
+  if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return Infinity;
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy;
+  if (!(lenSq > 0)) return coinTargetDistance(point, a, options);
+  const ratio = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / lenSq));
+  return coinTargetDistance(point, { x: ax + vx * ratio, y: ay + vy * ratio }, options);
+}
+
+function pickIncidentalCoinPickupsCore(previousSnapshot, currentSnapshot, currentSummary, previousSelf, options = {}) {
+  if (!Array.isArray(currentSnapshot)) return [];
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : 0;
+  const memoryMs = Math.max(500, Number(options.incidentalCoinPickupMemoryMs || 3000) || 3000);
+  const radius = Math.max(0, Number(options.coinCollectedConfirmDistance || 0) || 0);
+  const currentKeys = new Set(currentSnapshot.map(coin => String(coin?.key || '')));
+  const picked = [];
+  for (const coin of Array.isArray(previousSnapshot) ? previousSnapshot : []) {
+    if (!coin || !coin.key || currentKeys.has(String(coin.key))) continue;
+    if (t - Number(coin.at || 0) > memoryMs) continue;
+    const currentDistance = coinTargetDistance(currentSummary, coin, options);
+    const previousDistance = previousSelf ? coinTargetDistance(previousSelf, coin, options) : Infinity;
+    const pathDistance = previousSelf ? pointToSegmentDistanceCore(coin, previousSelf, currentSummary, options) : currentDistance;
+    if (Math.min(currentDistance, previousDistance, pathDistance) > radius) continue;
+    picked.push({
+      coin,
+      currentDistance,
+      previousDistance,
+      pathDistance
+    });
+  }
+  return picked;
+}
+
 module.exports = {
   coinTargetKeyCore,
   coinTargetDistance,
   coinMatchesTrackedTargetCore,
   trackedCoinTargetForCollectionCore,
-  buildNativeCoinSnapshotCore
+  buildNativeCoinSnapshotCore,
+  pointToSegmentDistanceCore,
+  pickIncidentalCoinPickupsCore
 };
