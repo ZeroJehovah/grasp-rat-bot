@@ -10,7 +10,7 @@
 const COMBAT_CONSTANTS = {
   // Range and distance thresholds
   ATTACK_RANGE: 14500,                    // combatAttackRange - standard attack/fire range
-  DISENGAGE_RANGE: 15000,                 // combatDisengageRange - when to drop engaged target
+  DISENGAGE_RANGE: 17000,                 // combatDisengageRange - when to drop engaged target
   DODGE_RANGE_BUFFER: 1000,               // combatDodgeRangeBuffer - extended dodge-only detection
 
   // Spacing behavior
