@@ -22,6 +22,11 @@ const {
   opportunityMatchesChoiceCore,
   chooseStableOpportunityCore
 } = require('./opportunity-choice');
+const {
+  opportunityPriorityTierCore,
+  buildOpportunityCandidatesCore,
+  bestCoinOpportunityScoreCore
+} = require('./opportunity-candidates');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -409,6 +414,103 @@ function runStrategyModuleSelfTests() {
       && opportunityOscillationResult.chosen?.oscillationLocked === true
       && opportunityOscillationResult.switchLock?.lockedKey === 'coin:a'
       && opportunityOscillationResult.switchLock?.blockedKey === 'coin:b'
+  });
+
+  // Test opportunity candidate construction
+  const candidateOptions = {
+    safeCoinCandidates: (coins, threats, maxDistance) => (coins || []).filter(coin => Number(coin.distance || 0) <= maxDistance),
+    coinStaminaCost: coin => Number(coin.staminaCost ?? coin.distance ?? 0),
+    coinStaminaAffordable: (coin, cost) => Number(cost ?? coin.staminaCost ?? 0) <= 10000,
+    scoreCoinOpportunity: coin => Number(coin.score ?? coin.opportunityScore ?? 0),
+    snapshotCoinNavigationReason: coin => Number(coin.distance || 0) <= 1500 ? 'best-opportunity-coin' : 'best-opportunity-visible-coin',
+    maxCoinDistance: 1500,
+    routeMaxDistance: 50000,
+    scoreEnemyOpportunity: target => target.blocked ? null : Number(target.score || 0),
+    enemyStaminaCost: target => Number(target.staminaCost || 0),
+    opportunityStaminaAffordable: cost => cost <= 5000,
+    isAfkProfitTarget: target => Boolean(target.afk),
+    attackRange: 1000,
+    attackEngageRange: 5000,
+    priorityTier: item => opportunityPriorityTierCore(item, { visibleDistance: 2000 })
+  };
+
+  const dedupedCoinCandidates = buildOpportunityCandidatesCore({ x: 0, y: 0 }, [], [{
+    maxDistance: 5000,
+    coins: [
+      { drop_id: 'same', amount: 1, distance: 500, score: 10 },
+      { drop_id: 'same', amount: 3, distance: 800, score: 10 },
+      { drop_id: 'other', amount: 1, distance: 400, score: 9 }
+    ]
+  }], [], null, candidateOptions);
+  results.push({
+    name: 'opportunity-candidates-dedupes-coin-by-score-amount-distance',
+    passed: dedupedCoinCandidates.length === 2
+      && dedupedCoinCandidates.find(item => item.id === 'same')?.amount === 3
+      && dedupedCoinCandidates.find(item => item.id === 'same')?.actionKind === 'coin'
+  });
+
+  const routeCandidate = buildOpportunityCandidatesCore({ x: 0, y: 0 }, [], [{
+    maxDistance: 5000,
+    coins: [{ drop_id: 'route', amount: 1, distance: 900, score: 10 }]
+  }], [], {
+    drop_id: 'route',
+    amount: 4,
+    distance: 900,
+    score: 12,
+    route: true,
+    routeValue: 4,
+    routeHeld: true,
+    competingRouteScore: 11,
+    coinRoute: { ids: ['route', 'next'], value: 4, legCount: 2 }
+  }, candidateOptions);
+  results.push({
+    name: 'opportunity-candidates-route-winner-preserves-metadata',
+    passed: routeCandidate[0]?.reason === 'best-opportunity-coin-route'
+      && routeCandidate[0]?.coinRoute?.ids?.join(',') === 'route,next'
+      && routeCandidate[0]?.routeHeld === true
+      && routeCandidate[0]?.competingRouteScore === 11
+  });
+
+  const routeDisplayCandidate = buildOpportunityCandidatesCore({ x: 0, y: 0 }, [], [{
+    maxDistance: 5000,
+    coins: [{ drop_id: 'display', amount: 5, distance: 700, score: 12 }]
+  }], [], {
+    drop_id: 'display',
+    amount: 2,
+    distance: 700,
+    score: 12,
+    route: true,
+    routeValue: 2,
+    routeKind: 'short',
+    coinRoute: { ids: ['display', 'near'], value: 2, legCount: 2 }
+  }, candidateOptions);
+  results.push({
+    name: 'opportunity-candidates-route-display-merge-keeps-base-coin',
+    passed: routeDisplayCandidate[0]?.amount === 5
+      && routeDisplayCandidate[0]?.reason === 'best-opportunity-coin-route'
+      && routeDisplayCandidate[0]?.sourceCoin?.routeDisplayOnly === true
+      && routeDisplayCandidate[0]?.coinRoute?.ids?.join(',') === 'display,near'
+  });
+
+  const enemyCandidate = buildOpportunityCandidatesCore({ x: 0, y: 0 }, [], [], [
+    { user_id: 'afk', distance: 900, score: 8, staminaCost: 100, afk: true },
+    { user_id: 'active-far', distance: 6000, score: 9, staminaCost: 100, afk: false },
+    { user_id: 'blocked', distance: 500, score: 20, staminaCost: 100, blocked: true }
+  ], null, candidateOptions);
+  results.push({
+    name: 'opportunity-candidates-builds-enemy-action-kind',
+    passed: enemyCandidate.length === 2
+      && enemyCandidate.find(item => item.id === 'afk')?.actionKind === 'attack'
+      && enemyCandidate.find(item => item.id === 'active-far')?.actionKind === 'seek-enemy'
+  });
+
+  const bestCoinRouteScore = bestCoinOpportunityScoreCore({ x: 0, y: 0 }, [{
+    maxDistance: 5000,
+    coins: [{ drop_id: 'coin', amount: 1, distance: 500, score: 5, staminaCost: 100 }]
+  }], [], { drop_id: 'route-score', amount: 2, distance: 900, score: 9, staminaCost: 100 }, candidateOptions);
+  results.push({
+    name: 'opportunity-candidates-best-coin-score-includes-route',
+    passed: bestCoinRouteScore === 9
   });
 
   // Test combat constants validation

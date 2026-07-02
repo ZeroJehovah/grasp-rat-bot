@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.279"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.280"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -15680,9 +15680,9 @@ function hpDisplay(value) {
   }
 
   function opportunityEffectiveStaminaCost(staminaCost) {
-    const floor = Math.max(1, Number(cfg.opportunityDistanceFloor || 1));
-    const d = Math.max(0, Number(staminaCost) || 0);
-    return Math.max(floor, d);
+    return opportunityEffectiveStaminaCostCore(staminaCost, {
+      distanceFloor: cfg.opportunityDistanceFloor
+    });
   }
 
   function opportunityMoveStaminaCost(distance, stopDistance = 0) {
@@ -15882,10 +15882,11 @@ function hpDisplay(value) {
 	  }
 
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
-    const amount = Number(value || 0);
-    if (!(amount > 0)) return -Infinity;
-    const scale = Math.max(1, Number(cfg.opportunityDistanceScoreScale || 1));
-    return amount * Number(weight || 1) * scale / opportunityEffectiveStaminaCost(staminaCost);
+    return opportunityValueScoreCore(value, staminaCost, {
+      weight,
+      distanceFloor: cfg.opportunityDistanceFloor,
+      distanceScoreScale: cfg.opportunityDistanceScoreScale
+    });
   }
 
 	  function compareCoinOpportunity(a, b) {
@@ -15897,16 +15898,7 @@ function hpDisplay(value) {
 	  }
 
 	  function mergeCoinRouteDisplay(base, routeCoin) {
-	    if (!base || !routeCoin?.coinRoute) return base;
-	    return {
-	      ...base,
-	      coinRoute: routeCoin.coinRoute,
-	      route: true,
-	      routeValue: routeCoin.routeValue || null,
-	      routeKind: routeCoin.routeKind || '',
-	      routeLegs: routeCoin.routeLegs || 0,
-	      routeDisplayOnly: true
-	    };
+	    return mergeCoinRouteDisplayCore(base, routeCoin);
 	  }
 
   function combatTargetId(target) {
@@ -17965,12 +17957,183 @@ function hpDisplay(value) {
   }
 
   function opportunityPriorityTier(item) {
-    const distance = Number(item?.distance ?? Infinity);
-    const visibleDistance = Math.max(0, Number(cfg.opportunityVisibleDistance || cfg.opportunityNearbyPriorityDistance || 0));
-    if (Number.isFinite(distance) && distance <= visibleDistance) return 1;
-    if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
-    return 0;
+    return opportunityPriorityTierCore(item, {
+      visibleDistance: cfg.opportunityVisibleDistance,
+      nearbyPriorityDistance: cfg.opportunityNearbyPriorityDistance
+    });
   }
+
+	  function opportunityEffectiveStaminaCostCore(staminaCost, options = {}) {
+  const floor = Math.max(1, Number(options.distanceFloor || 1));
+  const d = Math.max(0, Number(staminaCost) || 0);
+  return Math.max(floor, d);
+}
+	  function opportunityValueScoreCore(value, staminaCost, options = {}) {
+  const amount = Number(value || 0);
+  if (!(amount > 0)) return -Infinity;
+  const scale = Math.max(1, Number(options.distanceScoreScale || 1));
+  const weight = Number(options.weight ?? options.coinOpportunityValue ?? 1);
+  return amount * weight * scale / opportunityEffectiveStaminaCostCore(staminaCost, options);
+}
+	  function opportunityPriorityTierCore(item, options = {}) {
+  const distance = Number(item?.distance ?? Infinity);
+  const visibleDistance = Math.max(0, Number(options.visibleDistance || options.nearbyPriorityDistance || 0));
+  if (Number.isFinite(distance) && distance <= visibleDistance) return 1;
+  if (item?.type === 'enemy' && item?.kind === 'attack') return 1;
+  return 0;
+}
+	  function mergeCoinRouteDisplayCore(base, routeCoin) {
+  if (!base || !routeCoin?.coinRoute) return base;
+  return {
+    ...base,
+    coinRoute: routeCoin.coinRoute,
+    route: true,
+    routeValue: routeCoin.routeValue || null,
+    routeKind: routeCoin.routeKind || '',
+    routeLegs: routeCoin.routeLegs || 0,
+    routeDisplayOnly: true
+  };
+}
+	  function uniqueVisibleRouteCoinsCore(coinGroups, options = {}) {
+  const isSnapshotOnlyCoin = typeof options.isSnapshotOnlyCoin === 'function' ? options.isSnapshotOnlyCoin : coin => Boolean(coin?.snapshotOnly);
+  const keyFrom = typeof options.coinKey === 'function' ? options.coinKey : coinRouteKey;
+  const byId = new Map();
+  for (const { coins: groupCoins } of coinGroups || []) {
+    for (const coin of groupCoins || []) {
+      if (isSnapshotOnlyCoin(coin)) continue;
+      const key = keyFrom(coin);
+      if (!byId.has(key)) byId.set(key, coin);
+    }
+  }
+  return Array.from(byId.values());
+}
+	  function buildCoinOpportunityCandidatesCore(self, coinGroups, activeThreats, routeCoin = null, options = {}) {
+  const safeCoinCandidates = typeof options.safeCoinCandidates === 'function' ? options.safeCoinCandidates : (coins => coins || []);
+  const coinStaminaCost = typeof options.coinStaminaCost === 'function' ? options.coinStaminaCost : coin => Number(coin?.staminaCost || 0);
+  const coinStaminaAffordable = typeof options.coinStaminaAffordable === 'function' ? options.coinStaminaAffordable : () => true;
+  const scoreCoinOpportunity = typeof options.scoreCoinOpportunity === 'function' ? options.scoreCoinOpportunity : coin => Number(coin?.opportunityScore ?? 0);
+  const snapshotCoinNavigationReason = typeof options.snapshotCoinNavigationReason === 'function'
+    ? options.snapshotCoinNavigationReason
+    : coin => Number(coin?.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
+  const priorityTier = typeof options.priorityTier === 'function' ? options.priorityTier : item => opportunityPriorityTierCore(item, options);
+  const byId = new Map();
+
+  for (const { coins: groupCoins, maxDistance } of coinGroups || []) {
+    for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
+      const id = String(coin?.drop_id);
+      const previous = byId.get(id);
+      const staminaCost = coinStaminaCost(coin);
+      if (!coinStaminaAffordable(coin, staminaCost)) continue;
+      const score = scoreCoinOpportunity(coin);
+      if (!previous
+        || score > Number(previous.opportunitySortScore || -Infinity)
+        || (score === Number(previous.opportunitySortScore || -Infinity) && Number(coin.amount || 0) > Number(previous.amount || 0))
+        || (score === Number(previous.opportunitySortScore || -Infinity) && Number(coin.distance || 0) < Number(previous.distance || Infinity))) {
+        byId.set(id, { ...coin, opportunitySortScore: score, opportunityStaminaCost: staminaCost, opportunityMaxDistance: maxDistance });
+      }
+    }
+  }
+
+  if (routeCoin) {
+    const id = String(routeCoin.drop_id);
+    const score = scoreCoinOpportunity(routeCoin);
+    const previous = byId.get(id);
+    if (!previous
+      || score > Number(previous.opportunitySortScore || -Infinity)
+      || (score === Number(previous.opportunitySortScore || -Infinity) && Number(routeCoin.routeValue || 0) > Number(previous.amount || 0))) {
+      byId.set(id, {
+        ...routeCoin,
+        opportunitySortScore: score,
+        opportunityStaminaCost: coinStaminaCost(routeCoin),
+        opportunityMaxDistance: options.routeMaxDistance
+      });
+    } else if (previous) {
+      byId.set(id, mergeCoinRouteDisplayCore(previous, routeCoin));
+    }
+  }
+
+  return Array.from(byId.values()).map(coin => {
+    const reason = coin.route ? 'best-opportunity-coin-route' : snapshotCoinNavigationReason(coin);
+    const actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? 'coin' : 'seek-coin';
+    const score = Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin);
+    return {
+      type: 'coin',
+      id: coin.drop_id,
+      amount: coin.amount,
+      x: coin.x,
+      y: coin.y,
+      distance: coin.distance,
+      staminaCost: coinStaminaCost(coin),
+      score,
+      priorityTier: priorityTier({ type: 'coin', distance: coin.distance }),
+      actionKind,
+      reason,
+      maxDistance: coin.opportunityMaxDistance,
+      coinRoute: coin.coinRoute || null,
+      routeValue: coin.routeValue || null,
+      routeKind: coin.routeKind || '',
+      routeLegs: coin.routeLegs || 0,
+      routeHeld: Boolean(coin.routeHeld),
+      competingRouteScore: coin.competingRouteScore,
+      sourceCoin: coin
+    };
+  });
+}
+	  function buildEnemyOpportunityCandidatesCore(targets, options = {}) {
+  const scoreEnemyOpportunity = typeof options.scoreEnemyOpportunity === 'function' ? options.scoreEnemyOpportunity : target => Number(target?.opportunityScore ?? 0);
+  const enemyStaminaCost = typeof options.enemyStaminaCost === 'function' ? options.enemyStaminaCost : target => Number(target?.staminaCost || 0);
+  const opportunityStaminaAffordable = typeof options.opportunityStaminaAffordable === 'function' ? options.opportunityStaminaAffordable : () => true;
+  const isAfkProfitTarget = typeof options.isAfkProfitTarget === 'function' ? options.isAfkProfitTarget : () => false;
+  const priorityTier = typeof options.priorityTier === 'function' ? options.priorityTier : item => opportunityPriorityTierCore(item, options);
+  const attackRange = Math.max(0, Number(options.attackRange || 0));
+  const attackEngageRange = Math.max(attackRange, Number(options.attackEngageRange || attackRange || 0));
+  const opportunities = [];
+  for (const target of targets || []) {
+    const score = scoreEnemyOpportunity(target);
+    if (score === null) continue;
+    const staminaCost = enemyStaminaCost(target);
+    if (!opportunityStaminaAffordable(staminaCost)) continue;
+    const afk = isAfkProfitTarget(target);
+    const inRange = Number(target?.distance || Infinity) <= (afk ? attackRange : attackEngageRange);
+    const actionKind = inRange ? 'attack' : 'seek-enemy';
+    opportunities.push({
+      type: 'enemy',
+      id: target.user_id,
+      distance: target.distance,
+      staminaCost,
+      score,
+      actionKind,
+      reason: '',
+      priorityTier: priorityTier({ type: 'enemy', kind: actionKind, distance: target.distance }),
+      sourceTarget: target
+    });
+  }
+  return opportunities;
+}
+	  function buildOpportunityCandidatesCore(self, activeThreats, coinGroups, enemyTargets, routeCoin = null, options = {}) {
+  return [
+    ...buildCoinOpportunityCandidatesCore(self, coinGroups, activeThreats, routeCoin, options),
+    ...buildEnemyOpportunityCandidatesCore(enemyTargets, options)
+  ];
+}
+	  function bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, routeCoin = null, options = {}) {
+  const safeCoinCandidates = typeof options.safeCoinCandidates === 'function' ? options.safeCoinCandidates : (coins => coins || []);
+  const coinStaminaAffordable = typeof options.coinStaminaAffordable === 'function' ? options.coinStaminaAffordable : () => true;
+  const scoreCoinOpportunity = typeof options.scoreCoinOpportunity === 'function' ? options.scoreCoinOpportunity : coin => Number(coin?.opportunityScore ?? 0);
+  let best = -Infinity;
+  for (const { coins: groupCoins, maxDistance } of coinGroups || []) {
+    for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
+      if (!coinStaminaAffordable(coin)) continue;
+      const score = scoreCoinOpportunity(coin);
+      if (score > best) best = score;
+    }
+  }
+  if (routeCoin) {
+    const score = scoreCoinOpportunity(routeCoin);
+    if (score > best) best = score;
+  }
+  return best;
+}
 
 	  function defaultDist(a, b) {
   const dx = Number(a?.x) - Number(b?.x);
@@ -18369,33 +18532,34 @@ function hpDisplay(value) {
 	    });
 	  }
 
+	  function opportunityCandidateCoreOptions(self = null) {
+	    return {
+	      safeCoinCandidates,
+	      coinStaminaCost: opportunityCoinStaminaCost,
+	      coinStaminaAffordable: (coin, staminaCost = opportunityCoinStaminaCost(coin)) => coinStaminaAffordableWithDiagnostic(self, coin, staminaCost),
+	      scoreCoinOpportunity,
+	      snapshotCoinNavigationReason,
+	      maxCoinDistance: cfg.coinMaxDistance,
+	      routeMaxDistance: cfg.coinRouteMaxDistance,
+	      scoreEnemyOpportunity,
+	      enemyStaminaCost: opportunityEnemyStaminaCost,
+	      opportunityStaminaAffordable: staminaCost => opportunityStaminaAffordable(self, staminaCost),
+	      isAfkProfitTarget,
+	      attackRange: cfg.attackRange,
+	      attackEngageRange: cfg.attackEngageRange,
+	      priorityTier: opportunityPriorityTier,
+	      visibleDistance: cfg.opportunityVisibleDistance,
+	      nearbyPriorityDistance: cfg.opportunityNearbyPriorityDistance
+	    };
+	  }
+
   function uniqueVisibleRouteCoins(coinGroups) {
-    const byId = new Map();
-    for (const { coins: groupCoins } of coinGroups || []) {
-      for (const coin of groupCoins || []) {
-        if (isSnapshotOnlyCoin(coin)) continue;
-        const key = coinRouteKey(coin);
-        if (!byId.has(key)) byId.set(key, coin);
-      }
-    }
-    return Array.from(byId.values());
+    return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
   }
 
   function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-    let best = -Infinity;
-    for (const { coins: groupCoins, maxDistance } of coinGroups) {
-	      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
-        if (!coinStaminaAffordableWithDiagnostic(self, coin)) continue;
-        const score = scoreCoinOpportunity(coin);
-        if (score > best) best = score;
-      }
-    }
     const route = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
-    if (route) {
-      const score = scoreCoinOpportunity(route);
-      if (score > best) best = score;
-    }
-    return best;
+    return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
   }
 
   function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
@@ -19035,93 +19199,29 @@ function hpDisplay(value) {
 		  }
 
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
-    const opportunities = [];
-    const coinById = new Map();
-    for (const { coins: groupCoins, maxDistance } of coinGroups) {
-	      for (const coin of safeCoinCandidates(groupCoins, activeThreats, maxDistance, self)) {
-        const id = String(coin.drop_id);
-        const previous = coinById.get(id);
-        const staminaCost = opportunityCoinStaminaCost(coin);
-        if (!coinStaminaAffordableWithDiagnostic(self, coin, staminaCost)) continue;
-        const score = scoreCoinOpportunity(coin);
-        if (!previous
-          || score > Number(previous.opportunitySortScore || -Infinity)
-          || (score === Number(previous.opportunitySortScore || -Infinity) && Number(coin.amount || 0) > Number(previous.amount || 0))
-          || (score === Number(previous.opportunitySortScore || -Infinity) && Number(coin.distance || 0) < Number(previous.distance || Infinity))) {
-	          coinById.set(id, { ...coin, opportunitySortScore: score, opportunityStaminaCost: staminaCost, opportunityMaxDistance: maxDistance });
-        }
-      }
-    }
-	    const routeCoin = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
-	    if (routeCoin) {
-	      const id = String(routeCoin.drop_id);
-	      const score = scoreCoinOpportunity(routeCoin);
-	      const previous = coinById.get(id);
-	      if (!previous
-	        || score > Number(previous.opportunitySortScore || -Infinity)
-	        || (score === Number(previous.opportunitySortScore || -Infinity) && Number(routeCoin.routeValue || 0) > Number(previous.amount || 0))) {
-	        coinById.set(id, {
-	          ...routeCoin,
-	          opportunitySortScore: score,
-	          opportunityStaminaCost: opportunityCoinStaminaCost(routeCoin),
-	          opportunityMaxDistance: cfg.coinRouteMaxDistance
-	        });
-	      } else if (previous) {
-	        coinById.set(id, mergeCoinRouteDisplay(previous, routeCoin));
-	      }
-	    }
-    for (const coin of coinById.values()) {
-      const reason = coin.route ? 'best-opportunity-coin-route' : snapshotCoinNavigationReason(coin);
-	      opportunities.push({
-	        type: 'coin',
-	        id: coin.drop_id,
-	        amount: coin.amount,
-	        x: coin.x,
-	        y: coin.y,
-	        distance: coin.distance,
-	        staminaCost: opportunityCoinStaminaCost(coin),
-	        score: Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin),
-		        priorityTier: opportunityPriorityTier({ type: 'coin', distance: coin.distance }),
-		        actionKind: coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin',
-		        reason,
-		        maxDistance: coin.opportunityMaxDistance,
-		        coinRoute: coin.coinRoute || null,
-		        routeValue: coin.routeValue || null,
-		        routeKind: coin.routeKind || '',
-		        routeLegs: coin.routeLegs || 0,
-		        routeHeld: Boolean(coin.routeHeld),
-		        competingRouteScore: coin.competingRouteScore,
-		        action: () => buildCoinAction(
-	          self,
-	          coin,
-          reason,
-          coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
-        )
-      });
-    }
-
     const enemyTargets = enemyOpportunityCandidates(self, enemyGroups.flat(), activeThreats);
-    for (const target of enemyTargets) {
-      const score = scoreEnemyOpportunity(target);
-      if (score === null) continue;
-      const staminaCost = opportunityEnemyStaminaCost(target);
-      if (!opportunityStaminaAffordable(self, staminaCost)) continue;
-	      opportunities.push({
-	        type: 'enemy',
-	        id: target.user_id,
-	        distance: target.distance,
-	        staminaCost,
-	        score,
-		        actionKind: target.distance <= (isAfkProfitTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
-		        reason: '',
-		        priorityTier: opportunityPriorityTier({
-		          type: 'enemy',
-		          kind: target.distance <= (isAfkProfitTarget(target) ? cfg.attackRange : cfg.attackEngageRange) ? 'attack' : 'seek-enemy',
-          distance: target.distance
-        }),
-	        action: () => buildEnemyAction(self, target)
-	      });
-	    }
+    const routeCoin = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
+	    const opportunities = buildOpportunityCandidatesCore(
+	      self,
+	      activeThreats,
+	      coinGroups,
+	      enemyTargets,
+	      routeCoin,
+	      opportunityCandidateCoreOptions(self)
+	    ).map(item => {
+	      if (item.type === 'coin') {
+	        const coin = item.sourceCoin || item;
+	        return {
+	          ...item,
+	          action: () => buildCoinAction(self, coin, item.reason, item.actionKind === 'seek-coin' ? 'seek-coin' : 'coin')
+	        };
+	      }
+	      const target = item.sourceTarget || item;
+	      return {
+	        ...item,
+	        action: () => buildEnemyAction(self, target, item.reason || '')
+	      };
+	    });
 
 	    if (!options.disableMissingHold) {
 	      const missingHeld = buildMissingHeldOpportunity(self, activeThreats, opportunities);

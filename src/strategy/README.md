@@ -18,6 +18,7 @@ src/strategy/
 ├── combat-movement.js          # Combat positioning and dodge
 ├── combat-fire-discipline.js   # Combat shooting state machine
 ├── opportunity-choice.js       # Opportunity choice stability core
+├── opportunity-candidates.js   # Opportunity candidate construction core
 ├── opportunity-constants.js    # Profit/coin system configuration
 └── self-test.js               # Strategy module test suite
 ```
@@ -138,6 +139,16 @@ Builds stable opportunity choice decisions:
 
 This module is authoritative for opportunity choice stability as of `bootstrap-0.4.279`; the browser runtime wrapper still owns `bot.opportunityChoice`, `bot.opportunitySwitchLock`, config access, and action construction.
 
+#### `opportunity-candidates.js`
+Builds opportunity candidate descriptors:
+- Opportunity value score and priority tiers
+- Visible coin de-duplication by id
+- Coin route display metadata merge
+- Coin and enemy opportunity descriptors
+- Best visible coin score including route candidates
+
+This module is authoritative for opportunity candidate construction as of `bootstrap-0.4.280`; the browser runtime wrapper still owns route picking, runtime callbacks, action construction, missing-held cleanup, and persisted opportunity choice state.
+
 ### Testing
 
 #### `self-test.js`
@@ -149,9 +160,10 @@ Automated test suite:
 - Coin diagnostics (2 tests)
 - Coin route planning (3 tests)
 - Opportunity choice stability (5 tests)
+- Opportunity candidate construction (5 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 25 tests, all passing**
+- **Total: 30 tests, all passing**
 
 ## Usage Example
 
