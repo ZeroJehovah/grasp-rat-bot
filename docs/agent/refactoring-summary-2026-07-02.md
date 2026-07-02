@@ -160,6 +160,17 @@ This is intended as an equivalent extraction of the stable-choice layer only; op
 
 This is intended as an equivalent extraction of candidate descriptor construction only; action builders, missing-held cleanup, and top-level action selection remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2I Opportunity Choice Persistence Integration
+
+`bootstrap-0.4.281` extracts opportunity choice persistence construction:
+
+- `src/strategy/opportunity-choice.js` now also owns building the persisted choice record and action `opportunityChoice` metadata, including previous-choice continuity, hold windows, missing-held timestamps, route id/value/leg metadata, oscillation flags, high-value hold flags, and route competition fields.
+- The browser runtime still owns the `bot.opportunityChoice` state write, config/state access, opportunity action builders, and missing-held cleanup decisions; wrappers pass runtime options into the strategy core and store the returned choice.
+- `src/strategy/self-test.js` now has 32 tests, including two persistence cases covering persisted choice/action metadata and missing-held route metadata.
+- Static verification checks both the strategy source module and generated remote runtime for the persistence core and wrapper wiring.
+
+This is intended as an equivalent extraction of choice metadata construction only; missing-held validation, action construction, and top-level action selection remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -169,9 +180,10 @@ This is intended as an equivalent extraction of candidate descriptor constructio
 4. Coin route planner core: integrated in `bootstrap-0.4.278`
 5. Opportunity choice stability: integrated in `bootstrap-0.4.279`
 6. Opportunity candidate construction: integrated in `bootstrap-0.4.280`
-7. Constants: partially integrated for high-value coin defaults
-8. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-9. Run live validation sessions after each behavior-touching replacement
+7. Opportunity choice persistence construction: integrated in `bootstrap-0.4.281`
+8. Constants: partially integrated for high-value coin defaults
+9. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+10. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

@@ -675,11 +675,12 @@ function main() {
     });
     check(`${file} locks oscillating opportunity target pairs`, () => {
       const body = functionBody(strategyOpportunityChoiceSource, 'applyOpportunityOscillationLockCore');
+      const choiceMetadataSource = file === 'grasp-rat-bot.js' ? strategyOpportunityChoiceSource : text;
       assert(text.includes('oscillationSwitchLimit: cfg.opportunityOscillationSwitchLimit'), 'oscillation lock limit config not used');
       assert(body.includes('switchCount > limit'), 'oscillation lock does not wait until the switch limit is exceeded');
       assert(body.includes('lockedKey: fromKey'), 'oscillation lock does not pin the current target');
       assert(text.includes('resetOpportunitySwitchLock()'), 'opportunity switch lock reset helper not found');
-      assert(text.includes('oscillationLocked: Boolean'), 'opportunity choice does not expose oscillation lock state');
+      assert(choiceMetadataSource.includes('oscillationLocked: Boolean'), 'opportunity choice does not expose oscillation lock state');
     });
     check(`${file} waits at killed high-drop target position before drop refresh`, () => {
       const body = functionBody(text, 'pickPostAttackDropWaitTarget');
@@ -802,11 +803,12 @@ function main() {
       );
     });
     check(`${file} protects held high-value coins from AFK drop target switches`, () => {
+      const choiceMetadataSource = file === 'grasp-rat-bot.js' ? strategyOpportunityChoiceSource : text;
       assert(text.includes('function isHighValueCoinOpportunity(item)'), 'high-value opportunity helper not found');
       assert(text.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'high-value coin hold switch blocker not found');
       assert(strategyOpportunityChoiceSource.includes("isHighValueCoinOpportunityCore(held, options) && String(best?.type || '') === 'enemy'"), 'high-value hold does not specifically block enemy switches');
       assert(text.includes('highValueCoinHold: true') || strategyOpportunityChoiceSource.includes('highValueCoinHold: true'), 'held high-value coin decision marker not found');
-      assert(text.includes('opportunityChoice.highValueCoinHold') || text.includes('highValueCoinHold: Boolean(item.highValueCoinHold)'), 'high-value hold metadata is not exposed');
+      assert(text.includes('opportunityChoice.highValueCoinHold') || choiceMetadataSource.includes('highValueCoinHold: Boolean(item.highValueCoinHold)'), 'high-value hold metadata is not exposed');
     });
 	    check(`${file} ends combat logs on relogin wait/manual states`, () => {
 	      const body = functionBody(text, 'combatLogSuspendReason');
@@ -1882,10 +1884,14 @@ function main() {
     assert(strategyOpportunityChoiceSource.includes('function applyOpportunityOscillationLockCore'), 'strategy opportunity oscillation lock core not found');
     assert(strategyOpportunityChoiceSource.includes('function opportunityMatchesChoiceCore'), 'strategy opportunity choice matcher core not found');
     assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
+    assert(strategyOpportunityChoiceSource.includes('function rememberOpportunityChoiceCore'), 'strategy opportunity choice persistence core not found');
     assert(sourceBot.includes("require('./src/strategy/opportunity-choice')"), 'source bot does not import opportunity choice strategy module');
     assert(sourceBot.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
+    assert(sourceBot.includes('rememberOpportunityChoiceCore.toString()'), 'source bot does not inject opportunity choice persistence core');
     assert(sourceBot.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
+    assert(sourceBot.includes('switchHoldMs: cfg.opportunitySwitchHoldMs'), 'source bot opportunity choice persistence hold config not wired');
     assert(distSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
+    assert(distSource.includes('function rememberOpportunityChoiceCore'), 'generated runtime does not inline opportunity choice persistence core');
     assert(distSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
   });
 

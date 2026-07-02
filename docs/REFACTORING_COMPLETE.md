@@ -260,11 +260,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.280` continues with `opportunity-candidates.js`, making opportunity value scoring, priority tiers, visible coin de-duplication, route metadata merge, coin/enemy descriptors, and best visible coin score comparison authoritative in the strategy module while preserving route picking, runtime callbacks, action builders, missing-held cleanup, and persisted opportunity choice state in the browser code.
 
+`bootstrap-0.4.281` continues with `opportunity-choice.js`, making persisted choice record construction and action `opportunityChoice` metadata authoritative in the strategy module while preserving the browser wrapper's ownership of the `bot.opportunityChoice` state write, runtime options, action builders, and missing-held cleanup decisions.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin route planner, opportunity choice stability, and opportunity candidate construction slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin route planner, opportunity choice stability, opportunity candidate construction, and opportunity choice persistence slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 
@@ -277,6 +279,6 @@ The extracted modules provide a solid foundation for future enhancements, with c
 
 **Total Time Investment**: ~3 hours  
 **Lines Refactored**: 1,900+  
-**Tests Added**: 13  
+**Tests Added**: 15
 **Bugs Introduced**: 0  
 **Value Delivered**: HIGH
