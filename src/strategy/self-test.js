@@ -17,6 +17,12 @@ const {
   coinPickupPrecisionPulseMsCore
 } = require('./coin-motion');
 const {
+  coinTargetKeyCore,
+  coinMatchesTrackedTargetCore,
+  trackedCoinTargetForCollectionCore,
+  buildNativeCoinSnapshotCore
+} = require('./coin-target');
+const {
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
   pickCoinRouteOpportunityCore
@@ -407,6 +413,76 @@ function runStrategyModuleSelfTests() {
       && motionMeta.precisionPulseMs === 71
       && motionMeta.motionLocked === true
       && motionMeta.pushThrough === true
+  });
+
+  // Test coin target identity and collection matching
+  results.push({
+    name: 'coin-target-key-prefers-id-and-falls-back-to-coordinate',
+    passed: coinTargetKeyCore({ id: 'coin-a', x: 10, y: 20, amount: 2 }) === 'id:coin-a'
+      && coinTargetKeyCore({ x: 10.4, y: 20.6, amount: 2.2 }) === 'xy:10:21:2'
+      && coinTargetKeyCore({ amount: 1 }) === ''
+  });
+
+  results.push({
+    name: 'coin-target-matches-id-or-prune-radius',
+    passed: coinMatchesTrackedTargetCore(
+      { drop_id: 7, x: 1000, y: 0 },
+      { id: '7', x: 9000, y: 0 },
+      { coinCollectedPruneRadius: 100 }
+    ) === true
+      && coinMatchesTrackedTargetCore(
+        { x: 1040, y: 0 },
+        { x: 1000, y: 0 },
+        { coinCollectedPruneRadius: 50 }
+      ) === true
+      && coinMatchesTrackedTargetCore(
+        { x: 1100, y: 0 },
+        { x: 1000, y: 0 },
+        { coinCollectedPruneRadius: 50 }
+      ) === false
+  });
+
+  const decisionTrackedCoin = trackedCoinTargetForCollectionCore({
+    lastDecision: {
+      kind: 'coin',
+      target: { x: 300, y: 400, amount: 3 },
+      postAttackTarget: { id: 'enemy-1', name: 'Enemy' }
+    },
+    lastTarget: { kind: 'coin', id: 'last-coin' },
+    coinProgress: { id: 'progress-coin' }
+  }, { x: 0, y: 0 });
+  results.push({
+    name: 'coin-target-tracked-decision-fills-id-distance-and-post-attack',
+    passed: decisionTrackedCoin?.id === 'last-coin'
+      && decisionTrackedCoin?.distance === 500
+      && decisionTrackedCoin?.postAttackTarget?.id === 'enemy-1'
+  });
+
+  const fallbackTrackedCoin = trackedCoinTargetForCollectionCore({
+    lastTarget: { kind: 'coin', id: 'held-coin' },
+    coinProgress: { id: 'progress-coin', lastDistance: 42, amount: 5, x: 10, y: 20, postAttackTarget: { id: 'enemy-2' } }
+  });
+  results.push({
+    name: 'coin-target-tracked-fallback-uses-last-target-and-progress',
+    passed: fallbackTrackedCoin?.id === 'held-coin'
+      && fallbackTrackedCoin?.distance === 42
+      && fallbackTrackedCoin?.amount === 5
+      && fallbackTrackedCoin?.postAttackTarget?.id === 'enemy-2'
+  });
+
+  const nativeSnapshot = buildNativeCoinSnapshotCore([
+    { drop_id: 'a', amount: 2.4, x: '10', y: '20' },
+    { amount: 3, x: 30, y: 40 },
+    { drop_id: 'zero', amount: 0, x: 50, y: 60 },
+    { drop_id: 'bad', amount: 1, x: NaN, y: 60 }
+  ], { nowMs: 1234 });
+  results.push({
+    name: 'coin-target-native-snapshot-normalizes-and-filters',
+    passed: nativeSnapshot.length === 2
+      && nativeSnapshot[0].key === 'id:a'
+      && nativeSnapshot[0].amount === 2
+      && nativeSnapshot[0].at === 1234
+      && nativeSnapshot[1].key === 'xy:30:40:3'
   });
 
   // Test coin route planning

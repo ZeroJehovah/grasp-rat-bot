@@ -79,6 +79,13 @@ const {
   coinMotionMetaCore
 } = require('./src/strategy/coin-motion');
 const {
+  coinTargetKeyCore,
+  coinTargetDistance,
+  coinMatchesTrackedTargetCore,
+  trackedCoinTargetForCollectionCore,
+  buildNativeCoinSnapshotCore
+} = require('./src/strategy/coin-target');
+const {
   defaultDist,
   coinRouteKey,
   coinRouteIdsFrom,
@@ -11454,66 +11461,34 @@ ${importantLogSource()}
 	    bot.lastCoinClearReason = reason;
 	  }
 
+  ${coinTargetKeyCore.toString()}
+  ${coinTargetDistance.toString()}
+  ${coinMatchesTrackedTargetCore.toString()}
+  ${trackedCoinTargetForCollectionCore.toString()}
+  ${buildNativeCoinSnapshotCore.toString()}
+
+  function coinTargetCoreOptions(extra = {}) {
+    return {
+      dist,
+      coinCollectedPruneRadius: cfg.coinCollectedPruneRadius,
+      ...extra
+    };
+  }
+
   function trackedCoinTargetForCollection(self) {
-    const decision = bot.lastDecision || null;
-    const decisionTarget = decision?.target || null;
-    const decisionLooksLikeCoin = decisionTarget
-      && (decision.kind === 'coin'
-        || decision.kind === 'seek-coin'
-        || (decision.kind === 'patrol' && String(decision.reason || '').includes('coin')));
-    if (decisionLooksLikeCoin) {
-      const target = { ...decisionTarget };
-      if (decision?.postAttackTarget && !target.postAttackTarget) target.postAttackTarget = decision.postAttackTarget;
-      target.id = target.id ?? bot.lastTarget?.id ?? bot.coinProgress?.id;
-      if (!Number.isFinite(Number(target.distance)) && Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.y)) && self) {
-        target.distance = dist(self, target);
-      }
-      return target;
-    }
-    if (bot.lastTarget?.kind === 'coin') {
-      return {
-        id: bot.lastTarget.id,
-        distance: bot.coinProgress?.lastDistance,
-        amount: bot.coinProgress?.amount,
-        x: bot.coinProgress?.x,
-        y: bot.coinProgress?.y,
-        postAttackTarget: bot.coinProgress?.postAttackTarget || null
-      };
-    }
-    if (bot.coinProgress?.id) {
-      return {
-        id: bot.coinProgress.id,
-        distance: bot.coinProgress.lastDistance,
-        amount: bot.coinProgress.amount,
-        x: bot.coinProgress.x,
-        y: bot.coinProgress.y,
-        postAttackTarget: bot.coinProgress.postAttackTarget || null
-      };
-    }
-    return null;
+    return trackedCoinTargetForCollectionCore({
+      lastDecision: bot.lastDecision,
+      lastTarget: bot.lastTarget,
+      coinProgress: bot.coinProgress
+    }, self, coinTargetCoreOptions());
   }
 
   function coinTargetKey(target) {
-    const id = target?.id ?? target?.drop_id ?? target?.coin_id;
-    if (id !== undefined && id !== null && id !== '') return 'id:' + String(id);
-    const x = Number(target?.x);
-    const y = Number(target?.y);
-    if (Number.isFinite(x) && Number.isFinite(y)) {
-      return 'xy:' + Math.round(x) + ':' + Math.round(y) + ':' + Math.round(Number(target?.amount || 0));
-    }
-    return '';
+    return coinTargetKeyCore(target);
   }
 
   function coinMatchesTrackedTarget(coin, target) {
-    const targetId = target?.id ?? target?.drop_id ?? target?.coin_id;
-    const coinId = coin?.drop_id ?? coin?.id ?? coin?.coin_id;
-    if (targetId !== undefined && targetId !== null && targetId !== '' && coinId !== undefined && coinId !== null && coinId !== '') {
-      if (String(targetId) === String(coinId)) return true;
-    }
-    const targetPoint = { x: Number(target?.x), y: Number(target?.y) };
-    const coinPoint = { x: Number(coin?.x), y: Number(coin?.y) };
-    if (!Number.isFinite(targetPoint.x) || !Number.isFinite(targetPoint.y) || !Number.isFinite(coinPoint.x) || !Number.isFinite(coinPoint.y)) return false;
-    return dist(targetPoint, coinPoint) <= Number(cfg.coinCollectedPruneRadius || 0);
+    return coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions());
   }
 
   function trackedCoinStillVisible(target) {
@@ -11528,19 +11503,10 @@ ${importantLogSource()}
   function nativeCoinSnapshot() {
     const nativeCoinList = getNativeCoinList();
     if (!Array.isArray(nativeCoinList)) return null;
-    const t = Date.now();
-    return nativeCoinList
+    const coins = nativeCoinList
       .map(coin => normalizeCoinDrop(coin, 'native'))
-      .filter(Boolean)
-      .map(coin => ({
-        id: coin.drop_id ?? coin.id ?? coin.coin_id ?? '',
-        key: coinTargetKey(coin),
-        amount: Math.max(0, Math.round(Number(coin.amount || 0) || 0)),
-        x: Number(coin.x),
-        y: Number(coin.y),
-        at: t
-      }))
-      .filter(coin => coin.key && coin.amount > 0 && Number.isFinite(coin.x) && Number.isFinite(coin.y));
+      .filter(Boolean);
+    return buildNativeCoinSnapshotCore(coins, coinTargetCoreOptions({ nowMs: Date.now() }));
   }
 
   function rememberNativeCoinSnapshot(snapshot = null) {

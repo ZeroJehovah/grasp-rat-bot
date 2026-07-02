@@ -13,6 +13,7 @@ src/strategy/
 ├── action-switch-diagnostics.js # Target/focus switch diagnostics
 ├── coin-diagnostics.js         # Coin diagnostics summaries
 ├── coin-motion.js              # Coin pickup motion and metadata core
+├── coin-target.js              # Coin target identity and matching core
 ├── coin-route.js               # Coin route planning core
 ├── combat-constants.js         # Combat system configuration
 ├── combat-target-selection.js  # Combat target eligibility and priority
@@ -83,6 +84,15 @@ Builds coin pickup movement decisions:
 - Coin motion metadata summaries
 
 This module is authoritative for coin pickup/motion direction and metadata logic as of `bootstrap-0.4.286`; the browser runtime wrapper still owns `bot.coinApproachLock`, coin failure/progress counters, config access, and action construction.
+
+#### `coin-target.js`
+Builds coin target identity and matching decisions:
+- Stable coin target keys
+- Coin-to-tracked-target ID/radius matching
+- Tracked collection target reconstruction
+- Native coin snapshot normalization and filtering
+
+This module is authoritative for coin target identity and matching logic as of `bootstrap-0.4.287`; the browser runtime wrapper still owns `bot` state access, native coin source access, normalization, config access, and collection side effects.
 
 #### `coin-route.js`
 Builds native visible coin routes and route-switch guards:
@@ -197,6 +207,7 @@ Automated test suite:
 - Target-switch diagnostics (2 tests)
 - Coin diagnostics (2 tests)
 - Coin motion direction/pulse/metadata (9 tests)
+- Coin target identity/matching (5 tests)
 - Coin route planning (3 tests)
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
@@ -204,7 +215,7 @@ Automated test suite:
 - Stamina budget summaries/selectors (4 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 54 tests, all passing**
+- **Total: 59 tests, all passing**
 
 ## Usage Example
 
@@ -263,8 +274,9 @@ executeAction(action);
 12. **Phase 2L**: Post-attack drop coin matching integrated into runtime and strategy self-tests
 13. **Phase 2M**: Stamina budget summary/selector logic integrated into runtime and strategy self-tests
 14. **Phase 2N**: Coin motion direction/pulse/metadata integrated into runtime and strategy self-tests
-15. **Next**: Replace additional helpers only in small, provably equivalent slices
-16. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+15. **Phase 2O**: Coin target identity/matching integrated into runtime and strategy self-tests
+16. **Next**: Replace additional helpers only in small, provably equivalent slices
+17. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 
