@@ -270,11 +270,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.285` continues with `stamina-budget.js`, making stamina-budget summaries and selectors authoritative in the strategy module while preserving the browser wrapper's ownership of measured stamina budgets, safe coin filtering, distance/stamina callbacks, relogin delay config, and leave/action construction.
 
+`bootstrap-0.4.286` continues with `coin-motion.js`, making coin pickup/motion direction, approach-lock update intent, pickup pulse timing, and motion metadata authoritative in the strategy module while preserving the browser wrapper's ownership of `bot.coinApproachLock`, coin failure/progress counters, config access, and action construction.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 
