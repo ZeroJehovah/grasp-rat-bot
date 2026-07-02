@@ -269,6 +269,7 @@ function main() {
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
+  const strategyCoinTargetSource = readText('src/strategy/coin-target.js');
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
@@ -1890,6 +1891,27 @@ function main() {
     assert(distSource.includes('function coinPickupPrecisionPulseMsCore'), 'generated runtime does not inline coin pickup pulse core');
     assert(distSource.includes('function coinMotionCoreOptions'), 'generated runtime coin motion wrapper options not found');
     assert(distSource.includes('function applyCoinApproachLockUpdate'), 'generated runtime coin approach lock wrapper not found');
+  });
+
+  check('coin target identity uses strategy module core', () => {
+    assert(strategyCoinTargetSource.includes('function coinTargetKeyCore'), 'strategy coin target key core not found');
+    assert(strategyCoinTargetSource.includes('function coinMatchesTrackedTargetCore'), 'strategy coin target matcher core not found');
+    assert(strategyCoinTargetSource.includes('function trackedCoinTargetForCollectionCore'), 'strategy tracked coin target core not found');
+    assert(strategyCoinTargetSource.includes('function buildNativeCoinSnapshotCore'), 'strategy native coin snapshot core not found');
+    assert(sourceBot.includes("require('./src/strategy/coin-target')"), 'source bot does not import coin target strategy module');
+    assert(sourceBot.includes('coinTargetKeyCore.toString()'), 'source bot does not inject coin target key core');
+    assert(sourceBot.includes('coinMatchesTrackedTargetCore.toString()'), 'source bot does not inject coin target matcher core');
+    assert(sourceBot.includes('trackedCoinTargetForCollectionCore.toString()'), 'source bot does not inject tracked coin target core');
+    assert(sourceBot.includes('buildNativeCoinSnapshotCore.toString()'), 'source bot does not inject native coin snapshot core');
+    assert(sourceBot.includes('function coinTargetCoreOptions'), 'source bot coin target runtime wrapper options not found');
+    assert(sourceBot.includes('trackedCoinTargetForCollectionCore({'), 'source bot tracked coin target wrapper does not call strategy core');
+    assert(sourceBot.includes('return coinTargetKeyCore(target);'), 'source bot coin target key wrapper does not call strategy core');
+    assert(sourceBot.includes('return coinMatchesTrackedTargetCore(coin, target'), 'source bot coin target matcher wrapper does not call strategy core');
+    assert(sourceBot.includes('return buildNativeCoinSnapshotCore(coins'), 'source bot native coin snapshot wrapper does not call strategy core');
+    assert(distSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');
+    assert(distSource.includes('function coinMatchesTrackedTargetCore'), 'generated runtime does not inline coin target matcher core');
+    assert(distSource.includes('function trackedCoinTargetForCollectionCore'), 'generated runtime does not inline tracked coin target core');
+    assert(distSource.includes('function buildNativeCoinSnapshotCore'), 'generated runtime does not inline native coin snapshot core');
   });
 
   check('coin route planner uses strategy module core', () => {
