@@ -22,7 +22,9 @@ const {
   trackedCoinTargetForCollectionCore,
   buildNativeCoinSnapshotCore,
   pointToSegmentDistanceCore,
-  pickIncidentalCoinPickupsCore
+  pickIncidentalCoinPickupsCore,
+  snapshotCoinWorthLongTravelCore,
+  snapshotCoinNavigationReasonCore
 } = require('./coin-target');
 const {
   buildCoinRouteFromAnchorCore,
@@ -525,6 +527,40 @@ function runStrategyModuleSelfTests() {
     passed: pathIncidentalPickups.length === 1
       && pathIncidentalPickups[0].coin.id === 'path'
       && pathIncidentalPickups[0].pathDistance === 5
+  });
+
+  const snapshotHelperOptions = {
+    snapshotCoinClusterMinCoins: 3,
+    snapshotSingleCoinMaxDistance: 1000,
+    snapshotSingleCoinDistancePerAmount: 300,
+    globalCoinMaxDistance: 500,
+    coinMaxDistance: 800,
+    isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly)
+  };
+  results.push({
+    name: 'coin-target-snapshot-worth-cluster-beats-distance',
+    passed: snapshotCoinWorthLongTravelCore({ distance: 100000, amount: 1 }, 3, 3, snapshotHelperOptions) === true
+  });
+
+  results.push({
+    name: 'coin-target-snapshot-worth-single-distance-scales-by-amount',
+    passed: snapshotCoinWorthLongTravelCore({ distance: 1500, amount: 5 }, 1, 5, snapshotHelperOptions) === true
+      && snapshotCoinWorthLongTravelCore({ distance: 1501, amount: 5 }, 1, 5, snapshotHelperOptions) === false
+      && snapshotCoinWorthLongTravelCore({ distance: Infinity, amount: 99 }, 1, 99, snapshotHelperOptions) === false
+  });
+
+  results.push({
+    name: 'coin-target-snapshot-navigation-reason-priority',
+    passed: snapshotCoinNavigationReasonCore({ snapshotIdleFallback: true }, snapshotHelperOptions) === 'snapshot-coin-idle-timeout'
+      && snapshotCoinNavigationReasonCore({ fieldMigration: true }, snapshotHelperOptions) === 'migrate-to-known-field'
+      && snapshotCoinNavigationReasonCore({ snapshotOnly: true, snapshotMembers: 3 }, snapshotHelperOptions) === 'snapshot-coin-field'
+      && snapshotCoinNavigationReasonCore({ snapshotOnly: true, snapshotMembers: 1 }, snapshotHelperOptions) === 'snapshot-coin-target'
+  });
+
+  results.push({
+    name: 'coin-target-snapshot-navigation-visible-distance',
+    passed: snapshotCoinNavigationReasonCore({ distance: 800 }, snapshotHelperOptions) === 'best-opportunity-coin'
+      && snapshotCoinNavigationReasonCore({ distance: 801 }, snapshotHelperOptions) === 'best-opportunity-visible-coin'
   });
 
   // Test coin route planning

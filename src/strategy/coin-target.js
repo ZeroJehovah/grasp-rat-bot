@@ -121,6 +121,31 @@ function pickIncidentalCoinPickupsCore(previousSnapshot, currentSnapshot, curren
   return picked;
 }
 
+function snapshotCoinWorthLongTravelCore(coin, members = 1, totalAmount = null, options = {}) {
+  const memberCount = Math.max(1, Number(members || 1));
+  const minCoins = Math.max(1, Number(options.snapshotCoinClusterMinCoins || 1));
+  if (memberCount >= minCoins) return true;
+  const distance = Number(coin?.distance ?? Infinity);
+  if (!Number.isFinite(distance)) return false;
+  const amount = Math.max(0, Number(totalAmount ?? coin?.amount ?? 0));
+  const baseMax = Math.max(0, Number(options.snapshotSingleCoinMaxDistance || options.globalCoinMaxDistance || options.coinMaxDistance || 0));
+  const perAmount = Math.max(0, Number(options.snapshotSingleCoinDistancePerAmount || 0));
+  const maxDistance = Math.max(baseMax, amount * perAmount);
+  return distance <= maxDistance;
+}
+
+function snapshotCoinNavigationReasonCore(coin, options = {}) {
+  if (coin?.snapshotIdleFallback) return 'snapshot-coin-idle-timeout';
+  if (coin?.fieldMigration) return 'migrate-to-known-field';
+  const isSnapshotOnly = typeof options.isSnapshotOnlyCoin === 'function'
+    ? options.isSnapshotOnlyCoin(coin)
+    : Boolean(coin?.snapshot && !coin?.native);
+  if (isSnapshotOnly && Number(coin?.snapshotMembers || 0) > 0) {
+    return Number(coin.snapshotMembers) >= Number(options.snapshotCoinClusterMinCoins || 0) ? 'snapshot-coin-field' : 'snapshot-coin-target';
+  }
+  return Number(coin?.distance) <= Number(options.coinMaxDistance || 0) ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
+}
+
 module.exports = {
   coinTargetKeyCore,
   coinTargetDistance,
@@ -128,5 +153,7 @@ module.exports = {
   trackedCoinTargetForCollectionCore,
   buildNativeCoinSnapshotCore,
   pointToSegmentDistanceCore,
-  pickIncidentalCoinPickupsCore
+  pickIncidentalCoinPickupsCore,
+  snapshotCoinWorthLongTravelCore,
+  snapshotCoinNavigationReasonCore
 };

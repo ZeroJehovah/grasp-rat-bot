@@ -92,8 +92,9 @@ Builds coin target identity and matching decisions:
 - Tracked collection target reconstruction
 - Native coin snapshot normalization and filtering
 - Incidental pickup candidate detection
+- Snapshot coin worth/reason helpers
 
-This module is authoritative for coin target identity and matching logic as of `bootstrap-0.4.287`, and incidental pickup candidate detection as of `bootstrap-0.4.288`; the browser runtime wrapper still owns `bot` state access, native coin source access, normalization, config access, collection side effects, session accounting, and snapshot memory writes.
+This module is authoritative for coin target identity and matching logic as of `bootstrap-0.4.287`, incidental pickup candidate detection as of `bootstrap-0.4.288`, and snapshot coin worth/reason helper logic as of `bootstrap-0.4.289`; the browser runtime wrapper still owns `bot` state access, native coin source access, normalization, config access, collection side effects, session accounting, snapshot memory writes, and the runtime snapshot-only predicate.
 
 #### `coin-route.js`
 Builds native visible coin routes and route-switch guards:
@@ -208,7 +209,7 @@ Automated test suite:
 - Target-switch diagnostics (2 tests)
 - Coin diagnostics (2 tests)
 - Coin motion direction/pulse/metadata (9 tests)
-- Coin target identity/matching/incidental pickup (8 tests)
+- Coin target identity/matching/incidental pickup/snapshot helpers (12 tests)
 - Coin route planning (3 tests)
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
@@ -216,7 +217,7 @@ Automated test suite:
 - Stamina budget summaries/selectors (4 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 62 tests, all passing**
+- **Total: 66 tests, all passing**
 
 ## Usage Example
 
@@ -277,8 +278,9 @@ executeAction(action);
 14. **Phase 2N**: Coin motion direction/pulse/metadata integrated into runtime and strategy self-tests
 15. **Phase 2O**: Coin target identity/matching integrated into runtime and strategy self-tests
 16. **Phase 2P**: Incidental coin pickup detection integrated into runtime and strategy self-tests
-17. **Next**: Replace additional helpers only in small, provably equivalent slices
-18. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+17. **Phase 2Q**: Snapshot coin worth/reason helpers integrated into runtime and strategy self-tests
+18. **Next**: Replace additional helpers only in small, provably equivalent slices
+19. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 

@@ -85,7 +85,9 @@ const {
   trackedCoinTargetForCollectionCore,
   buildNativeCoinSnapshotCore,
   pointToSegmentDistanceCore,
-  pickIncidentalCoinPickupsCore
+  pickIncidentalCoinPickupsCore,
+  snapshotCoinWorthLongTravelCore,
+  snapshotCoinNavigationReasonCore
 } = require('./src/strategy/coin-target');
 const {
   defaultDist,
@@ -10372,25 +10374,11 @@ ${importantLogSource()}
 	  }
 
   function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
-    const memberCount = Math.max(1, Number(members || 1));
-    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
-    if (memberCount >= minCoins) return true;
-    const distance = Number(coin?.distance ?? Infinity);
-    if (!Number.isFinite(distance)) return false;
-    const amount = Math.max(0, Number(totalAmount ?? coin?.amount ?? 0));
-    const baseMax = Math.max(0, Number(cfg.snapshotSingleCoinMaxDistance || cfg.globalCoinMaxDistance || cfg.coinMaxDistance || 0));
-    const perAmount = Math.max(0, Number(cfg.snapshotSingleCoinDistancePerAmount || 0));
-    const maxDistance = Math.max(baseMax, amount * perAmount);
-    return distance <= maxDistance;
+    return snapshotCoinWorthLongTravelCore(coin, members, totalAmount, coinTargetCoreOptions());
   }
 
 	  function snapshotCoinNavigationReason(coin) {
-	    if (coin?.snapshotIdleFallback) return 'snapshot-coin-idle-timeout';
-	    if (coin?.fieldMigration) return 'migrate-to-known-field';
-	    if (isSnapshotOnlyCoin(coin) && Number(coin?.snapshotMembers || 0) > 0) {
-	      return coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target';
-	    }
-    return coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
+	    return snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions());
   }
 
   function scoreCoinOpportunity(coin) {
@@ -11470,6 +11458,8 @@ ${importantLogSource()}
   ${buildNativeCoinSnapshotCore.toString()}
   ${pointToSegmentDistanceCore.toString()}
   ${pickIncidentalCoinPickupsCore.toString()}
+  ${snapshotCoinWorthLongTravelCore.toString()}
+  ${snapshotCoinNavigationReasonCore.toString()}
 
   function coinTargetCoreOptions(extra = {}) {
     return {
@@ -11477,6 +11467,12 @@ ${importantLogSource()}
       coinCollectedPruneRadius: cfg.coinCollectedPruneRadius,
       coinCollectedConfirmDistance: cfg.coinCollectedConfirmDistance,
       incidentalCoinPickupMemoryMs: cfg.incidentalCoinPickupMemoryMs,
+      snapshotCoinClusterMinCoins: cfg.snapshotCoinClusterMinCoins,
+      snapshotSingleCoinMaxDistance: cfg.snapshotSingleCoinMaxDistance,
+      snapshotSingleCoinDistancePerAmount: cfg.snapshotSingleCoinDistancePerAmount,
+      globalCoinMaxDistance: cfg.globalCoinMaxDistance,
+      coinMaxDistance: cfg.coinMaxDistance,
+      isSnapshotOnlyCoin,
       ...extra
     };
   }

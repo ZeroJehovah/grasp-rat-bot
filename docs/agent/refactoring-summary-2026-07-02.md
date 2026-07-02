@@ -248,6 +248,17 @@ This is intended as an equivalent extraction of coin identity/matching logic onl
 
 This is intended as an equivalent extraction of incidental pickup candidate selection only; recording session totals and updating bot collection state remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2Q Snapshot Coin Helpers
+
+`bootstrap-0.4.289` extends coin target extraction with snapshot coin helper logic:
+
+- `src/strategy/coin-target.js` now also owns snapshot coin long-travel worth checks for clusters/single coins and snapshot navigation reason selection.
+- The browser runtime still owns config access and the runtime `isSnapshotOnlyCoin()` predicate.
+- `src/strategy/self-test.js` now has 66 tests, including four snapshot helper cases covering cluster worth, amount-scaled single-coin worth, reason priority, and visible-distance reason selection.
+- Static verification checks both the strategy source module and generated remote runtime for the snapshot helper cores and wrapper wiring.
+
+This is intended as an equivalent extraction of small snapshot helpers only; snapshot destination selection remains in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -265,9 +276,10 @@ This is intended as an equivalent extraction of incidental pickup candidate sele
 12. Coin motion direction/pulse/metadata logic: integrated in `bootstrap-0.4.286`
 13. Coin target identity/matching logic: integrated in `bootstrap-0.4.287`
 14. Incidental coin pickup detection: integrated in `bootstrap-0.4.288`
-15. Constants: partially integrated for high-value coin defaults
-16. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-17. Run live validation sessions after each behavior-touching replacement
+15. Snapshot coin worth/reason helpers: integrated in `bootstrap-0.4.289`
+16. Constants: partially integrated for high-value coin defaults
+17. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+18. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

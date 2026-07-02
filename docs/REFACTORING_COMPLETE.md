@@ -276,11 +276,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.288` extends `coin-target.js`, making incidental coin pickup candidate detection authoritative in the strategy module while preserving the browser wrapper's ownership of session accounting, `bot.lastCoinCollected`, and native snapshot memory writes.
 
+`bootstrap-0.4.289` extends `coin-target.js`, making snapshot coin worth/reason helpers authoritative in the strategy module while preserving the browser wrapper's ownership of config access, the runtime snapshot-only predicate, and snapshot destination selection.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 
