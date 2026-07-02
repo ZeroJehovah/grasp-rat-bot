@@ -12,6 +12,7 @@ src/strategy/
 ├── action-arbitration.js       # Final action arbitration logic
 ├── action-switch-diagnostics.js # Target/focus switch diagnostics
 ├── coin-diagnostics.js         # Coin diagnostics summaries
+├── coin-route.js               # Coin route planning core
 ├── combat-constants.js         # Combat system configuration
 ├── combat-target-selection.js  # Combat target eligibility and priority
 ├── combat-movement.js          # Combat positioning and dodge
@@ -67,6 +68,17 @@ Builds the diagnostic summaries used for visible/realtime coin filtering:
 - Count fields for visible/realtime coin groups
 
 This module is authoritative for pure coin diagnostics construction as of `bootstrap-0.4.277`; runtime-specific config, ignored-coin storage, stamina-affordability checks, and threat diagnostics stay in the browser wrapper.
+
+#### `coin-route.js`
+Builds native visible coin routes and route-switch guards:
+- Route key and route metadata helpers
+- Route leg stamina and safety core functions
+- Anchor-based route construction
+- Closer-first and held-single-coin guards
+- Held route switch hysteresis
+- Bounded route candidate selection
+
+This module is authoritative for route planning core logic as of `bootstrap-0.4.278`; the browser runtime wrapper still owns config/state access, visible coin filtering, stamina affordability, threat blocking, and held opportunity choice lookup.
 
 ### Combat System
 
@@ -124,9 +136,10 @@ Automated test suite:
 - Arbitration logic (4 tests)
 - Target-switch diagnostics (2 tests)
 - Coin diagnostics (2 tests)
+- Coin route planning (3 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 17 tests, all passing**
+- **Total: 20 tests, all passing**
 
 ## Usage Example
 
@@ -176,8 +189,9 @@ executeAction(action);
 3. **Phase 2C**: Action focus and final-action arbitration integrated into runtime and self-tests
 4. **Phase 2D**: Target-switch diagnostics integrated into runtime and strategy self-tests
 5. **Phase 2E**: Coin diagnostics construction integrated into runtime and strategy self-tests
-6. **Next**: Replace additional helpers only in small, provably equivalent slices
-7. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+6. **Phase 2F**: Coin route planner core integrated into runtime and strategy self-tests
+7. **Next**: Replace additional helpers only in small, provably equivalent slices
+8. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 
@@ -205,7 +219,7 @@ executeAction(action);
 
 ## Future Enhancements
 
-1. **Profit Module**: Extract coin routing and opportunity selection
+1. **Profit Module**: Continue extracting opportunity selection around the coin route wrapper
 2. **Safety Module**: Extract flee/avoidance logic
 3. **State Management**: Centralize bot state handling
 4. **Decision Tree**: Explicit decision tree structure

@@ -127,15 +127,27 @@ This is still a diagnostics-only migration. Combat target selection, movement, a
 
 This is a diagnostics/data-shaping migration only; it does not change coin selection or movement decisions.
 
+## 2026-07-03 Follow-up: Phase 2F Coin Route Planner Integration
+
+`bootstrap-0.4.278` extracts the coin route planner core while preserving runtime wrappers:
+
+- `src/strategy/coin-route.js` now owns route keys, route id extraction, route leg cost/safety cores, route point limits, route summaries, route point metadata, anchor route construction, closer-first and held-single-coin guards, held route matching, switch hysteresis, and bounded route picking.
+- The browser runtime still owns config/state access, including visible coin filtering, stamina affordability checks, threat blocking callbacks, coin filter diagnostics, and current held opportunity choice lookup.
+- `src/strategy/self-test.js` now has 20 tests, including three coin route cases covering route metadata, closer-first guarding, and held route stabilization.
+- Static verification checks both the strategy source module and generated remote runtime for the coin route core and wrapper.
+
+This is intended as an equivalent extraction of existing route planning logic; ordinary profit arbitration and action construction remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
 1. Action arbitration and focus summary: integrated in `bootstrap-0.4.275`
 2. Target-switch diagnostics: integrated in `bootstrap-0.4.276`
 3. Coin diagnostics construction: integrated in `bootstrap-0.4.277`
-4. Constants: partially integrated for high-value coin defaults
-5. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-6. Run live validation sessions after each behavior-touching replacement
+4. Coin route planner core: integrated in `bootstrap-0.4.278`
+5. Constants: partially integrated for high-value coin defaults
+6. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+7. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

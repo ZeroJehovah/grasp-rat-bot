@@ -10,6 +10,11 @@ const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = requi
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
+const {
+  buildCoinRouteFromAnchorCore,
+  coinRouteSkipsCloserFirstCoinCore,
+  pickCoinRouteOpportunityCore
+} = require('./coin-route');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -231,6 +236,90 @@ function runStrategyModuleSelfTests() {
       && coinDiag.filteredNearCoins[0].id === 'blocked'
       && coinDiag.filteredNearCoins[0].distance === 700
       && coinDiag.filteredNearCoins[0].threat.id === 7
+  });
+
+  // Test coin route planning
+  const routeSelf = { x: 0, y: 0 };
+  const routeCoins = [
+    { drop_id: '1', amount: 1, x: 1000, y: 0, distance: 1000 },
+    { drop_id: '2', amount: 1, x: 2000, y: 0, distance: 2000 },
+    { drop_id: '3', amount: 1, x: 3000, y: 0, distance: 3000 }
+  ];
+  const routeOptions = {
+    dist: (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)),
+    moveStaminaCost: distance => Number(distance || 0),
+    pickupStaminaMs: 0,
+    valueScore: (value, cost) => cost > 0 ? value * 100000 / cost : Infinity,
+    staminaAffordable: cost => cost <= 10000,
+    coinOpportunityValue: 100000,
+    sampleDistance: 10000,
+    clusterRadius: 5000,
+    maxPointsDense: 6,
+    maxPointsMid: 4,
+    maxPointsSparse: 3,
+    linkDistance: 1500,
+    maxLinkDistance: 2500,
+    nearbyFirstCoinDistance: 22000,
+    firstCoinDistanceRatio: 1.45,
+    firstCoinDistanceSlack: 6000,
+    choiceType: choice => String(choice?.type || ''),
+    choiceId: choice => String(choice?.id ?? ''),
+    heldMinOverlap: 2,
+    switchMargin: 3000,
+    switchRelativeMargin: 0.1,
+    maxDistance: 50000,
+    poolLimit: 72,
+    anchorLimit: 22,
+    safeCoinCandidates: (coins, threats, maxDistance, self) => (coins || [])
+      .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin.distance)) ? Number(coin.distance) : Math.hypot(Number(self.x) - Number(coin.x), Number(self.y) - Number(coin.y)) }))
+      .filter(coin => coin.distance <= maxDistance),
+    isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly)
+  };
+  const builtRoute = buildCoinRouteFromAnchorCore(routeSelf, routeCoins[0], routeCoins, [], routeOptions);
+  results.push({
+    name: 'coin-route-builds-metadata',
+    passed: builtRoute
+      && builtRoute.coinRoute?.legCount === 3
+      && builtRoute.coinRoute?.points?.length === 3
+      && builtRoute.coinRoute?.ids?.join(',') === '1,2,3'
+      && builtRoute.routeKind === 'short'
+  });
+
+  results.push({
+    name: 'coin-route-closer-first-guard',
+    passed: coinRouteSkipsCloserFirstCoinCore(
+      routeSelf,
+      { drop_id: 'far-route', amount: 3, x: 30000, y: 0, distance: 30000, coinRoute: { firstDistance: 30000 } },
+      [{ drop_id: 'near', amount: 1, x: 10000, y: 0, distance: 10000 }],
+      routeOptions
+    ) === true
+  });
+
+  const heldRouteChoice = {
+    type: 'coin',
+    id: '1',
+    reason: 'best-opportunity-coin-route',
+    until: 10000,
+    coinRouteIds: ['1', '2', '3']
+  };
+  const pickedRoute = pickCoinRouteOpportunityCore(routeSelf, [
+    ...routeCoins,
+    { drop_id: '4', amount: 10, x: 9000, y: 0, distance: 9000 },
+    { drop_id: '5', amount: 10, x: 10000, y: 0, distance: 10000 },
+    { drop_id: '6', amount: 10, x: 11000, y: 0, distance: 11000 }
+  ], [], {
+    ...routeOptions,
+    nearbyFirstCoinDistance: 0,
+    staminaAffordable: cost => cost <= 20000,
+    heldChoice: heldRouteChoice,
+    heldRouteChoice
+  });
+  results.push({
+    name: 'coin-route-pick-stabilizes-held-route',
+    passed: pickedRoute
+      && pickedRoute.drop_id === '1'
+      && pickedRoute.routeHeld === true
+      && pickedRoute.coinRoute?.ids?.join(',') === '1,2,3'
   });
 
   // Test combat constants validation

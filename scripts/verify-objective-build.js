@@ -267,6 +267,7 @@ function main() {
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
+  const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -628,25 +629,30 @@ function main() {
     });
     check(`${file} plans bounded native visible coin routes inside opportunity scoring`, () => {
       const routeBody = functionBody(text, 'pickCoinRouteOpportunity');
+      const routeCoreSource = file === 'grasp-rat-bot.js' ? strategyCoinRouteSource : text;
+      const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
       const bestBody = functionBody(text, 'bestCoinOpportunityScore');
       const pickBody = functionBody(text, 'pickBestOpportunity');
       assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
+      assert(strategyCoinRouteSource.includes('function pickCoinRouteOpportunityCore'), 'strategy coin route planner core not found');
+      assert(strategyCoinRouteSource.includes('function buildCoinRouteFromAnchorCore'), 'strategy coin route builder core not found');
+      assert(strategyCoinRouteSource.includes('function coinRouteLegClearCore'), 'strategy coin route leg safety core not found');
       assert(text.includes('function coinRouteLegClear'), 'coin route leg safety checker not found');
       assert(text.includes('function coinRouteSkipsCloserFirstCoin'), 'coin route closer-first guard not found');
       assert(text.includes('function currentHeldCoinChoice'), 'coin route held single-coin choice helper not found');
       assert(text.includes('function coinRouteSkipsHeldSingleCoin'), 'coin route held single-coin skip guard not found');
       assert(text.includes('function currentHeldCoinRouteChoice'), 'coin route held-choice stabilizer not found');
       assert(text.includes('function heldCoinRouteBeatsSwitch'), 'coin route switch hysteresis helper not found');
-      assert(text.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
+      assert(routeCoreSource.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
       assert(text.includes('best-opportunity-coin-route'), 'coin route decision reason not found');
-      assert(text.includes('points: coinRoutePoints(bestRoute)'), 'coin route action metadata does not expose route points');
-      assert(routeBody.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'coin route planner can include snapshot-only coins');
-      assert(routeBody.includes('cfg.coinRoutePoolLimit'), 'coin route planner is not pool bounded');
-      assert(routeBody.includes('cfg.coinRouteAnchorLimit'), 'coin route planner is not anchor bounded');
-      assert(routeBody.includes('coinRouteLegClear(self, anchor, activeThreats)'), 'coin route planner does not safety-check first leg');
-      assert(routeBody.includes('coinRouteSkipsCloserFirstCoin(self, route, candidates)'), 'coin route planner can skip much closer local coins');
-      assert(routeBody.includes('currentHeldCoinChoice') && routeBody.includes('coinRouteSkipsHeldSingleCoin(self, route, heldChoice)'), 'coin route planner can skip the held nearby single coin');
-      assert(routeBody.includes('currentHeldCoinRouteChoice') && routeBody.includes('heldCoinRouteBeatsSwitch(heldRoute, best)'), 'coin route planner does not stabilize held route first coin');
+      assert(routeCoreSource.includes('points: coinRoutePoints(bestRoute)'), 'coin route action metadata does not expose route points');
+      assert(routeCoreBody.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'coin route planner can include snapshot-only coins');
+      assert(text.includes('poolLimit: cfg.coinRoutePoolLimit') || routeCoreBody.includes('options.poolLimit'), 'coin route planner is not pool bounded');
+      assert(text.includes('anchorLimit: cfg.coinRouteAnchorLimit') || routeCoreBody.includes('options.anchorLimit'), 'coin route planner is not anchor bounded');
+      assert(routeCoreBody.includes('coinRouteLegClearCore(self, anchor, activeThreats, options)'), 'coin route planner does not safety-check first leg');
+      assert(routeCoreBody.includes('coinRouteSkipsCloserFirstCoinCore(self, route, candidates, options)'), 'coin route planner can skip much closer local coins');
+      assert(text.includes('heldChoice: currentHeldCoinChoice()') && routeCoreBody.includes('coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, options)'), 'coin route planner can skip the held nearby single coin');
+      assert(text.includes('heldRouteChoice: currentHeldCoinRouteChoice()') && routeCoreBody.includes('heldCoinRouteBeatsSwitchCore(heldRoute, best, options)'), 'coin route planner does not stabilize held route first coin');
       assert(bestBody.includes('pickCoinRouteOpportunity'), 'profitable combat comparison does not include coin route score');
       assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
       assert(pickBody.includes('mergeCoinRouteDisplay(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
@@ -1850,6 +1856,19 @@ function main() {
     assert(combatLogSourceModule.includes("type: 'coin-diagnostics'"), 'standalone coin diagnostic log entry not found');
     assert(combatLogSourceModule.includes('recordCoinDiagnosticsLog(source, decision || {})'), 'coin diagnostics are not recorded on each log tick');
     assert(combatLogSourceModule.includes('coinDiagnosticsHasLoggableEntry'), 'coin diagnostics log gate not found');
+  });
+
+  check('coin route planner uses strategy module core', () => {
+    assert(strategyCoinRouteSource.includes('function pickCoinRouteOpportunityCore'), 'strategy coin route picker core not found');
+    assert(strategyCoinRouteSource.includes('function buildCoinRouteFromAnchorCore'), 'strategy coin route builder core not found');
+    assert(strategyCoinRouteSource.includes('function coinRouteLegClearCore'), 'strategy coin route safety core not found');
+    assert(strategyCoinRouteSource.includes('function coinRouteSkipsCloserFirstCoinCore'), 'strategy coin route closer-first core not found');
+    assert(strategyCoinRouteSource.includes('function coinRouteSkipsHeldSingleCoinCore'), 'strategy coin route held single-coin core not found');
+    assert(sourceBot.includes("require('./src/strategy/coin-route')"), 'source bot does not import coin route strategy module');
+    assert(sourceBot.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
+    assert(sourceBot.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
+    assert(distSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
+    assert(distSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
