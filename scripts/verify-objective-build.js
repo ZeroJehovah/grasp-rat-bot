@@ -1901,6 +1901,8 @@ function main() {
     assert(strategyCoinTargetSource.includes('function buildNativeCoinSnapshotCore'), 'strategy native coin snapshot core not found');
     assert(strategyCoinTargetSource.includes('function pointToSegmentDistanceCore'), 'strategy point-to-segment distance core not found');
     assert(strategyCoinTargetSource.includes('function pickIncidentalCoinPickupsCore'), 'strategy incidental pickup core not found');
+    assert(strategyCoinTargetSource.includes('function snapshotCoinWorthLongTravelCore'), 'strategy snapshot coin worth core not found');
+    assert(strategyCoinTargetSource.includes('function snapshotCoinNavigationReasonCore'), 'strategy snapshot coin reason core not found');
     assert(sourceBot.includes("require('./src/strategy/coin-target')"), 'source bot does not import coin target strategy module');
     assert(sourceBot.includes('coinTargetKeyCore.toString()'), 'source bot does not inject coin target key core');
     assert(sourceBot.includes('coinMatchesTrackedTargetCore.toString()'), 'source bot does not inject coin target matcher core');
@@ -1908,18 +1910,24 @@ function main() {
     assert(sourceBot.includes('buildNativeCoinSnapshotCore.toString()'), 'source bot does not inject native coin snapshot core');
     assert(sourceBot.includes('pointToSegmentDistanceCore.toString()'), 'source bot does not inject point-to-segment distance core');
     assert(sourceBot.includes('pickIncidentalCoinPickupsCore.toString()'), 'source bot does not inject incidental pickup core');
+    assert(sourceBot.includes('snapshotCoinWorthLongTravelCore.toString()'), 'source bot does not inject snapshot coin worth core');
+    assert(sourceBot.includes('snapshotCoinNavigationReasonCore.toString()'), 'source bot does not inject snapshot coin reason core');
     assert(sourceBot.includes('function coinTargetCoreOptions'), 'source bot coin target runtime wrapper options not found');
     assert(sourceBot.includes('trackedCoinTargetForCollectionCore({'), 'source bot tracked coin target wrapper does not call strategy core');
     assert(sourceBot.includes('return coinTargetKeyCore(target);'), 'source bot coin target key wrapper does not call strategy core');
     assert(sourceBot.includes('return coinMatchesTrackedTargetCore(coin, target'), 'source bot coin target matcher wrapper does not call strategy core');
     assert(sourceBot.includes('return buildNativeCoinSnapshotCore(coins'), 'source bot native coin snapshot wrapper does not call strategy core');
     assert(sourceBot.includes('pickIncidentalCoinPickupsCore('), 'source bot incidental pickup wrapper does not call strategy core');
+    assert(sourceBot.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
+    assert(sourceBot.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
     assert(distSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');
     assert(distSource.includes('function coinMatchesTrackedTargetCore'), 'generated runtime does not inline coin target matcher core');
     assert(distSource.includes('function trackedCoinTargetForCollectionCore'), 'generated runtime does not inline tracked coin target core');
     assert(distSource.includes('function buildNativeCoinSnapshotCore'), 'generated runtime does not inline native coin snapshot core');
     assert(distSource.includes('function pointToSegmentDistanceCore'), 'generated runtime does not inline point-to-segment distance core');
     assert(distSource.includes('function pickIncidentalCoinPickupsCore'), 'generated runtime does not inline incidental pickup core');
+    assert(distSource.includes('function snapshotCoinWorthLongTravelCore'), 'generated runtime does not inline snapshot coin worth core');
+    assert(distSource.includes('function snapshotCoinNavigationReasonCore'), 'generated runtime does not inline snapshot coin reason core');
   });
 
   check('coin route planner uses strategy module core', () => {

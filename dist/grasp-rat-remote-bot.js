@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.288"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.289"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -17946,25 +17946,11 @@ function hpDisplay(value) {
 	  }
 
   function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
-    const memberCount = Math.max(1, Number(members || 1));
-    const minCoins = Math.max(1, Number(cfg.snapshotCoinClusterMinCoins || 1));
-    if (memberCount >= minCoins) return true;
-    const distance = Number(coin?.distance ?? Infinity);
-    if (!Number.isFinite(distance)) return false;
-    const amount = Math.max(0, Number(totalAmount ?? coin?.amount ?? 0));
-    const baseMax = Math.max(0, Number(cfg.snapshotSingleCoinMaxDistance || cfg.globalCoinMaxDistance || cfg.coinMaxDistance || 0));
-    const perAmount = Math.max(0, Number(cfg.snapshotSingleCoinDistancePerAmount || 0));
-    const maxDistance = Math.max(baseMax, amount * perAmount);
-    return distance <= maxDistance;
+    return snapshotCoinWorthLongTravelCore(coin, members, totalAmount, coinTargetCoreOptions());
   }
 
 	  function snapshotCoinNavigationReason(coin) {
-	    if (coin?.snapshotIdleFallback) return 'snapshot-coin-idle-timeout';
-	    if (coin?.fieldMigration) return 'migrate-to-known-field';
-	    if (isSnapshotOnlyCoin(coin) && Number(coin?.snapshotMembers || 0) > 0) {
-	      return coin.snapshotMembers >= cfg.snapshotCoinClusterMinCoins ? 'snapshot-coin-field' : 'snapshot-coin-target';
-	    }
-    return coin.distance <= cfg.coinMaxDistance ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
+	    return snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions());
   }
 
   function scoreCoinOpportunity(coin) {
@@ -20215,6 +20201,29 @@ function hpDisplay(value) {
   }
   return picked;
 }
+  function snapshotCoinWorthLongTravelCore(coin, members = 1, totalAmount = null, options = {}) {
+  const memberCount = Math.max(1, Number(members || 1));
+  const minCoins = Math.max(1, Number(options.snapshotCoinClusterMinCoins || 1));
+  if (memberCount >= minCoins) return true;
+  const distance = Number(coin?.distance ?? Infinity);
+  if (!Number.isFinite(distance)) return false;
+  const amount = Math.max(0, Number(totalAmount ?? coin?.amount ?? 0));
+  const baseMax = Math.max(0, Number(options.snapshotSingleCoinMaxDistance || options.globalCoinMaxDistance || options.coinMaxDistance || 0));
+  const perAmount = Math.max(0, Number(options.snapshotSingleCoinDistancePerAmount || 0));
+  const maxDistance = Math.max(baseMax, amount * perAmount);
+  return distance <= maxDistance;
+}
+  function snapshotCoinNavigationReasonCore(coin, options = {}) {
+  if (coin?.snapshotIdleFallback) return 'snapshot-coin-idle-timeout';
+  if (coin?.fieldMigration) return 'migrate-to-known-field';
+  const isSnapshotOnly = typeof options.isSnapshotOnlyCoin === 'function'
+    ? options.isSnapshotOnlyCoin(coin)
+    : Boolean(coin?.snapshot && !coin?.native);
+  if (isSnapshotOnly && Number(coin?.snapshotMembers || 0) > 0) {
+    return Number(coin.snapshotMembers) >= Number(options.snapshotCoinClusterMinCoins || 0) ? 'snapshot-coin-field' : 'snapshot-coin-target';
+  }
+  return Number(coin?.distance) <= Number(options.coinMaxDistance || 0) ? 'best-opportunity-coin' : 'best-opportunity-visible-coin';
+}
 
   function coinTargetCoreOptions(extra = {}) {
     return {
@@ -20222,6 +20231,12 @@ function hpDisplay(value) {
       coinCollectedPruneRadius: cfg.coinCollectedPruneRadius,
       coinCollectedConfirmDistance: cfg.coinCollectedConfirmDistance,
       incidentalCoinPickupMemoryMs: cfg.incidentalCoinPickupMemoryMs,
+      snapshotCoinClusterMinCoins: cfg.snapshotCoinClusterMinCoins,
+      snapshotSingleCoinMaxDistance: cfg.snapshotSingleCoinMaxDistance,
+      snapshotSingleCoinDistancePerAmount: cfg.snapshotSingleCoinDistancePerAmount,
+      globalCoinMaxDistance: cfg.globalCoinMaxDistance,
+      coinMaxDistance: cfg.coinMaxDistance,
+      isSnapshotOnlyCoin,
       ...extra
     };
   }

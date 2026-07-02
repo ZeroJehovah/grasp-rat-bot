@@ -5171,7 +5171,7 @@ function runSelfTest() {
         const result = runStrategyModuleSelfTests();
         return `${result.passed}/${result.total}:${result.success}`;
       })(),
-      want: '62/62:true'
+      want: '66/66:true'
     },
     {
       name: 'final arbitration keeps recent safety action over profit',
