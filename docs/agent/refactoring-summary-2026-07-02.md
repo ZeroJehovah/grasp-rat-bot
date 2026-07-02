@@ -259,6 +259,17 @@ This is intended as an equivalent extraction of incidental pickup candidate sele
 
 This is intended as an equivalent extraction of small snapshot helpers only; snapshot destination selection remains in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2R Coin Progress Helpers
+
+`bootstrap-0.4.290` extracts pure coin failure/escape helper logic:
+
+- `src/strategy/coin-progress.js` now owns coin failure ignore/backoff calculation and stale coin escape direction construction.
+- The browser runtime still owns `bot.coinFailures`, `bot.ignoredCoins`, `bot.staleCoinEscape`, config access, and the larger `trackCoinProgress()` state machine.
+- `src/strategy/self-test.js` now has 70 tests, including four coin-progress cases covering ignore count increment/capping, decay, reason-specific bases, target-relative escape, and fallback escape phase selection.
+- Static verification checks both the strategy source module and generated remote runtime for the coin-progress cores and wrapper wiring.
+
+This is intended as an equivalent extraction of small coin-progress helpers only; the coin-progress state machine and session/accounting side effects remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -277,9 +288,10 @@ This is intended as an equivalent extraction of small snapshot helpers only; sna
 13. Coin target identity/matching logic: integrated in `bootstrap-0.4.287`
 14. Incidental coin pickup detection: integrated in `bootstrap-0.4.288`
 15. Snapshot coin worth/reason helpers: integrated in `bootstrap-0.4.289`
-16. Constants: partially integrated for high-value coin defaults
-17. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-18. Run live validation sessions after each behavior-touching replacement
+16. Coin progress failure/escape helpers: integrated in `bootstrap-0.4.290`
+17. Constants: partially integrated for high-value coin defaults
+18. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+19. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

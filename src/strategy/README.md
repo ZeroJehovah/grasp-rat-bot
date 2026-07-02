@@ -14,6 +14,7 @@ src/strategy/
 ├── coin-diagnostics.js         # Coin diagnostics summaries
 ├── coin-motion.js              # Coin pickup motion and metadata core
 ├── coin-target.js              # Coin target identity and matching core
+├── coin-progress.js            # Coin failure backoff and stale escape core
 ├── coin-route.js               # Coin route planning core
 ├── combat-constants.js         # Combat system configuration
 ├── combat-target-selection.js  # Combat target eligibility and priority
@@ -95,6 +96,15 @@ Builds coin target identity and matching decisions:
 - Snapshot coin worth/reason helpers
 
 This module is authoritative for coin target identity and matching logic as of `bootstrap-0.4.287`, incidental pickup candidate detection as of `bootstrap-0.4.288`, and snapshot coin worth/reason helper logic as of `bootstrap-0.4.289`; the browser runtime wrapper still owns `bot` state access, native coin source access, normalization, config access, collection side effects, session accounting, snapshot memory writes, and the runtime snapshot-only predicate.
+
+#### `coin-progress.js`
+Builds coin progress helper decisions:
+- Coin failure ignore/backoff counts
+- Reason-specific ignore durations
+- Stale coin escape direction away from the current target
+- Fallback escape direction phase selection
+
+This module is authoritative for coin failure ignore/backoff calculation and stale coin escape direction construction as of `bootstrap-0.4.290`; the browser runtime wrapper still owns `bot.coinFailures`, `bot.ignoredCoins`, `bot.staleCoinEscape`, config access, and the larger `trackCoinProgress()` state machine.
 
 #### `coin-route.js`
 Builds native visible coin routes and route-switch guards:
@@ -210,6 +220,7 @@ Automated test suite:
 - Coin diagnostics (2 tests)
 - Coin motion direction/pulse/metadata (9 tests)
 - Coin target identity/matching/incidental pickup/snapshot helpers (12 tests)
+- Coin progress failure/escape helpers (4 tests)
 - Coin route planning (3 tests)
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
@@ -217,7 +228,7 @@ Automated test suite:
 - Stamina budget summaries/selectors (4 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 66 tests, all passing**
+- **Total: 70 tests, all passing**
 
 ## Usage Example
 

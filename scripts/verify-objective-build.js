@@ -270,6 +270,7 @@ function main() {
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
   const strategyCoinTargetSource = readText('src/strategy/coin-target.js');
+  const strategyCoinProgressSource = readText('src/strategy/coin-progress.js');
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
@@ -1928,6 +1929,21 @@ function main() {
     assert(distSource.includes('function pickIncidentalCoinPickupsCore'), 'generated runtime does not inline incidental pickup core');
     assert(distSource.includes('function snapshotCoinWorthLongTravelCore'), 'generated runtime does not inline snapshot coin worth core');
     assert(distSource.includes('function snapshotCoinNavigationReasonCore'), 'generated runtime does not inline snapshot coin reason core');
+  });
+
+  check('coin progress failure helpers use strategy module core', () => {
+    assert(strategyCoinProgressSource.includes('function coinFailureIgnoreCore'), 'strategy coin failure ignore core not found');
+    assert(strategyCoinProgressSource.includes('function staleCoinEscapeDirectionCore'), 'strategy stale coin escape core not found');
+    assert(sourceBot.includes("require('./src/strategy/coin-progress')"), 'source bot does not import coin progress strategy module');
+    assert(sourceBot.includes('coinFailureIgnoreCore.toString()'), 'source bot does not inject coin failure ignore core');
+    assert(sourceBot.includes('staleCoinEscapeDirectionCore.toString()'), 'source bot does not inject stale coin escape core');
+    assert(sourceBot.includes('function coinProgressCoreOptions'), 'source bot coin progress runtime wrapper options not found');
+    assert(sourceBot.includes('coinFailureIgnoreCore(bot.coinFailures.get(id)'), 'source bot coin failure wrapper does not call strategy core');
+    assert(sourceBot.includes('staleCoinEscapeDirectionCore(action, self'), 'source bot stale coin escape wrapper does not call strategy core');
+    assert(sourceBot.includes('bot.coinFailures.set(id') && sourceBot.includes('bot.ignoredCoins.set(id'), 'source bot coin failure wrapper does not retain runtime state writes');
+    assert(sourceBot.includes('bot.staleCoinEscape = result.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
+    assert(distSource.includes('function coinFailureIgnoreCore'), 'generated runtime does not inline coin failure ignore core');
+    assert(distSource.includes('function staleCoinEscapeDirectionCore'), 'generated runtime does not inline stale coin escape core');
   });
 
   check('coin route planner uses strategy module core', () => {

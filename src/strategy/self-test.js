@@ -27,6 +27,10 @@ const {
   snapshotCoinNavigationReasonCore
 } = require('./coin-target');
 const {
+  coinFailureIgnoreCore,
+  staleCoinEscapeDirectionCore
+} = require('./coin-progress');
+const {
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
   pickCoinRouteOpportunityCore
@@ -561,6 +565,58 @@ function runStrategyModuleSelfTests() {
     name: 'coin-target-snapshot-navigation-visible-distance',
     passed: snapshotCoinNavigationReasonCore({ distance: 800 }, snapshotHelperOptions) === 'best-opportunity-coin'
       && snapshotCoinNavigationReasonCore({ distance: 801 }, snapshotHelperOptions) === 'best-opportunity-visible-coin'
+  });
+
+  // Test coin progress/failure helpers
+  const coinProgressOptions = {
+    coinFailureDecayMs: 1000,
+    coinCloseFailureIgnoreMs: 200,
+    coinNearFailureIgnoreMs: 300,
+    coinNoProgressIgnoreMs: 400,
+    coinFailureMaxIgnoreMs: 1000,
+    staleCoinEscapeMs: 750
+  };
+  const closeFailure = coinFailureIgnoreCore({ count: 2, lastAt: 900 }, 'close', 1000, coinProgressOptions);
+  results.push({
+    name: 'coin-progress-failure-ignore-increments-and-caps',
+    passed: closeFailure.count === 3
+      && closeFailure.ignoreMs === 600
+      && closeFailure.ignoreUntil === 1600
+      && coinFailureIgnoreCore({ count: 9, lastAt: 950 }, 'close', 1000, coinProgressOptions).ignoreMs === 1000
+  });
+
+  results.push({
+    name: 'coin-progress-failure-ignore-decays-and-picks-reason-base',
+    passed: coinFailureIgnoreCore({ count: 5, lastAt: 500 }, 'near', 2000, coinProgressOptions).count === 1
+      && coinFailureIgnoreCore({}, 'near', 1000, coinProgressOptions).ignoreMs === 300
+      && coinFailureIgnoreCore({}, 'progress', 1000, coinProgressOptions).ignoreMs === 400
+  });
+
+  const escapeAway = staleCoinEscapeDirectionCore(
+    { target: { id: 'coin', x: 10, y: 0 }, dx: 1, dy: 0 },
+    { x: 0, y: 0 },
+    5000,
+    coinProgressOptions
+  );
+  results.push({
+    name: 'coin-progress-stale-escape-moves-away-from-target',
+    passed: escapeAway.dx === -1
+      && escapeAway.dy === 0
+      && escapeAway.state.id === 'coin'
+      && escapeAway.state.until === 5750
+  });
+
+  const escapeFallback = staleCoinEscapeDirectionCore(
+    { target: { id: 'same', x: 0, y: 0 }, dx: 0, dy: 0 },
+    { x: 0, y: 0 },
+    3000,
+    coinProgressOptions
+  );
+  results.push({
+    name: 'coin-progress-stale-escape-fallback-phase',
+    passed: escapeFallback.dx === 0
+      && escapeFallback.dy === -1
+      && escapeFallback.state.until === 3750
   });
 
   // Test coin route planning
