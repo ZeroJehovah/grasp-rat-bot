@@ -84,6 +84,20 @@ const {
   heldCoinRouteBeatsSwitchCore,
   pickCoinRouteOpportunityCore
 } = require('./src/strategy/coin-route');
+const {
+  opportunityKey,
+  opportunityChoiceType,
+  opportunityChoiceId,
+  opportunityChoiceKey,
+  opportunityPairKey,
+  opportunityByKey,
+  opportunityMatchesChoiceCore,
+  isHighValueCoinOpportunityCore,
+  highValueCoinHoldBlocksEnemySwitchCore,
+  lockedOpportunityChoiceCore,
+  applyOpportunityOscillationLockCore,
+  chooseStableOpportunityCore
+} = require('./src/strategy/opportunity-choice');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -11017,119 +11031,55 @@ ${importantLogSource()}
     };
   }
 
-		  function opportunityKey(item) {
-		    if (!item) return '';
-		    return String(item.type || '') + ':' + String(item.id ?? '');
-		  }
+			  ${opportunityKey.toString()}
+			  ${opportunityChoiceType.toString()}
+			  ${opportunityChoiceId.toString()}
+			  ${opportunityChoiceKey.toString()}
+			  ${opportunityPairKey.toString()}
+			  ${opportunityByKey.toString()}
+			  ${opportunityMatchesChoiceCore.toString()}
+			  ${isHighValueCoinOpportunityCore.toString()}
+			  ${highValueCoinHoldBlocksEnemySwitchCore.toString()}
+			  ${lockedOpportunityChoiceCore.toString()}
+			  ${applyOpportunityOscillationLockCore.toString()}
+			  ${chooseStableOpportunityCore.toString()}
 
-		  function opportunityChoiceType(choice) {
-		    if (choice?.type) return String(choice.type);
-		    const key = String(choice?.key || '');
-		    return key.includes(':') ? key.split(':')[0] : '';
-		  }
-
-		  function opportunityChoiceId(choice) {
-		    if (choice?.id !== undefined && choice?.id !== null && choice.id !== '') return String(choice.id);
-		    const key = String(choice?.key || '');
-		    const index = key.indexOf(':');
-		    return index >= 0 ? key.slice(index + 1) : '';
-		  }
-
-		  function opportunityChoiceKey(choice) {
-		    if (choice?.key) return String(choice.key);
-		    const type = opportunityChoiceType(choice);
-		    const id = opportunityChoiceId(choice);
-		    return type && id ? type + ':' + id : '';
-		  }
-
-		  function opportunityPairKey(a, b) {
-		    return [String(a || ''), String(b || '')].sort().join('|');
-		  }
-
-		  function opportunityByKey(opportunities, key) {
-		    return (opportunities || []).find(item => opportunityKey(item) === key) || null;
-		  }
+			  function opportunityChoiceCoreOptions(extra = {}) {
+			    return {
+			      dist,
+			      sameCoinRadius: opportunitySameCoinRadius(),
+			      highValueCoinPriorityAmount: highValueCoinPriorityAmount(),
+			      switchMargin: cfg.opportunitySwitchMargin,
+			      switchRelativeMargin: cfg.opportunitySwitchRelativeMargin,
+			      oscillationSwitchLimit: cfg.opportunityOscillationSwitchLimit,
+			      nowMs: now(),
+			      ...extra
+			    };
+			  }
 
 		  function resetOpportunitySwitchLock() {
 		    bot.opportunitySwitchLock = null;
 		  }
 
-		  function lockedOpportunityChoice(sorted) {
-		    const lock = bot.opportunitySwitchLock;
-		    const lockedKey = String(lock?.lockedKey || '');
-		    if (!lockedKey) return null;
-		    const pairKeys = String(lock.pairKey || '').split('|').filter(Boolean);
-		    if (pairKeys.length === 2 && pairKeys.some(key => !opportunityByKey(sorted, key))) {
-		      resetOpportunitySwitchLock();
-		      return null;
-		    }
-		    const locked = opportunityByKey(sorted, lockedKey);
-		    if (!locked) {
-		      resetOpportunitySwitchLock();
-		      return null;
-		    }
-		    const best = sorted[0] || null;
-		    return {
-		      ...locked,
-		      held: true,
-		      oscillationLocked: true,
-		      oscillationSwitchCount: Number(lock.switchCount || 0),
-		      competingScore: best && opportunityKey(best) !== lockedKey ? best.score : locked.competingScore
-		    };
-		  }
+			  function lockedOpportunityChoice(sorted) {
+			    const result = lockedOpportunityChoiceCore(sorted, bot.opportunitySwitchLock);
+			    bot.opportunitySwitchLock = result.switchLock;
+			    return result.choice;
+			  }
 
-		  function applyOpportunityOscillationLock(sorted, current, chosen) {
-		    const locked = lockedOpportunityChoice(sorted);
-		    if (locked) return locked;
-		    if (!chosen) return chosen;
-		    if (!current) {
-		      resetOpportunitySwitchLock();
-		      return chosen;
-		    }
-		    if (opportunityMatchesChoice(chosen, current)) return chosen;
-		    const held = sorted.find(item => opportunityMatchesChoice(item, current)) || null;
-		    if (!held) {
-		      resetOpportunitySwitchLock();
-		      return chosen;
-		    }
-		    const fromKey = opportunityKey(held);
-		    const toKey = opportunityKey(chosen);
-		    if (!fromKey || !toKey || fromKey === toKey) return chosen;
-		    const limit = Math.max(0, Number(cfg.opportunityOscillationSwitchLimit || 0));
-		    if (!limit) return chosen;
-		    const t = now();
-		    const pairKey = opportunityPairKey(fromKey, toKey);
-		    const previous = bot.opportunitySwitchLock || {};
-		    const continuing = !previous.lockedKey && previous.pairKey === pairKey && previous.lastKey === fromKey;
-		    const switchCount = continuing ? Number(previous.switchCount || 0) + 1 : 1;
-		    if (switchCount > limit) {
-		      bot.opportunitySwitchLock = { pairKey, lastKey: fromKey, switchCount, lockedKey: fromKey, blockedKey: toKey, lockedAt: t, updatedAt: t };
-		      return { ...held, held: true, oscillationLocked: true, oscillationSwitchCount: switchCount, competingScore: chosen.score };
-		    }
-		    bot.opportunitySwitchLock = { pairKey, lastKey: toKey, switchCount, lockedKey: '', blockedKey: '', lockedAt: 0, updatedAt: t };
-		    return chosen;
-		  }
+			  function applyOpportunityOscillationLock(sorted, current, chosen) {
+			    const result = applyOpportunityOscillationLockCore(sorted, current, chosen, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
+			    bot.opportunitySwitchLock = result.switchLock;
+			    return result.chosen;
+			  }
 
 		  function opportunitySameCoinRadius() {
 		    return Math.max(0, Number(cfg.opportunitySameCoinRadius || cfg.coinCollectedPruneRadius || 900));
 		  }
 
-		  function opportunityMatchesChoice(item, choice) {
-		    if (!item || !choice) return false;
-		    const key = opportunityKey(item);
-		    const choiceKey = opportunityChoiceKey(choice);
-		    if (key && choiceKey && key === choiceKey) return true;
-		    if (String(item.type || '') !== 'coin' || opportunityChoiceType(choice) !== 'coin') return false;
-		    const amount = Number(item.amount ?? 0);
-		    const choiceAmount = Number(choice.amount ?? 0);
-		    if (amount > 0 && choiceAmount > 0 && Math.round(amount) !== Math.round(choiceAmount)) return false;
-		    const x = Number(item.x);
-		    const y = Number(item.y);
-		    const choiceX = Number(choice.x);
-		    const choiceY = Number(choice.y);
-		    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(choiceX) || !Number.isFinite(choiceY)) return false;
-		    return dist({ x, y }, { x: choiceX, y: choiceY }) <= opportunitySameCoinRadius();
-		  }
+			  function opportunityMatchesChoice(item, choice) {
+			    return opportunityMatchesChoiceCore(item, choice, opportunityChoiceCoreOptions());
+			  }
 
 			  function opportunityMissingHoldUntil(choice, t) {
 			    if (!choice || opportunityChoiceType(choice) !== 'coin') return 0;
@@ -11320,39 +11270,18 @@ ${importantLogSource()}
 	    };
 	  }
 
-	  function isHighValueCoinOpportunity(item) {
-	    return String(item?.type || '') === 'coin' && Number(item?.amount || 0) >= highValueCoinPriorityAmount();
-	  }
+		  function isHighValueCoinOpportunity(item) {
+		    return isHighValueCoinOpportunityCore(item, opportunityChoiceCoreOptions());
+		  }
 
-	  function highValueCoinHoldBlocksEnemySwitch(held, best) {
-	    return Boolean(isHighValueCoinOpportunity(held) && String(best?.type || '') === 'enemy');
-	  }
+		  function highValueCoinHoldBlocksEnemySwitch(held, best) {
+		    return highValueCoinHoldBlocksEnemySwitchCore(held, best, opportunityChoiceCoreOptions());
+		  }
 
-	  function chooseStableOpportunity(opportunities) {
-	    const sorted = opportunities
-	      .slice()
-	      .sort((a, b) => b.priorityTier - a.priorityTier || b.score - a.score || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1)) || a.distance - b.distance);
-	    const best = sorted[0] || null;
-	    if (!best) return null;
-    const current = bot.opportunityChoice;
-	    let chosen = best;
-	    if (current?.key && now() < Number(current.until || 0)) {
-	      const held = sorted.find(item => opportunityMatchesChoice(item, current));
-	      if (held && !opportunityMatchesChoice(best, current)) {
-	        if (highValueCoinHoldBlocksEnemySwitch(held, best)) {
-	          chosen = { ...held, held: true, highValueCoinHold: true, competingScore: best.score };
-	        } else if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
-	          const margin = Math.max(0, Number(cfg.opportunitySwitchMargin) || 0);
-          const relativeMargin = Math.max(0, Number(cfg.opportunitySwitchRelativeMargin) || 0);
-          const heldScore = Number(held.score || 0);
-          const requiredScore = Math.max(heldScore + margin, heldScore * (1 + relativeMargin));
-          if (Number(best.score || 0) <= requiredScore) {
-            chosen = { ...held, held: true, competingScore: best.score };
-	          }
-	        }
-	      }
-	    }
-		    return applyOpportunityOscillationLock(sorted, current, chosen);
+		  function chooseStableOpportunity(opportunities) {
+		    const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
+		    bot.opportunitySwitchLock = result.switchLock;
+		    return result.chosen;
 		  }
 
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {

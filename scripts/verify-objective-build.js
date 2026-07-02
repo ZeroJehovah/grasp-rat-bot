@@ -268,6 +268,7 @@ function main() {
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
+  const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -668,8 +669,8 @@ function main() {
       assert(text.includes('minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0'), 'recovery post-attack drop min score not wired');
     });
     check(`${file} locks oscillating opportunity target pairs`, () => {
-      const body = functionBody(text, 'applyOpportunityOscillationLock');
-      assert(body.includes('cfg.opportunityOscillationSwitchLimit'), 'oscillation lock limit config not used');
+      const body = functionBody(strategyOpportunityChoiceSource, 'applyOpportunityOscillationLockCore');
+      assert(text.includes('oscillationSwitchLimit: cfg.opportunityOscillationSwitchLimit'), 'oscillation lock limit config not used');
       assert(body.includes('switchCount > limit'), 'oscillation lock does not wait until the switch limit is exceeded');
       assert(body.includes('lockedKey: fromKey'), 'oscillation lock does not pin the current target');
       assert(text.includes('resetOpportunitySwitchLock()'), 'opportunity switch lock reset helper not found');
@@ -798,8 +799,8 @@ function main() {
     check(`${file} protects held high-value coins from AFK drop target switches`, () => {
       assert(text.includes('function isHighValueCoinOpportunity(item)'), 'high-value opportunity helper not found');
       assert(text.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'high-value coin hold switch blocker not found');
-      assert(text.includes("isHighValueCoinOpportunity(held) && String(best?.type || '') === 'enemy'"), 'high-value hold does not specifically block enemy switches');
-      assert(text.includes('highValueCoinHold: true'), 'held high-value coin decision marker not found');
+      assert(strategyOpportunityChoiceSource.includes("isHighValueCoinOpportunityCore(held, options) && String(best?.type || '') === 'enemy'"), 'high-value hold does not specifically block enemy switches');
+      assert(text.includes('highValueCoinHold: true') || strategyOpportunityChoiceSource.includes('highValueCoinHold: true'), 'held high-value coin decision marker not found');
       assert(text.includes('opportunityChoice.highValueCoinHold') || text.includes('highValueCoinHold: Boolean(item.highValueCoinHold)'), 'high-value hold metadata is not exposed');
     });
 	    check(`${file} ends combat logs on relogin wait/manual states`, () => {
@@ -1869,6 +1870,18 @@ function main() {
     assert(sourceBot.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
     assert(distSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
     assert(distSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
+  });
+
+  check('opportunity choice stability uses strategy module core', () => {
+    assert(strategyOpportunityChoiceSource.includes('function chooseStableOpportunityCore'), 'strategy opportunity choice stable picker core not found');
+    assert(strategyOpportunityChoiceSource.includes('function applyOpportunityOscillationLockCore'), 'strategy opportunity oscillation lock core not found');
+    assert(strategyOpportunityChoiceSource.includes('function opportunityMatchesChoiceCore'), 'strategy opportunity choice matcher core not found');
+    assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
+    assert(sourceBot.includes("require('./src/strategy/opportunity-choice')"), 'source bot does not import opportunity choice strategy module');
+    assert(sourceBot.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
+    assert(sourceBot.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
+    assert(distSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
+    assert(distSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
