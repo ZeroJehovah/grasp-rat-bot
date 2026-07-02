@@ -200,10 +200,11 @@ function stringFromCodes(codes) {
 }
 
 function functionBody(text, name) {
-  const marker = `function ${name}`;
-  const start = text.indexOf(marker);
+  const marker = new RegExp(`function\\s+${escapeRegExp(name)}\\s*\\(`);
+  const match = marker.exec(text);
+  const start = match ? match.index : -1;
   assert(start >= 0, `${name} function not found`);
-  const paren = text.indexOf('(', start + marker.length);
+  const paren = text.indexOf('(', start);
   assert(paren >= 0, `${name} parameter list not found`);
   let parenDepth = 0;
   let bodyStart = -1;
@@ -269,6 +270,7 @@ function main() {
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
+  const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -634,6 +636,8 @@ function main() {
       const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
       const bestBody = functionBody(text, 'bestCoinOpportunityScore');
       const pickBody = functionBody(text, 'pickBestOpportunity');
+      const opportunityCandidateSource = file === 'grasp-rat-bot.js' ? strategyOpportunityCandidatesSource : text;
+      const coinCandidateBody = functionBody(opportunityCandidateSource, 'buildCoinOpportunityCandidatesCore');
       assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
       assert(strategyCoinRouteSource.includes('function pickCoinRouteOpportunityCore'), 'strategy coin route planner core not found');
       assert(strategyCoinRouteSource.includes('function buildCoinRouteFromAnchorCore'), 'strategy coin route builder core not found');
@@ -654,11 +658,12 @@ function main() {
       assert(routeCoreBody.includes('coinRouteSkipsCloserFirstCoinCore(self, route, candidates, options)'), 'coin route planner can skip much closer local coins');
       assert(text.includes('heldChoice: currentHeldCoinChoice()') && routeCoreBody.includes('coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, options)'), 'coin route planner can skip the held nearby single coin');
       assert(text.includes('heldRouteChoice: currentHeldCoinRouteChoice()') && routeCoreBody.includes('heldCoinRouteBeatsSwitchCore(heldRoute, best, options)'), 'coin route planner does not stabilize held route first coin');
-      assert(bestBody.includes('pickCoinRouteOpportunity'), 'profitable combat comparison does not include coin route score');
+      assert(bestBody.includes('pickCoinRouteOpportunity') && bestBody.includes('bestCoinOpportunityScoreCore'), 'profitable combat comparison does not include coin route score');
       assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
-      assert(pickBody.includes('mergeCoinRouteDisplay(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
-      assert(pickBody.includes('routeHeld: Boolean(coin.routeHeld)'), 'coin route held metadata is not propagated to opportunity choice');
-      assert(pickBody.includes('coin.distance <= cfg.coinMaxDistance ?') && pickBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
+      assert(pickBody.includes('buildOpportunityCandidatesCore'), 'visible opportunity selection does not use opportunity candidate core');
+      assert(coinCandidateBody.includes('mergeCoinRouteDisplayCore(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
+      assert(coinCandidateBody.includes('routeHeld: Boolean(coin.routeHeld)'), 'coin route held metadata is not propagated to opportunity choice');
+      assert(coinCandidateBody.includes("actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance") && coinCandidateBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
     });
     check(`${file} lets high-value combat drops interrupt recovery`, () => {
       const body = functionBody(text, 'pickPostAttackDropCoin');
@@ -1882,6 +1887,19 @@ function main() {
     assert(sourceBot.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
     assert(distSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
     assert(distSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
+  });
+
+  check('opportunity candidate construction uses strategy module core', () => {
+    assert(strategyOpportunityCandidatesSource.includes('function buildOpportunityCandidatesCore'), 'strategy opportunity candidate combiner core not found');
+    assert(strategyOpportunityCandidatesSource.includes('function buildCoinOpportunityCandidatesCore'), 'strategy coin opportunity candidate core not found');
+    assert(strategyOpportunityCandidatesSource.includes('function buildEnemyOpportunityCandidatesCore'), 'strategy enemy opportunity candidate core not found');
+    assert(strategyOpportunityCandidatesSource.includes('function bestCoinOpportunityScoreCore'), 'strategy best coin opportunity score core not found');
+    assert(strategyOpportunityCandidatesSource.includes('function opportunityValueScoreCore'), 'strategy opportunity value score core not found');
+    assert(sourceBot.includes("require('./src/strategy/opportunity-candidates')"), 'source bot does not import opportunity candidate strategy module');
+    assert(sourceBot.includes('buildOpportunityCandidatesCore.toString()'), 'source bot does not inject opportunity candidate core');
+    assert(sourceBot.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
+    assert(distSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
+    assert(distSource.includes('function opportunityCandidateCoreOptions'), 'generated runtime opportunity candidate wrapper options not found');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
