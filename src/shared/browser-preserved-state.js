@@ -7,6 +7,7 @@ function buildBrowserPreservedState(previousBot) {
     seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
     session: previousBot?.session && typeof previousBot.session === 'object' ? { ...previousBot.session } : null,
     lastSelf: previousBot?.lastSelf && typeof previousBot.lastSelf === 'object' ? { ...previousBot.lastSelf } : null,
+    lastNativeCoinSnapshot: Array.isArray(previousBot?.lastNativeCoinSnapshot) ? previousBot.lastNativeCoinSnapshot.slice(-160) : [],
     combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === 'object' ? { ...previousBot.combatTarget } : null,
     combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : new Map(),
     combatAim: previousBot?.combatAim && typeof previousBot.combatAim === 'object' ? { ...previousBot.combatAim } : null,
