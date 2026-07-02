@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Grasp Rat Bot Bootstrap
 // @namespace    https://github.com/grasp-rat-bot
-// @version      0.4.71
+// @version      0.4.72
 // @description  Loads, hot-updates, and supervises the Grasp Rat bot from a signed manifest.
 // @match        https://grasp-rat-game.h-e.top/*
 // @match        https://connect.linux.do/oauth2/authorize*
@@ -27,7 +27,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.4.71';
+  const BOOTSTRAP_VERSION = '0.4.72';
   const BOOTSTRAP_OWNER = 'tampermonkey';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const USERSCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/userscript/grasp-rat-bootstrap.user.js';
@@ -653,13 +653,21 @@
   }
 
   function exitDetailHasText(detail) {
-    return Boolean(detail && (
-      detail.displayReason
-      || detail.summary
-      || detail.exitSummary
-      || detail.enemyLeaveSummary
-      || detail.reason
-    ));
+    return Boolean(exitDetailText(detail));
+  }
+
+  function exitDetailText(detail) {
+    return String(detail?.displayReason
+      || detail?.summary
+      || detail?.exitSummary
+      || detail?.enemyLeaveSummary
+      || detail?.lastResult?.displayReason
+      || detail?.lastResult?.summary
+      || detail?.lastResult?.exitSummary
+      || detail?.lastResult?.enemyLeaveSummary
+      || detail?.reason
+      || detail?.lastResult?.reason
+      || '').trim();
   }
 
   function pickNewestExitDetail(candidates) {
@@ -708,6 +716,9 @@
   }
 
   function panelReasonDetail(decision, status) {
+    if (waitReasonPrefersLastExit(status)) {
+      return exitDetailText(activePersistentExitDetail(status));
+    }
     return decisionReasonDetail(decision, status);
   }
 

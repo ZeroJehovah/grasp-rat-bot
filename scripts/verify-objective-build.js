@@ -2111,7 +2111,10 @@ function main() {
       assert(currentDetailBody.includes('decision?.displayReason') && currentDetailBody.includes('decision?.leave?.displayReason'), 'current decision detail helper does not read current decision fields');
       assert(!currentDetailBody.includes('status') && !currentDetailBody.includes('localStorage'), 'current decision detail helper can read non-current state');
       assert(allowsBody.includes("return kind === 'leave' || kind === 'wait' || kind === 'idle';"), 'exit detail scope is not limited to current wait/leave/idle decisions');
-      assert(panelBody.includes('return decisionReasonDetail(decision, status);') && !panelBody.includes('lastExitReasonDetail'), 'panel reason still prefers historical exit detail');
+      assert(text.includes('function exitDetailText'), 'panel has no shared exit detail text helper');
+      assert(panelBody.includes('waitReasonPrefersLastExit(status)'), 'panel reason does not detect relogin/no-self wait states');
+      assert(panelBody.includes('exitDetailText(activePersistentExitDetail(status))'), 'panel reason does not prefer preserved exit detail during relogin/no-self waits');
+      assert(panelBody.includes('return decisionReasonDetail(decision, status);') && !panelBody.includes('lastExitReasonDetail'), 'panel reason fallback is not scoped to current decision detail');
       assert(text.includes("const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || '';"), 'panel reason still has a reasonText fallback');
       assert(!text.includes("const reasonDetail = state.cloudflareError?.displayReason || panelReasonDetail(decision, status) || reasonText(decision?.reason);"), 'panel reason still falls back to reasonText directly');
       assert(text.includes('if (reasonDetail) {') && text.includes("{ text: '原因：'"), 'panel still renders an empty reason row');
