@@ -57,6 +57,11 @@ const {
   shouldHoldPreviousFinalAction,
   applyFinalActionArbitrationCore
 } = require('./src/strategy/action-arbitration');
+const {
+  actionSwitchPairKey,
+  buildPreviousDecisionSummary,
+  recordActionSwitchDiagnosticsCore
+} = require('./src/strategy/action-switch-diagnostics');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -11982,57 +11987,22 @@ ${importantLogSource()}
     return bot.targetSwitchDiagnostics;
   }
 
-  function actionSwitchPairKey(a, b) {
-    return [String(a?.key || ''), String(b?.key || '')].sort().join('|');
-  }
+  ${actionSwitchPairKey.toString()}
+
+  ${buildPreviousDecisionSummary.toString()}
+
+  ${recordActionSwitchDiagnosticsCore.toString()}
 
   function recordActionSwitchDiagnostics(action, source = '') {
     const state = ensureTargetSwitchDiagnostics();
-    const current = actionFocusSummary(action);
-    const previous = state.lastFocus || null;
-    const previousTarget = state.lastTargetFocus || null;
-    const t = Date.now();
-    let nextAction = action;
-    if (previous && current && previous.key !== current.key && (previous.targeted || current.targeted)) {
-      const pairKey = actionSwitchPairKey(previous, current);
-      const windowMs = targetSwitchOscillationWindowMs();
-      const recentPair = state.events
-        .filter(item => item?.pairKey === pairKey && t - Number(item.at || 0) <= windowMs);
-      const reversed = recentPair.some(item => item?.from?.key === current.key && item?.to?.key === previous.key);
-      const targetChanged = Boolean(current.targeted && previousTarget && previousTarget.key !== current.key);
-      const targetChange = targetChanged ? {
-        from: previousTarget,
-        to: current,
-        ageMs: previousTarget.at ? Math.max(0, Math.round(t - Number(previousTarget.at || t))) : null
-      } : null;
-      const event = {
-        type: previous.targeted && current.targeted ? 'target-switch' : 'focus-switch',
-        at: t,
-        tickCount: bot.tickCount,
-        source: String(source || ''),
-        from: previous,
-        to: current,
-        targetChange,
-        pairKey,
-        pairSwitchCount: recentPair.length + 1,
-        oscillating: Boolean(reversed || recentPair.length + 1 >= 3),
-        previousDecision: bot.lastDecision ? {
-          kind: bot.lastDecision.kind || '',
-          reason: bot.lastDecision.reason || '',
-          target: bot.lastDecision.target || null,
-          score: roundedNullable(bot.lastDecision.score ?? bot.lastDecision.opportunityChoice?.score),
-          staminaCost: roundedNullable(bot.lastDecision.staminaCost ?? bot.lastDecision.opportunityChoice?.staminaCost)
-        } : null
-      };
-      const snapshot = safeJsonClone(event) || event;
-      state.events.push(snapshot);
-      while (state.events.length > targetSwitchHistoryLimit()) state.events.shift();
-      state.lastSwitch = snapshot;
-      nextAction = { ...action, targetSwitch: snapshot };
-    }
-    state.lastFocus = current;
-    if (current?.targeted) state.lastTargetFocus = current;
-    return nextAction;
+    return recordActionSwitchDiagnosticsCore(action, state, {
+      source,
+      tickCount: bot.tickCount,
+      previousDecision: bot.lastDecision,
+      historyLimit: targetSwitchHistoryLimit(),
+      oscillationWindowMs: targetSwitchOscillationWindowMs(),
+      clone: safeJsonClone
+    }).action;
   }
 
   function finalActionArbitrationHoldMs() {

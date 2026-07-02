@@ -8,6 +8,7 @@
 
 const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = require('./action-priority');
 const { applyFinalActionArbitration } = require('./action-arbitration');
+const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -134,6 +135,47 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'arbitration-exit-never-held',
     passed: !arb4.held && arb4.action.kind === 'leave'
+  });
+
+  // Test target switch diagnostics
+  const switchState = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
+  recordActionSwitchDiagnosticsCore(
+    { kind: 'coin', reason: 'best-opportunity-coin', target: { id: 'coin-a', amount: 1 } },
+    switchState,
+    { nowMs: 1000, historyLimit: 24, oscillationWindowMs: 10000 }
+  );
+  const switchResult = recordActionSwitchDiagnosticsCore(
+    { kind: 'coin', reason: 'best-opportunity-coin', target: { id: 'coin-b', amount: 1 } },
+    switchState,
+    {
+      nowMs: 1120,
+      historyLimit: 24,
+      oscillationWindowMs: 10000,
+      tickCount: 7,
+      source: 'self-test',
+      previousDecision: { kind: 'coin', reason: 'previous', score: 1.6, staminaCost: 9.2 }
+    }
+  );
+  results.push({
+    name: 'target-switch-diagnostic-records-event',
+    passed: switchResult.event
+      && switchResult.action.targetSwitch
+      && switchResult.event.type === 'target-switch'
+      && switchResult.event.pairSwitchCount === 1
+      && switchResult.event.previousDecision.score === 2
+      && switchResult.event.previousDecision.staminaCost === 9
+  });
+
+  const oscillationResult = recordActionSwitchDiagnosticsCore(
+    { kind: 'coin', reason: 'best-opportunity-coin', target: { id: 'coin-a', amount: 1 } },
+    switchState,
+    { nowMs: 1240, historyLimit: 24, oscillationWindowMs: 10000 }
+  );
+  results.push({
+    name: 'target-switch-diagnostic-detects-reversal',
+    passed: oscillationResult.event
+      && oscillationResult.event.pairSwitchCount === 2
+      && oscillationResult.event.oscillating === true
   });
 
   // Test combat constants validation

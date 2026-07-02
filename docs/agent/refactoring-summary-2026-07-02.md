@@ -105,13 +105,25 @@ Commit pending for `bootstrap-0.4.275` changes the first extracted strategy modu
 
 Combat target selection, movement, and fire-discipline modules remain conservative reference modules until each live replacement is validated with focused replay or self-test evidence.
 
+## 2026-07-02 Follow-up: Phase 2D Target-Switch Diagnostics Integration
+
+`bootstrap-0.4.276` continues the same equivalence-first migration:
+
+- `src/strategy/action-switch-diagnostics.js` now owns target/focus switch event construction, pair-key calculation, reversed-pair oscillation detection, previous-decision score/stamina summaries, and bounded history updates.
+- `grasp-rat-bot.js` keeps the browser wrapper `recordActionSwitchDiagnostics()` and still emits a single remote script by inlining the strategy functions.
+- `src/strategy/self-test.js` now has 15 tests, including two target-switch diagnostic cases.
+- Static verification checks both the strategy source module and generated remote runtime for the target-switch diagnostic core.
+
+This is still a diagnostics-only migration. Combat target selection, movement, and fire-discipline modules remain staged until separately validated.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
 1. Action arbitration and focus summary: integrated in `bootstrap-0.4.275`
-2. Constants: partially integrated for high-value coin defaults
-3. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-4. Run live validation sessions after each behavior-touching replacement
+2. Target-switch diagnostics: integrated in `bootstrap-0.4.276`
+3. Constants: partially integrated for high-value coin defaults
+4. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+5. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

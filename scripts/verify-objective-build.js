@@ -265,6 +265,7 @@ function main() {
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
+  const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -1845,10 +1846,14 @@ function main() {
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
-    assert(sourceBot.includes('function recordActionSwitchDiagnostics'), 'target switch diagnostic recorder not found');
+    assert(sourceBot.includes('function recordActionSwitchDiagnostics'), 'target switch diagnostic wrapper not found');
+    assert(strategyActionSwitchDiagnosticsSource.includes('function recordActionSwitchDiagnosticsCore'), 'strategy target switch diagnostic core not found');
+    assert(strategyActionSwitchDiagnosticsSource.includes('function actionSwitchPairKey'), 'strategy target switch pair key helper not found');
+    assert(strategyActionSwitchDiagnosticsSource.includes('targetSwitch: snapshot'), 'strategy target switch event is not attached to decisions');
+    assert(distSource.includes('function recordActionSwitchDiagnosticsCore'), 'generated runtime does not inline target switch diagnostic core');
+    assert(distSource.includes('targetSwitch: snapshot'), 'generated runtime target switch event is not attached to decisions');
     assert(sourceBot.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
     assert(sourceBot.includes('action = recordActionSwitchDiagnostics(action, source);'), 'final action path does not record target switch diagnostics');
-    assert(sourceBot.includes('targetSwitch: snapshot'), 'target switch event is not attached to decisions');
     assert(combatLogSourceModule.includes("type: 'target-switch'"), 'standalone target-switch log entry not found');
     assert(combatLogSourceModule.includes('recordTargetSwitchLog(source, decision || {})'), 'target switch diagnostics are not recorded on each log tick');
     assert(combatLogSourceModule.includes('targetSwitchDiagnosticSignature'), 'target switch log throttle signature not found');

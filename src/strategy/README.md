@@ -10,6 +10,7 @@ The `src/strategy/` directory contains extracted decision-making logic organized
 src/strategy/
 ├── action-priority.js          # Action priority band definitions
 ├── action-arbitration.js       # Final action arbitration logic
+├── action-switch-diagnostics.js # Target/focus switch diagnostics
 ├── combat-constants.js         # Combat system configuration
 ├── combat-target-selection.js  # Combat target eligibility and priority
 ├── combat-movement.js          # Combat positioning and dodge
@@ -45,6 +46,16 @@ Prevents rapid target oscillation by holding higher-priority actions for a confi
 - Hold expires after configured time
 
 This module is authoritative for runtime final-action arbitration as of `bootstrap-0.4.275`; Node self-tests call it directly.
+
+#### `action-switch-diagnostics.js`
+Builds the final target/focus switch diagnostic events used by combat logs and `status().targetSwitchDiagnostics`:
+- Pair-key construction for oscillation windows
+- Target-switch vs focus-switch classification
+- Reversed-pair oscillation detection
+- Previous-decision score/stamina summary
+- Bounded event history updates
+
+This module is authoritative for runtime target-switch diagnostics as of `bootstrap-0.4.276`; the browser runtime keeps a small wrapper around the module core.
 
 ### Combat System
 
@@ -100,9 +111,10 @@ Automated test suite:
 - Priority band classification (4 tests)
 - Action focus building (1 test)
 - Arbitration logic (4 tests)
+- Target-switch diagnostics (2 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 13 tests, all passing**
+- **Total: 15 tests, all passing**
 
 ## Usage Example
 
@@ -150,8 +162,9 @@ executeAction(action);
 1. **Phase 1**: Modules created, self-tests passing
 2. **Phase 2A/2B**: Constants imported and high-value coin defaults migrated
 3. **Phase 2C**: Action focus and final-action arbitration integrated into runtime and self-tests
-4. **Next**: Replace additional helpers only in small, provably equivalent slices
-5. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+4. **Phase 2D**: Target-switch diagnostics integrated into runtime and strategy self-tests
+5. **Next**: Replace additional helpers only in small, provably equivalent slices
+6. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 
