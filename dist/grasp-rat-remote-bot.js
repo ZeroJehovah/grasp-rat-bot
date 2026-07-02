@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.269"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.275"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -11,6 +11,7 @@
 		    }
 		  })();
 		  const config = { ...baseConfig, ...runtimeConfig };
+		  const OPPORTUNITY_CONSTANTS = {"NEAR_COIN_PRIORITY_DISTANCE":13500,"FOOT_COIN_PRIORITY_DISTANCE":1200,"GLOBAL_COIN_MAX_DISTANCE":200000,"COIN_ROUTE_MIN_COINS":3,"COIN_ROUTE_FIRST_COIN_DISTANCE_RATIO":1.45,"COIN_ROUTE_FIRST_COIN_DISTANCE_SLACK":6000,"COIN_ROUTE_NEARBY_FIRST_COIN_DISTANCE":22000,"COIN_ROUTE_SWITCH_MARGIN":3000,"COIN_ROUTE_SWITCH_RELATIVE_MARGIN":0.1,"HIGH_VALUE_COIN_PRIORITY_AMOUNT":10,"HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP":50,"POST_ATTACK_DROP_COIN_MAX_DISTANCE":15000,"POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE":8000,"POST_ATTACK_RECOVERY_DROP_MIN_SCORE":5,"POST_ATTACK_DROP_WAIT_MS":1000,"AFK_RECENT_ACTIVITY_COOLDOWN_MS":12000,"AFK_STAMINA_OBSERVE_COOLDOWN_MS":60000,"OPPORTUNITY_HOLD_MS":1000,"OPPORTUNITY_SWITCH_HOLD_MS":1500,"OPPORTUNITY_MISSING_HOLD_MS":800,"OPPORTUNITY_SWITCH_MARGIN":0.15,"STAMINA_COST_PER_CM":1,"SHOT_STAMINA_COST_MS":500,"ESTIMATED_DAMAGE_PER_SHOT":3,"COIN_DANGER_RADIUS":8000,"INVULNERABLE_COIN_DANGER_RADIUS":12000,"RECOVERY_COIN_MAX_DISTANCE":5000,"NATIVE_COIN_AUTHORITATIVE_RADIUS":50000};
 		  const BOT_KEY = '__graspRatBot';
 		  const PANEL_ID = 'grasp-rat-bot-panel';
 		  const TARGET_OVERLAY_ID = 'grasp-rat-target-overlay';
@@ -19264,88 +19265,90 @@ function hpDisplay(value) {
   }
 
   function actionPriorityBand(action) {
-    const kind = String(action?.kind || '');
-    if (kind === 'leave') return 'exit';
-    if (kind === 'flee') return 'safety';
-    if (kind === 'recover') return 'recover';
-    if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
-    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
-    if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';
-    if (kind === 'wait' || kind === 'idle') return 'wait';
-    return kind || 'action';
-  }
+  const kind = String(action?.kind || '');
+  if (kind === 'leave') return 'exit';
+  if (kind === 'flee') return 'safety';
+  if (kind === 'recover') return 'recover';
+  if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
+  if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
+  if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';
+  if (kind === 'wait' || kind === 'idle') return 'wait';
+  return kind || 'action';
+}
 
   function actionFocusTargetType(action, target) {
-    const kind = String(action?.kind || '');
-    const reason = String(action?.reason || '');
-    if (kind === 'coin' || kind === 'seek-coin') return 'coin';
-    if (kind === 'patrol' && (String(reason).includes('coin') || target?.amount !== undefined)) return 'coin';
-    if (target?.coinRoute || target?.amount !== undefined || target?.fieldAmount !== undefined) return 'coin';
-    return 'enemy';
-  }
+  const kind = String(action?.kind || '');
+  const reason = String(action?.reason || '');
+  if (kind === 'coin' || kind === 'seek-coin') return 'coin';
+  if (kind === 'patrol' && (String(reason).includes('coin') || target?.amount !== undefined)) return 'coin';
+  if (target?.coinRoute || target?.amount !== undefined || target?.fieldAmount !== undefined) return 'coin';
+  return 'enemy';
+}
 
   function actionFocusId(target, fallback = '') {
-    const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
-    if (id !== undefined && id !== null && id !== '') return String(id);
-    const name = target?.name || target?.label;
-    if (name) return 'name:' + String(name);
-    const x = Number(target?.x);
-    const y = Number(target?.y);
-    if (Number.isFinite(x) && Number.isFinite(y)) return 'xy:' + Math.round(x) + ':' + Math.round(y);
-    return String(fallback || '');
-  }
+  const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
+  if (id !== undefined && id !== null && id !== '') return String(id);
+  const name = target?.name || target?.label;
+  if (name) return 'name:' + String(name);
+  const x = Number(target?.x);
+  const y = Number(target?.y);
+  if (Number.isFinite(x) && Number.isFinite(y)) return 'xy:' + Math.round(x) + ':' + Math.round(y);
+  return String(fallback || '');
+}
 
-  function actionFocusSummary(action) {
-    if (!action || typeof action !== 'object') return null;
-    const kind = String(action.kind || '');
-    const reason = String(action.reason || '');
-    const band = actionPriorityBand(action);
-    const target = action.target && typeof action.target === 'object' ? action.target : null;
-    let type = '';
-    let id = '';
-    let label = '';
-    let targeted = false;
-    if (target) {
-      type = actionFocusTargetType(action, target);
-      id = actionFocusId(target, type);
-      label = String(target.name || target.label || id || '');
-      targeted = type === 'coin' || type === 'enemy';
-    } else if (kind === 'flee') {
-      const threat = Array.isArray(action.threats) ? action.threats[0] : null;
-      type = 'safety';
-      id = actionFocusId(threat, reason || kind);
-      label = String(threat?.name || threat?.label || id || reason || kind);
-    } else {
-      type = band || kind || 'action';
-      id = reason || kind || type;
-      label = id;
-    }
-    const score = Number(action.score ?? action.opportunityChoice?.score);
-    const staminaCost = Number(action.staminaCost ?? action.opportunityChoice?.staminaCost);
-    return {
-      key: String(type || 'action') + ':' + String(id || ''),
-      type,
-      id,
-      label,
-      kind,
-      reason,
-      band,
-      targeted,
-      score: Number.isFinite(score) ? Math.round(score) : null,
-      staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
-      priorityTier: roundedNullable(action.opportunityChoice?.priorityTier),
-      distance: roundedNullable(target?.distance),
-      amount: roundedNullable(target?.amount),
-      drop: roundedNullable(target?.drop),
-      hp: roundedNullable(target?.hp),
-      combat: Boolean(action.combat),
-      shoot: Boolean(action.shoot),
-      opportunisticShot: Boolean(action.opportunisticShot),
-      dx: roundedNullable(action.dx),
-      dy: roundedNullable(action.dy),
-      at: Date.now()
-    };
+  function actionFocusSummary(action, options = {}) {
+  if (!action || typeof action !== 'object') return null;
+  const kind = String(action.kind || '');
+  const reason = String(action.reason || '');
+  const band = actionPriorityBand(action);
+  const target = action.target && typeof action.target === 'object' ? action.target : null;
+  let type = '';
+  let id = '';
+  let label = '';
+  let targeted = false;
+  if (target) {
+    type = actionFocusTargetType(action, target);
+    id = actionFocusId(target, type);
+    label = String(target.name || target.label || id || '');
+    targeted = type === 'coin' || type === 'enemy';
+  } else if (kind === 'flee') {
+    const threat = Array.isArray(action.threats) ? action.threats[0] : null;
+    type = 'safety';
+    id = actionFocusId(threat, reason || kind);
+    label = String(threat?.name || threat?.label || id || reason || kind);
+  } else {
+    type = band || kind || 'action';
+    id = reason || kind || type;
+    label = id;
   }
+  const score = Number(action.score ?? action.opportunityChoice?.score);
+  const staminaCost = Number(action.staminaCost ?? action.opportunityChoice?.staminaCost);
+  const nowMs = Number(options.nowMs);
+  return {
+    key: String(type || 'action') + ':' + String(id || ''),
+    type,
+    id,
+    label,
+    kind,
+    reason,
+    band,
+    targetKey: id,
+    targeted,
+    score: Number.isFinite(score) ? Math.round(score) : null,
+    staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
+    priorityTier: roundedNullable(action.opportunityChoice?.priorityTier),
+    distance: roundedNullable(target?.distance),
+    amount: roundedNullable(target?.amount),
+    drop: roundedNullable(target?.drop),
+    hp: roundedNullable(target?.hp),
+    combat: Boolean(action.combat),
+    shoot: Boolean(action.shoot),
+    opportunisticShot: Boolean(action.opportunisticShot),
+    dx: roundedNullable(action.dx),
+    dy: roundedNullable(action.dy),
+    at: Number.isFinite(nowMs) ? nowMs : Date.now()
+  };
+}
 
   function ensureTargetSwitchDiagnostics() {
     if (!bot.targetSwitchDiagnostics || typeof bot.targetSwitchDiagnostics !== 'object') {
@@ -19425,81 +19428,110 @@ function hpDisplay(value) {
   }
 
   function finalActionBandRank(band) {
-    switch (String(band || '')) {
-      case 'exit': return 600;
-      case 'safety': return 500;
-      case 'combat': return 400;
-      case 'profit': return 300;
-      case 'recover': return 200;
-      case 'wait': return 100;
-      default: return 0;
-    }
+  switch (String(band || '')) {
+    case 'exit': return 600;
+    case 'safety': return 500;
+    case 'combat': return 400;
+    case 'profit': return 300;
+    case 'recover': return 200;
+    case 'wait': return 100;
+    default: return 0;
   }
+}
 
   function finalActionReusable(action) {
-    if (!action || typeof action !== 'object') return false;
-    if (action.kind === 'leave') return false;
-    if (action.leave || action.pendingExitIntent) return false;
-    const band = actionPriorityBand(action);
-    return band === 'safety' || band === 'combat' || band === 'profit';
+  if (!action || typeof action !== 'object') return false;
+  if (action.kind === 'leave') return false;
+  if (action.leave || action.pendingExitIntent) return false;
+  const band = actionPriorityBand(action);
+  return band === 'safety' || band === 'combat' || band === 'profit';
+}
+
+  function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
+  const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
+  if (!(holdMs > 0) || ageMs > holdMs) return false;
+  if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
+  if (previousFocus.key === currentFocus.key) return false;
+  const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
+  const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
+  if (currentBand === 'exit') return false;
+  const previousRank = finalActionBandRank(previousBand);
+  const currentRank = finalActionBandRank(currentBand);
+  if (previousRank <= 0 || currentRank <= 0) return false;
+  if (currentRank > previousRank) return false;
+  if (previousBand === currentBand && previousBand !== 'profit') return false;
+  if (previousBand === 'profit' && currentBand !== 'profit') return false;
+  if (previousBand === 'safety' && currentBand === 'combat') return false;
+  return true;
+}
+
+  function applyFinalActionArbitrationCore(action, state, options = {}) {
+  if (!state || typeof state !== 'object') {
+    state = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+  }
+  if (!Array.isArray(state.history)) state.history = [];
+
+  const clone = typeof options.clone === 'function' ? options.clone : defaultClone;
+  const tOption = Number(options.nowMs);
+  const t = Number.isFinite(tOption) ? tOption : Date.now();
+  const holdMs = Math.max(0, Math.round(Number(options.holdMs ?? options.finalActionArbitrationHoldMs ?? 0) || 0));
+  const historyLimit = Math.max(4, Math.round(Number(options.historyLimit ?? options.finalActionArbitrationHistoryLimit ?? 24) || 24));
+  const focusBuilder = typeof options.actionFocusSummary === 'function' ? options.actionFocusSummary : actionFocusSummary;
+
+  const currentFocus = focusBuilder(action, { nowMs: t });
+  const previousAction = state.lastAction || null;
+  const previousFocus = state.lastFocus || null;
+  const ageMs = Math.max(0, t - Number(state.lastSelectedAt || 0));
+  let selected = action;
+  let selectedFocus = currentFocus;
+  let override = null;
+
+  if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs, { holdMs })) {
+    override = {
+      type: 'final-action-arbitration',
+      at: t,
+      source: String(options.source || ''),
+      mode: 'hold-previous',
+      ageMs: Math.round(ageMs),
+      holdMs,
+      from: currentFocus,
+      to: previousFocus,
+      reason: 'higher-priority-band-stick'
+    };
+    selected = {
+      ...previousAction,
+      finalActionArbitration: override
+    };
+    selectedFocus = previousFocus;
   }
 
-  function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs) {
-    const holdMs = finalActionArbitrationHoldMs();
-    if (!(holdMs > 0) || ageMs > holdMs) return false;
-    if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
-    if (previousFocus.key === currentFocus.key) return false;
-    const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
-    const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
-    if (currentBand === 'exit') return false;
-    const previousRank = finalActionBandRank(previousBand);
-    const currentRank = finalActionBandRank(currentBand);
-    if (previousRank <= 0 || currentRank <= 0) return false;
-    if (currentRank > previousRank) return false;
-    if (previousBand === currentBand && previousBand !== 'profit') return false;
-    if (previousBand === 'profit' && currentBand !== 'profit') return false;
-    if (previousBand === 'safety' && currentBand === 'combat') return false;
-    return true;
+  if (override) {
+    const snapshot = clone(override) || override;
+    state.lastOverride = snapshot;
+    state.history.push(snapshot);
+    while (state.history.length > historyLimit) state.history.shift();
   }
+  state.lastAction = clone(selected) || selected;
+  state.lastFocus = clone(selectedFocus) || selectedFocus;
+  if (!override) state.lastSelectedAt = t;
+
+  return {
+    action: selected,
+    focus: selectedFocus,
+    override,
+    held: Boolean(override),
+    state
+  };
+}
 
   function applyFinalActionArbitration(action, source = '') {
     const state = ensureFinalActionArbitration();
-    const currentFocus = actionFocusSummary(action);
-    const previousAction = state.lastAction || null;
-    const previousFocus = state.lastFocus || null;
-    const t = Date.now();
-    const ageMs = Math.max(0, t - Number(state.lastSelectedAt || 0));
-    let selected = action;
-    let selectedFocus = currentFocus;
-    let override = null;
-    if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs)) {
-      override = {
-        type: 'final-action-arbitration',
-        at: t,
-        source: String(source || ''),
-        mode: 'hold-previous',
-        ageMs: Math.round(ageMs),
-        holdMs: finalActionArbitrationHoldMs(),
-        from: currentFocus,
-        to: previousFocus,
-        reason: 'higher-priority-band-stick'
-      };
-      selected = {
-        ...previousAction,
-        finalActionArbitration: override
-      };
-      selectedFocus = previousFocus;
-    }
-    if (override) {
-      const snapshot = safeJsonClone(override) || override;
-      state.lastOverride = snapshot;
-      state.history.push(snapshot);
-      while (state.history.length > finalActionArbitrationHistoryLimit()) state.history.shift();
-    }
-    state.lastAction = safeJsonClone(selected) || selected;
-    state.lastFocus = safeJsonClone(selectedFocus) || selectedFocus;
-    if (!override) state.lastSelectedAt = t;
-    return selected;
+    return applyFinalActionArbitrationCore(action, state, {
+      source,
+      holdMs: finalActionArbitrationHoldMs(),
+      historyLimit: finalActionArbitrationHistoryLimit(),
+      clone: safeJsonClone
+    }).action;
   }
 
   function setLastTarget(kind, id) {

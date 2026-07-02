@@ -42,9 +42,21 @@ const { controlLoginSource } = require('./src/browser/control-login-source');
 const { nativeStateSource } = require('./src/browser/native-state-source');
 const { runtimeSummarySource } = require('./src/browser/runtime-summary-source');
 const { runSelfTest } = require('./src/node/run-self-test');
-// Strategy modules for centralized constants and logic
+// Strategy modules for centralized constants and logic.
 const { COMBAT_CONSTANTS } = require('./src/strategy/combat-constants');
 const { OPPORTUNITY_CONSTANTS } = require('./src/strategy/opportunity-constants');
+const {
+  actionPriorityBand,
+  actionFocusTargetType,
+  actionFocusId,
+  actionFocusSummary
+} = require('./src/strategy/action-priority');
+const {
+  finalActionBandRank,
+  finalActionReusable,
+  shouldHoldPreviousFinalAction,
+  applyFinalActionArbitrationCore
+} = require('./src/strategy/action-arbitration');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -254,6 +266,7 @@ function browserBotSource(config) {
 		    }
 		  })();
 		  const config = { ...baseConfig, ...runtimeConfig };
+		  const OPPORTUNITY_CONSTANTS = ${JSON.stringify(OPPORTUNITY_CONSTANTS)};
 		  const BOT_KEY = '__graspRatBot';
 		  const PANEL_ID = 'grasp-rat-bot-panel';
 		  const TARGET_OVERLAY_ID = 'grasp-rat-target-overlay';
@@ -11953,89 +11966,13 @@ ${importantLogSource()}
     return Number.isFinite(number) ? Math.round(number) : null;
   }
 
-  function actionPriorityBand(action) {
-    const kind = String(action?.kind || '');
-    if (kind === 'leave') return 'exit';
-    if (kind === 'flee') return 'safety';
-    if (kind === 'recover') return 'recover';
-    if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
-    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
-    if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';
-    if (kind === 'wait' || kind === 'idle') return 'wait';
-    return kind || 'action';
-  }
+  ${actionPriorityBand.toString()}
 
-  function actionFocusTargetType(action, target) {
-    const kind = String(action?.kind || '');
-    const reason = String(action?.reason || '');
-    if (kind === 'coin' || kind === 'seek-coin') return 'coin';
-    if (kind === 'patrol' && (String(reason).includes('coin') || target?.amount !== undefined)) return 'coin';
-    if (target?.coinRoute || target?.amount !== undefined || target?.fieldAmount !== undefined) return 'coin';
-    return 'enemy';
-  }
+  ${actionFocusTargetType.toString()}
 
-  function actionFocusId(target, fallback = '') {
-    const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
-    if (id !== undefined && id !== null && id !== '') return String(id);
-    const name = target?.name || target?.label;
-    if (name) return 'name:' + String(name);
-    const x = Number(target?.x);
-    const y = Number(target?.y);
-    if (Number.isFinite(x) && Number.isFinite(y)) return 'xy:' + Math.round(x) + ':' + Math.round(y);
-    return String(fallback || '');
-  }
+  ${actionFocusId.toString()}
 
-  function actionFocusSummary(action) {
-    if (!action || typeof action !== 'object') return null;
-    const kind = String(action.kind || '');
-    const reason = String(action.reason || '');
-    const band = actionPriorityBand(action);
-    const target = action.target && typeof action.target === 'object' ? action.target : null;
-    let type = '';
-    let id = '';
-    let label = '';
-    let targeted = false;
-    if (target) {
-      type = actionFocusTargetType(action, target);
-      id = actionFocusId(target, type);
-      label = String(target.name || target.label || id || '');
-      targeted = type === 'coin' || type === 'enemy';
-    } else if (kind === 'flee') {
-      const threat = Array.isArray(action.threats) ? action.threats[0] : null;
-      type = 'safety';
-      id = actionFocusId(threat, reason || kind);
-      label = String(threat?.name || threat?.label || id || reason || kind);
-    } else {
-      type = band || kind || 'action';
-      id = reason || kind || type;
-      label = id;
-    }
-    const score = Number(action.score ?? action.opportunityChoice?.score);
-    const staminaCost = Number(action.staminaCost ?? action.opportunityChoice?.staminaCost);
-    return {
-      key: String(type || 'action') + ':' + String(id || ''),
-      type,
-      id,
-      label,
-      kind,
-      reason,
-      band,
-      targeted,
-      score: Number.isFinite(score) ? Math.round(score) : null,
-      staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
-      priorityTier: roundedNullable(action.opportunityChoice?.priorityTier),
-      distance: roundedNullable(target?.distance),
-      amount: roundedNullable(target?.amount),
-      drop: roundedNullable(target?.drop),
-      hp: roundedNullable(target?.hp),
-      combat: Boolean(action.combat),
-      shoot: Boolean(action.shoot),
-      opportunisticShot: Boolean(action.opportunisticShot),
-      dx: roundedNullable(action.dx),
-      dy: roundedNullable(action.dy),
-      at: Date.now()
-    };
-  }
+  ${actionFocusSummary.toString()}
 
   function ensureTargetSwitchDiagnostics() {
     if (!bot.targetSwitchDiagnostics || typeof bot.targetSwitchDiagnostics !== 'object') {
@@ -12114,82 +12051,22 @@ ${importantLogSource()}
     return bot.finalActionArbitration;
   }
 
-  function finalActionBandRank(band) {
-    switch (String(band || '')) {
-      case 'exit': return 600;
-      case 'safety': return 500;
-      case 'combat': return 400;
-      case 'profit': return 300;
-      case 'recover': return 200;
-      case 'wait': return 100;
-      default: return 0;
-    }
-  }
+  ${finalActionBandRank.toString()}
 
-  function finalActionReusable(action) {
-    if (!action || typeof action !== 'object') return false;
-    if (action.kind === 'leave') return false;
-    if (action.leave || action.pendingExitIntent) return false;
-    const band = actionPriorityBand(action);
-    return band === 'safety' || band === 'combat' || band === 'profit';
-  }
+  ${finalActionReusable.toString()}
 
-  function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs) {
-    const holdMs = finalActionArbitrationHoldMs();
-    if (!(holdMs > 0) || ageMs > holdMs) return false;
-    if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
-    if (previousFocus.key === currentFocus.key) return false;
-    const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
-    const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
-    if (currentBand === 'exit') return false;
-    const previousRank = finalActionBandRank(previousBand);
-    const currentRank = finalActionBandRank(currentBand);
-    if (previousRank <= 0 || currentRank <= 0) return false;
-    if (currentRank > previousRank) return false;
-    if (previousBand === currentBand && previousBand !== 'profit') return false;
-    if (previousBand === 'profit' && currentBand !== 'profit') return false;
-    if (previousBand === 'safety' && currentBand === 'combat') return false;
-    return true;
-  }
+  ${shouldHoldPreviousFinalAction.toString()}
+
+  ${applyFinalActionArbitrationCore.toString()}
 
   function applyFinalActionArbitration(action, source = '') {
     const state = ensureFinalActionArbitration();
-    const currentFocus = actionFocusSummary(action);
-    const previousAction = state.lastAction || null;
-    const previousFocus = state.lastFocus || null;
-    const t = Date.now();
-    const ageMs = Math.max(0, t - Number(state.lastSelectedAt || 0));
-    let selected = action;
-    let selectedFocus = currentFocus;
-    let override = null;
-    if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs)) {
-      override = {
-        type: 'final-action-arbitration',
-        at: t,
-        source: String(source || ''),
-        mode: 'hold-previous',
-        ageMs: Math.round(ageMs),
-        holdMs: finalActionArbitrationHoldMs(),
-        from: currentFocus,
-        to: previousFocus,
-        reason: 'higher-priority-band-stick'
-      };
-      selected = {
-        ...previousAction,
-        finalActionArbitration: override
-      };
-      selectedFocus = previousFocus;
-    }
-    if (override) {
-      const snapshot = safeJsonClone(override) || override;
-      state.lastOverride = snapshot;
-      state.history.push(snapshot);
-      while (state.history.length > finalActionArbitrationHistoryLimit()) state.history.shift();
-    }
-    state.lastAction = safeJsonClone(selected) || selected;
-    state.lastFocus = safeJsonClone(selectedFocus) || selectedFocus;
-    if (!override) state.lastSelectedAt = t;
-    return selected;
+    return applyFinalActionArbitrationCore(action, state, {
+      source,
+      holdMs: finalActionArbitrationHoldMs(),
+      historyLimit: finalActionArbitrationHistoryLimit(),
+      clone: safeJsonClone
+    }).action;
   }
 
   function setLastTarget(kind, id) {

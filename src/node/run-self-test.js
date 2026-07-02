@@ -24,6 +24,12 @@ const {
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
 } = require('../shared/target-whitelist');
+const {
+  applyFinalActionArbitrationCore
+} = require('../strategy/action-arbitration');
+const {
+  runStrategyModuleSelfTests
+} = require('../strategy/self-test');
 
 function runSelfTest() {
   const cfg = {
@@ -4909,92 +4915,16 @@ function runSelfTest() {
     };
   }
 
-  function actionPriorityBand(action) {
-    const kind = String(action?.kind || '');
-    if (kind === 'leave') return 'exit';
-    if (kind === 'flee') return 'safety';
-    if (kind === 'recover') return 'recover';
-    if (action?.combat || (kind === 'wait' && action?.target && action?.combat)) return 'combat';
-    if (kind === 'attack' || kind === 'seek-enemy' || kind === 'seek-drop' || kind === 'coin' || kind === 'seek-coin') return 'profit';
-    if (kind === 'patrol' && (action?.target || String(action?.reason || '').includes('coin'))) return 'profit';
-    if (kind === 'wait' || kind === 'idle') return 'wait';
-    return kind || 'action';
-  }
-
-  function actionFocusSummary(action) {
-    const target = action?.target || null;
-    const kind = String(action?.kind || '');
-    const reason = String(action?.reason || '');
-    const band = actionPriorityBand(action);
-    let type = band;
-    let id = reason || kind || band;
-    if (target) {
-      type = kind === 'coin' || kind === 'seek-coin' || target.amount !== undefined ? 'coin' : 'enemy';
-      id = target.id ?? target.user_id ?? target.drop_id ?? target.coin_id ?? target.targetId ?? id;
-    }
-    return {
-      key: String(type) + ':' + String(id),
-      type,
-      id: String(id),
-      kind,
-      reason,
-      band,
-      targeted: type === 'coin' || type === 'enemy'
-    };
-  }
-
-  function finalActionBandRank(band) {
-    switch (String(band || '')) {
-      case 'exit': return 600;
-      case 'safety': return 500;
-      case 'combat': return 400;
-      case 'profit': return 300;
-      case 'recover': return 200;
-      case 'wait': return 100;
-      default: return 0;
-    }
-  }
-
-  function finalActionReusable(action) {
-    const band = actionPriorityBand(action);
-    return band === 'safety' || band === 'combat' || band === 'profit';
-  }
-
-  function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs) {
-    if (!(cfg.finalActionArbitrationHoldMs > 0) || ageMs > cfg.finalActionArbitrationHoldMs) return false;
-    if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
-    if (previousFocus.key === currentFocus.key) return false;
-    const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
-    const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
-    if (currentBand === 'exit') return false;
-    const previousRank = finalActionBandRank(previousBand);
-    const currentRank = finalActionBandRank(currentBand);
-    if (currentRank > previousRank) return false;
-    if (previousBand === currentBand && previousBand !== 'profit') return false;
-    if (previousBand === 'profit' && currentBand !== 'profit') return false;
-    if (previousBand === 'safety' && currentBand === 'combat') return false;
-    return true;
-  }
-
   function applyFinalActionArbitrationForTest(action, ageMs = 0) {
     const state = bot.finalActionArbitration || (bot.finalActionArbitration = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] });
-    const currentFocus = actionFocusSummary(action);
-    let selected = action;
-    if (shouldHoldPreviousFinalAction(state.lastAction, state.lastFocus, action, currentFocus, ageMs)) {
-      selected = {
-        ...state.lastAction,
-        finalActionArbitration: {
-          mode: 'hold-previous',
-          from: currentFocus,
-          to: state.lastFocus
-        }
-      };
-      state.lastOverride = selected.finalActionArbitration;
-      state.history.push(state.lastOverride);
-    }
-    state.lastAction = { ...selected };
-    state.lastFocus = actionFocusSummary(selected);
-    return selected;
+    const nowMs = Number(state.__testNowMs || 0) + Math.max(0, Number(ageMs || 0));
+    state.__testNowMs = nowMs;
+    return applyFinalActionArbitrationCore(action, state, {
+      nowMs,
+      holdMs: cfg.finalActionArbitrationHoldMs,
+      historyLimit: cfg.finalActionArbitrationHistoryLimit,
+      clone: safeJsonClone
+    }).action;
   }
 
   function pickActiveCombatWaitThreat(self, activeThreats, bullets = []) {
@@ -5235,6 +5165,14 @@ function runSelfTest() {
   }
 
   const cases = [
+    {
+      name: 'strategy module self-tests pass',
+      got: (() => {
+        const result = runStrategyModuleSelfTests();
+        return `${result.passed}/${result.total}:${result.success}`;
+      })(),
+      want: '13/13:true'
+    },
     {
       name: 'final arbitration keeps recent safety action over profit',
       got: (() => {
@@ -7312,14 +7250,21 @@ function runSelfTest() {
 	      name: 'combat sustained target pressure exits losing no-damage fight',
 	      got: (() => {
 	        const t = Date.now();
-	        bot.combatTarget = { id: 7, at: t - 13000, lastDamageAt: t - 13000, hp: 82 };
-	        const action = chooseCombatAction(
-	          { user_id: 1, x: 0, y: 0, hp: 68, max_hp: 100, stamina_5s_remaining_milli: 7000 },
-	          { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 82, vx: 35, drop: 20 },
-	          [{ id: 'target-shot', ownerId: 7, x: 10000, y: 0, vx: -500, vy: 0 }]
-	        );
-	        bot.combatTarget = null;
-	        return action.reason + ':' + Boolean(action.combatState?.sustainedPressureDisadvantage) + ':' + action.combatState?.sustainedPressureDisadvantage?.noDamageMs;
+	        const originalNow = Date.now;
+	        Date.now = () => t;
+	        try {
+	          bot.combatTarget = { id: 7, at: t - 13000, lastDamageAt: t - 13000, hp: 82 };
+	          const action = chooseCombatAction(
+	            { user_id: 1, x: 0, y: 0, hp: 68, max_hp: 100, stamina_5s_remaining_milli: 7000 },
+	            { user_id: 7, x: 12000, y: 0, distance: 12000, current_join_mode: 'Active', hp: 82, vx: 35, drop: 20 },
+	            [{ id: 'target-shot', ownerId: 7, x: 10000, y: 0, vx: -500, vy: 0 }]
+	          );
+	          bot.combatTarget = null;
+	          return action.reason + ':' + Boolean(action.combatState?.sustainedPressureDisadvantage) + ':' + action.combatState?.sustainedPressureDisadvantage?.noDamageMs;
+	        } finally {
+	          Date.now = originalNow;
+	          bot.combatTarget = null;
+	        }
 	      })(),
 	      want: 'combat-hp-disadvantage-leave:true:13000'
 	    },
