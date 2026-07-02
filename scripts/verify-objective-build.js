@@ -272,6 +272,7 @@ function main() {
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
+  const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -1933,6 +1934,26 @@ function main() {
     assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
     assert(distSource.includes('function pickPostAttackDropCoinCore'), 'generated runtime does not inline post-attack drop coin picker core');
     assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
+  });
+
+  check('stamina budget helpers use strategy module core', () => {
+    assert(strategyStaminaBudgetSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'strategy daily stamina budget core not found');
+    assert(strategyStaminaBudgetSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'strategy blocked stamina summary core not found');
+    assert(strategyStaminaBudgetSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'strategy nearest coin stamina exit core not found');
+    assert(strategyStaminaBudgetSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'strategy daily final coin picker core not found');
+    assert(sourceBot.includes("require('./src/strategy/stamina-budget')"), 'source bot does not import stamina budget strategy module');
+    assert(sourceBot.includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'source bot does not inject daily stamina budget core');
+    assert(sourceBot.includes('summarizeBlockedStaminaOpportunityCore.toString()'), 'source bot does not inject blocked stamina summary core');
+    assert(sourceBot.includes('summarizeNearestCoinStaminaBudgetExitCore.toString()'), 'source bot does not inject nearest stamina exit core');
+    assert(sourceBot.includes('pickNearestDailyStaminaFinalCoinCore.toString()'), 'source bot does not inject daily final coin picker core');
+    assert(sourceBot.includes('dailyStaminaBudgetIsLimitingCore('), 'source bot daily stamina wrapper does not call strategy core');
+    assert(sourceBot.includes('summarizeBlockedStaminaOpportunityCore(coins, targets'), 'source bot blocked stamina wrapper does not call strategy core');
+    assert(sourceBot.includes('summarizeNearestCoinStaminaBudgetExitCore(self, coins'), 'source bot nearest stamina exit wrapper does not call strategy core');
+    assert(sourceBot.includes('pickNearestDailyStaminaFinalCoinCore('), 'source bot daily final coin wrapper does not call strategy core');
+    assert(distSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'generated runtime does not inline daily stamina budget core');
+    assert(distSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'generated runtime does not inline blocked stamina summary core');
+    assert(distSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'generated runtime does not inline nearest stamina exit core');
+    assert(distSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'generated runtime does not inline daily final coin picker core');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {

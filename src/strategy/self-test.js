@@ -34,6 +34,12 @@ const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
+const {
+  dailyStaminaBudgetIsLimitingCore,
+  summarizeBlockedStaminaOpportunityCore,
+  summarizeNearestCoinStaminaBudgetExitCore,
+  pickNearestDailyStaminaFinalCoinCore
+} = require('./stamina-budget');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -767,6 +773,67 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'post-attack-drop-wait-skips-covered-or-threat-blocked',
     passed: postAttackCovered === null && postAttackThreatBlocked === null
+  });
+
+  results.push({
+    name: 'stamina-budget-daily-limit-core',
+    passed: dailyStaminaBudgetIsLimitingCore(800, 1000, 700) === true
+      && dailyStaminaBudgetIsLimitingCore(1200, 1000, 700) === false
+      && dailyStaminaBudgetIsLimitingCore(800, Infinity, 700) === true
+      && dailyStaminaBudgetIsLimitingCore(800, 1000, Infinity) === false
+  });
+
+  const blockedStaminaSummary = summarizeBlockedStaminaOpportunityCore([
+    { drop_id: 'expensive-coin', amount: 2, distance: 300, staminaCost: 1500, snapshot: true },
+    { drop_id: 'cheap-coin', amount: 1, distance: 100, staminaCost: 900 }
+  ], [
+    { user_id: 'enemy', name: 'Enemy', drop: 4, distance: 200, staminaCost: 1200 }
+  ], {
+    budget: 1000,
+    coinStaminaCost: coin => Number(coin.staminaCost || 0),
+    enemyStaminaCost: target => Number(target.staminaCost || 0)
+  });
+  results.push({
+    name: 'stamina-budget-blocked-summary-picks-smallest-shortage',
+    passed: blockedStaminaSummary?.type === 'enemy'
+      && blockedStaminaSummary?.id === 'enemy'
+      && blockedStaminaSummary?.requiredMs === 1200
+      && blockedStaminaSummary?.shortageMs === 200
+      && blockedStaminaSummary?.distance === 200
+  });
+
+  const nearestCoinExit = summarizeNearestCoinStaminaBudgetExitCore({ x: 0, y: 0 }, [
+    { drop_id: 'far', x: 500, y: 0, amount: 5, staminaCost: 2000, native: true },
+    { drop_id: 'near', x: 100, y: 0, amount: 1, staminaCost: 1500, snapshot: true }
+  ], {
+    budget: 1000,
+    dist: postAttackDist,
+    coinStaminaCost: coin => Number(coin.staminaCost || 0),
+    reloginDelayMs: 1800000
+  });
+  results.push({
+    name: 'stamina-budget-nearest-coin-exit-summary',
+    passed: nearestCoinExit?.id === 'near'
+      && nearestCoinExit?.distance === 100
+      && nearestCoinExit?.requiredMs === 1500
+      && nearestCoinExit?.reloginDelayMs === 1800000
+      && nearestCoinExit?.snapshot === true
+  });
+
+  const dailyFinalCoin = pickNearestDailyStaminaFinalCoinCore([
+    { drop_id: 'snapshot', amount: 10, distance: 50, staminaCost: 600, snapshotOnly: true },
+    { drop_id: 'far', amount: 5, distance: 500, staminaCost: 600 },
+    { drop_id: 'near', amount: 1, distance: 100, staminaCost: 600 },
+    { drop_id: 'affordable', amount: 20, distance: 10, staminaCost: 300 }
+  ], {
+    coinStaminaCost: coin => Number(coin.staminaCost || 0),
+    oneHourBudget: 1000,
+    oneDayBudget: 500,
+    isSnapshotOnlyCoin: coin => Boolean(coin.snapshotOnly)
+  });
+  results.push({
+    name: 'stamina-budget-daily-final-picks-nearest-visible-limiting-coin',
+    passed: dailyFinalCoin?.drop_id === 'near'
   });
 
   // Test combat constants validation
