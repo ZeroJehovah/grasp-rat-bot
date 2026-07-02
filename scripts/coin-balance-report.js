@@ -182,14 +182,14 @@ class ApiClient {
         text = await response.text();
       } catch (err) {
         process.stderr.write(`[coin-report] ${day} page ${page} retrying with curl after fetch error: ${err.message || err}\n`);
-        return parseApiResponse(fetchPageWithCurl(url, this.auth, this.options.timeoutMs), 200);
+        return await fetchPageWithCurlRetry(url, this.auth, this.options.timeoutMs, day, page);
       }
       try {
         return parseApiResponse(text, response.status);
       } catch (err) {
         if (!shouldRetryWithCurl(response.status, text)) throw err;
         process.stderr.write(`[coin-report] ${day} page ${page} retrying with curl after HTTP ${response.status}\n`);
-        return parseApiResponse(fetchPageWithCurl(url, this.auth, this.options.timeoutMs), 200);
+        return await fetchPageWithCurlRetry(url, this.auth, this.options.timeoutMs, day, page);
       }
     } finally {
       clearTimeout(timeout);
@@ -244,6 +244,28 @@ function shouldRetryWithCurl(status, text) {
   return status === 403 && /Just a moment|cloudflare/i.test(String(text || ''));
 }
 
+async function fetchPageWithCurlRetry(url, auth, timeoutMs, day, page) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (attempt > 1) {
+      const delay = attempt * 3000;
+      process.stderr.write(`[coin-report] ${day} page ${page} curl retry ${attempt} after transient response\n`);
+      await sleep(delay);
+    }
+    try {
+      return parseApiResponse(fetchPageWithCurl(url, auth, timeoutMs), 200);
+    } catch (err) {
+      lastError = err;
+      if (!isTransientCurlError(err)) throw err;
+    }
+  }
+  throw lastError;
+}
+
+function isTransientCurlError(err) {
+  return /Just a moment|cloudflare|SSL_ERROR_SYSCALL|timed out|connection|transfer/i.test(String(err && err.message || err));
+}
+
 function fetchPageWithCurl(url, auth, timeoutMs) {
   const args = [
     '--silent',
@@ -251,17 +273,20 @@ function fetchPageWithCurl(url, auth, timeoutMs) {
     '--location',
     '--max-time',
     String(Math.max(1, Math.ceil(numberOr(timeoutMs, DEFAULT_TIMEOUT_MS) / 1000))),
+    '--connect-timeout',
+    '20',
     '--retry',
     '2',
+    '--retry-all-errors',
     '--retry-delay',
-    '2',
-    String(url)
+    '2'
   ];
   for (const [key, value] of Object.entries(requestHeaders(auth))) {
     if (key === 'cookie') continue;
     args.push('-H', `${key}: ${value}`);
   }
   args.push('-b', auth.cookie);
+  args.push(String(url));
   const result = spawnSync('curl', args, {
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024
