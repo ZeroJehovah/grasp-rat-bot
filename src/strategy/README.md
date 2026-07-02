@@ -17,7 +17,7 @@ src/strategy/
 ├── combat-target-selection.js  # Combat target eligibility and priority
 ├── combat-movement.js          # Combat positioning and dodge
 ├── combat-fire-discipline.js   # Combat shooting state machine
-├── opportunity-choice.js       # Opportunity choice stability core
+├── opportunity-choice.js       # Opportunity choice stability/persistence core
 ├── opportunity-candidates.js   # Opportunity candidate construction core
 ├── opportunity-constants.js    # Profit/coin system configuration
 └── self-test.js               # Strategy module test suite
@@ -216,8 +216,10 @@ executeAction(action);
 5. **Phase 2E**: Coin diagnostics construction integrated into runtime and strategy self-tests
 6. **Phase 2F**: Coin route planner core integrated into runtime and strategy self-tests
 7. **Phase 2G**: Opportunity choice stability integrated into runtime and strategy self-tests
-8. **Next**: Replace additional helpers only in small, provably equivalent slices
-9. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+8. **Phase 2H**: Opportunity candidate construction integrated into runtime and strategy self-tests
+9. **Phase 2I**: Opportunity choice persistence construction integrated into runtime and strategy self-tests
+10. **Next**: Replace additional helpers only in small, provably equivalent slices
+11. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 
