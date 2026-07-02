@@ -2,9 +2,11 @@
 
 
 - Latest bot self-test count: `310`.
+- Latest strategy module self-test count: `13` (added in `bootstrap-0.4.269`).
 - Latest combat-log analyzer self-test count: `88`.
 - Latest combat replay self-test count: `1` local replay case plus skipped historical fixtures when retained logs are absent.
 - Bot strategy self-tests are now maintained in `src/node/run-self-test.js`; `grasp-rat-bot.js --self-test` delegates to that extracted Node-only module while the browser runtime source remains in the main file.
+- Strategy module self-tests are maintained in `src/strategy/self-test.js` and cover action priority classification, action arbitration hold logic, combat constants validation, opportunity constants validation, and ROI calculations. All 13 strategy module tests pass independently and validate the extracted module behavior matches the inline implementation expectations.
 - Browser UI/runtime source is now split across `src/browser/target-overlay-source.js`, `src/browser/status-panel-source.js`, `src/browser/combat-log-source.js`, `src/browser/important-log-source.js`, `src/browser/control-login-source.js`, `src/browser/native-state-source.js`, and `src/browser/runtime-summary-source.js`; static verification checks that those source modules export raw browser fragments, inline required shared helpers where needed, and still collapse into a single generated remote runtime without `require()` calls.
 - Recent important coverage:
   - leave-success exit confirmation now has bot self-tests for refreshing before confirmation, marking restored pending-exit state as reloaded, retrying the original pending exit when refreshed state is still online, and confirming only when refreshed state is offline. Static verification requires durable pending-exit storage, durable ordinary pending combat-log storage on reload/failure paths, no ordinary combat-log `localStorage` persistence inside the per-frame queue hot path, startup restore, no direct plain `leave-success` confirmation, no normal leave-success session-end important log before confirmation, and clear/update paths for persisted pending exits;
