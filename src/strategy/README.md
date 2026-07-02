@@ -17,6 +17,7 @@ src/strategy/
 ├── combat-target-selection.js  # Combat target eligibility and priority
 ├── combat-movement.js          # Combat positioning and dodge
 ├── combat-fire-discipline.js   # Combat shooting state machine
+├── opportunity-choice.js       # Opportunity choice stability core
 ├── opportunity-constants.js    # Profit/coin system configuration
 └── self-test.js               # Strategy module test suite
 ```
@@ -127,6 +128,16 @@ Profit/coin system configuration:
 - AFK targeting (activity cooldown: 12s, stamina cooldown: 60s)
 - ROI calculation helpers (1ms/cm movement, 500ms/shot)
 
+#### `opportunity-choice.js`
+Builds stable opportunity choice decisions:
+- Opportunity key and previous-choice parsing
+- Same-coin coordinate matching
+- High-value coin hold checks
+- Switch-margin hold logic
+- Opportunity oscillation lock state transitions
+
+This module is authoritative for opportunity choice stability as of `bootstrap-0.4.279`; the browser runtime wrapper still owns `bot.opportunityChoice`, `bot.opportunitySwitchLock`, config access, and action construction.
+
 ### Testing
 
 #### `self-test.js`
@@ -137,9 +148,10 @@ Automated test suite:
 - Target-switch diagnostics (2 tests)
 - Coin diagnostics (2 tests)
 - Coin route planning (3 tests)
+- Opportunity choice stability (5 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 20 tests, all passing**
+- **Total: 25 tests, all passing**
 
 ## Usage Example
 
@@ -190,8 +202,9 @@ executeAction(action);
 4. **Phase 2D**: Target-switch diagnostics integrated into runtime and strategy self-tests
 5. **Phase 2E**: Coin diagnostics construction integrated into runtime and strategy self-tests
 6. **Phase 2F**: Coin route planner core integrated into runtime and strategy self-tests
-7. **Next**: Replace additional helpers only in small, provably equivalent slices
-8. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+7. **Phase 2G**: Opportunity choice stability integrated into runtime and strategy self-tests
+8. **Next**: Replace additional helpers only in small, provably equivalent slices
+9. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 

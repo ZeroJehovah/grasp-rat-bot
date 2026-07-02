@@ -138,6 +138,17 @@ This is a diagnostics/data-shaping migration only; it does not change coin selec
 
 This is intended as an equivalent extraction of existing route planning logic; ordinary profit arbitration and action construction remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2G Opportunity Choice Stability Integration
+
+`bootstrap-0.4.279` extracts opportunity choice matching and stability core logic:
+
+- `src/strategy/opportunity-choice.js` now owns opportunity key parsing, previous-choice parsing, same-coin coordinate matching, high-value coin hold checks, switch-margin hold rules, locked-opportunity recovery, and oscillation lock state transitions.
+- The browser runtime still owns `bot.opportunityChoice`, `bot.opportunitySwitchLock`, config access, and action construction; wrappers pass runtime state into the strategy core and write the returned switch-lock state back to `bot`.
+- `src/strategy/self-test.js` now has 25 tests, including five opportunity choice cases covering key parsing, coordinate matching, margin holds, high-value coin enemy-switch blocking, and oscillation locking.
+- Static verification checks both the strategy source module and generated remote runtime for the opportunity choice core and wrapper.
+
+This is intended as an equivalent extraction of the stable-choice layer only; opportunity candidate construction and missing-held cleanup remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -145,9 +156,10 @@ This is intended as an equivalent extraction of existing route planning logic; o
 2. Target-switch diagnostics: integrated in `bootstrap-0.4.276`
 3. Coin diagnostics construction: integrated in `bootstrap-0.4.277`
 4. Coin route planner core: integrated in `bootstrap-0.4.278`
-5. Constants: partially integrated for high-value coin defaults
-6. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-7. Run live validation sessions after each behavior-touching replacement
+5. Opportunity choice stability: integrated in `bootstrap-0.4.279`
+6. Constants: partially integrated for high-value coin defaults
+7. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+8. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

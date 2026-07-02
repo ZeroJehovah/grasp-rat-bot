@@ -256,11 +256,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.278` continues with `coin-route.js`, making coin route planner core logic authoritative in the strategy module while preserving runtime-specific config/state wrappers, stamina/threat callbacks, and held-choice lookup in the browser code.
 
+`bootstrap-0.4.279` continues with `opportunity-choice.js`, making opportunity key matching, switch-margin holds, high-value coin hold checks, and oscillation lock transitions authoritative in the strategy module while preserving runtime state ownership and action construction in the browser code.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, and coin route planner slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin route planner, and opportunity choice stability slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 

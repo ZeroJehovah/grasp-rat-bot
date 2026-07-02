@@ -15,6 +15,13 @@ const {
   coinRouteSkipsCloserFirstCoinCore,
   pickCoinRouteOpportunityCore
 } = require('./coin-route');
+const {
+  opportunityChoiceType,
+  opportunityChoiceId,
+  opportunityChoiceKey,
+  opportunityMatchesChoiceCore,
+  chooseStableOpportunityCore
+} = require('./opportunity-choice');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 
@@ -320,6 +327,88 @@ function runStrategyModuleSelfTests() {
       && pickedRoute.drop_id === '1'
       && pickedRoute.routeHeld === true
       && pickedRoute.coinRoute?.ids?.join(',') === '1,2,3'
+  });
+
+  // Test opportunity choice/stability
+  const opportunityChoice = { key: 'coin:abc', x: 100, y: 100, amount: 2 };
+  results.push({
+    name: 'opportunity-choice-key-parsing',
+    passed: opportunityChoiceType(opportunityChoice) === 'coin'
+      && opportunityChoiceId(opportunityChoice) === 'abc'
+      && opportunityChoiceKey({ type: 'enemy', id: 7 }) === 'enemy:7'
+  });
+
+  results.push({
+    name: 'opportunity-choice-coordinate-match',
+    passed: opportunityMatchesChoiceCore(
+      { type: 'coin', id: 'new-id', amount: 2, x: 120, y: 100 },
+      { type: 'coin', id: 'old-id', amount: 2, x: 100, y: 100 },
+      {
+        sameCoinRadius: 50,
+        dist: (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y))
+      }
+    ) === true
+  });
+
+  const heldChoice = { key: 'coin:a', type: 'coin', id: 'a', until: 2000, score: 100 };
+  const holdResult = chooseStableOpportunityCore([
+    { type: 'coin', id: 'b', amount: 2, x: 300, y: 0, distance: 300, score: 105, priorityTier: 1 },
+    { type: 'coin', id: 'a', amount: 1, x: 100, y: 0, distance: 100, score: 100, priorityTier: 1 }
+  ], heldChoice, null, {
+    nowMs: 1000,
+    sameCoinRadius: 50,
+    switchMargin: 10,
+    switchRelativeMargin: 0,
+    oscillationSwitchLimit: 0
+  });
+  results.push({
+    name: 'opportunity-choice-holds-with-margin',
+    passed: holdResult.chosen?.id === 'a'
+      && holdResult.chosen?.held === true
+      && holdResult.chosen?.competingScore === 105
+  });
+
+  const highValueResult = chooseStableOpportunityCore([
+    { type: 'enemy', id: 'enemy', distance: 100, score: 500, priorityTier: 1 },
+    { type: 'coin', id: 'coin', amount: 10, x: 100, y: 0, distance: 100, score: 100, priorityTier: 1 }
+  ], { key: 'coin:coin', type: 'coin', id: 'coin', until: 2000 }, null, {
+    nowMs: 1000,
+    highValueCoinPriorityAmount: 10,
+    switchMargin: 0,
+    switchRelativeMargin: 0,
+    oscillationSwitchLimit: 0
+  });
+  results.push({
+    name: 'opportunity-choice-high-value-coin-holds-enemy-switch',
+    passed: highValueResult.chosen?.id === 'coin'
+      && highValueResult.chosen?.held === true
+      && highValueResult.chosen?.highValueCoinHold === true
+  });
+
+  const opportunityOscillationResult = chooseStableOpportunityCore([
+    { type: 'coin', id: 'b', amount: 2, x: 300, y: 0, distance: 300, score: 120, priorityTier: 1 },
+    { type: 'coin', id: 'a', amount: 1, x: 100, y: 0, distance: 100, score: 100, priorityTier: 1 }
+  ], { key: 'coin:a', type: 'coin', id: 'a', until: 0 }, {
+    pairKey: 'coin:a|coin:b',
+    lastKey: 'coin:a',
+    switchCount: 1,
+    lockedKey: '',
+    blockedKey: '',
+    lockedAt: 0,
+    updatedAt: 900
+  }, {
+    nowMs: 1000,
+    sameCoinRadius: 50,
+    switchMargin: 0,
+    switchRelativeMargin: 0,
+    oscillationSwitchLimit: 1
+  });
+  results.push({
+    name: 'opportunity-choice-oscillation-locks-current',
+    passed: opportunityOscillationResult.chosen?.id === 'a'
+      && opportunityOscillationResult.chosen?.oscillationLocked === true
+      && opportunityOscillationResult.switchLock?.lockedKey === 'coin:a'
+      && opportunityOscillationResult.switchLock?.blockedKey === 'coin:b'
   });
 
   // Test combat constants validation
