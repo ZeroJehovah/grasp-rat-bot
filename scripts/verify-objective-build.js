@@ -263,6 +263,8 @@ function main() {
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
+  const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
+  const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -1853,9 +1855,13 @@ function main() {
   });
 
   check('final action arbitration gates cross-band focus steals', () => {
-    assert(sourceBot.includes('function applyFinalActionArbitration'), 'final action arbitration function not found');
-    assert(sourceBot.includes('function finalActionBandRank'), 'final action priority band rank helper not found');
-    assert(sourceBot.includes('higher-priority-band-stick'), 'final action hysteresis reason not found');
+    assert(sourceBot.includes('function applyFinalActionArbitration'), 'final action arbitration wrapper not found');
+    assert(strategyActionArbitrationSource.includes('function finalActionBandRank'), 'strategy final action priority band rank helper not found');
+    assert(strategyActionArbitrationSource.includes('function applyFinalActionArbitrationCore'), 'strategy final action arbitration core not found');
+    assert(strategyActionPrioritySource.includes('function actionFocusSummary'), 'strategy action focus summary helper not found');
+    assert(distSource.includes('function finalActionBandRank'), 'generated runtime does not inline final action priority band rank helper');
+    assert(distSource.includes('function applyFinalActionArbitrationCore'), 'generated runtime does not inline final action arbitration core');
+    assert(distSource.includes('higher-priority-band-stick'), 'final action hysteresis reason not found in generated runtime');
     assert(sourceBot.includes('action = applyFinalActionArbitration(action, source);'), 'final action path does not run arbitration before diagnostics');
     assert(sourceBot.indexOf('action = applyFinalActionArbitration(action, source);') < sourceBot.indexOf('action = recordActionSwitchDiagnostics(action, source);'), 'final action arbitration must run before target-switch diagnostics');
     assert(sourceBot.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');

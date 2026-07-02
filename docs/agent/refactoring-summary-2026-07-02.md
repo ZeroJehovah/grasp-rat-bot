@@ -1,6 +1,6 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
-## Completed: Phase 1 - Strategy Module Extraction
+## Phase Notes: Strategy Module Extraction and First Integration
 
 **Date**: 2026-07-02  
 **Commit**: `4fcd904` - "Refactor: Extract strategy modules for improved maintainability"
@@ -88,19 +88,30 @@
 
 ## What Was NOT Changed
 
-- **Main file logic** - Still intact and working
-- **Runtime behavior** - Identical to before
-- **Decision flow** - No changes to action selection
+- **Combat target/movement/fire live logic** - Still uses the proven inline runtime implementation
+- **Most decision flow** - No broad replacement of combat/profit/safety execution yet
 - **API surface** - All exports unchanged
 - **Test coverage** - All 310 existing tests pass
+
+## 2026-07-02 Follow-up: Phase 2C Action Arbitration Integration
+
+Commit pending for `bootstrap-0.4.275` changes the first extracted strategy modules from scaffolding into authoritative runtime code:
+
+- `src/strategy/action-priority.js` now matches the previous browser runtime action band and focus summary implementation, including coin/enemy focus keys, safety focus handling, and diagnostic fields.
+- `src/strategy/action-arbitration.js` now owns the final-action hold rules used by the browser runtime and Node self-tests: exits are never held, leave/pending-exit actions are not reusable, same-focus actions are not held, profit cannot hold over new combat/safety, and safety cannot block new combat.
+- `grasp-rat-bot.js` still emits a single browser script; the strategy functions are inlined into the generated source instead of using browser-side `require()`.
+- `src/node/run-self-test.js` calls the strategy arbitration module directly and includes a strategy-suite summary case.
+- The generated browser script now defines `OPPORTUNITY_CONSTANTS`, fixing the prior remote-script bug where high-value coin logic referenced that constant without an injected definition.
+
+Combat target selection, movement, and fire-discipline modules remain conservative reference modules until each live replacement is validated with focused replay or self-test evidence.
 
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
-1. Import new modules into `grasp-rat-bot.js`
-2. Replace inline implementations with module calls
-3. Verify via offline combat log replay
-4. Run live validation sessions
+1. Action arbitration and focus summary: integrated in `bootstrap-0.4.275`
+2. Constants: partially integrated for high-value coin defaults
+3. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+4. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module
@@ -132,7 +143,7 @@
 
 Successfully extracted core strategy logic into 8 modular, testable components totaling 1,686 lines of well-documented code. All validation passes. The codebase is now better organized and more maintainable, with clear pathways for future improvements.
 
-The main bot remains fully functional and unchanged. These modules are ready for gradual integration when needed.
+The main bot remains fully functional. Action arbitration is now integrated through the strategy modules; the remaining modules are ready for gradual, evidence-backed integration when needed.
 
 ---
 

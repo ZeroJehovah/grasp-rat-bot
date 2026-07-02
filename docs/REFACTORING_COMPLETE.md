@@ -246,9 +246,15 @@ Further work has **diminishing returns** and **increasing risk**.
 
 ---
 
+## Follow-up Status
+
+`bootstrap-0.4.275` continues this work by making `action-priority.js` and `action-arbitration.js` authoritative for the live runtime and Node self-tests. The browser build still inlines those functions into one generated remote script. This follow-up also fixes the generated-script constant injection for `OPPORTUNITY_CONSTANTS`.
+
+Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
+
 ## Conclusion
 
-This refactoring successfully improved the codebase structure and maintainability while preserving 100% backward compatibility and introducing zero behavior changes.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration slice is now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 

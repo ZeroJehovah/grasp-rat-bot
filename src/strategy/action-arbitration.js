@@ -1,140 +1,113 @@
 'use strict';
 
-/**
- * Final Action Arbitration
- *
- * Implements the final action arbitration layer that prevents rapid cross-band
- * target switching by holding higher-priority actions for a short window.
- */
+const { actionPriorityBand, actionFocusSummary } = require('./action-priority');
 
-const { getActionPriorityBand, buildActionFocus } = require('./action-priority');
-
-/**
- * Apply final action arbitration to prevent target oscillation
- *
- * @param {Object} currentAction - The newly selected action
- * @param {Object} previousFinalAction - The previous final action that was executed
- * @param {Object} state - Arbitration state (preserved across calls)
- * @param {Object} config - Configuration
- * @returns {Object} - { action, held, arbitration }
- */
-function applyFinalActionArbitration(currentAction, previousFinalAction, state, config) {
-  const t = Date.now();
-  const holdMs = Number(config.finalActionArbitrationHoldMs || 480) || 480;
-
-  if (!state) {
-    state = {
-      lastAction: null,
-      lastFocus: null,
-      lastSelectedAt: 0,
-      lastOverride: null,
-      history: []
-    };
+function finalActionBandRank(band) {
+  switch (String(band || '')) {
+    case 'exit': return 600;
+    case 'safety': return 500;
+    case 'combat': return 400;
+    case 'profit': return 300;
+    case 'recover': return 200;
+    case 'wait': return 100;
+    default: return 0;
   }
-
-  const currentPriorityBand = getActionPriorityBand(currentAction);
-  const currentFocus = buildActionFocus(currentAction, currentPriorityBand);
-
-  // Exit is never held back
-  if (currentPriorityBand === 0) { // exit band
-    state.lastAction = currentAction;
-    state.lastFocus = currentFocus;
-    state.lastSelectedAt = t;
-    state.lastOverride = null;
-    return { action: currentAction, held: false, arbitration: null };
-  }
-
-  // No previous action - use current
-  if (!previousFinalAction || !state.lastFocus) {
-    state.lastAction = currentAction;
-    state.lastFocus = currentFocus;
-    state.lastSelectedAt = t;
-    state.lastOverride = null;
-    return { action: currentAction, held: false, arbitration: null };
-  }
-
-  const previousPriorityBand = state.lastFocus.band;
-  const ageMs = t - state.lastSelectedAt;
-
-  // Previous action is higher priority
-  if (previousPriorityBand < currentPriorityBand) {
-    // Hold expired or hold window not applicable
-    if (ageMs >= holdMs) {
-      state.lastAction = currentAction;
-      state.lastFocus = currentFocus;
-      state.lastSelectedAt = t;
-      state.lastOverride = null;
-      return { action: currentAction, held: false, arbitration: null };
-    }
-
-    // Safety (band 1) cannot block new combat (band 2) or new safety
-    if (previousPriorityBand === 1 && currentPriorityBand <= 2) {
-      state.lastAction = currentAction;
-      state.lastFocus = currentFocus;
-      state.lastSelectedAt = t;
-      state.lastOverride = null;
-      return { action: currentAction, held: false, arbitration: null };
-    }
-
-    // Profit (band 3) cannot block new combat (band 2) or safety (band 1)
-    if (previousPriorityBand === 3 && currentPriorityBand <= 2) {
-      state.lastAction = currentAction;
-      state.lastFocus = currentFocus;
-      state.lastSelectedAt = t;
-      state.lastOverride = null;
-      return { action: currentAction, held: false, arbitration: null };
-    }
-
-    // Hold the previous action
-    const arbitration = {
-      held: true,
-      heldAction: {
-        band: previousPriorityBand,
-        kind: state.lastFocus.kind,
-        reason: state.lastFocus.reason,
-        targetKey: state.lastFocus.targetKey
-      },
-      blocked: {
-        band: currentPriorityBand,
-        kind: currentFocus.kind,
-        reason: currentFocus.reason,
-        targetKey: currentFocus.targetKey
-      },
-      ageMs,
-      remainingMs: Math.max(0, holdMs - ageMs)
-    };
-
-    state.lastOverride = arbitration;
-
-    // Record in history
-    state.history = state.history || [];
-    state.history.push({
-      at: t,
-      held: state.lastFocus.kind,
-      blocked: currentFocus.kind,
-      heldBand: previousPriorityBand,
-      blockedBand: currentPriorityBand
-    });
-
-    // Keep history bounded
-    if (state.history.length > 20) {
-      state.history = state.history.slice(-20);
-    }
-
-    return { action: previousFinalAction, held: true, arbitration };
-  }
-
-  // Current action has higher or equal priority - use it
-  state.lastAction = currentAction;
-  state.lastFocus = currentFocus;
-  state.lastSelectedAt = t;
-  state.lastOverride = null;
-  return { action: currentAction, held: false, arbitration: null };
 }
 
-/**
- * Build exposed arbitration status
- */
+function finalActionReusable(action) {
+  if (!action || typeof action !== 'object') return false;
+  if (action.kind === 'leave') return false;
+  if (action.leave || action.pendingExitIntent) return false;
+  const band = actionPriorityBand(action);
+  return band === 'safety' || band === 'combat' || band === 'profit';
+}
+
+function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
+  const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
+  if (!(holdMs > 0) || ageMs > holdMs) return false;
+  if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
+  if (previousFocus.key === currentFocus.key) return false;
+  const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
+  const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
+  if (currentBand === 'exit') return false;
+  const previousRank = finalActionBandRank(previousBand);
+  const currentRank = finalActionBandRank(currentBand);
+  if (previousRank <= 0 || currentRank <= 0) return false;
+  if (currentRank > previousRank) return false;
+  if (previousBand === currentBand && previousBand !== 'profit') return false;
+  if (previousBand === 'profit' && currentBand !== 'profit') return false;
+  if (previousBand === 'safety' && currentBand === 'combat') return false;
+  return true;
+}
+
+function defaultClone(value) {
+  if (value === undefined || value === null) return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return value;
+  }
+}
+
+function applyFinalActionArbitrationCore(action, state, options = {}) {
+  if (!state || typeof state !== 'object') {
+    state = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+  }
+  if (!Array.isArray(state.history)) state.history = [];
+
+  const clone = typeof options.clone === 'function' ? options.clone : defaultClone;
+  const tOption = Number(options.nowMs);
+  const t = Number.isFinite(tOption) ? tOption : Date.now();
+  const holdMs = Math.max(0, Math.round(Number(options.holdMs ?? options.finalActionArbitrationHoldMs ?? 0) || 0));
+  const historyLimit = Math.max(4, Math.round(Number(options.historyLimit ?? options.finalActionArbitrationHistoryLimit ?? 24) || 24));
+  const focusBuilder = typeof options.actionFocusSummary === 'function' ? options.actionFocusSummary : actionFocusSummary;
+
+  const currentFocus = focusBuilder(action, { nowMs: t });
+  const previousAction = state.lastAction || null;
+  const previousFocus = state.lastFocus || null;
+  const ageMs = Math.max(0, t - Number(state.lastSelectedAt || 0));
+  let selected = action;
+  let selectedFocus = currentFocus;
+  let override = null;
+
+  if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs, { holdMs })) {
+    override = {
+      type: 'final-action-arbitration',
+      at: t,
+      source: String(options.source || ''),
+      mode: 'hold-previous',
+      ageMs: Math.round(ageMs),
+      holdMs,
+      from: currentFocus,
+      to: previousFocus,
+      reason: 'higher-priority-band-stick'
+    };
+    selected = {
+      ...previousAction,
+      finalActionArbitration: override
+    };
+    selectedFocus = previousFocus;
+  }
+
+  if (override) {
+    const snapshot = clone(override) || override;
+    state.lastOverride = snapshot;
+    state.history.push(snapshot);
+    while (state.history.length > historyLimit) state.history.shift();
+  }
+  state.lastAction = clone(selected) || selected;
+  state.lastFocus = clone(selectedFocus) || selectedFocus;
+  if (!override) state.lastSelectedAt = t;
+
+  return {
+    action: selected,
+    focus: selectedFocus,
+    override,
+    held: Boolean(override),
+    state
+  };
+}
+
 function buildArbitrationStatus(state) {
   if (!state) return null;
 
@@ -150,7 +123,28 @@ function buildArbitrationStatus(state) {
   };
 }
 
+function applyFinalActionArbitration(currentAction, previousFinalAction, state, config = {}) {
+  if (!state || typeof state !== 'object') {
+    state = { lastAction: previousFinalAction || null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+  }
+  if (previousFinalAction && !state.lastAction) state.lastAction = previousFinalAction;
+  const result = applyFinalActionArbitrationCore(currentAction, state, {
+    holdMs: config.finalActionArbitrationHoldMs ?? config.holdMs,
+    historyLimit: config.finalActionArbitrationHistoryLimit ?? config.historyLimit,
+    source: config.source || ''
+  });
+  return {
+    action: result.action,
+    held: result.held,
+    arbitration: result.override
+  };
+}
+
 module.exports = {
+  finalActionBandRank,
+  finalActionReusable,
+  shouldHoldPreviousFinalAction,
+  applyFinalActionArbitrationCore,
   applyFinalActionArbitration,
   buildArbitrationStatus
 };

@@ -24,20 +24,27 @@ src/strategy/
 
 #### `action-priority.js`
 Defines the priority hierarchy for action arbitration:
-- **Exit** (band 0): Immediate leave/exit actions
-- **Safety** (band 1): Flee from threats, avoidance
-- **Combat** (band 2): Combat engagements
-- **Profit** (band 3): Coin collection, opportunities
-- **Recover** (band 4): Recovery/waiting
-- **Wait** (band 5): Idle waiting
+- **Exit**: Immediate leave/exit actions
+- **Safety**: Flee from threats, avoidance
+- **Combat**: Combat engagements
+- **Profit**: Coin collection, opportunities
+- **Recover**: Recovery/waiting
+- **Wait**: Idle waiting
+
+This module is authoritative for runtime action focus summaries as of `bootstrap-0.4.275`. The browser runtime inlines the same functions into the generated single-file remote script.
 
 #### `action-arbitration.js`
 Prevents rapid target oscillation by holding higher-priority actions for a configured window (default 480ms). Rules:
 - Exit is never held back
+- Leave/pending-exit actions are not reused as held actions
 - Safety can hold over profit
+- Safety does not hold back new combat
 - Combat can hold over profit/recover
 - Profit cannot hold over combat/safety
+- Same-focus actions are not treated as switches
 - Hold expires after configured time
+
+This module is authoritative for runtime final-action arbitration as of `bootstrap-0.4.275`; Node self-tests call it directly.
 
 ### Combat System
 
@@ -123,7 +130,7 @@ const fireState = determineCombatFireState(self, target, {
   targetPressureFire: hasRealBulletPressure(target)
 });
 
-// Apply arbitration
+// Apply arbitration in a Node context
 const { action, held, arbitration } = applyFinalActionArbitration(
   currentAction,
   bot.lastFinalAction,
@@ -140,11 +147,11 @@ executeAction(action);
 
 ## Integration Strategy
 
-1. **Phase 1** (Current): Modules created, self-tests passing
-2. **Phase 2**: Import modules into main file
-3. **Phase 3**: Replace inline implementations with module calls
-4. **Phase 4**: Verify via offline combat replay
-5. **Phase 5**: Live validation and performance check
+1. **Phase 1**: Modules created, self-tests passing
+2. **Phase 2A/2B**: Constants imported and high-value coin defaults migrated
+3. **Phase 2C**: Action focus and final-action arbitration integrated into runtime and self-tests
+4. **Next**: Replace additional helpers only in small, provably equivalent slices
+5. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 
@@ -157,8 +164,9 @@ executeAction(action);
 
 ## Backward Compatibility
 
-- Modules are additive, not replacing
-- Main file continues to work unchanged
+- Action focus/arbitration modules are now runtime sources of truth
+- Combat/profit modules are additive until separately validated
+- Main file still emits a single browser runtime without `require()`
 - No breaking changes to existing API
 - Gradual migration path with validation at each step
 
