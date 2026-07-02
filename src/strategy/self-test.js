@@ -20,7 +20,8 @@ const {
   opportunityChoiceId,
   opportunityChoiceKey,
   opportunityMatchesChoiceCore,
-  chooseStableOpportunityCore
+  chooseStableOpportunityCore,
+  rememberOpportunityChoiceCore
 } = require('./opportunity-choice');
 const {
   opportunityPriorityTierCore,
@@ -414,6 +415,72 @@ function runStrategyModuleSelfTests() {
       && opportunityOscillationResult.chosen?.oscillationLocked === true
       && opportunityOscillationResult.switchLock?.lockedKey === 'coin:a'
       && opportunityOscillationResult.switchLock?.blockedKey === 'coin:b'
+  });
+
+  const rememberedChoice = rememberOpportunityChoiceCore(
+    {
+      type: 'coin',
+      id: 'coin-a',
+      amount: 2,
+      x: 100,
+      y: 200,
+      distance: 345.6,
+      staminaCost: 789.2,
+      score: 123.7,
+      actionKind: 'coin',
+      priorityTier: 1,
+      held: true,
+      competingScore: 140.2
+    },
+    { kind: 'coin', reason: 'best-opportunity-coin' },
+    { key: 'coin:coin-a', type: 'coin', id: 'coin-a', at: 900, until: 1200 },
+    { nowMs: 1000, switchHoldMs: 500, sameCoinRadius: 50 }
+  );
+  results.push({
+    name: 'opportunity-choice-remember-builds-choice-and-action-metadata',
+    passed: rememberedChoice.choice?.key === 'coin:coin-a'
+      && rememberedChoice.choice?.at === 900
+      && rememberedChoice.choice?.until === 1500
+      && rememberedChoice.choice?.score === 124
+      && rememberedChoice.choice?.staminaCost === 789
+      && rememberedChoice.action?.opportunityChoice?.held === true
+      && rememberedChoice.action?.opportunityChoice?.competingScore === 140
+      && rememberedChoice.action?.opportunityChoice?.holdRemainingMs === 500
+  });
+
+  const rememberedRouteMissing = rememberOpportunityChoiceCore(
+    {
+      type: 'coin',
+      id: 'route-a',
+      amount: 5,
+      x: 100,
+      y: 200,
+      distance: 1000,
+      staminaCost: 500,
+      score: 200,
+      actionKind: 'seek-coin',
+      priorityTier: 1,
+      maxDistance: 50000,
+      missingHold: true,
+      holdUntil: 1800,
+      routeHeld: true,
+      competingRouteScore: 199.6,
+      coinRoute: { ids: ['route-a', 'route-b'], value: 7.4, legCount: 2.2 }
+    },
+    { kind: 'seek-coin', reason: 'best-opportunity-coin-route' },
+    { key: 'coin:route-a', type: 'coin', id: 'route-a', at: 700, lastSeenAt: 800, until: 2200, missingSince: 900 },
+    { nowMs: 1000, switchHoldMs: 500, sameCoinRadius: 50 }
+  );
+  results.push({
+    name: 'opportunity-choice-remember-preserves-missing-route-metadata',
+    passed: rememberedRouteMissing.choice?.until === 1800
+      && rememberedRouteMissing.choice?.lastSeenAt === 800
+      && rememberedRouteMissing.choice?.missingSince === 900
+      && rememberedRouteMissing.choice?.coinRouteIds?.join(',') === 'route-a,route-b'
+      && rememberedRouteMissing.choice?.coinRouteValue === 7
+      && rememberedRouteMissing.choice?.coinRouteLegs === 2
+      && rememberedRouteMissing.action?.opportunityChoice?.routeHeld === true
+      && rememberedRouteMissing.action?.opportunityChoice?.competingRouteScore === 200
   });
 
   // Test opportunity candidate construction

@@ -151,6 +151,69 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
   return { chosen: locked.chosen, switchLock: locked.switchLock, sorted };
 }
 
+function opportunityRouteIds(routeMeta) {
+  return Array.isArray(routeMeta?.ids) ? routeMeta.ids.map(id => String(id)).filter(Boolean) : [];
+}
+
+function rememberOpportunityChoiceCore(item, action, previous = null, options = {}) {
+  if (!item) return { choice: previous || null, action };
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const key = opportunityKey(item);
+  const same = previous && opportunityMatchesChoiceCore(item, previous, options);
+  const missingHold = Boolean(item.missingHold);
+  const routeMeta = item.coinRoute || action?.coinRoute || action?.target?.coinRoute || null;
+  const routeIds = opportunityRouteIds(routeMeta);
+  const switchHoldMs = Math.max(0, Number(options.switchHoldMs) || 0);
+  const choice = {
+    key,
+    type: item.type || '',
+    id: item.id ?? '',
+    at: same ? Number(previous.at || t) : t,
+    lastSeenAt: missingHold ? Number(previous?.lastSeenAt || previous?.at || t) : t,
+    until: missingHold ? Math.max(t, Number(item.holdUntil || previous?.until || t)) : t + switchHoldMs,
+    score: Math.round(Number(item.score || 0)),
+    staminaCost: Number.isFinite(Number(item.staminaCost)) ? Math.round(Number(item.staminaCost)) : null,
+    reason: action?.reason || item.reason || '',
+    x: Number.isFinite(Number(item.x)) ? Number(item.x) : null,
+    y: Number.isFinite(Number(item.y)) ? Number(item.y) : null,
+    amount: Number.isFinite(Number(item.amount)) ? Number(item.amount) : null,
+    distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
+    actionKind: item.actionKind || action?.kind || '',
+    priorityTier: Number(item.priorityTier || 0),
+    maxDistance: Number.isFinite(Number(item.maxDistance)) ? Number(item.maxDistance) : null,
+    missingSince: missingHold ? Number(previous?.missingSince || t) : 0,
+    oscillationLocked: Boolean(item.oscillationLocked),
+    oscillationSwitchCount: Number(item.oscillationSwitchCount || 0),
+    coinRouteIds: routeIds.length ? routeIds : null,
+    coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
+    coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null
+  };
+  return {
+    choice,
+    action: {
+      ...action,
+      opportunityChoice: {
+        type: choice.type,
+        id: choice.id,
+        score: choice.score,
+        staminaCost: choice.staminaCost,
+        held: Boolean(item.held),
+        highValueCoinHold: Boolean(item.highValueCoinHold),
+        missingHold,
+        competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
+        holdRemainingMs: Math.max(0, Math.round(Number(choice.until || 0) - t)),
+        oscillationLocked: Boolean(item.oscillationLocked),
+        oscillationSwitchCount: Number(item.oscillationSwitchCount || 0),
+        coinRouteIds: routeIds.length ? routeIds : null,
+        coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
+        coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null,
+        routeHeld: Boolean(item.routeHeld),
+        competingRouteScore: Number.isFinite(Number(item.competingRouteScore)) ? Math.round(Number(item.competingRouteScore)) : null
+      }
+    }
+  };
+}
+
 module.exports = {
   defaultDist,
   opportunityKey,
@@ -164,5 +227,7 @@ module.exports = {
   highValueCoinHoldBlocksEnemySwitchCore,
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,
-  chooseStableOpportunityCore
+  chooseStableOpportunityCore,
+  opportunityRouteIds,
+  rememberOpportunityChoiceCore
 };

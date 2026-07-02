@@ -96,7 +96,9 @@ const {
   highValueCoinHoldBlocksEnemySwitchCore,
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,
-  chooseStableOpportunityCore
+  chooseStableOpportunityCore,
+  opportunityRouteIds,
+  rememberOpportunityChoiceCore
 } = require('./src/strategy/opportunity-choice');
 const {
   opportunityEffectiveStaminaCostCore,
@@ -11056,6 +11058,8 @@ ${importantLogSource()}
 			  ${lockedOpportunityChoiceCore.toString()}
 			  ${applyOpportunityOscillationLockCore.toString()}
 			  ${chooseStableOpportunityCore.toString()}
+			  ${opportunityRouteIds.toString()}
+			  ${rememberOpportunityChoiceCore.toString()}
 
 			  function opportunityChoiceCoreOptions(extra = {}) {
 			    return {
@@ -11064,6 +11068,7 @@ ${importantLogSource()}
 			      highValueCoinPriorityAmount: highValueCoinPriorityAmount(),
 			      switchMargin: cfg.opportunitySwitchMargin,
 			      switchRelativeMargin: cfg.opportunitySwitchRelativeMargin,
+			      switchHoldMs: cfg.opportunitySwitchHoldMs,
 			      oscillationSwitchLimit: cfg.opportunityOscillationSwitchLimit,
 			      nowMs: now(),
 			      ...extra
@@ -11230,57 +11235,9 @@ ${importantLogSource()}
 
 			  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
 	    if (!item) return action;
-	    const t = now();
-	    const key = opportunityKey(item);
-	    const same = previous && opportunityMatchesChoice(item, previous);
-	    const missingHold = Boolean(item.missingHold);
-	    const routeMeta = item.coinRoute || action?.coinRoute || action?.target?.coinRoute || null;
-	    const routeIds = Array.isArray(routeMeta?.ids) ? routeMeta.ids.map(id => String(id)).filter(Boolean) : [];
-	    bot.opportunityChoice = {
-	      key,
-	      type: item.type || '',
-	      id: item.id ?? '',
-	      at: same ? Number(previous.at || t) : t,
-	      lastSeenAt: missingHold ? Number(previous?.lastSeenAt || previous?.at || t) : t,
-	      until: missingHold ? Math.max(t, Number(item.holdUntil || previous?.until || t)) : t + Math.max(0, Number(cfg.opportunitySwitchHoldMs) || 0),
-	      score: Math.round(Number(item.score || 0)),
-	      staminaCost: Number.isFinite(Number(item.staminaCost)) ? Math.round(Number(item.staminaCost)) : null,
-	      reason: action?.reason || item.reason || '',
-	      x: Number.isFinite(Number(item.x)) ? Number(item.x) : null,
-	      y: Number.isFinite(Number(item.y)) ? Number(item.y) : null,
-	      amount: Number.isFinite(Number(item.amount)) ? Number(item.amount) : null,
-	      distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
-		      actionKind: item.actionKind || action?.kind || '',
-		      priorityTier: Number(item.priorityTier || 0),
-		      maxDistance: Number.isFinite(Number(item.maxDistance)) ? Number(item.maxDistance) : null,
-		      missingSince: missingHold ? Number(previous?.missingSince || t) : 0,
-		      oscillationLocked: Boolean(item.oscillationLocked),
-		      oscillationSwitchCount: Number(item.oscillationSwitchCount || 0),
-		      coinRouteIds: routeIds.length ? routeIds : null,
-		      coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
-		      coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null
-		    };
-	    return {
-	      ...action,
-	      opportunityChoice: {
-	        type: bot.opportunityChoice.type,
-	        id: bot.opportunityChoice.id,
-	        score: bot.opportunityChoice.score,
-	        staminaCost: bot.opportunityChoice.staminaCost,
-	        held: Boolean(item.held),
-	        highValueCoinHold: Boolean(item.highValueCoinHold),
-	        missingHold,
-		        competingScore: Number.isFinite(Number(item.competingScore)) ? Math.round(Number(item.competingScore)) : null,
-		        holdRemainingMs: Math.max(0, Math.round(Number(bot.opportunityChoice.until || 0) - t)),
-		        oscillationLocked: Boolean(item.oscillationLocked),
-		        oscillationSwitchCount: Number(item.oscillationSwitchCount || 0),
-		        coinRouteIds: routeIds.length ? routeIds : null,
-		        coinRouteValue: Number.isFinite(Number(routeMeta?.value)) ? Math.round(Number(routeMeta.value)) : null,
-		        coinRouteLegs: Number.isFinite(Number(routeMeta?.legCount)) ? Math.round(Number(routeMeta.legCount)) : null,
-		        routeHeld: Boolean(item.routeHeld),
-		        competingRouteScore: Number.isFinite(Number(item.competingRouteScore)) ? Math.round(Number(item.competingRouteScore)) : null
-		      }
-	    };
+	    const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
+	    bot.opportunityChoice = result.choice;
+	    return result.action;
 	  }
 
 		  function isHighValueCoinOpportunity(item) {
