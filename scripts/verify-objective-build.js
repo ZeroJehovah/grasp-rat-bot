@@ -1885,13 +1885,17 @@ function main() {
     assert(strategyOpportunityChoiceSource.includes('function opportunityMatchesChoiceCore'), 'strategy opportunity choice matcher core not found');
     assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
     assert(strategyOpportunityChoiceSource.includes('function rememberOpportunityChoiceCore'), 'strategy opportunity choice persistence core not found');
+    assert(strategyOpportunityChoiceSource.includes('function buildMissingHeldOpportunityCore'), 'strategy missing-held opportunity core not found');
     assert(sourceBot.includes("require('./src/strategy/opportunity-choice')"), 'source bot does not import opportunity choice strategy module');
     assert(sourceBot.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
     assert(sourceBot.includes('rememberOpportunityChoiceCore.toString()'), 'source bot does not inject opportunity choice persistence core');
+    assert(sourceBot.includes('buildMissingHeldOpportunityCore.toString()'), 'source bot does not inject missing-held opportunity core');
+    assert(sourceBot.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice'), 'source bot missing-held wrapper does not call strategy core');
     assert(sourceBot.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
     assert(sourceBot.includes('switchHoldMs: cfg.opportunitySwitchHoldMs'), 'source bot opportunity choice persistence hold config not wired');
     assert(distSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'generated runtime does not inline opportunity choice persistence core');
+    assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'generated runtime does not inline missing-held opportunity core');
     assert(distSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
   });
 

@@ -17,7 +17,7 @@ src/strategy/
 ├── combat-target-selection.js  # Combat target eligibility and priority
 ├── combat-movement.js          # Combat positioning and dodge
 ├── combat-fire-discipline.js   # Combat shooting state machine
-├── opportunity-choice.js       # Opportunity choice stability/persistence core
+├── opportunity-choice.js       # Opportunity choice stability/persistence/missing-held core
 ├── opportunity-candidates.js   # Opportunity candidate construction core
 ├── opportunity-constants.js    # Profit/coin system configuration
 └── self-test.js               # Strategy module test suite
@@ -137,8 +137,9 @@ Builds stable opportunity choice decisions:
 - Switch-margin hold logic
 - Opportunity oscillation lock state transitions
 - Persisted choice and action metadata construction
+- Missing-held opportunity reconstruction
 
-This module is authoritative for opportunity choice stability as of `bootstrap-0.4.279` and choice persistence construction as of `bootstrap-0.4.281`; the browser runtime wrapper still owns `bot.opportunityChoice`, `bot.opportunitySwitchLock`, config access, and action construction.
+This module is authoritative for opportunity choice stability as of `bootstrap-0.4.279`, choice persistence construction as of `bootstrap-0.4.281`, and missing-held opportunity reconstruction as of `bootstrap-0.4.282`; the browser runtime wrapper still owns `bot.opportunityChoice`, `bot.opportunitySwitchLock`, config access, visible source lookup, stale visible coin cleanup, diagnostics, and action construction.
 
 #### `opportunity-candidates.js`
 Builds opportunity candidate descriptors:
@@ -160,11 +161,11 @@ Automated test suite:
 - Target-switch diagnostics (2 tests)
 - Coin diagnostics (2 tests)
 - Coin route planning (3 tests)
-- Opportunity choice stability/persistence (7 tests)
+- Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 32 tests, all passing**
+- **Total: 35 tests, all passing**
 
 ## Usage Example
 
@@ -218,8 +219,9 @@ executeAction(action);
 7. **Phase 2G**: Opportunity choice stability integrated into runtime and strategy self-tests
 8. **Phase 2H**: Opportunity candidate construction integrated into runtime and strategy self-tests
 9. **Phase 2I**: Opportunity choice persistence construction integrated into runtime and strategy self-tests
-10. **Next**: Replace additional helpers only in small, provably equivalent slices
-11. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+10. **Phase 2J**: Missing-held opportunity construction integrated into runtime and strategy self-tests
+11. **Next**: Replace additional helpers only in small, provably equivalent slices
+12. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 

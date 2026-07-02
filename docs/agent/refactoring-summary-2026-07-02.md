@@ -171,6 +171,17 @@ This is intended as an equivalent extraction of candidate descriptor constructio
 
 This is intended as an equivalent extraction of choice metadata construction only; missing-held validation, action construction, and top-level action selection remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2J Missing-Held Opportunity Integration
+
+`bootstrap-0.4.282` extracts missing-held opportunity reconstruction:
+
+- `src/strategy/opportunity-choice.js` now also owns missing-hold expiry, same-choice suppression, held coin reconstruction, visible-authority clear requests, ignored/distance/threat/stamina gates, and candidate metadata for missing-held coin targets.
+- The browser runtime still owns visible source lookup, stale visible coin cleanup, coin/threat/stamina diagnostics, action closures, and `bot` state writes; wrappers pass runtime checks into the strategy core and execute returned clear/action decisions.
+- `src/strategy/self-test.js` now has 35 tests, including three missing-held cases covering candidate reconstruction, visible-missing clear requests, and snapshot held-choice preservation.
+- Static verification checks both the strategy source module and generated remote runtime for the missing-held core and wrapper wiring.
+
+This is intended as an equivalent extraction of missing-held candidate construction only; top-level opportunity selection and action execution remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -181,9 +192,10 @@ This is intended as an equivalent extraction of choice metadata construction onl
 5. Opportunity choice stability: integrated in `bootstrap-0.4.279`
 6. Opportunity candidate construction: integrated in `bootstrap-0.4.280`
 7. Opportunity choice persistence construction: integrated in `bootstrap-0.4.281`
-8. Constants: partially integrated for high-value coin defaults
-9. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-10. Run live validation sessions after each behavior-touching replacement
+8. Missing-held opportunity construction: integrated in `bootstrap-0.4.282`
+9. Constants: partially integrated for high-value coin defaults
+10. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+11. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

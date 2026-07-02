@@ -151,6 +151,102 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
   return { chosen: locked.chosen, switchLock: locked.switchLock, sorted };
 }
 
+function opportunityMissingHoldUntilCore(choice, options = {}) {
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  if (!choice || opportunityChoiceType(choice) !== 'coin') return 0;
+  const holdMs = Math.max(0, Number(options.missingHoldMs ?? options.switchHoldMs) || 0);
+  const lastSeenAt = Number(choice.lastSeenAt || choice.at || t);
+  const until = Math.min(Number(choice.until || 0), lastSeenAt + holdMs);
+  return until > t ? until : 0;
+}
+
+function missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, options = {}) {
+  const reason = String(choice?.reason || '');
+  if (reason.startsWith('snapshot-coin')) return false;
+  const distance = Number(coin?.distance ?? choice?.distance);
+  const radius = Math.max(0, Number(options.nativeCoinAuthoritativeRadius ?? options.snapshotCoinLocalSuppressRadius ?? 0) || 0);
+  const sameCoinRadius = Math.max(0, Number(options.sameCoinRadius || 0));
+  return !Number.isFinite(distance) || !(radius > 0) || distance <= radius + sameCoinRadius;
+}
+
+function buildMissingHeldOpportunityCore(current, opportunities, options = {}) {
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const holdUntil = opportunityMissingHoldUntilCore(current, options);
+  if (!holdUntil) return { opportunity: null, coin: null, clearMissing: false };
+  if ((opportunities || []).some(item => opportunityMatchesChoiceCore(item, current, options))) {
+    return { opportunity: null, coin: null, clearMissing: false };
+  }
+  const id = opportunityChoiceId(current);
+  if (!id && id !== '0') return { opportunity: null, coin: null, clearMissing: false };
+  const x = Number(current.x);
+  const y = Number(current.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return { opportunity: null, coin: null, clearMissing: false };
+  const amount = Math.max(0, Number(current.amount || 0)) || 1;
+  const self = options.self || null;
+  const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const coin = {
+    drop_id: id,
+    x,
+    y,
+    amount,
+    distance: self ? dist(self, { x, y }) : Number(current.distance || Infinity)
+  };
+  const visibleMissing = typeof options.visibleSourcesConfirmMissing === 'function'
+    ? options.visibleSourcesConfirmMissing(current, coin)
+    : Boolean(options.visibleSourcesConfirmMissing);
+  if (missingHeldCoinCoveredByVisibleAuthorityCore(current, coin, options) && visibleMissing) {
+    return { opportunity: null, coin, clearMissing: true, clearReason: 'visible-coin-disappeared' };
+  }
+  const ignored = typeof options.ignoredCoin === 'function' ? options.ignoredCoin(id) : Boolean(options.ignoredCoin);
+  if (ignored) return { opportunity: null, coin, clearMissing: false, blockReason: 'ignored' };
+  const maxDistance = Math.max(
+    0,
+    Number(current.maxDistance || 0),
+    Number(options.snapshotCoinMaxDistance || 0),
+    Number(options.globalCoinMaxDistance || 0),
+    Number(options.coinMaxDistance || 0)
+  );
+  if (Number.isFinite(coin.distance) && maxDistance && coin.distance > maxDistance) {
+    return { opportunity: null, coin, clearMissing: false, blockReason: 'distance' };
+  }
+  const coinBlockedByThreat = typeof options.coinBlockedByThreat === 'function' ? options.coinBlockedByThreat : () => false;
+  for (const threat of options.activeThreats || []) {
+    if (coinBlockedByThreat(self, coin, threat)) {
+      return { opportunity: null, coin, clearMissing: false, blockReason: 'threat-blocked', threat };
+    }
+  }
+  const coinStaminaCost = typeof options.coinStaminaCost === 'function' ? options.coinStaminaCost : item => Number(item?.staminaCost ?? item?.distance ?? 0);
+  const staminaCost = coinStaminaCost(coin);
+  const coinStaminaAffordable = typeof options.coinStaminaAffordable === 'function' ? options.coinStaminaAffordable : () => true;
+  if (!coinStaminaAffordable(self, coin, staminaCost)) {
+    return { opportunity: null, coin, clearMissing: false, blockReason: 'stamina-unaffordable', staminaCost };
+  }
+  const coinMaxDistance = Number(options.coinMaxDistance || 0);
+  const actionKind = coin.distance <= coinMaxDistance ? 'coin' : 'seek-coin';
+  const reason = current.reason || (actionKind === 'coin' ? 'best-opportunity-coin' : 'best-opportunity-visible-coin');
+  const scoreCoinOpportunity = typeof options.scoreCoinOpportunity === 'function' ? options.scoreCoinOpportunity : item => Number(item?.opportunityScore ?? current?.score ?? 0);
+  const priorityTier = typeof options.priorityTier === 'function' ? options.priorityTier : item => Number(item?.priorityTier || 0);
+  const opportunity = {
+    type: 'coin',
+    id,
+    amount,
+    x,
+    y,
+    distance: coin.distance,
+    staminaCost,
+    score: scoreCoinOpportunity(coin),
+    priorityTier: priorityTier({ type: 'coin', distance: coin.distance }),
+    actionKind,
+    reason,
+    maxDistance,
+    held: true,
+    missingHold: true,
+    holdUntil,
+    sourceCoin: coin
+  };
+  return { opportunity, coin, clearMissing: false };
+}
+
 function opportunityRouteIds(routeMeta) {
   return Array.isArray(routeMeta?.ids) ? routeMeta.ids.map(id => String(id)).filter(Boolean) : [];
 }
@@ -228,6 +324,9 @@ module.exports = {
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,
   chooseStableOpportunityCore,
+  opportunityMissingHoldUntilCore,
+  missingHeldCoinCoveredByVisibleAuthorityCore,
+  buildMissingHeldOpportunityCore,
   opportunityRouteIds,
   rememberOpportunityChoiceCore
 };
