@@ -42,6 +42,7 @@ const { controlLoginSource } = require('./src/browser/control-login-source');
 const { nativeStateSource } = require('./src/browser/native-state-source');
 const { runtimeSummarySource } = require('./src/browser/runtime-summary-source');
 const { runSelfTest } = require('./src/node/run-self-test');
+// Strategy modules for centralized constants and logic
 const { COMBAT_CONSTANTS } = require('./src/strategy/combat-constants');
 const { OPPORTUNITY_CONSTANTS } = require('./src/strategy/opportunity-constants');
 
@@ -6725,13 +6726,13 @@ ${importantLogSource()}
   }
 
   function highValueCoinPriorityAmount() {
-    const value = Number(cfg.highValueCoinPriorityAmount ?? 10);
-    return Math.max(1, Number.isFinite(value) ? value : 10);
+    const value = Number(cfg.highValueCoinPriorityAmount ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
+    return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
   }
 
   function highValueCoinPriorityHealthyHp() {
-    const value = Number(cfg.highValueCoinPriorityHealthyHp ?? cfg.combatLowHpLeaveThreshold ?? 50);
-    return Math.max(1, Number.isFinite(value) ? value : 50);
+    const value = Number(cfg.highValueCoinPriorityHealthyHp ?? cfg.combatLowHpLeaveThreshold ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP);
+    return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP);
   }
 
   function pickHighValueVisibleCoin(self, coins, activeThreats, options = {}) {
