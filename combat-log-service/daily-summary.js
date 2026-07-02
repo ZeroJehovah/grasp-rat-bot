@@ -103,7 +103,47 @@ function applyReportDayWindow(session, window) {
     session.reportLoginDurationMs = 0;
     session.reportClippedToDay = session.reportLoginAt !== loginAt;
   }
+  applyReportRewardWindow(session, window);
   return session;
+}
+
+function applyReportRewardWindow(session, window) {
+  if (!window || !session.reportClippedToDay) return session;
+  const originalCoinsGained = number(session.coinsGained);
+  const originalPureRefreshCoins = number(session.pureRefreshCoins);
+  const kills = (Array.isArray(session.kills) ? session.kills : [])
+    .map(normalizeKill)
+    .filter(Boolean)
+    .filter(kill => {
+      const at = number(kill.at);
+      return at >= window.start && at < window.end;
+    });
+  const buckets = killBucketSummary(kills);
+  const killRewardCoins = kills.reduce((sum, kill) => sum + number(kill.rewardCoins), 0);
+  const unconfirmedKillDropCoins = kills.reduce((sum, kill) => sum + number(kill.unconfirmedDropCoins), 0);
+  session.kills = kills;
+  session.rewardKillCount = kills.filter(kill => number(kill.rewardCoins) > 0).length;
+  session.killRewardCoins = killRewardCoins;
+  session.attributedKillRewardCoins = killRewardCoins;
+  session.unconfirmedKillDropCoins = unconfirmedKillDropCoins;
+  session.afkKillCount = buckets.afk.count;
+  session.afkKillRewardCoins = buckets.afk.rewardCoins;
+  session.afkUnconfirmedKillCount = buckets.afk.unconfirmedCount;
+  session.afkUnconfirmedDropCoins = buckets.afk.unconfirmedDropCoins;
+  session.activeKillCount = buckets.active.count;
+  session.activeKillRewardCoins = buckets.active.rewardCoins;
+  session.activeUnconfirmedKillCount = buckets.active.unconfirmedCount;
+  session.activeUnconfirmedDropCoins = buckets.active.unconfirmedDropCoins;
+  session.unknownKillCount = buckets.unknown.count;
+  session.unknownKillRewardCoins = buckets.unknown.rewardCoins;
+  session.unknownUnconfirmedKillCount = buckets.unknown.unconfirmedCount;
+  session.unknownUnconfirmedDropCoins = buckets.unknown.unconfirmedDropCoins;
+  session.pureRefreshCoins = 0;
+  session.pickedCoins = killRewardCoins;
+  session.coinsGained = killRewardCoins;
+  session.reportRewardClippedToDay = true;
+  session.reportUnwindowedCoinsGained = Math.max(0, originalCoinsGained - killRewardCoins);
+  session.reportUnwindowedPureRefreshCoins = originalPureRefreshCoins;
 }
 
 function listJsonlFiles(dayDir) {
@@ -2325,6 +2365,24 @@ function runSelfTest() {
   assertSelfTest(clippedSession.reportLoginAt === Date.parse('2026-06-12T16:00:00Z'), 'cross-day session start was not clipped to report day');
   assertSelfTest(clippedSession.reportExitAt === Date.parse('2026-06-13T01:30:00Z'), 'in-day session exit was clipped incorrectly');
   assertSelfTest(totalsForScope([clippedSession], [], []).loginDurationMs === 9.5 * 60 * 60 * 1000, 'login totals did not use clipped report duration');
+  const clippedRewardSession = applyReportDayWindow(
+    {
+      loginAt: Date.parse('2026-06-12T15:00:00Z'),
+      exitAt: Date.parse('2026-06-13T01:30:00Z'),
+      pickedCoins: 100,
+      coinsGained: 100,
+      pureRefreshCoins: 70,
+      killRewardCoins: 30,
+      kills: [
+        { at: Date.parse('2026-06-12T15:30:00Z'), name: 'previous-day', rewardCoins: 11, playerCategory: 'active', dropMatched: true },
+        { at: Date.parse('2026-06-12T16:30:00Z'), name: 'current-day', rewardCoins: 19, playerCategory: 'afk', dropMatched: true }
+      ]
+    },
+    reportDayWindow(day)
+  );
+  assertSelfTest(clippedRewardSession.coinsGained === 19, `expected clipped reward total 19, got ${clippedRewardSession.coinsGained}`);
+  assertSelfTest(clippedRewardSession.pureRefreshCoins === 0, 'clipped session should not carry untimestamped refresh coins across day boundary');
+  assertSelfTest(clippedRewardSession.afkKillCount === 1 && clippedRewardSession.activeKillCount === 0, 'clipped session kept kills outside report day');
   assertSelfTest(reasonText('login-before-session-end:no-self', '重新登录前上一局已不可用，按登录前收口').includes('上一局已经不可用'), 'login-before no-self closeout was not explained');
   assertSelfTest(defaultDailyReportPath('2026-06-13') === path.join(__dirname, '..', 'docs', 'reports', '2026-06', 'daily-2026-06-13.md'), 'default daily report path is not under docs/reports/YYYY-MM');
   assertSelfTest(

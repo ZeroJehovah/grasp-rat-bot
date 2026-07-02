@@ -63,6 +63,8 @@ The report parser uses the JSON `other` payload and content text to classify:
 - ignored non-game quota records,
 - unknown game-like records that need review.
 
+Use the Elysiver balance API as the authoritative source for natural-day coin totals. The in-game panel and combat-log daily summary are local session estimates; they can undercount incidental system-coin pickups when the bot collects a coin that was not the tracked coin target. Player drop pickups are usually timestamped and reconcile more directly with combat-log kill rewards.
+
 Monthly Markdown includes daily totals, whole-month totals, API record counts, and sorted detail rows for player-drop pickup and death loss.
 
 ## Validation
