@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.287"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.288"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -20177,11 +20177,51 @@ function hpDisplay(value) {
     }))
     .filter(coin => coin.key && coin.amount > 0 && Number.isFinite(coin.x) && Number.isFinite(coin.y));
 }
+  function pointToSegmentDistanceCore(point, a, b, options = {}) {
+  const px = Number(point?.x);
+  const py = Number(point?.y);
+  const ax = Number(a?.x);
+  const ay = Number(a?.y);
+  const bx = Number(b?.x);
+  const by = Number(b?.y);
+  if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return Infinity;
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy;
+  if (!(lenSq > 0)) return coinTargetDistance(point, a, options);
+  const ratio = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / lenSq));
+  return coinTargetDistance(point, { x: ax + vx * ratio, y: ay + vy * ratio }, options);
+}
+  function pickIncidentalCoinPickupsCore(previousSnapshot, currentSnapshot, currentSummary, previousSelf, options = {}) {
+  if (!Array.isArray(currentSnapshot)) return [];
+  const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : 0;
+  const memoryMs = Math.max(500, Number(options.incidentalCoinPickupMemoryMs || 3000) || 3000);
+  const radius = Math.max(0, Number(options.coinCollectedConfirmDistance || 0) || 0);
+  const currentKeys = new Set(currentSnapshot.map(coin => String(coin?.key || '')));
+  const picked = [];
+  for (const coin of Array.isArray(previousSnapshot) ? previousSnapshot : []) {
+    if (!coin || !coin.key || currentKeys.has(String(coin.key))) continue;
+    if (t - Number(coin.at || 0) > memoryMs) continue;
+    const currentDistance = coinTargetDistance(currentSummary, coin, options);
+    const previousDistance = previousSelf ? coinTargetDistance(previousSelf, coin, options) : Infinity;
+    const pathDistance = previousSelf ? pointToSegmentDistanceCore(coin, previousSelf, currentSummary, options) : currentDistance;
+    if (Math.min(currentDistance, previousDistance, pathDistance) > radius) continue;
+    picked.push({
+      coin,
+      currentDistance,
+      previousDistance,
+      pathDistance
+    });
+  }
+  return picked;
+}
 
   function coinTargetCoreOptions(extra = {}) {
     return {
       dist,
       coinCollectedPruneRadius: cfg.coinCollectedPruneRadius,
+      coinCollectedConfirmDistance: cfg.coinCollectedConfirmDistance,
+      incidentalCoinPickupMemoryMs: cfg.incidentalCoinPickupMemoryMs,
       ...extra
     };
   }
@@ -20226,22 +20266,6 @@ function hpDisplay(value) {
     return next;
   }
 
-  function pointToSegmentDistance(point, a, b) {
-    const px = Number(point?.x);
-    const py = Number(point?.y);
-    const ax = Number(a?.x);
-    const ay = Number(a?.y);
-    const bx = Number(b?.x);
-    const by = Number(b?.y);
-    if (![px, py, ax, ay, bx, by].every(Number.isFinite)) return Infinity;
-    const vx = bx - ax;
-    const vy = by - ay;
-    const lenSq = vx * vx + vy * vy;
-    if (!(lenSq > 0)) return dist(point, a);
-    const ratio = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / lenSq));
-    return dist(point, { x: ax + vx * ratio, y: ay + vy * ratio });
-  }
-
   function recordSessionCoinPickup(target, amount, currentSummary, previousCoins, reason) {
     const value = Math.max(0, Math.round(Number(amount || 0)));
     if (!value) return false;
@@ -20274,17 +20298,17 @@ function hpDisplay(value) {
     const currentSnapshot = nativeCoinSnapshot();
     if (!Array.isArray(currentSnapshot)) return false;
     const t = Date.now();
-    const memoryMs = Math.max(500, Number(cfg.incidentalCoinPickupMemoryMs || 3000) || 3000);
-    const currentKeys = new Set(currentSnapshot.map(coin => String(coin.key || '')));
-    const radius = Math.max(0, Number(cfg.coinCollectedConfirmDistance || 0) || 0);
     let recorded = false;
-    for (const coin of previousSnapshot) {
-      if (!coin || !coin.key || currentKeys.has(String(coin.key))) continue;
-      if (t - Number(coin.at || 0) > memoryMs) continue;
-      const currentDistance = dist(currentSummary, coin);
-      const previousDistance = previousSelf ? dist(previousSelf, coin) : Infinity;
-      const pathDistance = previousSelf ? pointToSegmentDistance(coin, previousSelf, currentSummary) : currentDistance;
-      if (Math.min(currentDistance, previousDistance, pathDistance) > radius) continue;
+    const incidentalPickups = pickIncidentalCoinPickupsCore(
+      previousSnapshot,
+      currentSnapshot,
+      currentSummary,
+      previousSelf,
+      coinTargetCoreOptions({ nowMs: t })
+    );
+    for (const pickup of incidentalPickups) {
+      const coin = pickup.coin;
+      const currentDistance = pickup.currentDistance;
       const sessionRecorded = recordSessionCoinPickup({
         id: coin.id || coin.key,
         amount: coin.amount,

@@ -20,7 +20,9 @@ const {
   coinTargetKeyCore,
   coinMatchesTrackedTargetCore,
   trackedCoinTargetForCollectionCore,
-  buildNativeCoinSnapshotCore
+  buildNativeCoinSnapshotCore,
+  pointToSegmentDistanceCore,
+  pickIncidentalCoinPickupsCore
 } = require('./coin-target');
 const {
   buildCoinRouteFromAnchorCore,
@@ -483,6 +485,46 @@ function runStrategyModuleSelfTests() {
       && nativeSnapshot[0].amount === 2
       && nativeSnapshot[0].at === 1234
       && nativeSnapshot[1].key === 'xy:30:40:3'
+  });
+
+  results.push({
+    name: 'coin-target-point-to-segment-distance',
+    passed: pointToSegmentDistanceCore({ x: 5, y: 3 }, { x: 0, y: 0 }, { x: 10, y: 0 }) === 3
+      && pointToSegmentDistanceCore({ x: 3, y: 4 }, { x: 0, y: 0 }, { x: 0, y: 0 }) === 5
+      && pointToSegmentDistanceCore({ x: NaN, y: 0 }, { x: 0, y: 0 }, { x: 1, y: 1 }) === Infinity
+  });
+
+  const currentIncidentalPickups = pickIncidentalCoinPickupsCore([
+    { id: 'picked', key: 'id:picked', amount: 2, x: 10, y: 0, at: 900 },
+    { id: 'still-visible', key: 'id:still-visible', amount: 3, x: 100, y: 0, at: 900 },
+    { id: 'old', key: 'id:old', amount: 4, x: 10, y: 0, at: 0 }
+  ], [
+    { id: 'still-visible', key: 'id:still-visible', amount: 3, x: 100, y: 0, at: 1000 }
+  ], { x: 0, y: 0 }, null, {
+    nowMs: 1000,
+    incidentalCoinPickupMemoryMs: 500,
+    coinCollectedConfirmDistance: 20
+  });
+  results.push({
+    name: 'coin-target-incidental-pickup-current-radius',
+    passed: currentIncidentalPickups.length === 1
+      && currentIncidentalPickups[0].coin.id === 'picked'
+      && currentIncidentalPickups[0].currentDistance === 10
+  });
+
+  const pathIncidentalPickups = pickIncidentalCoinPickupsCore([
+    { id: 'path', key: 'id:path', amount: 1, x: 50, y: 5, at: 1000 },
+    { id: 'far', key: 'id:far', amount: 1, x: 50, y: 30, at: 1000 }
+  ], [], { x: 100, y: 0 }, { x: 0, y: 0 }, {
+    nowMs: 1200,
+    incidentalCoinPickupMemoryMs: 1000,
+    coinCollectedConfirmDistance: 10
+  });
+  results.push({
+    name: 'coin-target-incidental-pickup-self-path',
+    passed: pathIncidentalPickups.length === 1
+      && pathIncidentalPickups[0].coin.id === 'path'
+      && pathIncidentalPickups[0].pathDistance === 5
   });
 
   // Test coin route planning

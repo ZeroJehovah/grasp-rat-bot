@@ -590,8 +590,9 @@ function main() {
       assert(text.includes('function recordIncidentalCoinPickups'), 'incidental coin pickup recorder not found');
       const incidentalBody = functionBody(text, 'recordIncidentalCoinPickups');
       assert(incidentalBody.includes('nativeCoinSnapshot()'), 'incidental pickup recorder does not read native coin state');
-      assert(incidentalBody.includes('currentKeys.has(String(coin.key))'), 'incidental pickup recorder does not compare disappeared coins');
-      assert(incidentalBody.includes('pointToSegmentDistance(coin, previousSelf, currentSummary)'), 'incidental pickup recorder does not check self movement path');
+      assert(incidentalBody.includes('pickIncidentalCoinPickupsCore('), 'incidental pickup recorder does not use strategy core');
+      assert(incidentalBody.includes('previousSnapshot') && incidentalBody.includes('currentSnapshot'), 'incidental pickup recorder does not compare disappeared coins');
+      assert(text.includes('pointToSegmentDistanceCore'), 'incidental pickup movement path core not found');
       assert(incidentalBody.includes("'incidental-coin-disappeared'"), 'incidental pickup reason not recorded');
       assert(incidentalBody.includes('rememberNativeCoinSnapshot(currentSnapshot)'), 'incidental pickup recorder does not refresh native snapshot');
       assert(functionBody(text, 'markCoinCollected').includes('rememberNativeCoinSnapshot();'), 'tracked pickup path does not refresh native snapshot');
@@ -1898,20 +1899,27 @@ function main() {
     assert(strategyCoinTargetSource.includes('function coinMatchesTrackedTargetCore'), 'strategy coin target matcher core not found');
     assert(strategyCoinTargetSource.includes('function trackedCoinTargetForCollectionCore'), 'strategy tracked coin target core not found');
     assert(strategyCoinTargetSource.includes('function buildNativeCoinSnapshotCore'), 'strategy native coin snapshot core not found');
+    assert(strategyCoinTargetSource.includes('function pointToSegmentDistanceCore'), 'strategy point-to-segment distance core not found');
+    assert(strategyCoinTargetSource.includes('function pickIncidentalCoinPickupsCore'), 'strategy incidental pickup core not found');
     assert(sourceBot.includes("require('./src/strategy/coin-target')"), 'source bot does not import coin target strategy module');
     assert(sourceBot.includes('coinTargetKeyCore.toString()'), 'source bot does not inject coin target key core');
     assert(sourceBot.includes('coinMatchesTrackedTargetCore.toString()'), 'source bot does not inject coin target matcher core');
     assert(sourceBot.includes('trackedCoinTargetForCollectionCore.toString()'), 'source bot does not inject tracked coin target core');
     assert(sourceBot.includes('buildNativeCoinSnapshotCore.toString()'), 'source bot does not inject native coin snapshot core');
+    assert(sourceBot.includes('pointToSegmentDistanceCore.toString()'), 'source bot does not inject point-to-segment distance core');
+    assert(sourceBot.includes('pickIncidentalCoinPickupsCore.toString()'), 'source bot does not inject incidental pickup core');
     assert(sourceBot.includes('function coinTargetCoreOptions'), 'source bot coin target runtime wrapper options not found');
     assert(sourceBot.includes('trackedCoinTargetForCollectionCore({'), 'source bot tracked coin target wrapper does not call strategy core');
     assert(sourceBot.includes('return coinTargetKeyCore(target);'), 'source bot coin target key wrapper does not call strategy core');
     assert(sourceBot.includes('return coinMatchesTrackedTargetCore(coin, target'), 'source bot coin target matcher wrapper does not call strategy core');
     assert(sourceBot.includes('return buildNativeCoinSnapshotCore(coins'), 'source bot native coin snapshot wrapper does not call strategy core');
+    assert(sourceBot.includes('pickIncidentalCoinPickupsCore('), 'source bot incidental pickup wrapper does not call strategy core');
     assert(distSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');
     assert(distSource.includes('function coinMatchesTrackedTargetCore'), 'generated runtime does not inline coin target matcher core');
     assert(distSource.includes('function trackedCoinTargetForCollectionCore'), 'generated runtime does not inline tracked coin target core');
     assert(distSource.includes('function buildNativeCoinSnapshotCore'), 'generated runtime does not inline native coin snapshot core');
+    assert(distSource.includes('function pointToSegmentDistanceCore'), 'generated runtime does not inline point-to-segment distance core');
+    assert(distSource.includes('function pickIncidentalCoinPickupsCore'), 'generated runtime does not inline incidental pickup core');
   });
 
   check('coin route planner uses strategy module core', () => {
