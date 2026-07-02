@@ -121,6 +121,12 @@ const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./src/strategy/post-attack-drop');
+const {
+  dailyStaminaBudgetIsLimitingCore,
+  summarizeBlockedStaminaOpportunityCore,
+  summarizeNearestCoinStaminaBudgetExitCore,
+  pickNearestDailyStaminaFinalCoinCore
+} = require('./src/strategy/stamina-budget');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
 const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top/';
@@ -8401,13 +8407,17 @@ ${importantLogSource()}
 	    return Math.min(...values);
 	  }
 
+	  ${dailyStaminaBudgetIsLimitingCore.toString()}
+	  ${summarizeBlockedStaminaOpportunityCore.toString()}
+	  ${summarizeNearestCoinStaminaBudgetExitCore.toString()}
+	  ${pickNearestDailyStaminaFinalCoinCore.toString()}
+
 	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
-	    const cost = Math.max(0, Number(staminaCost) || 0);
-	    const oneHour = opportunityWindowStaminaBudget(self, '1h');
-	    const oneDay = opportunityWindowStaminaBudget(self, '1d');
-	    return Number.isFinite(oneDay)
-	      && cost > oneDay
-	      && (!Number.isFinite(oneHour) || cost <= oneHour);
+	    return dailyStaminaBudgetIsLimitingCore(
+	      staminaCost,
+	      opportunityWindowStaminaBudget(self, '1h'),
+	      opportunityWindowStaminaBudget(self, '1d')
+	    );
 	  }
 
   function opportunityStaminaAffordable(self, staminaCost) {
@@ -8418,97 +8428,32 @@ ${importantLogSource()}
   }
 
 	  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
-    const budget = opportunityLongStaminaBudget(self);
-    if (!Number.isFinite(budget)) return null;
-    const items = [];
-    for (const coin of coins || []) {
-      const distance = Number(coin?.distance);
-      const amount = Number(coin?.amount || 0);
-      if (!(amount > 0) || !Number.isFinite(distance)) continue;
-      const staminaCost = opportunityCoinStaminaCost(coin);
-      if (staminaCost <= budget) continue;
-      items.push({
-        type: 'coin',
-        id: coin.drop_id,
-        amount,
-        distance,
-        staminaCost,
-        shortageMs: staminaCost - budget,
-        snapshot: Boolean(coin.snapshot),
-        native: Boolean(coin.native)
-      });
-    }
-    for (const target of targets || []) {
-      const distance = Number(target?.distance);
-      const drop = Number(target?.drop ?? dropValue(target) ?? 0);
-      if (!(drop > 0) || !Number.isFinite(distance)) continue;
-      const staminaCost = opportunityEnemyStaminaCost(target);
-      if (staminaCost <= budget) continue;
-      items.push({
-        type: 'enemy',
-        id: target.user_id,
-        name: target.name || '',
-        drop,
-        distance,
-        staminaCost,
-        shortageMs: staminaCost - budget
-      });
-    }
-    if (!items.length) return null;
-    items.sort((a, b) => a.shortageMs - b.shortageMs || a.distance - b.distance);
-    const best = items[0];
-    return {
-      budgetMs: Math.max(0, Math.round(budget)),
-      requiredMs: Math.max(0, Math.round(best.staminaCost)),
-      shortageMs: Math.max(0, Math.round(best.shortageMs)),
-      type: best.type,
-      id: best.id,
-      name: best.name || '',
-      amount: best.amount || 0,
-      drop: best.drop || 0,
-      distance: Math.round(best.distance),
-      snapshot: Boolean(best.snapshot),
-      native: Boolean(best.native)
-	    };
+	    return summarizeBlockedStaminaOpportunityCore(coins, targets, {
+	      budget: opportunityLongStaminaBudget(self),
+	      coinStaminaCost: opportunityCoinStaminaCost,
+	      enemyStaminaCost: opportunityEnemyStaminaCost,
+	      targetDrop: dropValue
+	    });
 	  }
 
 	  function summarizeNearestCoinStaminaBudgetExit(self, coins) {
-	    const budget = opportunityWindowStaminaBudget(self, '1h');
-	    if (!Number.isFinite(budget)) return null;
-	    const candidates = (coins || [])
-	      .map(coin => ({
-	        ...coin,
-	        distance: Number.isFinite(Number(coin?.distance)) ? Number(coin.distance) : dist(self, coin),
-	        amount: Number(coin?.amount || 0)
-	      }))
-	      .filter(coin => coin.amount > 0 && Number.isFinite(coin.distance))
-	      .sort((a, b) => a.distance - b.distance || b.amount - a.amount);
-	    const coin = candidates[0] || null;
-	    if (!coin) return null;
-	    const staminaCost = opportunityCoinStaminaCost(coin);
-	    if (staminaCost <= budget) return null;
-	    return {
-	      type: 'coin',
-	      window: '1h',
-	      id: coin.drop_id,
-	      amount: coin.amount,
-	      distance: Math.round(coin.distance),
-	      budgetMs: Math.max(0, Math.round(budget)),
-	      requiredMs: Math.max(0, Math.round(staminaCost)),
-	      shortageMs: Math.max(0, Math.round(staminaCost - budget)),
-	      reloginDelayMs: staminaBudgetReloginDelayMs(),
-	      snapshot: Boolean(coin.snapshot),
-	      native: Boolean(coin.native)
-	    };
+	    return summarizeNearestCoinStaminaBudgetExitCore(self, coins, {
+	      budget: opportunityWindowStaminaBudget(self, '1h'),
+	      dist,
+	      coinStaminaCost: opportunityCoinStaminaCost,
+	      reloginDelayMs: staminaBudgetReloginDelayMs()
+	    });
 	  }
 
 	  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
-	    const candidates = safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self)
-	      .filter(coin => !isSnapshotOnlyCoin(coin))
-	      .filter(coin => dailyStaminaBudgetIsLimiting(self, opportunityCoinStaminaCost(coin)))
-	      .sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)
-	        || Number(b.amount || 0) - Number(a.amount || 0));
-	    return candidates[0] || null;
+	    return pickNearestDailyStaminaFinalCoinCore(
+	      safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self),
+	      {
+	        isSnapshotOnlyCoin,
+	        coinStaminaCost: opportunityCoinStaminaCost,
+	        dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimiting(self, staminaCost)
+	      }
+	    );
 	  }
 
 	  function dailyStaminaFinalCoinAction(self, coin) {

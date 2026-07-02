@@ -204,6 +204,17 @@ This is intended as an equivalent extraction of target selection only; post-atta
 
 This is intended as an equivalent extraction of post-attack drop coin selection only; action execution and attribution side effects remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2M Stamina Budget Integration
+
+`bootstrap-0.4.285` extracts stamina-budget summary and selector logic:
+
+- `src/strategy/stamina-budget.js` now owns daily-budget limiting checks, blocked opportunity summary construction, nearest coin stamina-exit summaries, and daily-final visible coin selection.
+- The browser runtime still owns measured stamina budget access, safe coin filtering, distance/stamina callbacks, relogin delay config, and leave/action construction.
+- `src/strategy/self-test.js` now has 45 tests, including four stamina-budget cases covering daily limiting, blocked summary selection, nearest coin exit summaries, and daily-final visible coin selection.
+- Static verification checks both the strategy source module and generated remote runtime for the stamina-budget cores and wrapper wiring.
+
+This is intended as an equivalent extraction of stamina summary/selector logic only; relogin/leave action construction remains in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -217,9 +228,10 @@ This is intended as an equivalent extraction of post-attack drop coin selection 
 8. Missing-held opportunity construction: integrated in `bootstrap-0.4.282`
 9. Post-attack drop wait selection: integrated in `bootstrap-0.4.283`
 10. Post-attack drop coin matching: integrated in `bootstrap-0.4.284`
-11. Constants: partially integrated for high-value coin defaults
-12. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-13. Run live validation sessions after each behavior-touching replacement
+11. Stamina budget summary/selector logic: integrated in `bootstrap-0.4.285`
+12. Constants: partially integrated for high-value coin defaults
+13. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+14. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

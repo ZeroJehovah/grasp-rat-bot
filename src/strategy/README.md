@@ -20,6 +20,7 @@ src/strategy/
 ├── opportunity-choice.js       # Opportunity choice stability/persistence/missing-held core
 ├── opportunity-candidates.js   # Opportunity candidate construction core
 ├── post-attack-drop.js         # Post-attack drop coin/wait selection core
+├── stamina-budget.js           # Stamina budget summary and selector core
 ├── opportunity-constants.js    # Profit/coin system configuration
 └── self-test.js               # Strategy module test suite
 ```
@@ -166,6 +167,15 @@ Builds post-attack drop selections:
 
 This module is authoritative for post-attack drop wait target selection as of `bootstrap-0.4.283` and post-attack drop coin matching as of `bootstrap-0.4.284`; the browser runtime wrapper still owns safe coin filtering, stamina diagnostics, attack-history resolution mutation, kill-reward attribution, config access, threat callbacks, and action construction.
 
+#### `stamina-budget.js`
+Builds stamina-budget summaries and selectors:
+- Daily stamina limiting checks
+- Blocked opportunity summaries
+- Nearest coin stamina-exit summaries
+- Daily-final visible coin selection
+
+This module is authoritative for stamina-budget summary/selector logic as of `bootstrap-0.4.285`; the browser runtime wrapper still owns measured stamina budgets, safe coin filtering, distance/stamina callbacks, relogin delay config, and leave/action construction.
+
 ### Testing
 
 #### `self-test.js`
@@ -179,9 +189,10 @@ Automated test suite:
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
 - Post-attack drop coin/wait selection (6 tests)
+- Stamina budget summaries/selectors (4 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 41 tests, all passing**
+- **Total: 45 tests, all passing**
 
 ## Usage Example
 
@@ -238,8 +249,9 @@ executeAction(action);
 10. **Phase 2J**: Missing-held opportunity construction integrated into runtime and strategy self-tests
 11. **Phase 2K**: Post-attack drop wait selection integrated into runtime and strategy self-tests
 12. **Phase 2L**: Post-attack drop coin matching integrated into runtime and strategy self-tests
-13. **Next**: Replace additional helpers only in small, provably equivalent slices
-14. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
+13. **Phase 2M**: Stamina budget summary/selector logic integrated into runtime and strategy self-tests
+14. **Next**: Replace additional helpers only in small, provably equivalent slices
+15. **Combat replacements**: Require focused replay or targeted self-test evidence before live use
 
 ## Design Principles
 

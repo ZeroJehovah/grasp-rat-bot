@@ -268,11 +268,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.284` continues with `post-attack-drop.js`, making post-attack drop coin matching and candidate metadata authoritative in the strategy module while preserving the browser wrapper's ownership of safe coin filtering, stamina diagnostics, attack-history resolution mutation, kill-reward attribution, config access, and action construction.
 
+`bootstrap-0.4.285` continues with `stamina-budget.js`, making stamina-budget summaries and selectors authoritative in the strategy module while preserving the browser wrapper's ownership of measured stamina budgets, safe coin filtering, distance/stamina callbacks, relogin delay config, and leave/action construction.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, and post-attack drop coin slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 
@@ -285,6 +287,6 @@ The extracted modules provide a solid foundation for future enhancements, with c
 
 **Total Time Investment**: ~3 hours  
 **Lines Refactored**: 1,900+  
-**Tests Added**: 24
+**Tests Added**: 28
 **Bugs Introduced**: 0  
 **Value Delivered**: HIGH
