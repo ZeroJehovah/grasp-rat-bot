@@ -97,6 +97,9 @@ const {
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,
   chooseStableOpportunityCore,
+  opportunityMissingHoldUntilCore,
+  missingHeldCoinCoveredByVisibleAuthorityCore,
+  buildMissingHeldOpportunityCore,
   opportunityRouteIds,
   rememberOpportunityChoiceCore
 } = require('./src/strategy/opportunity-choice');
@@ -11058,6 +11061,9 @@ ${importantLogSource()}
 			  ${lockedOpportunityChoiceCore.toString()}
 			  ${applyOpportunityOscillationLockCore.toString()}
 			  ${chooseStableOpportunityCore.toString()}
+			  ${opportunityMissingHoldUntilCore.toString()}
+			  ${missingHeldCoinCoveredByVisibleAuthorityCore.toString()}
+			  ${buildMissingHeldOpportunityCore.toString()}
 			  ${opportunityRouteIds.toString()}
 			  ${rememberOpportunityChoiceCore.toString()}
 
@@ -11100,11 +11106,10 @@ ${importantLogSource()}
 			  }
 
 			  function opportunityMissingHoldUntil(choice, t) {
-			    if (!choice || opportunityChoiceType(choice) !== 'coin') return 0;
-			    const holdMs = Math.max(0, Number(cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs) || 0);
-			    const lastSeenAt = Number(choice.lastSeenAt || choice.at || t);
-			    const until = Math.min(Number(choice.until || 0), lastSeenAt + holdMs);
-			    return until > t ? until : 0;
+			    return opportunityMissingHoldUntilCore(choice, opportunityChoiceCoreOptions({
+			      nowMs: t,
+			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs
+			    }));
 			  }
 
 			  function currentVisibleCoinListForMissingHold() {
@@ -11139,11 +11144,9 @@ ${importantLogSource()}
 			  }
 
 			  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
-			    const reason = String(choice?.reason || '');
-			    if (reason.startsWith('snapshot-coin')) return false;
-			    const distance = Number(coin?.distance ?? choice?.distance);
-			    const radius = Math.max(0, Number(typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius) || 0);
-			    return !Number.isFinite(distance) || !(radius > 0) || distance <= radius + opportunitySameCoinRadius();
+			    return missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, opportunityChoiceCoreOptions({
+			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius
+			    }));
 			  }
 
 			  function clearMissingVisibleCoinTarget(choice, coin, reason, t) {
@@ -11173,64 +11176,40 @@ ${importantLogSource()}
 			  }
 
 			  function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
-			    const current = bot.opportunityChoice;
 			    const t = now();
-			    const holdUntil = opportunityMissingHoldUntil(current, t);
-			    if (!holdUntil) return null;
-			    if ((opportunities || []).some(item => opportunityMatchesChoice(item, current))) return null;
-			    const id = opportunityChoiceId(current);
-			    if (!id && id !== '0') return null;
-			    const x = Number(current.x);
-			    const y = Number(current.y);
-			    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-			    const amount = Math.max(0, Number(current.amount || 0)) || 1;
-			    const coin = {
-			      drop_id: id,
-			      x,
-			      y,
-			      amount,
-			      distance: self ? dist(self, { x, y }) : Number(current.distance || Infinity)
-			    };
-			    if (missingHeldCoinCoveredByVisibleAuthority(current, coin) && visibleCoinSourcesConfirmTargetMissing(current)) {
-			      clearMissingVisibleCoinTarget(current, coin, 'visible-coin-disappeared', t);
+			    const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
+			      nowMs: t,
+			      self,
+			      activeThreats,
+			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs,
+			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius,
+			      snapshotCoinMaxDistance: cfg.snapshotCoinMaxDistance,
+			      globalCoinMaxDistance: cfg.globalCoinMaxDistance,
+			      coinMaxDistance: cfg.coinMaxDistance,
+			      visibleSourcesConfirmMissing: choice => visibleCoinSourcesConfirmTargetMissing(choice),
+			      ignoredCoin: id => Boolean(bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))),
+			      coinBlockedByThreat: (origin, coin, threat) => {
+			        const blocked = coinBlockedByThreat(origin, coin, threat);
+			        if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
+			        return blocked;
+			      },
+			      coinStaminaCost: opportunityCoinStaminaCost,
+			      coinStaminaAffordable: (origin, coin, staminaCost) => coinStaminaAffordableWithDiagnostic(origin, coin, staminaCost),
+			      scoreCoinOpportunity,
+			      priorityTier: opportunityPriorityTier
+			    }));
+			    if (result?.clearMissing) {
+			      clearMissingVisibleCoinTarget(bot.opportunityChoice, result.coin, result.clearReason || 'visible-coin-disappeared', t);
 			      return null;
 			    }
-			    if (bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))) return null;
-			    const maxDistance = Math.max(
-			      0,
-			      Number(current.maxDistance || 0),
-		      Number(cfg.snapshotCoinMaxDistance || 0),
-		      Number(cfg.globalCoinMaxDistance || 0),
-		      Number(cfg.coinMaxDistance || 0)
-		    );
-		    if (Number.isFinite(coin.distance) && maxDistance && coin.distance > maxDistance) return null;
-		    if ((activeThreats || []).some(threat => {
-		      const blocked = coinBlockedByThreat(self, coin, threat);
-		      if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
-		      return blocked;
-		    })) return null;
-		    const staminaCost = opportunityCoinStaminaCost(coin);
-		    if (!coinStaminaAffordableWithDiagnostic(self, coin, staminaCost)) return null;
-		    const actionKind = coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin';
-		    const reason = current.reason || (actionKind === 'coin' ? 'best-opportunity-coin' : 'best-opportunity-visible-coin');
-		    return {
-		      type: 'coin',
-		      id,
-		      amount,
-		      x,
-		      y,
-		      distance: coin.distance,
-		      staminaCost,
-		      score: scoreCoinOpportunity(coin),
-		      priorityTier: opportunityPriorityTier({ type: 'coin', distance: coin.distance }),
-		      actionKind,
-		      reason,
-		      maxDistance,
-		      held: true,
-		      missingHold: true,
-		      holdUntil,
-		      action: () => buildCoinAction(self, coin, reason, actionKind === 'seek-coin' ? 'seek-coin' : null)
-		    };
+			    const item = result?.opportunity || null;
+			    if (!item) return null;
+			    const coin = result.coin || item.sourceCoin || item;
+			    const { sourceCoin, ...opportunity } = item;
+			    return {
+			      ...opportunity,
+			      action: () => buildCoinAction(self, coin, opportunity.reason, opportunity.actionKind === 'seek-coin' ? 'seek-coin' : null)
+			    };
 		  }
 
 			  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {

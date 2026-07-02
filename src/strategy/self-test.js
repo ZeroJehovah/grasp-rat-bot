@@ -21,6 +21,7 @@ const {
   opportunityChoiceKey,
   opportunityMatchesChoiceCore,
   chooseStableOpportunityCore,
+  buildMissingHeldOpportunityCore,
   rememberOpportunityChoiceCore
 } = require('./opportunity-choice');
 const {
@@ -481,6 +482,65 @@ function runStrategyModuleSelfTests() {
       && rememberedRouteMissing.choice?.coinRouteLegs === 2
       && rememberedRouteMissing.action?.opportunityChoice?.routeHeld === true
       && rememberedRouteMissing.action?.opportunityChoice?.competingRouteScore === 200
+  });
+
+  const missingHeldOptions = {
+    nowMs: 1500,
+    self: { x: 0, y: 0 },
+    dist: (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)),
+    sameCoinRadius: 50,
+    missingHoldMs: 2000,
+    switchHoldMs: 500,
+    nativeCoinAuthoritativeRadius: 50000,
+    snapshotCoinMaxDistance: 0,
+    globalCoinMaxDistance: 50000,
+    coinMaxDistance: 200,
+    visibleSourcesConfirmMissing: false,
+    ignoredCoin: () => false,
+    coinBlockedByThreat: () => false,
+    coinStaminaCost: coin => Number(coin.distance || 0) + 10,
+    coinStaminaAffordable: (self, coin, cost) => Number(cost || 0) <= 10000,
+    scoreCoinOpportunity: coin => Number(coin.amount || 0) * 1000 / Math.max(1, Number(coin.distance || 0)),
+    priorityTier: item => Number(item.distance || Infinity) <= 500 ? 1 : 0
+  };
+  const missingHeldBuilt = buildMissingHeldOpportunityCore(
+    { key: 'coin:held', type: 'coin', id: 'held', amount: 3, x: 100, y: 0, at: 1000, lastSeenAt: 1000, until: 3000 },
+    [{ type: 'coin', id: 'other', amount: 1, x: 400, y: 0, score: 20, priorityTier: 1 }],
+    missingHeldOptions
+  );
+  results.push({
+    name: 'opportunity-choice-missing-held-builds-candidate',
+    passed: missingHeldBuilt.opportunity?.id === 'held'
+      && missingHeldBuilt.opportunity?.actionKind === 'coin'
+      && missingHeldBuilt.opportunity?.missingHold === true
+      && missingHeldBuilt.opportunity?.holdUntil === 3000
+      && missingHeldBuilt.opportunity?.staminaCost === 110
+      && missingHeldBuilt.opportunity?.score === 30
+      && missingHeldBuilt.opportunity?.priorityTier === 1
+  });
+
+  const missingHeldClear = buildMissingHeldOpportunityCore(
+    { key: 'coin:gone', type: 'coin', id: 'gone', amount: 1, x: 100, y: 0, at: 1000, lastSeenAt: 1000, until: 3000, reason: 'best-opportunity-coin' },
+    [],
+    { ...missingHeldOptions, visibleSourcesConfirmMissing: true }
+  );
+  results.push({
+    name: 'opportunity-choice-missing-held-requests-visible-clear',
+    passed: missingHeldClear.clearMissing === true
+      && missingHeldClear.clearReason === 'visible-coin-disappeared'
+      && missingHeldClear.coin?.drop_id === 'gone'
+  });
+
+  const missingHeldSnapshot = buildMissingHeldOpportunityCore(
+    { key: 'coin:snapshot', type: 'coin', id: 'snapshot', amount: 1, x: 100, y: 0, at: 1000, lastSeenAt: 1000, until: 3000, reason: 'snapshot-coin-target' },
+    [],
+    { ...missingHeldOptions, visibleSourcesConfirmMissing: true }
+  );
+  results.push({
+    name: 'opportunity-choice-missing-held-keeps-snapshot-choice',
+    passed: missingHeldSnapshot.clearMissing === false
+      && missingHeldSnapshot.opportunity?.id === 'snapshot'
+      && missingHeldSnapshot.opportunity?.actionKind === 'coin'
   });
 
   // Test opportunity candidate construction
