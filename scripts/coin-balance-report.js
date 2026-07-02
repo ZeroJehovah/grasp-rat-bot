@@ -8,7 +8,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_API_URL = 'https://elysiver.h-e.top/api/log/self';
-const DEFAULT_OUT_DIR = path.join(ROOT, 'docs', 'coin-reports');
+const DEFAULT_REPORT_ROOT = path.join(ROOT, 'docs', 'reports');
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_DELAY_MS = 4000;
 const DEFAULT_TIMEOUT_MS = 20000;
@@ -73,7 +73,7 @@ Auth environment variables:
 Options:
   --month YYYY-MM          Generate a natural-month report.
   --day YYYY-MM-DD         Fetch and summarize one day instead.
-  --out <file>             Output Markdown path. Default: docs/coin-reports/YYYY-MM.md
+  --out <file>             Output Markdown path. Default: docs/reports/YYYY-MM/monthly-YYYY-MM.md
   --json                   Print JSON to stdout instead of Markdown.
   --page-size <n>          API page size. Default: ${DEFAULT_PAGE_SIZE}
   --delay-ms <ms>          Delay between API requests. Default: ${DEFAULT_DELAY_MS}
@@ -139,6 +139,11 @@ function reportDaysForMonth(month) {
 function nowBeijingDay() {
   const date = new Date(Date.now() + 8 * 60 * 60 * 1000);
   return date.toISOString().slice(0, 10);
+}
+
+function defaultMonthlyReportPath(month) {
+  assertMonth(month);
+  return path.join(DEFAULT_REPORT_ROOT, month, `monthly-${month}.md`);
 }
 
 class ApiClient {
@@ -614,7 +619,7 @@ async function run(options) {
     console.log(JSON.stringify({ month: options.month, totals: sumMonth(days), days }, null, 2));
     return;
   }
-  const outPath = options.out || path.join(DEFAULT_OUT_DIR, `${options.month}.md`);
+  const outPath = options.out || defaultMonthlyReportPath(options.month);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, report, 'utf8');
   console.log(JSON.stringify({ outPath, totals: sumMonth(days), requests: client.requestCount }, null, 2));
@@ -682,6 +687,7 @@ function runSelfTest() {
   assert(markdown.includes('| 00:00:02 | Alice | 拾取 | +12 |'));
   assert(markdown.includes('| 00:00:03 | Bob | 死亡 | -7 |'));
   assert(markdown.includes('死亡损失金币（总计）：7'));
+  assert.strictEqual(defaultMonthlyReportPath('2026-06'), path.join(ROOT, 'docs', 'reports', '2026-06', 'monthly-2026-06.md'));
   console.log('coin-balance-report self-test passed');
 }
 
