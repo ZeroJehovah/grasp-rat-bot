@@ -1130,6 +1130,21 @@
     }
   });
 
+  // src/browser/runtime/runtime-diagnostics.js
+  var require_runtime_diagnostics = __commonJS({
+    "src/browser/runtime/runtime-diagnostics.js"(exports, module) {
+      "use strict";
+      function recordRuntimeDiagnosticsCore(bot, values = {}) {
+        try {
+          if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== "object") bot.runtimeDiagnostics = {};
+          Object.assign(bot.runtimeDiagnostics, values);
+        } catch (_) {
+        }
+      }
+      module.exports = { recordRuntimeDiagnosticsCore };
+    }
+  });
+
   // src/strategy/attack-worth.js
   var require_attack_worth = __commonJS({
     "src/strategy/attack-worth.js"(exports, module) {
@@ -3962,7 +3977,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.421" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.422" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4107,12 +4122,9 @@
     function normalizeLoginSnapshotGateState(state2 = null) {
       return normalizeLoginSnapshotGateStateCore(state2, loginSnapshotSuccessRequired());
     }
+    const { recordRuntimeDiagnosticsCore } = require_runtime_diagnostics();
     function recordRuntimeDiagnostics(values = {}) {
-      try {
-        if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== "object") bot.runtimeDiagnostics = {};
-        Object.assign(bot.runtimeDiagnostics, values);
-      } catch (_) {
-      }
+      return recordRuntimeDiagnosticsCore(bot, values);
     }
     const bot = {
       running: true,

@@ -112,6 +112,7 @@ async function selfTest() {
   assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
   assert(source.includes('function restoreRuntimeStateCore'), 'restored runtime state helper was not bundled');
   assert(source.includes('function normalizeLoginSnapshotGateStateCore'), 'login snapshot gate helper was not bundled');
+  assert(source.includes('function recordRuntimeDiagnosticsCore'), 'runtime diagnostics helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -221,6 +222,8 @@ async function selfTest() {
   assert(status.loginSnapshotStreak === 3, 'spike did not round login snapshot gate streak');
   assert(status.loginSnapshotLastSampleAt === 900, 'spike did not preserve login snapshot last-sample fallback');
   assert(status.loginSnapshotResetReason === 'spike-reset', 'spike did not preserve login snapshot reset reason');
+  assert(status.runtimeDiagnosticsTickMs === 12.3, 'spike did not merge runtime diagnostics values');
+  assert(status.runtimeDiagnosticsSource === 'bundler-spike', 'spike did not preserve runtime diagnostics source');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

@@ -285,6 +285,7 @@ function main() {
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
   const restoredRuntimeStateRuntimeModule = readText('src/browser/runtime/restored-runtime-state.js');
   const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
+  const runtimeDiagnosticsRuntimeModule = readText('src/browser/runtime/runtime-diagnostics.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
@@ -414,6 +415,7 @@ function main() {
     restoredCoinFailuresRuntimeModule,
     restoredRuntimeStateRuntimeModule,
     loginSnapshotGateRuntimeModule,
+    runtimeDiagnosticsRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
@@ -564,6 +566,7 @@ function main() {
     assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
     assert(distSource.includes('var require_restored_runtime_state = __commonJS'), 'bundled production dist does not bundle the restored-runtime-state runtime module through esbuild');
     assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
+    assert(distSource.includes('var require_runtime_diagnostics = __commonJS'), 'bundled production dist does not bundle the runtime-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
@@ -724,6 +727,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['coin-progress-runtime', () => coinProgressRuntimeSource(config)]"), 'coin-progress-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-safety', () => coinSafetySource(config)]"), 'coin-safety fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['restored-runtime-state', () => restoredRuntimeStateSource(config)]"), 'restored-runtime-state fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['runtime-diagnostics', () => runtimeDiagnosticsSource(config)]"), 'runtime-diagnostics fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -1453,13 +1457,25 @@ function main() {
     assert(loginSnapshotGateRuntimeModule.includes('lastSampleAt: Number(state?.lastSampleAt || state?.lastOkAt || state?.lastErrorAt || 0) || 0'), 'login-snapshot-gate runtime core does not preserve last sample fallback');
     assert(loginSnapshotGateRuntimeModule.includes("resetReason: String(state?.resetReason || '')"), 'login-snapshot-gate runtime core does not preserve reset reason');
     assert(loginSnapshotGateRuntimeModule.includes('loginSnapshotSuccessRequiredCore,\n  normalizeLoginSnapshotGateStateCore'), 'login-snapshot-gate runtime core exports not found');
-    assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsSource() {'), 'runtime-diagnostics source factory not found');
-    assert(runtimeDiagnosticsSourceModule.includes('module.exports = { runtimeDiagnosticsSource }'), 'runtime-diagnostics source module export not found');
-    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('String.raw`'), 'runtime-diagnostics source factory does not return raw browser source');
-    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('function recordRuntimeDiagnostics'), 'runtime-diagnostics source factory does not include runtime diagnostics recorder');
-    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('bot.runtimeDiagnostics'), 'runtime-diagnostics source factory does not update bot runtime diagnostics');
-    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('Object.assign(bot.runtimeDiagnostics, values)'), 'runtime-diagnostics source factory does not merge diagnostic values');
-    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('catch (_) {}'), 'runtime-diagnostics source factory does not preserve error swallowing');
+    assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsInlineSource() {'), 'runtime-diagnostics inline source factory not found');
+    assert(runtimeDiagnosticsSourceModule.includes('function bundledRuntimeDiagnosticsSource() {'), 'runtime-diagnostics bundled source factory not found');
+    assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsSource(options = {})'), 'runtime-diagnostics source selector not found');
+    assert(runtimeDiagnosticsSourceModule.includes('runtimeDiagnosticsInlineSource,\n  bundledRuntimeDiagnosticsSource,\n  runtimeDiagnosticsSource'), 'runtime-diagnostics source module exports not found');
+    const runtimeDiagnosticsInlineBody = functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsInlineSource');
+    assert(runtimeDiagnosticsInlineBody.includes('String.raw`'), 'runtime-diagnostics inline source factory does not return raw browser source');
+    assert(runtimeDiagnosticsInlineBody.includes('function recordRuntimeDiagnostics'), 'runtime-diagnostics inline source factory does not include runtime diagnostics recorder');
+    assert(runtimeDiagnosticsInlineBody.includes('bot.runtimeDiagnostics'), 'runtime-diagnostics inline source factory does not update bot runtime diagnostics');
+    assert(runtimeDiagnosticsInlineBody.includes('Object.assign(bot.runtimeDiagnostics, values)'), 'runtime-diagnostics inline source factory does not merge diagnostic values');
+    assert(runtimeDiagnosticsInlineBody.includes('catch (_) {}'), 'runtime-diagnostics inline source factory does not preserve error swallowing');
+    const runtimeDiagnosticsBundledBody = functionBody(runtimeDiagnosticsSourceModule, 'bundledRuntimeDiagnosticsSource');
+    assert(runtimeDiagnosticsBundledBody.includes("require('./src/browser/runtime/runtime-diagnostics')"), 'runtime-diagnostics bundled source does not hand recorder to the bundler');
+    assert(runtimeDiagnosticsBundledBody.includes('recordRuntimeDiagnosticsCore(bot, values)'), 'runtime-diagnostics bundled source does not bind bot diagnostics state');
+    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('options.bundledRuntime'), 'runtime-diagnostics source selector does not switch on bundled runtime mode');
+    assert(runtimeDiagnosticsRuntimeModule.includes('function recordRuntimeDiagnosticsCore(bot, values = {})'), 'runtime-diagnostics runtime core not found');
+    assert(runtimeDiagnosticsRuntimeModule.includes("if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== 'object') bot.runtimeDiagnostics = {};"), 'runtime-diagnostics runtime core does not initialize diagnostics object');
+    assert(runtimeDiagnosticsRuntimeModule.includes('Object.assign(bot.runtimeDiagnostics, values);'), 'runtime-diagnostics runtime core does not merge diagnostic values');
+    assert(runtimeDiagnosticsRuntimeModule.includes('catch (_) {}'), 'runtime-diagnostics runtime core does not preserve error swallowing');
+    assert(runtimeDiagnosticsRuntimeModule.includes('module.exports = { recordRuntimeDiagnosticsCore }'), 'runtime-diagnostics runtime core export not found');
     assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
     assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');

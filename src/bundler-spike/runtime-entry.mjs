@@ -13,6 +13,7 @@ import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import restoredRuntimeState from '../browser/runtime/restored-runtime-state.js';
 import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
+import runtimeDiagnostics from '../browser/runtime/runtime-diagnostics.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
@@ -491,6 +492,12 @@ function helperStatus(config = {}) {
     lastError: 404,
     resetReason: 'spike-reset'
   }, loginSnapshotRequired);
+  const runtimeDiagnosticsBot = { runtimeDiagnostics: null };
+  runtimeDiagnostics.recordRuntimeDiagnosticsCore(runtimeDiagnosticsBot, {
+    lastTickDurationMs: 12.3,
+    lastTickSource: 'bundler-spike'
+  });
+  runtimeDiagnostics.recordRuntimeDiagnosticsCore(null, { ignored: true });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -571,6 +578,8 @@ function helperStatus(config = {}) {
     loginSnapshotStreak: loginSnapshotGateState.streak,
     loginSnapshotLastSampleAt: loginSnapshotGateState.lastSampleAt,
     loginSnapshotResetReason: loginSnapshotGateState.resetReason,
+    runtimeDiagnosticsTickMs: runtimeDiagnosticsBot.runtimeDiagnostics?.lastTickDurationMs,
+    runtimeDiagnosticsSource: runtimeDiagnosticsBot.runtimeDiagnostics?.lastTickSource,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
