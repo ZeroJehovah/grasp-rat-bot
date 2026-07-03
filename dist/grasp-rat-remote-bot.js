@@ -1616,6 +1616,45 @@
         const delayMs = Math.max(hpDelayMs, repeatMinMs);
         return { delayMs, hpDelayMs, minMs, maxMs, baseMaxMs, repeatMinMs, hp: info };
       }
+      function isExitLoginSuppressReasonCore(reason) {
+        return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ""));
+      }
+      function unsafeExitReloginMinDelayMsCore(cfg) {
+        return Math.max(0, Number(cfg.unsafeExitReloginMinDelayMs ?? 0) || 0);
+      }
+      function pendingExitSuppressReasonCore(storageReason) {
+        const text = String(storageReason || "").toLowerCase();
+        if (text.includes("offline")) return "pending unsafe disconnect exit";
+        if (text.includes("enemy") || text.includes("combat") || text.includes("pursuit") || text.includes("injury")) {
+          return "pending unsafe hostile exit";
+        }
+        return "pending unsafe exit";
+      }
+      function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs) {
+        if (!staminaBudgetExit) return null;
+        const delayMs = staminaBudgetReloginDelayMs();
+        return {
+          until: t + delayMs,
+          fixedDelayMs: delayMs,
+          fixed: true,
+          reason: "stamina budget",
+          staminaBudgetExit
+        };
+      }
+      function staminaExitHoldUntilForDetailCore(detail, t, helpers) {
+        const holds = [
+          helpers.staminaBudgetExitHoldUntil(detail?.offlineSafety?.staminaBudgetExit, t),
+          helpers.staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted, t)
+        ].filter(Boolean);
+        if (!holds.length) return null;
+        return holds.sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || null;
+      }
+      function offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety) {
+        if (!offlineSafety) return false;
+        if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage || offlineSafety.combatTickGap) return true;
+        const text = String(reason || "").toLowerCase();
+        return text.includes("reconnect churn") || text.includes("server position") || text.includes("stamina") || text.includes("missing self") || text.includes("sampling outage") || text.includes("combat tick gap");
+      }
       module.exports = {
         leaveWaitDisplayCore,
         finalizeLeaveDisplayReasonCore,
@@ -1631,7 +1670,13 @@
         injuryLeaveSummaryCore,
         offlineLeaveSummaryCore,
         currentOfflineDisplayReasonCore,
-        reloginDelayForHpCore
+        reloginDelayForHpCore,
+        isExitLoginSuppressReasonCore,
+        unsafeExitReloginMinDelayMsCore,
+        pendingExitSuppressReasonCore,
+        staminaBudgetExitHoldUntilCore,
+        staminaExitHoldUntilForDetailCore,
+        offlineExitRequiresUnsafeReloginDelayCore
       };
     }
   });
@@ -4238,7 +4283,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.426" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.427" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -9838,8 +9883,16 @@
     function reloginDelayForHp(selfLike, detail) {
       return reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp });
     }
+    const {
+      isExitLoginSuppressReasonCore,
+      unsafeExitReloginMinDelayMsCore,
+      pendingExitSuppressReasonCore,
+      staminaBudgetExitHoldUntilCore,
+      staminaExitHoldUntilForDetailCore,
+      offlineExitRequiresUnsafeReloginDelayCore
+    } = require_exit_relogin();
     function isExitLoginSuppressReason(reason) {
-      return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ""));
+      return isExitLoginSuppressReasonCore(reason);
     }
     function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
       let existingUntil = Number(options.existingUntil || 0);
@@ -9968,15 +10021,10 @@
       return reloginUntil;
     }
     function unsafeExitReloginMinDelayMs() {
-      return Math.max(0, Number(cfg.unsafeExitReloginMinDelayMs ?? 0) || 0);
+      return unsafeExitReloginMinDelayMsCore(cfg);
     }
     function pendingExitSuppressReason(storageReason) {
-      const text = String(storageReason || "").toLowerCase();
-      if (text.includes("offline")) return "pending unsafe disconnect exit";
-      if (text.includes("enemy") || text.includes("combat") || text.includes("pursuit") || text.includes("injury")) {
-        return "pending unsafe hostile exit";
-      }
-      return "pending unsafe exit";
+      return pendingExitSuppressReasonCore(storageReason);
     }
     function startExitAudit(detail, meta = {}) {
       if (!detail || typeof detail !== "object") return null;
@@ -10017,29 +10065,16 @@
       return setExitReloginSuppress("enemy leave", reason, detail, selfLike, options);
     }
     function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
-      if (!staminaBudgetExit) return null;
-      const delayMs = staminaBudgetReloginDelayMs();
-      return {
-        until: t + delayMs,
-        fixedDelayMs: delayMs,
-        fixed: true,
-        reason: "stamina budget",
-        staminaBudgetExit
-      };
+      return staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs);
     }
     function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
-      const holds = [
-        staminaBudgetExitHoldUntil(detail?.offlineSafety?.staminaBudgetExit, t),
-        staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted, t)
-      ].filter(Boolean);
-      if (!holds.length) return null;
-      return holds.sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || null;
+      return staminaExitHoldUntilForDetailCore(detail, t, {
+        staminaBudgetExitHoldUntil,
+        staminaResetHoldUntil
+      });
     }
     function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
-      if (!offlineSafety) return false;
-      if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage || offlineSafety.combatTickGap) return true;
-      const text = String(reason || "").toLowerCase();
-      return text.includes("reconnect churn") || text.includes("server position") || text.includes("stamina") || text.includes("missing self") || text.includes("sampling outage") || text.includes("combat tick gap");
+      return offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety);
     }
     function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
       const staminaHold = staminaExitHoldUntilForDetail(detail);

@@ -117,6 +117,7 @@ async function selfTest() {
   assert(source.includes('function normalizeEnemyActorCore'), 'exit-relogin actor helper was not bundled');
   assert(source.includes('function readEnemyLeaveStreakCore'), 'exit-relogin streak helper was not bundled');
   assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
+  assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -249,6 +250,12 @@ async function selfTest() {
   assert(String(status.exitReloginOfflineDisplay || '').includes('等待3秒'), 'spike did not preserve exit relogin offline display reason');
   assert(status.exitReloginHpDelayMs === 6000, 'spike did not honor exit relogin repeat minimum delay');
   assert(status.exitReloginHpDelayRepeatMinMs === 6000, 'spike did not preserve exit relogin repeat minimum metadata');
+  assert(status.exitReloginSuppressMatch === true, 'spike did not execute exit relogin suppress reason matcher');
+  assert(status.exitReloginUnsafeMin === 1234, 'spike did not execute exit relogin unsafe minimum delay helper');
+  assert(status.exitReloginPendingReason === 'pending unsafe hostile exit', 'spike did not execute exit relogin pending suppress reason helper');
+  assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
+  assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
+  assert(status.exitReloginOfflineUnsafe === true, 'spike did not execute exit relogin unsafe offline delay predicate');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

@@ -1393,6 +1393,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 152. Bundler-owned `exit-relogin` actor/repeat-delay helper binding for remote builds: integrated in `bootstrap-0.4.424`
 153. Bundler-owned `exit-relogin` enemy leave streak helper binding for remote builds: integrated in `bootstrap-0.4.425`
 154. Bundler-owned `exit-relogin` summary helper binding for remote builds: integrated in `bootstrap-0.4.426`
+155. Bundler-owned `exit-relogin` hold/suppress base helper binding for remote builds: integrated in `bootstrap-0.4.427`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
