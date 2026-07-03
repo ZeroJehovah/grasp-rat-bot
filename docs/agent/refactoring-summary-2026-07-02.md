@@ -1379,6 +1379,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 138. Bundler-owned `opportunity-pick` helper binding for remote builds: integrated in `bootstrap-0.4.410`
 139. Bundler-owned `patrol` direction helper binding for remote builds: integrated in `bootstrap-0.4.411`
 140. Bundler-owned `attack-worth` helper binding for remote builds: integrated in `bootstrap-0.4.412`
+141. Bundler-owned `exit-motion` helper binding for remote builds: integrated in `bootstrap-0.4.413`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

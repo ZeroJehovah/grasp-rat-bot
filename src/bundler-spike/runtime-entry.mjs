@@ -10,6 +10,7 @@ import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
 import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
 import attackWorth from '../browser/runtime/attack-worth.js';
+import exitMotion from '../browser/runtime/exit-motion.js';
 import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
 import coinMotion from '../browser/runtime/coin-motion.js';
 import coinTarget from '../browser/runtime/coin-target.js';
@@ -58,6 +59,18 @@ function helperStatus(config = {}) {
     isAfkProfitTarget: () => false,
     attackMinDrop: 3,
     attackMinRewardRatio: 2
+  });
+  const exitMotionLock = exitMotion.exitMotionStopLockRemainingMsCore(1000, 8000, 2500);
+  const exitMotionDecision = exitMotion.postExitDecisionWithoutTargetCore({
+    kind: 'combat',
+    reason: 'previous',
+    dx: 1,
+    dy: -1,
+    target: { id: 'enemy' },
+    shoot: true
+  }, '', {
+    lastExitMotionStopReason: 'last-stop',
+    exitMotionLockRemainingMs: exitMotionLock
   });
   const coinDiagnosticResult = coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {
     realtimeNearCoins: [{ drop_id: 'coin-spike', amount: 3, distance: 100, x: 100, y: 0, native: true }],
@@ -299,6 +312,9 @@ function helperStatus(config = {}) {
     finalActionHeld: arbitrationResult.held,
     actionSwitch: switchResult.event,
     attackWorthResult,
+    exitMotionLock,
+    exitMotionDecisionReason: exitMotionDecision.reason,
+    exitMotionDecisionTargetless: exitMotionDecision.target === null && exitMotionDecision.shoot === false,
     coinDiagnosticsIgnored: arrayCountRuntime.arrayCount(coinDiagnosticResult.ignoredNearCoins),
     coinDiagnosticsSnapshotOnly: arrayCountRuntime.arrayCount(coinDiagnosticResult.snapshotOnlyNearCoins),
     coinMotionDirection: coinMotionResult.direction,

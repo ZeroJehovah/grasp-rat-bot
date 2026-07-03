@@ -282,6 +282,7 @@ function main() {
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
   const actionSwitchDiagnosticsRuntimeModule = readText('src/browser/runtime/action-switch-diagnostics.js');
   const attackWorthRuntimeModule = readText('src/browser/runtime/attack-worth.js');
+  const exitMotionRuntimeModule = readText('src/browser/runtime/exit-motion.js');
   const coinDiagnosticsRuntimeModule = readText('src/browser/runtime/coin-diagnostics.js');
   const coinMotionRuntimeModule = readText('src/browser/runtime/coin-motion.js');
   const coinTargetRuntimeModule = readText('src/browser/runtime/coin-target.js');
@@ -299,6 +300,7 @@ function main() {
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const strategyAttackWorthSource = readText('src/strategy/attack-worth.js');
+  const strategyExitMotionSource = readText('src/strategy/exit-motion.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
   const strategyCoinTargetSource = readText('src/strategy/coin-target.js');
@@ -400,6 +402,8 @@ function main() {
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
     actionSwitchDiagnosticsRuntimeModule,
+    attackWorthRuntimeModule,
+    exitMotionRuntimeModule,
     coinDiagnosticsRuntimeModule,
     coinMotionRuntimeModule,
     coinTargetRuntimeModule,
@@ -540,6 +544,7 @@ function main() {
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_attack_worth = __commonJS'), 'bundled production dist does not bundle the attack-worth runtime module through esbuild');
+    assert(distSource.includes('var require_exit_motion = __commonJS'), 'bundled production dist does not bundle the exit-motion runtime module through esbuild');
     assert(distSource.includes('var require_coin_motion = __commonJS'), 'bundled production dist does not bundle the coin-motion runtime module through esbuild');
     assert(distSource.includes('var require_coin_target = __commonJS'), 'bundled production dist does not bundle the coin-target runtime module through esbuild');
     assert(distSource.includes('var require_coin_progress = __commonJS'), 'bundled production dist does not bundle the coin-progress runtime module through esbuild');
@@ -625,6 +630,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['exit-motion', () => exitMotionSource(config)]"), 'exit-motion source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-stamina', () => opportunityStaminaSource(config)]"), 'opportunity-stamina source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
@@ -1234,13 +1240,21 @@ function main() {
     assert(attackWorthInlineBody.includes('isAfkProfitTarget(target)'), 'attack-worth inline source factory does not preserve AFK profit target handling');
     assert(attackWorthInlineBody.includes('cfg.attackMinRewardRatio'), 'attack-worth inline source factory does not preserve reward ratio guard');
     assert(functionBody(attackWorthSourceModule, 'bundledAttackWorthSource').includes("require('./src/browser/runtime/attack-worth')"), 'attack-worth bundled source does not hand attack-worth core to the bundler');
-    assert(exitMotionSourceModule.includes('function exitMotionSource() {'), 'exit-motion source factory not found');
-    assert(exitMotionSourceModule.includes('module.exports = { exitMotionSource }'), 'exit-motion source module export not found');
-    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('String.raw`'), 'exit-motion source factory does not return raw browser source');
-    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function exitMotionStopLockRemainingMs'), 'exit-motion source factory does not include motion stop lock helper');
-    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function postExitDecisionWithoutTarget'), 'exit-motion source factory does not include post-exit decision helper');
-    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function clearPostExitTargetState'), 'exit-motion source factory does not include post-exit target cleanup helper');
-    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('removeTargetOverlay()'), 'exit-motion source factory does not clear target overlay');
+    assert(exitMotionSourceModule.includes('function exitMotionInlineSource() {'), 'exit-motion inline source factory not found');
+    assert(exitMotionSourceModule.includes('function bundledExitMotionSource() {'), 'exit-motion bundled source factory not found');
+    assert(exitMotionSourceModule.includes('function exitMotionSource(options = {}) {'), 'exit-motion source selector not found');
+    assert(exitMotionSourceModule.includes('exitMotionInlineSource') && exitMotionSourceModule.includes('bundledExitMotionSource') && exitMotionSourceModule.includes('exitMotionSource'), 'exit-motion source module exports are incomplete');
+    const exitMotionInlineBody = functionBody(exitMotionSourceModule, 'exitMotionInlineSource');
+    assert(exitMotionInlineBody.includes('String.raw`'), 'exit-motion inline source factory does not return raw browser source');
+    assert(exitMotionInlineBody.includes('function exitMotionStopLockRemainingMs'), 'exit-motion inline source factory does not include motion stop lock helper');
+    assert(exitMotionInlineBody.includes('function postExitDecisionWithoutTarget'), 'exit-motion inline source factory does not include post-exit decision helper');
+    assert(exitMotionInlineBody.includes('function clearPostExitTargetState'), 'exit-motion inline source factory does not include post-exit target cleanup helper');
+    assert(exitMotionInlineBody.includes('removeTargetOverlay()'), 'exit-motion inline source factory does not clear target overlay');
+    const exitMotionBundledBody = functionBody(exitMotionSourceModule, 'bundledExitMotionSource');
+    assert(exitMotionBundledBody.includes("require('./src/browser/runtime/exit-motion')"), 'exit-motion bundled source does not hand exit-motion core to the bundler');
+    assert(exitMotionBundledBody.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'exit-motion bundled source does not call lock core with runtime state/config');
+    assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'exit-motion bundled source does not call decision core');
+    assert(exitMotionBundledBody.includes('removeTargetOverlay()'), 'exit-motion bundled source does not retain target overlay cleanup');
     assert(arrayCountSourceModule.includes('function arrayCountSource(options = {}) {'), 'array-count source factory not found');
     assert(arrayCountSourceModule.includes('function bundledArrayCountSource()'), 'bundled array-count source factory not found');
     assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
@@ -3251,6 +3265,29 @@ function main() {
     assert(!generatedRuntimeSource.includes('function attackWorthTakingCore'), 'generated remote runtime still inlines attack-worth core before bundling');
     assert(distSource.includes('function attackWorthTakingCore'), 'bundled dist does not contain attack-worth core');
     assert(distSource.includes('attackWorthTakingCore(self, target'), 'bundled dist attack-worth wrapper does not call attack-worth core');
+  });
+
+  check('exit motion uses strategy module core', () => {
+    assert(strategyExitMotionSource.includes('function exitMotionStopLockRemainingMsCore'), 'strategy exit-motion lock core not found');
+    assert(strategyExitMotionSource.includes('function postExitDecisionWithoutTargetCore'), 'strategy exit-motion decision core not found');
+    assert(strategyExitMotionSource.includes("reason || previous.reason || 'exit-motion-stopped'"), 'strategy exit-motion core does not preserve reason fallback');
+    assert(strategyExitMotionSource.includes('exitMotionStopReason: reason || options.lastExitMotionStopReason'), 'strategy exit-motion core does not preserve stop reason fallback');
+    assert(exitMotionSourceModule.includes("require('./src/browser/runtime/exit-motion')"), 'exit-motion bundled source does not require the browser runtime helper module');
+    assert(!exitMotionSourceModule.includes("require('../strategy/exit-motion')"), 'exit-motion source still imports exit-motion directly from strategy');
+    assert(exitMotionRuntimeModule.includes("require('../../strategy/exit-motion')"), 'exit-motion runtime adapter does not reuse strategy module core');
+    assert(exitMotionRuntimeModule.includes('exitMotionStopLockRemainingMsCore') && exitMotionRuntimeModule.includes('postExitDecisionWithoutTargetCore'), 'exit-motion runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/exit-motion.js'"), 'bundler spike does not import exit-motion runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('exitMotion.exitMotionStopLockRemainingMsCore('), 'bundler spike does not execute exit-motion lock helper');
+    assert(bundlerSpikeEntrySource.includes('exitMotion.postExitDecisionWithoutTargetCore('), 'bundler spike does not execute exit-motion decision helper');
+    assert(bundlerSpikeBuildSource.includes('status.exitMotionLock === 6500'), 'bundler spike self-test does not assert exit-motion lock execution');
+    assert(bundlerSpikeBuildSource.includes('status.exitMotionDecisionTargetless === true'), 'bundler spike self-test does not assert exit-motion decision execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/exit-motion')"), 'generated remote runtime does not hand exit-motion helpers to the bundler');
+    assert(!generatedRuntimeSource.includes('function exitMotionStopLockRemainingMsCore'), 'generated remote runtime still inlines exit-motion lock core before bundling');
+    assert(!generatedRuntimeSource.includes('function postExitDecisionWithoutTargetCore'), 'generated remote runtime still inlines exit-motion decision core before bundling');
+    assert(distSource.includes('function exitMotionStopLockRemainingMsCore'), 'bundled dist does not contain exit-motion lock core');
+    assert(distSource.includes('function postExitDecisionWithoutTargetCore'), 'bundled dist does not contain exit-motion decision core');
+    assert(distSource.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'bundled dist exit-motion lock wrapper does not call strategy core');
+    assert(distSource.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'bundled dist exit-motion decision wrapper does not call strategy core');
   });
 
   check('opportunity clear uses strategy module core', () => {

@@ -143,7 +143,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-attack-worth',
     `
 `],
-    ['exit-motion', exitMotionSource],
+    ['exit-motion', () => exitMotionSource(config)],
     ['separator-after-exit-motion',
     `
 

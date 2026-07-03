@@ -108,6 +108,8 @@ async function selfTest() {
   assert(source.includes('function applyFinalActionArbitrationCore'), 'action-arbitration helper was not bundled');
   assert(source.includes('function recordActionSwitchDiagnosticsCore'), 'action-switch diagnostics helper was not bundled');
   assert(source.includes('function attackWorthTakingCore'), 'attack-worth helper was not bundled');
+  assert(source.includes('function exitMotionStopLockRemainingMsCore'), 'exit-motion lock helper was not bundled');
+  assert(source.includes('function postExitDecisionWithoutTargetCore'), 'exit-motion decision helper was not bundled');
   assert(source.includes('function buildCoinDiagnostics'), 'coin diagnostics helper was not bundled');
   assert(source.includes('function coinDirectionToCore'), 'coin motion helper was not bundled');
   assert(source.includes('function coinTargetKeyCore'), 'coin target helper was not bundled');
@@ -138,6 +140,9 @@ async function selfTest() {
   assert(status.finalActionHeld === true, 'spike did not execute final action arbitration helper');
   assert(status.actionSwitch?.type === 'target-switch', 'spike did not execute action-switch diagnostics helper');
   assert(status.attackWorthResult === true, 'spike did not execute attack-worth helper');
+  assert(status.exitMotionLock === 6500, 'spike did not execute exit-motion lock helper');
+  assert(status.exitMotionDecisionReason === 'previous', 'spike did not preserve exit-motion decision reason');
+  assert(status.exitMotionDecisionTargetless === true, 'spike did not execute exit-motion targetless decision helper');
   assert(status.coinDiagnosticsIgnored === 1, 'spike did not execute ignored coin diagnostics helper');
   assert(status.coinDiagnosticsSnapshotOnly === 1, 'spike did not execute snapshot-only coin diagnostics helper');
   assert(status.coinMotionDirection?.axisApproach === 'x', 'spike did not execute coin motion direction helper');

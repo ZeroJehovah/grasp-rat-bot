@@ -10,6 +10,10 @@ const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = requi
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
+const {
+  exitMotionStopLockRemainingMsCore,
+  postExitDecisionWithoutTargetCore
+} = require('./exit-motion');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const {
   coinAxisLockShouldHoldCore,
@@ -119,6 +123,56 @@ function runStrategyModuleSelfTests() {
     name: 'attack-worth-core-uses-reward-ratio-for-active-target',
     passed: attackWorthTakingCore({ drop: 4 }, { drop: 5 }, attackWorthOptions) === false
       && attackWorthTakingCore({ drop: 4 }, { drop: 6 }, attackWorthOptions) === true
+  });
+
+  results.push({
+    name: 'exit-motion-core-computes-stop-lock',
+    passed: exitMotionStopLockRemainingMsCore(1000, 8000, 2500) === 6500
+      && exitMotionStopLockRemainingMsCore(1000, -1, 2500) === 0
+      && exitMotionStopLockRemainingMsCore(0, 8000, 2500) === 0
+  });
+  const postExitPreviousDecision = postExitDecisionWithoutTargetCore({
+    kind: 'combat',
+    reason: 'previous-reason',
+    dx: 1,
+    dy: -1,
+    target: { id: 'enemy' },
+    aimTarget: { id: 'enemy' },
+    opportunisticShot: { id: 'enemy' },
+    combat: true,
+    shoot: true,
+    forceShoot: true,
+    combatCover: { id: 'cover' }
+  }, '', {
+    lastExitMotionStopReason: 'last-stop',
+    exitMotionLockRemainingMs: () => 123
+  });
+  results.push({
+    name: 'exit-motion-core-sanitizes-targeted-decision',
+    passed: postExitPreviousDecision.kind === 'wait'
+      && postExitPreviousDecision.reason === 'previous-reason'
+      && postExitPreviousDecision.dx === 0
+      && postExitPreviousDecision.dy === 0
+      && postExitPreviousDecision.target === null
+      && postExitPreviousDecision.aimTarget === null
+      && postExitPreviousDecision.opportunisticShot === null
+      && postExitPreviousDecision.combat === false
+      && postExitPreviousDecision.shoot === false
+      && postExitPreviousDecision.forceShoot === false
+      && postExitPreviousDecision.combatCover === null
+      && postExitPreviousDecision.exitMotionStopped === true
+      && postExitPreviousDecision.exitMotionStopReason === 'last-stop'
+      && postExitPreviousDecision.exitMotionLockRemainingMs === 123
+  });
+  const postExitExplicitReason = postExitDecisionWithoutTargetCore(null, 'exit-confirmed', {
+    lastExitMotionStopReason: 'last-stop',
+    exitMotionLockRemainingMs: 0
+  });
+  results.push({
+    name: 'exit-motion-core-explicit-reason-overrides-fallbacks',
+    passed: postExitExplicitReason.reason === 'exit-confirmed'
+      && postExitExplicitReason.exitMotionStopReason === 'exit-confirmed'
+      && postExitExplicitReason.exitMotionLockRemainingMs === 0
   });
 
   // Test action focus building
