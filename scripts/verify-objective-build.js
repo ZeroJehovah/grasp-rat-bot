@@ -300,6 +300,7 @@ function main() {
   const combatLeaveCoverSourceModule = readText('src/browser/combat-leave-cover-source.js');
   const combatActionSourceModule = readText('src/browser/combat-action-source.js');
   const opportunityStaminaSourceModule = readText('src/browser/opportunity-stamina-source.js');
+  const opportunitySnapshotSourceModule = readText('src/browser/opportunity-snapshot-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -346,6 +347,7 @@ function main() {
     combatLeaveCoverSourceModule,
     combatActionSourceModule,
     opportunityStaminaSourceModule,
+    opportunitySnapshotSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -453,6 +455,7 @@ function main() {
     assert(botSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(botSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
     assert(botSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
+    assert(botSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
@@ -505,6 +508,7 @@ function main() {
     assert(botSourceModule.includes('${combatLeaveCoverSource()}'), 'combat-leave-cover module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatActionSource()}'), 'combat-action module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityStaminaSource()}'), 'opportunity-stamina module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunitySnapshotSource()}'), 'opportunity-snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -701,6 +705,16 @@ function main() {
     assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function dailyStaminaFinalCoinAction'), 'opportunity-stamina source factory does not include daily final coin action');
     assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function staminaBudgetCoinLeaveAction'), 'opportunity-stamina source factory does not include stamina budget leave action');
     assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function mergeCoinRouteDisplay'), 'opportunity-stamina source factory does not include coin route display wrapper');
+    assert(opportunitySnapshotSourceModule.includes('function opportunitySnapshotSource() {'), 'opportunity-snapshot source factory not found');
+    assert(opportunitySnapshotSourceModule.includes('module.exports = { opportunitySnapshotSource }'), 'opportunity-snapshot source module export not found');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('String.raw`'), 'opportunity-snapshot source factory does not return raw browser source');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function snapshotCoinAgeMs'), 'opportunity-snapshot source factory does not include snapshot coin age helper');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function pickSnapshotCoinDestination'), 'opportunity-snapshot source factory does not include snapshot coin picker');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('snapshotCoinWorthLongTravelCore'), 'opportunity-snapshot source factory does not include snapshot worth wrapper');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreCoinOpportunity'), 'opportunity-snapshot source factory does not include coin opportunity scorer');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function updateOpportunityAfkStaminaObservations'), 'opportunity-snapshot source factory does not include AFK stamina observation updater');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function afkOpportunityBlockedByStaminaCooldown'), 'opportunity-snapshot source factory does not include AFK cooldown gate');
+    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreEnemyOpportunity'), 'opportunity-snapshot source factory does not include enemy opportunity scorer');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
