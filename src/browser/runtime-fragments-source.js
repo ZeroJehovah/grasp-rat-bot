@@ -117,7 +117,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-login-snapshot-gate',
     `
 `],
-    ['runtime-diagnostics', runtimeDiagnosticsSource],
+    ['runtime-diagnostics', () => runtimeDiagnosticsSource(config)],
     ['separator-after-runtime-diagnostics',
     `
 
