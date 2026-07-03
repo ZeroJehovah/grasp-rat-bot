@@ -287,6 +287,7 @@ function main() {
   const opportunityChoiceRuntimeModule = readText('src/browser/runtime/opportunity-choice.js');
   const opportunityCandidatesRuntimeModule = readText('src/browser/runtime/opportunity-candidates.js');
   const postAttackDropRuntimeModule = readText('src/browser/runtime/post-attack-drop.js');
+  const staminaBudgetRuntimeModule = readText('src/browser/runtime/stamina-budget.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -395,6 +396,7 @@ function main() {
     opportunityChoiceRuntimeModule,
     opportunityCandidatesRuntimeModule,
     postAttackDropRuntimeModule,
+    staminaBudgetRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1280,6 +1282,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import coinMotion from '../browser/runtime/coin-motion.js'"), 'bundler spike does not import coin motion through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import coinTarget from '../browser/runtime/coin-target.js'"), 'bundler spike does not import coin target through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import postAttackDrop from '../browser/runtime/post-attack-drop.js'"), 'bundler spike does not import post-attack drop through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import staminaBudget from '../browser/runtime/stamina-budget.js'"), 'bundler spike does not import stamina budget through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
@@ -1292,6 +1295,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('coinMotion.coinDirectionToCore({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin motion helper module');
     assert(bundlerSpikeEntrySource.includes("coinTarget.coinTargetKeyCore({ drop_id: 'target-spike'"), 'bundler spike does not execute the coin target helper module');
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute the post-attack drop helper module');
+    assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute the stamina budget helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -1320,6 +1324,7 @@ function main() {
     assert(bundlerSpikeBuildSource.includes("assert(source.includes('function arrayCount')"), 'bundler spike self-test does not verify browser runtime helper bundling');
     assert(bundlerSpikeBuildSource.includes('status.nameCount === 2'), 'bundler spike self-test does not verify browser runtime helper execution');
     assert(bundlerSpikeBuildSource.includes("status.postAttackDropSelectedId === 'post-attack-coin'"), 'bundler spike self-test does not assert post-attack drop execution');
+    assert(bundlerSpikeBuildSource.includes('status.staminaBudgetExitShortageMs === 50'), 'bundler spike self-test does not assert stamina budget execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');
     assert(bundlerSpikeBuildSource.includes('context => context.window'), 'bundler spike self-test does not read installed window global');
     assert(bundlerSpikeBuildSource.includes("storageProbe?.scope === 'globalThis'"), 'bundler spike self-test does not cover globalThis localStorage');
@@ -3049,7 +3054,13 @@ function main() {
     assert(strategyStaminaBudgetSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'strategy blocked stamina summary core not found');
     assert(strategyStaminaBudgetSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'strategy nearest coin stamina exit core not found');
     assert(strategyStaminaBudgetSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'strategy daily final coin picker core not found');
-    assert(opportunityStaminaSourceModule.includes("require('../strategy/stamina-budget')"), 'opportunity-stamina source does not import stamina budget strategy module');
+    assert(opportunityStaminaSourceModule.includes("require('./runtime/stamina-budget')"), 'opportunity-stamina source does not import stamina budget through browser runtime adapter');
+    assert(!opportunityStaminaSourceModule.includes("require('../strategy/stamina-budget')"), 'opportunity-stamina source still imports stamina budget directly from strategy');
+    assert(staminaBudgetRuntimeModule.includes("require('../../strategy/stamina-budget')"), 'stamina-budget runtime adapter does not reuse strategy module core');
+    assert(staminaBudgetRuntimeModule.includes('dailyStaminaBudgetIsLimitingCore') && staminaBudgetRuntimeModule.includes('summarizeNearestCoinStaminaBudgetExitCore') && staminaBudgetRuntimeModule.includes('pickNearestDailyStaminaFinalCoinCore'), 'stamina-budget runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/stamina-budget.js'"), 'bundler spike does not import stamina-budget runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute stamina budget helper');
+    assert(bundlerSpikeBuildSource.includes('status.staminaBudgetExitShortageMs === 50'), 'bundler spike self-test does not assert stamina budget execution');
     assert(sourceRuntimeText.includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'source modules do not inject daily stamina budget core');
     assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore.toString()'), 'source bot does not inject blocked stamina summary core');
     assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore.toString()'), 'source bot does not inject nearest stamina exit core');
