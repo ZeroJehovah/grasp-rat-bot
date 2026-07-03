@@ -303,6 +303,7 @@ function main() {
   const opportunitySnapshotSourceModule = readText('src/browser/opportunity-snapshot-source.js');
   const postAttackSourceModule = readText('src/browser/post-attack-source.js');
   const opportunityActionsSourceModule = readText('src/browser/opportunity-actions-source.js');
+  const opportunityRouteSourceModule = readText('src/browser/opportunity-route-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -352,6 +353,7 @@ function main() {
     opportunitySnapshotSourceModule,
     postAttackSourceModule,
     opportunityActionsSourceModule,
+    opportunityRouteSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -515,6 +517,7 @@ function main() {
     assert(botSourceModule.includes('${opportunitySnapshotSource()}'), 'opportunity-snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${postAttackSource()}'), 'post-attack module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityRouteSource()}'), 'opportunity-route module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -735,6 +738,13 @@ function main() {
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function enemyOpportunityCandidates'), 'opportunity-actions source factory does not include enemy candidate helper');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
+    assert(opportunityRouteSourceModule.includes('function opportunityRouteSource() {'), 'opportunity-route source factory not found');
+    assert(opportunityRouteSourceModule.includes('module.exports = { opportunityRouteSource }'), 'opportunity-route source module export not found');
+    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('String.raw`'), 'opportunity-route source factory does not return raw browser source');
+    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('pickCoinRouteOpportunityCore.toString()'), 'opportunity-route source factory does not inline coin route picker core');
+    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('coinRouteActionMetaCore.toString()'), 'opportunity-route source factory does not inline route action metadata core');
+    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('function coinRouteCoreOptions'), 'opportunity-route source factory does not include core options wrapper');
+    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('function currentHeldCoinRouteChoice'), 'opportunity-route source factory does not include held route helper');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
@@ -2548,7 +2558,7 @@ function main() {
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsCloserFirstCoinCore'), 'strategy coin route closer-first core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsHeldSingleCoinCore'), 'strategy coin route held single-coin core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteActionMetaCore'), 'strategy coin route action metadata core not found');
-    assert(botSourceModule.includes("require('../strategy/coin-route')"), 'source bot does not import coin route strategy module');
+    assert(opportunityRouteSourceModule.includes("require('../strategy/coin-route')"), 'opportunity-route source does not import coin route strategy module');
     assert(sourceRuntimeText.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
