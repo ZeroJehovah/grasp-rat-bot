@@ -298,6 +298,7 @@ function main() {
   const entityActivitySourceModule = readText('src/browser/entity-activity-source.js');
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
+  const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -328,6 +329,7 @@ function main() {
     entityActivitySourceModule,
     staminaRuntimeSourceModule,
     exitReloginSourceModule,
+    pendingExitSourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -424,6 +426,7 @@ function main() {
     assert(botSourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
     assert(botSourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
     assert(botSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
+    assert(botSourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -458,6 +461,7 @@ function main() {
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
+    assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
@@ -480,6 +484,9 @@ function main() {
     assert(generatedRuntimeSource.includes('function staleOfflineStaminaHoldContradicted'), 'generated runtime does not include stale offline stamina contradiction helper');
     assert(generatedRuntimeSource.includes('function setExitReloginSuppress'), 'generated runtime does not include exit relogin suppress helper');
     assert(generatedRuntimeSource.includes('function clearOfflineReloginHold'), 'generated runtime does not include offline relogin hold cleanup helper');
+    assert(generatedRuntimeSource.includes('function summarizePendingExit'), 'generated runtime does not include pending-exit summary helper');
+    assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
+    assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
     assert(!generatedRuntimeSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
@@ -611,6 +618,12 @@ function main() {
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function setExitReloginSuppress'), 'exit-relogin source factory does not include suppress helper');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function clearEnemyReloginHold'), 'exit-relogin source factory does not include enemy hold cleanup helper');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function clearOfflineReloginHold'), 'exit-relogin source factory does not include offline hold cleanup helper');
+    assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
+    assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function summarizePendingExit'), 'pending-exit source factory does not include summary helper');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
