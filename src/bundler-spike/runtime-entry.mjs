@@ -14,6 +14,7 @@ import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import restoredRuntimeState from '../browser/runtime/restored-runtime-state.js';
 import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
 import runtimeDiagnostics from '../browser/runtime/runtime-diagnostics.js';
+import exitRelogin from '../browser/runtime/exit-relogin.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
@@ -498,6 +499,16 @@ function helperStatus(config = {}) {
     lastTickSource: 'bundler-spike'
   });
   runtimeDiagnostics.recordRuntimeDiagnosticsCore(null, { ignored: true });
+  const exitReloginDisplay = exitRelogin.leaveWaitDisplayCore(
+    '离线退出',
+    { holdRemainingMs: 2500 },
+    displayFormat.formatDurationMs
+  );
+  const exitReloginDetail = exitRelogin.finalizeLeaveDisplayReasonCore({
+    reason: 'offline',
+    summary: '离线退出',
+    reloginDelayMs: 1500
+  }, (base, detail) => exitRelogin.leaveWaitDisplayCore(base, detail, displayFormat.formatDurationMs));
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -580,6 +591,9 @@ function helperStatus(config = {}) {
     loginSnapshotResetReason: loginSnapshotGateState.resetReason,
     runtimeDiagnosticsTickMs: runtimeDiagnosticsBot.runtimeDiagnostics?.lastTickDurationMs,
     runtimeDiagnosticsSource: runtimeDiagnosticsBot.runtimeDiagnostics?.lastTickSource,
+    exitReloginDisplay,
+    exitReloginSummary: exitReloginDetail.summary,
+    exitReloginDisplayReason: exitReloginDetail.displayReason,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),

@@ -286,6 +286,7 @@ function main() {
   const restoredRuntimeStateRuntimeModule = readText('src/browser/runtime/restored-runtime-state.js');
   const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
   const runtimeDiagnosticsRuntimeModule = readText('src/browser/runtime/runtime-diagnostics.js');
+  const exitReloginRuntimeModule = readText('src/browser/runtime/exit-relogin.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
@@ -416,6 +417,7 @@ function main() {
     restoredRuntimeStateRuntimeModule,
     loginSnapshotGateRuntimeModule,
     runtimeDiagnosticsRuntimeModule,
+    exitReloginRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
@@ -567,6 +569,7 @@ function main() {
     assert(distSource.includes('var require_restored_runtime_state = __commonJS'), 'bundled production dist does not bundle the restored-runtime-state runtime module through esbuild');
     assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
     assert(distSource.includes('var require_runtime_diagnostics = __commonJS'), 'bundled production dist does not bundle the runtime-diagnostics runtime module through esbuild');
+    assert(distSource.includes('var require_exit_relogin = __commonJS'), 'bundled production dist does not bundle the exit-relogin runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
@@ -728,6 +731,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['coin-safety', () => coinSafetySource(config)]"), 'coin-safety fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['restored-runtime-state', () => restoredRuntimeStateSource(config)]"), 'restored-runtime-state fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-diagnostics', () => runtimeDiagnosticsSource(config)]"), 'runtime-diagnostics fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['exit-relogin', () => exitReloginSource(config)]"), 'exit-relogin fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -1476,12 +1480,31 @@ function main() {
     assert(runtimeDiagnosticsRuntimeModule.includes('Object.assign(bot.runtimeDiagnostics, values);'), 'runtime-diagnostics runtime core does not merge diagnostic values');
     assert(runtimeDiagnosticsRuntimeModule.includes('catch (_) {}'), 'runtime-diagnostics runtime core does not preserve error swallowing');
     assert(runtimeDiagnosticsRuntimeModule.includes('module.exports = { recordRuntimeDiagnosticsCore }'), 'runtime-diagnostics runtime core export not found');
-    assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
-    assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
-    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');
-    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function setExitReloginSuppress'), 'exit-relogin source factory does not include suppress helper');
-    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function clearEnemyReloginHold'), 'exit-relogin source factory does not include enemy hold cleanup helper');
-    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function clearOfflineReloginHold'), 'exit-relogin source factory does not include offline hold cleanup helper');
+    assert(exitReloginSourceModule.includes('function exitReloginDisplayInlineSource() {'), 'exit-relogin display inline source factory not found');
+    assert(exitReloginSourceModule.includes('function bundledExitReloginDisplaySource() {'), 'exit-relogin display bundled source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
+    assert(exitReloginSourceModule.includes('exitReloginDisplayInlineSource,\n  bundledExitReloginDisplaySource,\n  exitReloginRemainderSource,\n  exitReloginSource'), 'exit-relogin source module exports not found');
+    const exitReloginDisplayInlineBody = functionBody(exitReloginSourceModule, 'exitReloginDisplayInlineSource');
+    assert(exitReloginDisplayInlineBody.includes('String.raw`'), 'exit-relogin display inline source factory does not return raw browser source');
+    assert(exitReloginDisplayInlineBody.includes('function leaveWaitDisplay'), 'exit-relogin display inline source does not include wait display helper');
+    assert(exitReloginDisplayInlineBody.includes('function finalizeLeaveDisplayReason'), 'exit-relogin display inline source does not include display finalizer');
+    assert(exitReloginDisplayInlineBody.includes('formatDurationMs(waitMs)'), 'exit-relogin display inline source does not preserve wait duration formatting');
+    const exitReloginDisplayBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginDisplaySource');
+    assert(exitReloginDisplayBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin display bundled source does not hand display helpers to the bundler');
+    assert(exitReloginDisplayBundledBody.includes('leaveWaitDisplayCore(base, detail, formatDurationMs)'), 'exit-relogin display bundled source does not bind formatDurationMs');
+    assert(exitReloginDisplayBundledBody.includes('finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay)'), 'exit-relogin display bundled source does not bind leaveWaitDisplay finalizer');
+    const exitReloginRemainderBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderSource');
+    assert(exitReloginRemainderBody.includes('function setExitReloginSuppress'), 'exit-relogin remainder source does not include suppress helper');
+    assert(exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source does not include enemy hold cleanup helper');
+    assert(exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source does not include offline hold cleanup helper');
+    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('options.bundledRuntime'), 'exit-relogin source selector does not switch on bundled runtime mode');
+    assert(exitReloginRuntimeModule.includes('function leaveWaitDisplayCore(base, detail, formatDurationMs)'), 'exit-relogin display runtime core not found');
+    assert(exitReloginRuntimeModule.includes('return summary + \'，等待\' + formatDurationMs(waitMs);'), 'exit-relogin display runtime core does not append wait duration');
+    assert(exitReloginRuntimeModule.includes('function finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay)'), 'exit-relogin display finalizer runtime core not found');
+    assert(exitReloginRuntimeModule.includes('detail.summary = base;'), 'exit-relogin display finalizer runtime core does not write summary');
+    assert(exitReloginRuntimeModule.includes('detail.displayReason = leaveWaitDisplay(base, detail);'), 'exit-relogin display finalizer runtime core does not write display reason');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
@@ -1736,7 +1759,8 @@ function main() {
     });
     check(`${file} displays relogin wait using remaining hold before original delay`, () => {
       const body = functionBody(text, 'leaveWaitDisplay');
-      assert(body.includes('detail?.holdRemainingMs ?? detail?.reloginDelayMs'), 'leave wait display does not prefer remaining hold time');
+      const reloginDisplaySource = `${body}\n${finalRuntimeText}`;
+      assert(reloginDisplaySource.includes('detail?.holdRemainingMs ?? detail?.reloginDelayMs'), 'leave wait display does not prefer remaining hold time');
     });
     check(`${file} keeps shared runtime utility helpers available`, () => {
       const runtimeUtilsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeUtilsSource : text;

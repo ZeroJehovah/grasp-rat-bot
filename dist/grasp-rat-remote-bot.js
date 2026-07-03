@@ -1375,6 +1375,31 @@
     }
   });
 
+  // src/browser/runtime/exit-relogin.js
+  var require_exit_relogin = __commonJS({
+    "src/browser/runtime/exit-relogin.js"(exports, module) {
+      "use strict";
+      function leaveWaitDisplayCore(base, detail, formatDurationMs) {
+        const summary = String(base || "").trim();
+        const waitMs = Number(detail?.holdRemainingMs ?? detail?.reloginDelayMs ?? 0);
+        if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
+        return summary + "\uFF0C\u7B49\u5F85" + formatDurationMs(waitMs);
+      }
+      function finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay) {
+        if (!detail) return detail;
+        const base = String(detail.summary || detail.exitSummary || detail.enemyLeaveSummary || detail.reason || "").trim();
+        if (!base) return detail;
+        detail.summary = base;
+        detail.displayReason = leaveWaitDisplay(base, detail);
+        return detail;
+      }
+      module.exports = {
+        leaveWaitDisplayCore,
+        finalizeLeaveDisplayReasonCore
+      };
+    }
+  });
+
   // src/strategy/coin-motion.js
   var require_coin_motion = __commonJS({
     "src/strategy/coin-motion.js"(exports, module) {
@@ -3977,7 +4002,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.422" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.423" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -9503,19 +9528,15 @@
         };
       }
     }
+    const {
+      leaveWaitDisplayCore,
+      finalizeLeaveDisplayReasonCore
+    } = require_exit_relogin();
     function leaveWaitDisplay(base, detail) {
-      const summary = String(base || "").trim();
-      const waitMs = Number(detail?.holdRemainingMs ?? detail?.reloginDelayMs ?? 0);
-      if (!summary || !Number.isFinite(waitMs) || waitMs <= 0) return summary;
-      return summary + "\uFF0C\u7B49\u5F85" + formatDurationMs(waitMs);
+      return leaveWaitDisplayCore(base, detail, formatDurationMs);
     }
     function finalizeLeaveDisplayReason(detail) {
-      if (!detail) return detail;
-      const base = String(detail.summary || detail.exitSummary || detail.enemyLeaveSummary || detail.reason || "").trim();
-      if (!base) return detail;
-      detail.summary = base;
-      detail.displayReason = leaveWaitDisplay(base, detail);
-      return detail;
+      return finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay);
     }
     function normalizeEnemyActor(actor) {
       if (!actor) return null;
