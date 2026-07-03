@@ -834,6 +834,17 @@ This is a source-organization split only. It preserves preserved coin-failure re
 
 This is a source-organization split only. It preserves the disabled snapshot streak requirement, login snapshot gate state rounding/defaulting, last-sample timestamp preservation, reset metadata preservation, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BX Runtime Diagnostics Source Factory
+
+`bootstrap-0.4.351` extracts runtime diagnostics source generation into a dedicated browser source module:
+
+- `src/browser/runtime-diagnostics-source.js` now owns the raw browser source for `recordRuntimeDiagnostics()`.
+- `src/browser/bot-source.js` imports and injects `${runtimeDiagnosticsSource()}` immediately after `${loginSnapshotGateSource()}`, preserving generated runtime order before the `bot` state object.
+- Static verification checks the new source-factory shape, injection point, diagnostics recorder helper, `bot.runtimeDiagnostics` update, `Object.assign()` merge, and error-swallowing anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves guarded `bot.runtimeDiagnostics` initialization, diagnostic value merging, swallowed diagnostics write errors, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -915,9 +926,10 @@ This is a source-organization split only. It preserves the disabled snapshot str
 76. Refresh exit detail source factory: integrated in `bootstrap-0.4.348`
 77. Restored coin failures source factory: integrated in `bootstrap-0.4.349`
 78. Login snapshot gate source factory: integrated in `bootstrap-0.4.350`
-79. Constants: partially integrated for high-value coin defaults
-80. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-81. Run live validation sessions after each behavior-touching replacement
+79. Runtime diagnostics source factory: integrated in `bootstrap-0.4.351`
+80. Constants: partially integrated for high-value coin defaults
+81. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+82. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
