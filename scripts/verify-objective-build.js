@@ -283,6 +283,7 @@ function main() {
   const coinMotionRuntimeModule = readText('src/browser/runtime/coin-motion.js');
   const coinTargetRuntimeModule = readText('src/browser/runtime/coin-target.js');
   const coinProgressRuntimeModule = readText('src/browser/runtime/coin-progress.js');
+  const coinRouteRuntimeModule = readText('src/browser/runtime/coin-route.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -387,6 +388,7 @@ function main() {
     coinMotionRuntimeModule,
     coinTargetRuntimeModule,
     coinProgressRuntimeModule,
+    coinRouteRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -2948,7 +2950,13 @@ function main() {
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsCloserFirstCoinCore'), 'strategy coin route closer-first core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsHeldSingleCoinCore'), 'strategy coin route held single-coin core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteActionMetaCore'), 'strategy coin route action metadata core not found');
-    assert(opportunityRouteSourceModule.includes("require('../strategy/coin-route')"), 'opportunity-route source does not import coin route strategy module');
+    assert(opportunityRouteSourceModule.includes("require('./runtime/coin-route')"), 'opportunity-route source does not import coin route through browser runtime adapter');
+    assert(!opportunityRouteSourceModule.includes("require('../strategy/coin-route')"), 'opportunity-route source still imports coin route directly from strategy');
+    assert(coinRouteRuntimeModule.includes("require('../../strategy/coin-route')"), 'coin-route runtime adapter does not reuse strategy module core');
+    assert(coinRouteRuntimeModule.includes('coinRouteKey') && coinRouteRuntimeModule.includes('pickCoinRouteOpportunityCore'), 'coin-route runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/coin-route.js'"), 'bundler spike does not import coin route runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('coinRoute.coinRouteActionMetaCore('), 'bundler spike does not execute coin route metadata helper');
+    assert(bundlerSpikeBuildSource.includes("status.coinRouteKey === 'route-spike'"), 'bundler spike self-test does not assert coin route execution');
     assert(sourceRuntimeText.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
