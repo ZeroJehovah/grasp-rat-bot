@@ -314,6 +314,7 @@ function main() {
   const coinProgressRuntimeSourceModule = readText('src/browser/coin-progress-runtime-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const chooseActionSourceModule = readText('src/browser/choose-action-source.js');
+  const tickSourceModule = readText('src/browser/tick-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
@@ -383,6 +384,7 @@ function main() {
     coinProgressRuntimeSourceModule,
     coinTargetRuntimeSourceModule,
     chooseActionSourceModule,
+    tickSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
@@ -502,6 +504,7 @@ function main() {
     assert(botSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
+    assert(botSourceModule.includes("require('./tick-source')"), 'tick source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
@@ -587,6 +590,7 @@ function main() {
     assert(botSourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${chooseActionSource()}'), 'choose-action module is not injected into browser runtime');
+    assert(botSourceModule.includes('${tickSource()}'), 'tick module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
@@ -856,6 +860,18 @@ function main() {
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('summarizeNearestCoinStaminaBudgetExit'), 'choose-action source factory does not preserve stamina-budget exit handling');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickBestOpportunity'), 'choose-action source factory does not preserve opportunity selection');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes("'wait-for-visible-coin-refresh'"), 'choose-action source factory does not preserve visible-coin wait reason');
+    assert(tickSourceModule.includes('function tickSource() {'), 'tick source factory not found');
+    assert(tickSourceModule.includes('module.exports = { tickSource }'), 'tick source module export not found');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('String.raw`'), 'tick source factory does not return raw browser source');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("async function tick(source = 'timer')"), 'tick source factory does not include tick');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('handlePendingExit(self)'), 'tick source factory does not preserve pending-exit handling');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('maybeStartAutoLogin'), 'tick source factory does not preserve login handling');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('leaveOffline'), 'tick source factory does not preserve offline leave handling');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('chooseAction(self)'), 'tick source factory does not preserve action selection');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('trackCoinProgress(action, self)'), 'tick source factory does not preserve coin progress tracking');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('applyFinalActionArbitration(action, source)'), 'tick source factory does not preserve final action arbitration');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('recordImportantCombatTick(source, bot.lastDecision)'), 'tick source factory does not preserve important combat tick logging');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('recordCombatLogTick(source, bot.lastDecision)'), 'tick source factory does not preserve combat-log tick logging');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
