@@ -950,7 +950,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.397" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.398" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4473,9 +4473,7 @@
         }
       };
     }
-    function staminaExhaustedWindowLabel(staminaState) {
-      return staminaExhaustedLongWindows(staminaState).join("/");
-    }
+    const { staminaExhaustedWindowLabel } = require_exit_summary2();
     function requestReload(reason) {
       if (cfg.dryRun || cfg.once) return;
       if (bot.reloadRequestedAt) return;

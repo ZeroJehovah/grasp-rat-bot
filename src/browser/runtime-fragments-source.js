@@ -166,7 +166,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 			`],
-    ['control-login-runtime', controlLoginRuntimeSource],
+    ['control-login-runtime', () => controlLoginRuntimeSource(config)],
     ['separator-after-control-login-runtime',
     `
 
