@@ -9,7 +9,7 @@ const {
   coinNearApproachAxisCore,
   coinDirectionToCore,
   coinMotionMetaCore
-} = require('../strategy/coin-motion');
+} = require('./runtime/coin-motion');
 
 function coinMotionRuntimeSource() {
   return String.raw`  function directionTo(self, target, tolerance = 250) {

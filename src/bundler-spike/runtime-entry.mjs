@@ -10,6 +10,7 @@ import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
 import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
 import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
+import coinMotion from '../browser/runtime/coin-motion.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -54,6 +55,21 @@ function helperStatus(config = {}) {
     nowMs: 1000,
     ignoredCoinUntil: coin => String(coin?.drop_id || '') === 'ignored-spike' ? 1800 : 0
   });
+  const coinMotionResult = coinMotion.coinDirectionToCore({ x: 0, y: 0 }, {
+    drop_id: 'motion-spike',
+    x: 500,
+    y: 0
+  }, {
+    nowMs: 1000,
+    tolerance: 50,
+    coinAxisApproachMinDistance: 100,
+    coinAxisApproachRatio: 1,
+    coinAxisApproachLaneTolerance: 10,
+    coinApproachLockMs: 500,
+    nearCoinStuckDistance: 1000,
+    coinPickupSweepDistance: 100
+  });
+  const coinMotionMeta = coinMotion.coinMotionMetaCore(coinMotionResult.direction);
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -67,6 +83,8 @@ function helperStatus(config = {}) {
     actionSwitch: switchResult.event,
     coinDiagnosticsIgnored: arrayCountRuntime.arrayCount(coinDiagnosticResult.ignoredNearCoins),
     coinDiagnosticsSnapshotOnly: arrayCountRuntime.arrayCount(coinDiagnosticResult.snapshotOnlyNearCoins),
+    coinMotionDirection: coinMotionResult.direction,
+    coinMotionRouteMode: coinMotionMeta.routeMode,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

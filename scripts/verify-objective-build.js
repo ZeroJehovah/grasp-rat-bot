@@ -280,6 +280,7 @@ function main() {
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
   const actionSwitchDiagnosticsRuntimeModule = readText('src/browser/runtime/action-switch-diagnostics.js');
   const coinDiagnosticsRuntimeModule = readText('src/browser/runtime/coin-diagnostics.js');
+  const coinMotionRuntimeModule = readText('src/browser/runtime/coin-motion.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -381,6 +382,7 @@ function main() {
     actionArbitrationRuntimeModule,
     actionSwitchDiagnosticsRuntimeModule,
     coinDiagnosticsRuntimeModule,
+    coinMotionRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1263,6 +1265,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import actionArbitration from '../browser/runtime/action-arbitration.js'"), 'bundler spike does not import action-arbitration through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js'"), 'bundler spike does not import action-switch diagnostics through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import coinDiagnostics from '../browser/runtime/coin-diagnostics.js'"), 'bundler spike does not import coin diagnostics through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import coinMotion from '../browser/runtime/coin-motion.js'"), 'bundler spike does not import coin motion through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
@@ -1272,6 +1275,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('actionArbitration.applyFinalActionArbitrationCore(sampleAction, arbitrationState, { nowMs: 1000, holdMs: 1000 })'), 'bundler spike does not execute the action-arbitration helper module');
     assert(bundlerSpikeEntrySource.includes('actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(sampleAction, switchState, { nowMs: 1000 })'), 'bundler spike does not execute the action-switch diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes('coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin diagnostics helper module');
+    assert(bundlerSpikeEntrySource.includes('coinMotion.coinDirectionToCore({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin motion helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -2815,7 +2819,10 @@ function main() {
     assert(strategyCoinMotionSource.includes('function coinAxisLockShouldHoldCore'), 'strategy coin axis lock core not found');
     assert(strategyCoinMotionSource.includes('function coinMotionMetaCore'), 'strategy coin motion metadata core not found');
     const coinMotionRuntimeBody = functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource');
-    assert(coinMotionRuntimeSourceModule.includes("require('../strategy/coin-motion')"), 'coin-motion runtime source does not import coin motion strategy module');
+    assert(coinMotionRuntimeSourceModule.includes("require('./runtime/coin-motion')"), 'coin-motion runtime source does not import coin motion through the browser runtime helper module');
+    assert(!coinMotionRuntimeSourceModule.includes("require('../strategy/coin-motion')"), 'coin-motion runtime source still imports coin motion directly from strategy');
+    assert(coinMotionRuntimeModule.includes("require('../../strategy/coin-motion')"), 'browser coin motion helper module does not reuse the strategy coin motion helpers');
+    assert(coinMotionRuntimeModule.includes('coinDirectionToCore') && coinMotionRuntimeModule.includes('coinPickupPrecisionPulseMsCore') && coinMotionRuntimeModule.includes('coinMotionMetaCore'), 'browser coin motion helper module exports are incomplete');
     assert(coinMotionRuntimeBody.includes('coinDirectionToCore.toString()'), 'coin-motion runtime source does not inject coin direction core');
     assert(coinMotionRuntimeBody.includes('coinMotionMetaCore.toString()'), 'coin-motion runtime source does not inject coin motion metadata core');
     assert(coinMotionRuntimeBody.includes('function coinMotionCoreOptions'), 'coin-motion runtime wrapper options not found');
