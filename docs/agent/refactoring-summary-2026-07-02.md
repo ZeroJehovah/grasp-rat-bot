@@ -757,6 +757,17 @@ This is a source-organization split only. It preserves opportunity choice cleanu
 
 This is a source-organization split only. It preserves exit-motion wait decoration, post-exit target/choice cleanup, overlay cleanup, panel refresh behavior, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BQ Persistent Last-Self Source Factory
+
+`bootstrap-0.4.344` extracts persistent last-self source generation into a dedicated browser source module:
+
+- `src/browser/persistent-last-self-source.js` now owns the raw browser source for `readPersistentLastSelfState()` and `writePersistentLastSelfState()`.
+- `src/browser/bot-source.js` imports and injects `${persistentLastSelfSource()}` immediately after target whitelist state initialization, preserving generated runtime order before exit-state persistence helpers.
+- Static verification checks the new source-factory shape, injection point, read helper, write helper, and `LAST_SELF_STATE_KEY` storage anchor.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves persistent last-self localStorage read/write behavior, max-age handling, payload shape, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -831,9 +842,10 @@ This is a source-organization split only. It preserves exit-motion wait decorati
 69. Patrol source factory: integrated in `bootstrap-0.4.341`
 70. Opportunity clear source factory: integrated in `bootstrap-0.4.342`
 71. Exit motion source factory: integrated in `bootstrap-0.4.343`
-72. Constants: partially integrated for high-value coin defaults
-73. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-74. Run live validation sessions after each behavior-touching replacement
+72. Persistent last-self source factory: integrated in `bootstrap-0.4.344`
+73. Constants: partially integrated for high-value coin defaults
+74. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+75. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
