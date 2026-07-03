@@ -302,6 +302,7 @@ function main() {
   const opportunityStaminaSourceModule = readText('src/browser/opportunity-stamina-source.js');
   const opportunitySnapshotSourceModule = readText('src/browser/opportunity-snapshot-source.js');
   const postAttackSourceModule = readText('src/browser/post-attack-source.js');
+  const opportunityActionsSourceModule = readText('src/browser/opportunity-actions-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -350,6 +351,7 @@ function main() {
     opportunityStaminaSourceModule,
     opportunitySnapshotSourceModule,
     postAttackSourceModule,
+    opportunityActionsSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -512,6 +514,7 @@ function main() {
     assert(botSourceModule.includes('${opportunityStaminaSource()}'), 'opportunity-stamina module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunitySnapshotSource()}'), 'opportunity-snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${postAttackSource()}'), 'post-attack module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -726,6 +729,12 @@ function main() {
     assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function buildPostAttackDropWaitAction'), 'post-attack source factory does not include wait action builder');
     assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('pickPostAttackDropCoinCore.toString()'), 'post-attack source factory does not inline drop coin core');
     assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('pickPostAttackDropWaitTargetCore.toString()'), 'post-attack source factory does not inline wait target core');
+    assert(opportunityActionsSourceModule.includes('function opportunityActionsSource() {'), 'opportunity-actions source factory not found');
+    assert(opportunityActionsSourceModule.includes('module.exports = { opportunityActionsSource }'), 'opportunity-actions source module export not found');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('String.raw`'), 'opportunity-actions source factory does not return raw browser source');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function enemyOpportunityCandidates'), 'opportunity-actions source factory does not include enemy candidate helper');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
