@@ -110,6 +110,7 @@ async function selfTest() {
   assert(source.includes('function normalizePendingExitStateForStorageCore'), 'pending-exit persistence helper was not bundled');
   assert(source.includes('function refreshExitDetailCore'), 'refresh-exit-detail helper was not bundled');
   assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
+  assert(source.includes('function restoreRuntimeStateCore'), 'restored runtime state helper was not bundled');
   assert(source.includes('function normalizeLoginSnapshotGateStateCore'), 'login snapshot gate helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
@@ -209,6 +210,13 @@ async function selfTest() {
   assert(status.restoredFailureCount === 2, 'spike did not filter restored near coin failures');
   assert(status.restoredFailureHardIgnoreUntil === 1600, 'spike did not extend restored hard coin failure ignore window');
   assert(status.restoredFailureStaleIgnoreUntil === 1200, 'spike did not preserve stale restored coin failure ignore window');
+  assert(status.restoredRuntimeFailureCount === 2, 'spike did not restore runtime coin failures');
+  assert(status.restoredRuntimeEnemyReason === 'restored:enemy-leave-key', 'spike did not restore enemy leave state');
+  assert(status.restoredRuntimeOfflineReason === 'restored:offline-leave-key', 'spike did not restore offline leave state');
+  assert(status.restoredRuntimePendingReason === 'stored-pending', 'spike did not restore pending exit state');
+  assert(status.restoredRuntimeInitialReason === 'stored-pending', 'spike did not choose initial pending exit state');
+  assert(status.restoredRuntimeInitialAt === 2100, 'spike did not preserve restored runtime state call order');
+  assert(status.restoredRuntimeMarked === true, 'spike did not preserve first-load pending-exit reload marker');
   assert(status.loginSnapshotRequired === 0, 'spike did not execute login snapshot required helper');
   assert(status.loginSnapshotStreak === 3, 'spike did not round login snapshot gate streak');
   assert(status.loginSnapshotLastSampleAt === 900, 'spike did not preserve login snapshot last-sample fallback');

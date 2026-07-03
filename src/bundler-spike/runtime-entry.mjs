@@ -11,6 +11,7 @@ import persistentClear from '../browser/runtime/persistent-clear.js';
 import pendingExitPersistence from '../browser/runtime/pending-exit-persistence.js';
 import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
+import restoredRuntimeState from '../browser/runtime/restored-runtime-state.js';
 import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
@@ -452,6 +453,37 @@ function helperStatus(config = {}) {
     coinFailureSevereIgnoreCount: 5,
     coinFailureSevereIgnoreMs: 1000
   }, 1000);
+  const restoredRuntimeNow = (() => {
+    const values = [2000, 2100];
+    return () => values.shift() || 2200;
+  })();
+  const restoredRuntimeStateResult = restoredRuntimeState.restoreRuntimeStateCore({
+    pendingExit: {
+      at: 1000,
+      updatedAt: 1100,
+      reason: 'memory-pending',
+      summary: 'memory pending'
+    }
+  }, null, {
+    restoredCoinFailures: () => restoredFailureList,
+    readPersistentExitState: key => ({ key, reason: `restored:${key}` }),
+    readPersistedPendingExitState: (t, options) => ({
+      at: 1000,
+      updatedAt: t,
+      reason: 'stored-pending',
+      summary: 'stored pending',
+      marked: options.markReloaded
+    }),
+    chooseInitialPendingExitState: (memoryState, storedState, t, options) => ({
+      reason: storedState.reason,
+      memoryReason: memoryState.reason,
+      at: t,
+      marked: options.markReloaded
+    }),
+    enemyLeaveStateKey: 'enemy-leave-key',
+    offlineLeaveStateKey: 'offline-leave-key',
+    nowMs: restoredRuntimeNow
+  });
   const loginSnapshotRequired = loginSnapshotGate.loginSnapshotSuccessRequiredCore();
   const loginSnapshotGateState = loginSnapshotGate.normalizeLoginSnapshotGateStateCore({
     streak: 2.6,
@@ -528,6 +560,13 @@ function helperStatus(config = {}) {
     restoredFailureCount: arrayCountRuntime.arrayCount(restoredFailureList),
     restoredFailureHardIgnoreUntil: restoredFailureList.find(([id]) => id === 'hard-drop')?.[1]?.ignoreUntil,
     restoredFailureStaleIgnoreUntil: restoredFailureList.find(([id]) => id === 'stale-drop')?.[1]?.ignoreUntil,
+    restoredRuntimeFailureCount: arrayCountRuntime.arrayCount(restoredRuntimeStateResult.restoredFailures),
+    restoredRuntimeEnemyReason: restoredRuntimeStateResult.restoredEnemyLeaveState?.reason,
+    restoredRuntimeOfflineReason: restoredRuntimeStateResult.restoredOfflineLeaveState?.reason,
+    restoredRuntimePendingReason: restoredRuntimeStateResult.restoredPendingExitState?.reason,
+    restoredRuntimeInitialReason: restoredRuntimeStateResult.initialPendingExitState?.reason,
+    restoredRuntimeInitialAt: restoredRuntimeStateResult.initialPendingExitState?.at,
+    restoredRuntimeMarked: restoredRuntimeStateResult.initialPendingExitState?.marked,
     loginSnapshotRequired,
     loginSnapshotStreak: loginSnapshotGateState.streak,
     loginSnapshotLastSampleAt: loginSnapshotGateState.lastSampleAt,

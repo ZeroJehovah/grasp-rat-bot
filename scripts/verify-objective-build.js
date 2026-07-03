@@ -283,6 +283,7 @@ function main() {
   const pendingExitPersistenceRuntimeModule = readText('src/browser/runtime/pending-exit-persistence.js');
   const refreshExitDetailRuntimeModule = readText('src/browser/runtime/refresh-exit-detail.js');
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
+  const restoredRuntimeStateRuntimeModule = readText('src/browser/runtime/restored-runtime-state.js');
   const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
@@ -411,6 +412,7 @@ function main() {
     pendingExitPersistenceRuntimeModule,
     refreshExitDetailRuntimeModule,
     restoredCoinFailuresRuntimeModule,
+    restoredRuntimeStateRuntimeModule,
     loginSnapshotGateRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
@@ -560,6 +562,7 @@ function main() {
     assert(distSource.includes('var require_pending_exit_persistence = __commonJS'), 'bundled production dist does not bundle the pending-exit-persistence runtime module through esbuild');
     assert(distSource.includes('var require_refresh_exit_detail = __commonJS'), 'bundled production dist does not bundle the refresh-exit-detail runtime module through esbuild');
     assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
+    assert(distSource.includes('var require_restored_runtime_state = __commonJS'), 'bundled production dist does not bundle the restored-runtime-state runtime module through esbuild');
     assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
@@ -720,14 +723,25 @@ function main() {
     assert(fragmentEntriesBody.includes("['coin-target-runtime', () => coinTargetRuntimeSource(config)]"), 'coin-target-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-progress-runtime', () => coinProgressRuntimeSource(config)]"), 'coin-progress-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-safety', () => coinSafetySource(config)]"), 'coin-safety fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['restored-runtime-state', () => restoredRuntimeStateSource(config)]"), 'restored-runtime-state fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
-    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');
-    assert(restoredRuntimeStateSourceModule.includes('module.exports = { restoredRuntimeStateSource }'), 'restored runtime state source module export not found');
-    assert(restoredRuntimeStateSourceModule.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state source does not restore coin failures');
-    assert(restoredRuntimeStateSourceModule.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not restore pending exit state');
-    assert(restoredRuntimeStateSourceModule.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not choose initial pending exit state');
+    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateInlineSource() {'), 'restored runtime state inline source factory not found');
+    assert(restoredRuntimeStateSourceModule.includes('function bundledRestoredRuntimeStateSource() {'), 'restored runtime state bundled source factory not found');
+    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource(options = {})'), 'restored runtime state source selector not found');
+    assert(restoredRuntimeStateSourceModule.includes('restoredRuntimeStateInlineSource,\n  bundledRestoredRuntimeStateSource,\n  restoredRuntimeStateSource'), 'restored runtime state source module exports not found');
+    const restoredRuntimeStateInlineBody = functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateInlineSource');
+    assert(restoredRuntimeStateInlineBody.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state inline source does not restore coin failures');
+    assert(restoredRuntimeStateInlineBody.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });'), 'restored runtime state inline source does not restore pending exit state');
+    assert(restoredRuntimeStateInlineBody.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state inline source does not choose initial pending exit state');
+    const restoredRuntimeStateBundledBody = functionBody(restoredRuntimeStateSourceModule, 'bundledRestoredRuntimeStateSource');
+    assert(restoredRuntimeStateBundledBody.includes("require('./src/browser/runtime/restored-runtime-state')"), 'restored runtime state bundled source does not hand restore helper to the bundler');
+    assert(restoredRuntimeStateBundledBody.includes('restoreRuntimeStateCore(preserved, previousBot'), 'restored runtime state bundled source does not bind preserved/previousBot state');
+    assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailures') && restoredRuntimeStateBundledBody.includes('readPersistentExitState') && restoredRuntimeStateBundledBody.includes('readPersistedPendingExitState') && restoredRuntimeStateBundledBody.includes('chooseInitialPendingExitState'), 'restored runtime state bundled source does not bind runtime restore dependencies');
+    assert(restoredRuntimeStateBundledBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind enemy leave key');
+    assert(restoredRuntimeStateBundledBody.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind offline leave key');
+    assert(functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource').includes('options.bundledRuntime'), 'restored runtime state source selector does not switch on bundled runtime mode');
     assert(statusPanelRuntimeSourceModule.includes('function bundledStatusPanelRuntimeSource()'), 'bundled status-panel runtime source factory not found');
     assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource(options = {})'), 'status-panel runtime source factory not found');
     assert(statusPanelRuntimeSourceModule.includes('module.exports = {\n  bundledStatusPanelRuntimeSource,\n  statusPanelRuntimeSource\n}'), 'status-panel runtime source export not found');
@@ -1411,6 +1425,14 @@ function main() {
     assert(restoredCoinFailuresRuntimeModule.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures runtime core does not restore severe ignore windows');
     assert(restoredCoinFailuresRuntimeModule.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures runtime core does not restore hard ignore windows');
     assert(restoredCoinFailuresRuntimeModule.includes('module.exports = { restoredCoinFailuresCore }'), 'restored-coin-failures runtime core export not found');
+    assert(restoredRuntimeStateRuntimeModule.includes('function restoreRuntimeStateCore(preserved, previousBot, helpers = {})'), 'restored runtime state runtime core not found');
+    assert(restoredRuntimeStateRuntimeModule.includes('const restoredFailures = helpers.restoredCoinFailures();'), 'restored runtime state runtime core does not restore coin failures first');
+    assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistentExitState(helpers.enemyLeaveStateKey)'), 'restored runtime state runtime core does not restore enemy leave state');
+    assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistentExitState(helpers.offlineLeaveStateKey)'), 'restored runtime state runtime core does not restore offline leave state');
+    assert(restoredRuntimeStateRuntimeModule.includes('const restoreOptions = { markReloaded: !previousBot };'), 'restored runtime state runtime core does not preserve first-load reload marker');
+    assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistedPendingExitState(nowMs(), restoreOptions)'), 'restored runtime state runtime core does not restore persisted pending exit state');
+    assert(restoredRuntimeStateRuntimeModule.includes('helpers.chooseInitialPendingExitState('), 'restored runtime state runtime core does not choose initial pending exit state');
+    assert(restoredRuntimeStateRuntimeModule.includes('module.exports = { restoreRuntimeStateCore }'), 'restored runtime state runtime core export not found');
     assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateInlineSource() {'), 'login-snapshot-gate inline source factory not found');
     assert(loginSnapshotGateSourceModule.includes('function bundledLoginSnapshotGateSource() {'), 'login-snapshot-gate bundled source factory not found');
     assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateSource(options = {})'), 'login-snapshot-gate source selector not found');
@@ -2203,7 +2225,15 @@ function main() {
       assert(text.includes("const PENDING_EXIT_STATE_KEY = 'graspRatPendingExitState'"), 'pending exit storage key not found');
       assert(text.includes('function normalizePendingExitStateForStorage'), 'pending exit storage normalizer not found');
       assert(text.includes('function readPersistedPendingExitState'), 'pending exit storage reader not found');
-      assert(text.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot })'), 'pending exit state is not restored with reload marker on cold page load');
+      const pendingExitRestoreSource = `${text}\n${finalRuntimeText}`;
+      const restoresPendingExitWithReloadMarker = pendingExitRestoreSource.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot })')
+        || (
+          pendingExitRestoreSource.includes('restoreRuntimeStateCore(preserved, previousBot')
+          && pendingExitRestoreSource.includes('const restoreOptions = { markReloaded: !previousBot };')
+          && pendingExitRestoreSource.includes('helpers.readPersistedPendingExitState(nowMs(), restoreOptions)')
+          && pendingExitRestoreSource.includes('helpers.chooseInitialPendingExitState(')
+        );
+      assert(restoresPendingExitWithReloadMarker, 'pending exit state is not restored with reload marker on cold page load');
       assert(text.includes('pendingExit: initialPendingExitState'), 'bot startup does not use restored pending exit state');
       assert(text.includes('restorePersistedCombatLogPendingEntries();'), 'ordinary pending combat logs are not restored at startup');
       assert(expectObjectNumber(defaultConfigSource, 'combatLogBatchMaxEntries', 12), 'combat log default batch size is not bounded for low-latency flushes');

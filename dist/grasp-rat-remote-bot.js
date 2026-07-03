@@ -1073,6 +1073,36 @@
     }
   });
 
+  // src/browser/runtime/restored-runtime-state.js
+  var require_restored_runtime_state = __commonJS({
+    "src/browser/runtime/restored-runtime-state.js"(exports, module) {
+      "use strict";
+      function restoreRuntimeStateCore(preserved, previousBot, helpers = {}) {
+        const state2 = preserved && typeof preserved === "object" ? preserved : {};
+        const nowMs = typeof helpers.nowMs === "function" ? helpers.nowMs : Date.now;
+        const restoredFailures = helpers.restoredCoinFailures();
+        const restoredEnemyLeaveState = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
+        const restoredOfflineLeaveState = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
+        const restoreOptions = { markReloaded: !previousBot };
+        const restoredPendingExitState = helpers.readPersistedPendingExitState(nowMs(), restoreOptions);
+        const initialPendingExitState = helpers.chooseInitialPendingExitState(
+          state2.pendingExit,
+          restoredPendingExitState,
+          nowMs(),
+          restoreOptions
+        );
+        return {
+          restoredFailures,
+          restoredEnemyLeaveState,
+          restoredOfflineLeaveState,
+          restoredPendingExitState,
+          initialPendingExitState
+        };
+      }
+      module.exports = { restoreRuntimeStateCore };
+    }
+  });
+
   // src/browser/runtime/login-snapshot-gate.js
   var require_login_snapshot_gate = __commonJS({
     "src/browser/runtime/login-snapshot-gate.js"(exports, module) {
@@ -3932,7 +3962,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.420" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.421" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4052,11 +4082,21 @@
     function restoredCoinFailures() {
       return restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now());
     }
-    const restoredFailures = restoredCoinFailures();
-    const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-    const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-    const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
-    const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
+    const { restoreRuntimeStateCore } = require_restored_runtime_state();
+    const restoredRuntimeState = restoreRuntimeStateCore(preserved, previousBot, {
+      restoredCoinFailures,
+      readPersistentExitState,
+      readPersistedPendingExitState,
+      chooseInitialPendingExitState,
+      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+      nowMs: () => Date.now()
+    });
+    const restoredFailures = restoredRuntimeState.restoredFailures;
+    const restoredEnemyLeaveState = restoredRuntimeState.restoredEnemyLeaveState;
+    const restoredOfflineLeaveState = restoredRuntimeState.restoredOfflineLeaveState;
+    const restoredPendingExitState = restoredRuntimeState.restoredPendingExitState;
+    const initialPendingExitState = restoredRuntimeState.initialPendingExitState;
     const {
       loginSnapshotSuccessRequiredCore,
       normalizeLoginSnapshotGateStateCore
