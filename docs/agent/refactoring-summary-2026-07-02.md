@@ -1224,6 +1224,18 @@ This is a source-organization split only. It keeps bounded visible coin route pl
 
 This is a source-organization split only. It keeps opportunity choice stability, high-value coin hold behavior, missing-held reconstruction, and persisted choice metadata unchanged while moving the opportunity choice strategy helper behind an executable browser runtime adapter.
 
+## 2026-07-04 Follow-up: Phase 2DF Opportunity Candidates Helper Module
+
+`bootstrap-0.4.385` continues the strategy-helper-to-browser-runtime adapter pass with opportunity candidate helpers:
+
+- `src/browser/runtime/opportunity-candidates.js` now owns the executable browser runtime helper exports for opportunity stamina-cost normalization, value scoring, priority tiers, coin-route display merging, visible route coin de-duplication, coin/enemy candidate construction, combined opportunity candidates, and best coin score comparison by reusing `src/strategy/opportunity-candidates.js`.
+- `src/browser/opportunity-candidate-source.js` imports opportunity candidate helpers through that browser runtime module while still inlining the same helper function text into the generated runtime.
+- `src/bundler-spike/runtime-entry.mjs` imports opportunity candidate helpers through the browser runtime module path and now verifies candidate combination, coin candidate metadata, and best coin score execution through the spike status payload.
+- Static verification checks the runtime helper module, the opportunity-candidate source import path, the strategy-helper reuse path, candidate wrapper anchors, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.385` hash stayed `7d343bbb806b9acd4ab47cd64c5a8a673620e1820b1914abfaf08bed59ab5cef` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps coin/enemy opportunity candidate construction, route display metadata, priority tiers, and best-coin comparison unchanged while moving the opportunity candidate strategy helper behind an executable browser runtime adapter.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1339,9 +1351,10 @@ This is a source-organization split only. It keeps opportunity choice stability,
 110. Coin-progress true runtime helper module: integrated in `bootstrap-0.4.382`
 111. Coin-route true runtime helper module: integrated in `bootstrap-0.4.383`
 112. Opportunity-choice true runtime helper module: integrated in `bootstrap-0.4.384`
-113. Constants: partially integrated for high-value coin defaults
-114. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-115. Run live validation sessions after each behavior-touching replacement
+113. Opportunity-candidates true runtime helper module: integrated in `bootstrap-0.4.385`
+114. Constants: partially integrated for high-value coin defaults
+115. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+116. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
