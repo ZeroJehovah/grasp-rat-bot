@@ -264,6 +264,7 @@ function main() {
   const sourceBot = readText('grasp-rat-bot.js');
   const runtimeSourceModule = readText('src/browser/runtime-source.js');
   const runtimeAssemblySourceModule = readText('src/browser/runtime-assembly-source.js');
+  const runtimeFragmentsSourceModule = readText('src/browser/runtime-fragments-source.js');
   const runtimeBootstrapSourceModule = readText('src/browser/runtime-bootstrap-source.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
@@ -360,6 +361,7 @@ function main() {
     sourceBot,
     runtimeSourceModule,
     runtimeAssemblySourceModule,
+    runtimeFragmentsSourceModule,
     runtimeBootstrapSourceModule,
     browserPageGlobalCoreSource,
     targetOverlaySourceModule,
@@ -500,6 +502,7 @@ function main() {
     assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
+    assert(runtimeAssemblySourceModule.includes("require('./runtime-fragments-source')"), 'runtime assembly source does not import the runtime fragment registry');
     assert(runtimeUtilsSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils source module import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('../shared/display-format')"), 'status-panel runtime source display-format import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
@@ -511,51 +514,55 @@ function main() {
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./status-panel-runtime-source')"), 'status-panel runtime source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-log-runtime-source')"), 'combat-log runtime source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-aim-source')"), 'combat-aim source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-state-source')"), 'combat-state source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./tick-source')"), 'tick source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./startup-source')"), 'startup source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./bot-object-source')"), 'bot-object source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./control-login-runtime-source')"), 'control-login runtime source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./return-block-source')"), 'return-block source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./exit-motion-source')"), 'exit-motion source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./persistent-last-self-source')"), 'persistent-last-self source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./persistent-exit-source')"), 'persistent-exit source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./restored-runtime-state-source')"), 'restored runtime state source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./status-panel-runtime-source')"), 'status-panel runtime source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-log-runtime-source')"), 'combat-log runtime source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-aim-source')"), 'combat-aim source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-state-source')"), 'combat-state source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./tick-source')"), 'tick source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./startup-source')"), 'startup source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./bot-object-source')"), 'bot-object source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./control-login-runtime-source')"), 'control-login runtime source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./return-block-source')"), 'return-block source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./exit-motion-source')"), 'exit-motion source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./persistent-last-self-source')"), 'persistent-last-self source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./persistent-exit-source')"), 'persistent-exit source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./restored-runtime-state-source')"), 'restored runtime state source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
     assert(runtimeAssemblySourceModule.includes('function browserRuntimeAssemblySource(config)'), 'runtime assembly source factory not found');
     assert(runtimeAssemblySourceModule.includes('module.exports = {\n  browserRuntimeAssemblySource'), 'runtime assembly source module export not found');
     assert(runtimeAssemblySourceModule.includes('function renderRuntimeFragments(fragments)'), 'runtime assembly fragment renderer not found');
+    assert(runtimeFragmentsSourceModule.includes('function browserRuntimeFragments(config)'), 'runtime fragments source factory not found');
+    assert(runtimeFragmentsSourceModule.includes('module.exports = {\n  browserRuntimeFragments'), 'runtime fragments source export not found');
     const assemblyBody = functionBody(runtimeAssemblySourceModule, 'browserRuntimeAssemblySource');
-    assert(assemblyBody.includes('const fragments = ['), 'runtime assembly source does not use an explicit fragment registry');
-    assert(assemblyBody.includes('return renderRuntimeFragments(fragments);'), 'runtime assembly source does not render the fragment registry');
-    assert(assemblyBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
+    const fragmentRegistryBody = functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragments');
+    assert(assemblyBody.includes('return renderRuntimeFragments(browserRuntimeFragments(config));'), 'runtime assembly source does not render the fragment registry');
+    assert(fragmentRegistryBody.includes('const fragments = ['), 'runtime fragments source does not use an explicit fragment registry');
+    assert(fragmentRegistryBody.includes('return fragments;'), 'runtime fragments source does not return the fragment registry');
+    assert(fragmentRegistryBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
     assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');
     assert(restoredRuntimeStateSourceModule.includes('module.exports = { restoredRuntimeStateSource }'), 'restored runtime state source module export not found');
     assert(restoredRuntimeStateSourceModule.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state source does not restore coin failures');
@@ -661,7 +668,7 @@ function main() {
       'networkQualitySummarySource',
       'runtimeSummarySource'
     ].forEach(name => {
-      assert(assemblyBody.includes(name), `${name} is not listed in the runtime assembly fragment registry`);
+      assert(fragmentRegistryBody.includes(name), `${name} is not listed in the runtime fragment registry`);
     });
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
