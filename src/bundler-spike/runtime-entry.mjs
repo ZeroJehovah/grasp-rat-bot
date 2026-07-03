@@ -7,6 +7,7 @@ import exitSummary from '../browser/runtime/exit-summary.js';
 import preservedState from '../browser/runtime/browser-preserved-state.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
+import actionArbitration from '../browser/runtime/action-arbitration.js';
 import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
@@ -34,6 +35,9 @@ function helperStatus(config = {}) {
   const switchState = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
   actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(sampleAction, switchState, { nowMs: 1000 });
   const switchResult = actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(nextAction, switchState, { nowMs: 1200 });
+  const arbitrationState = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+  actionArbitration.applyFinalActionArbitrationCore(sampleAction, arbitrationState, { nowMs: 1000, holdMs: 1000 });
+  const arbitrationResult = actionArbitration.applyFinalActionArbitrationCore(nextAction, arbitrationState, { nowMs: 1200, holdMs: 1000 });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -43,6 +47,7 @@ function helperStatus(config = {}) {
     names,
     nameCount: arrayCountRuntime.arrayCount(names),
     actionFocus: actionPriority.actionFocusSummary(sampleAction),
+    finalActionHeld: arbitrationResult.held,
     actionSwitch: switchResult.event,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({

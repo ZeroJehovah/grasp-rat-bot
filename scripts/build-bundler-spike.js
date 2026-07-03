@@ -105,6 +105,7 @@ async function selfTest() {
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
+  assert(source.includes('function applyFinalActionArbitrationCore'), 'action-arbitration helper was not bundled');
   assert(source.includes('function recordActionSwitchDiagnosticsCore'), 'action-switch diagnostics helper was not bundled');
   assert(source.includes('function arrayCount'), 'browser runtime helper was not bundled');
   new vm.Script(source, { filename: outFile });
@@ -121,6 +122,7 @@ async function selfTest() {
   assert(Array.isArray(status.names) && status.names.length === 2, 'spike did not execute target whitelist helper');
   assert(status.nameCount === 2, 'spike did not execute browser runtime helper');
   assert(status.actionFocus?.type === 'coin', 'spike did not execute action focus helper');
+  assert(status.finalActionHeld === true, 'spike did not execute final action arbitration helper');
   assert(status.actionSwitch?.type === 'target-switch', 'spike did not execute action-switch diagnostics helper');
   assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');

@@ -1140,6 +1140,18 @@ This is a source-organization split only. It keeps final-action arbitration beha
 
 This is a source-organization split only. It keeps target-switch diagnostics behavior unchanged while moving the second final-action strategy helper behind an executable browser runtime adapter.
 
+## 2026-07-04 Follow-up: Phase 2CY Action Arbitration Helper Module
+
+`bootstrap-0.4.378` completes the current final-action helper adapter pass with action arbitration:
+
+- `src/browser/runtime/action-arbitration.js` now owns the executable browser runtime helper exports for final action band ranking, reusable-action checks, hold-previous decisions, arbitration core execution, and status summaries by reusing `src/strategy/action-arbitration.js`.
+- `src/browser/action-arbitration-source.js` imports final-action arbitration through that browser runtime module while still inlining the same helper function text into the generated runtime.
+- `src/bundler-spike/runtime-entry.mjs` imports final-action arbitration through the browser runtime module path and now verifies `applyFinalActionArbitrationCore()` execution through the spike status payload.
+- Static verification checks the runtime helper module, the action-arbitration import path, the strategy-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.378` hash stayed `e4b2ede8d670ef7c940bb338c29f510634ee2816487d43ea02b49463367608a3` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps final-action arbitration behavior unchanged while removing the remaining direct strategy import from `src/browser/action-arbitration-source.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1248,9 +1260,10 @@ This is a source-organization split only. It keeps target-switch diagnostics beh
 103. Runtime-defaults true runtime helper module: integrated in `bootstrap-0.4.375`
 104. Action-priority true runtime helper module: integrated in `bootstrap-0.4.376`
 105. Action-switch diagnostics true runtime helper module: integrated in `bootstrap-0.4.377`
-106. Constants: partially integrated for high-value coin defaults
-107. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-108. Run live validation sessions after each behavior-touching replacement
+106. Action-arbitration true runtime helper module: integrated in `bootstrap-0.4.378`
+107. Constants: partially integrated for high-value coin defaults
+108. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+109. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
