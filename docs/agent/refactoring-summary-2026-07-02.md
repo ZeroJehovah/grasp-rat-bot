@@ -1356,8 +1356,9 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 115. Stamina-budget true runtime helper module: integrated in `bootstrap-0.4.387`
 116. Opportunity-constants true runtime helper module: integrated in `bootstrap-0.4.388`
 117. Named runtime fragment registry boundary: integrated in `bootstrap-0.4.389`
-118. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-119. Run live validation sessions after each behavior-touching replacement
+118. Explicit runtime fragment names: integrated in `bootstrap-0.4.390`
+119. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+120. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
