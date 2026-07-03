@@ -366,6 +366,17 @@ This is an equivalent build/source-boundary migration only. It does not change s
 
 This is a small real-runtime migration slice. It does not remove every direct `window` access yet; remaining page-global reads inside larger browser fragments should be migrated through this shared core in later validated steps.
 
+## 2026-07-03 Follow-up: Phase 2AA Control Login Page-Global Guards
+
+`bootstrap-0.4.299` continues the page-global adapter migration inside `src/browser/control-login-source.js`:
+
+- Post-login zoom delayed callbacks now check the installed bot identity through `readPageGlobal(BOT_KEY, null, pageGlobal)` instead of direct `window[BOT_KEY]` reads.
+- Pause reason and paused-state sync now read page globals through `readPageGlobal()` while preserving the existing `localStorage` fallback.
+- `scripts/verify-objective-build.js` now rejects direct `window[BOT_KEY]`, `window.__graspRatBotPauseReason`, and `window.__graspRatBotPaused` reads in the control-login source module.
+- The generated production dist remains a single esbuild-produced browser script, and `src/browser-modules/` is not present in the tracked source tree.
+
+This is still an equivalent runtime-boundary cleanup only. It reduces direct page-global coupling in a large browser fragment without changing login, zoom, pause, or strategy behavior.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -395,9 +406,10 @@ This is a small real-runtime migration slice. It does not remove every direct `w
 24. Production esbuild remote build: integrated in `bootstrap-0.4.296`
 25. Browser runtime source boundary: integrated in `bootstrap-0.4.297`
 26. Page-global core integration: integrated in `bootstrap-0.4.298`
-27. Constants: partially integrated for high-value coin defaults
-28. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-29. Run live validation sessions after each behavior-touching replacement
+27. Control-login page-global guards: integrated in `bootstrap-0.4.299`
+28. Constants: partially integrated for high-value coin defaults
+29. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+30. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
