@@ -54,7 +54,7 @@ const { opportunityStaminaSource } = require('./opportunity-stamina-source');
 const { opportunitySnapshotSource } = require('./opportunity-snapshot-source');
 const { postAttackSource } = require('./post-attack-source');
 const { opportunityActionsSource } = require('./opportunity-actions-source');
-const { opportunityRouteSource } = require('./opportunity-route-source');
+const { opportunityCandidateSource } = require('./opportunity-candidate-source');
 const { coinTargetRuntimeSource } = require('./coin-target-runtime-source');
 const { controlLoginSource } = require('./control-login-source');
 const { nativeStateSource } = require('./native-state-source');
@@ -107,17 +107,6 @@ const {
   opportunityRouteIds,
   rememberOpportunityChoiceCore
 } = require('../strategy/opportunity-choice');
-const {
-  opportunityEffectiveStaminaCostCore,
-  opportunityValueScoreCore,
-  opportunityPriorityTierCore,
-  mergeCoinRouteDisplayCore,
-  uniqueVisibleRouteCoinsCore,
-  buildCoinOpportunityCandidatesCore,
-  buildEnemyOpportunityCandidatesCore,
-  buildOpportunityCandidatesCore,
-  bestCoinOpportunityScoreCore
-} = require('../strategy/opportunity-candidates');
 function browserBotSource(config) {
   return `
 (() => {
@@ -1131,72 +1120,7 @@ ${returnBlockSource()}
 
 ${classifySource()}${offlineSafetySource()}
 	${coinSafetySource()}${targetSelectionSource()}${combatMovementSource()}${combatAimSource()}${opportunityStaminaSource()}
-${combatStateSource()}${combatFireSource()}${combatLeaveCoverSource()}${combatActionSource()}${opportunitySnapshotSource()}
-  function opportunityPriorityTier(item) {
-    return opportunityPriorityTierCore(item, {
-      visibleDistance: cfg.opportunityVisibleDistance,
-      nearbyPriorityDistance: cfg.opportunityNearbyPriorityDistance
-    });
-  }
-
-	  ${opportunityEffectiveStaminaCostCore.toString()}
-	  ${opportunityValueScoreCore.toString()}
-	  ${opportunityPriorityTierCore.toString()}
-	  ${mergeCoinRouteDisplayCore.toString()}
-	  ${uniqueVisibleRouteCoinsCore.toString()}
-	  ${buildCoinOpportunityCandidatesCore.toString()}
-	  ${buildEnemyOpportunityCandidatesCore.toString()}
-	  ${buildOpportunityCandidatesCore.toString()}
-	  ${bestCoinOpportunityScoreCore.toString()}
-
-${opportunityRouteSource()}	  function opportunityCandidateCoreOptions(self = null) {
-	    return {
-	      safeCoinCandidates,
-	      coinStaminaCost: opportunityCoinStaminaCost,
-	      coinStaminaAffordable: (coin, staminaCost = opportunityCoinStaminaCost(coin)) => coinStaminaAffordableWithDiagnostic(self, coin, staminaCost),
-	      scoreCoinOpportunity,
-	      snapshotCoinNavigationReason,
-	      maxCoinDistance: cfg.coinMaxDistance,
-	      routeMaxDistance: cfg.coinRouteMaxDistance,
-	      scoreEnemyOpportunity,
-	      enemyStaminaCost: opportunityEnemyStaminaCost,
-	      opportunityStaminaAffordable: staminaCost => opportunityStaminaAffordable(self, staminaCost),
-	      isAfkProfitTarget,
-	      attackRange: cfg.attackRange,
-	      attackEngageRange: cfg.attackEngageRange,
-	      priorityTier: opportunityPriorityTier,
-	      visibleDistance: cfg.opportunityVisibleDistance,
-	      nearbyPriorityDistance: cfg.opportunityNearbyPriorityDistance
-	    };
-	  }
-
-  function uniqueVisibleRouteCoins(coinGroups) {
-    return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
-  }
-
-  function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-    const route = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
-    return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
-  }
-
-  function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
-    if (!isFullHp(self)) return null;
-    const target = pickCombatTarget(self, combatTargets, bullets, { mode: 'profit' });
-    if (!target) return null;
-    const targetScore = scoreEnemyOpportunity(target);
-    if (targetScore === null) return null;
-    if (!opportunityStaminaAffordable(self, opportunityEnemyStaminaCost(target))) return null;
-    const coinScore = bestCoinOpportunityScore(self, coinGroups, activeThreats);
-    if (targetScore < coinScore) return null;
-    return {
-      ...target,
-      combatIntent: 'profit',
-      combatOpportunityScore: Math.round(targetScore),
-      competingCoinScore: Number.isFinite(coinScore) ? Math.round(coinScore) : null
-    };
-  }
-
-${postAttackSource()}${opportunityActionsSource()}			  ${opportunityKey.toString()}
+${combatStateSource()}${combatFireSource()}${combatLeaveCoverSource()}${combatActionSource()}${opportunitySnapshotSource()}${opportunityCandidateSource()}${postAttackSource()}${opportunityActionsSource()}			  ${opportunityKey.toString()}
 			  ${opportunityChoiceType.toString()}
 			  ${opportunityChoiceId.toString()}
 			  ${opportunityChoiceKey.toString()}
