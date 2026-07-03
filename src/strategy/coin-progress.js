@@ -163,11 +163,57 @@ function updateCoinProgressRecordCore(previousProgress, attempt, distance, nowMs
   };
 }
 
+function buildIgnoredCoinProgressCore(id, previous, distance, nowMs = 0, ignoreUntil = 0, mode = '') {
+  const t = Number(nowMs) || 0;
+  if (mode === 'stuck') {
+    return {
+      id,
+      startedAt: previous?.startedAt,
+      lastImprovedAt: previous?.lastImprovedAt,
+      bestDistance: Number(previous?.bestDistance),
+      lastDistance: distance,
+      ignoredAt: t,
+      ignoreUntil
+    };
+  }
+  return {
+    ...(previous || {}),
+    ignoredAt: t,
+    ignoreUntil
+  };
+}
+
+function buildIgnoredCoinPatrolActionCore(action, id, distance, source, failure, escape, nowMs = 0, reason = '', includeAges = false) {
+  const t = Number(nowMs) || 0;
+  const ignoredCoin = {
+    id,
+    distance,
+    bestDistance: Number(source?.bestDistance),
+    ignoreMs: failure?.ignoreMs,
+    failureCount: failure?.count
+  };
+  if (includeAges) {
+    ignoredCoin.closeAgeMs = source.closeStartedAt ? Math.round(t - source.closeStartedAt) : 0;
+    ignoredCoin.nearAgeMs = source.nearStartedAt ? Math.round(t - source.nearStartedAt) : 0;
+    ignoredCoin.ageMs = Math.round(t - Number(source.startedAt || t));
+  }
+  return {
+    kind: 'patrol',
+    reason,
+    target: action?.target,
+    dx: escape?.dx,
+    dy: escape?.dy,
+    ignoredCoin
+  };
+}
+
 module.exports = {
   coinFailureIgnoreCore,
   staleCoinEscapeDirectionCore,
   coinProgressIntentCore,
   coinAttemptExpiredCore,
   updateCoinAttemptCore,
-  updateCoinProgressRecordCore
+  updateCoinProgressRecordCore,
+  buildIgnoredCoinProgressCore,
+  buildIgnoredCoinPatrolActionCore
 };
