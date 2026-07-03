@@ -324,6 +324,7 @@ function main() {
   const persistentClearSourceModule = readText('src/browser/persistent-clear-source.js');
   const pendingExitPersistenceSourceModule = readText('src/browser/pending-exit-persistence-source.js');
   const refreshExitDetailSourceModule = readText('src/browser/refresh-exit-detail-source.js');
+  const restoredCoinFailuresSourceModule = readText('src/browser/restored-coin-failures-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
@@ -386,6 +387,7 @@ function main() {
     persistentClearSourceModule,
     pendingExitPersistenceSourceModule,
     refreshExitDetailSourceModule,
+    restoredCoinFailuresSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
@@ -558,6 +560,7 @@ function main() {
     assert(botSourceModule.includes('${persistentClearSource()}'), 'persistent-clear module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitPersistenceSource()}'), 'pending-exit persistence module is not injected into browser runtime');
     assert(botSourceModule.includes('${refreshExitDetailSource()}'), 'refresh-exit-detail module is not injected into browser runtime');
+    assert(botSourceModule.includes('${restoredCoinFailuresSource()}'), 'restored-coin-failures module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
@@ -931,6 +934,13 @@ function main() {
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('holdRemainingMs'), 'refresh-exit-detail source factory does not refresh relogin hold remaining time');
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('staminaBudgetExit'), 'refresh-exit-detail source factory does not refresh stamina-budget exit summary');
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail source factory does not finalize display reason');
+    assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresSource() {'), 'restored-coin-failures source factory not found');
+    assert(restoredCoinFailuresSourceModule.includes('module.exports = { restoredCoinFailuresSource }'), 'restored-coin-failures source module export not found');
+    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('String.raw`'), 'restored-coin-failures source factory does not return raw browser source');
+    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('function restoredCoinFailures'), 'restored-coin-failures source factory does not include restore helper');
+    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('preserved.coinFailures'), 'restored-coin-failures source factory does not read preserved failures');
+    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures source factory does not restore severe ignore windows');
+    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('coinFailureHardIgnoreCount'), 'restored-coin-failures source factory does not restore hard ignore windows');
     assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
     assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');
