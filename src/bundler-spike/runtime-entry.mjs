@@ -12,6 +12,7 @@ import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostic
 import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
 import coinMotion from '../browser/runtime/coin-motion.js';
 import coinTarget from '../browser/runtime/coin-target.js';
+import coinProgress from '../browser/runtime/coin-progress.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -81,6 +82,27 @@ function helperStatus(config = {}) {
     { id: 'target-spike', x: 10, y: 20 },
     { coinCollectedPruneRadius: 5 }
   );
+  const coinProgressFailure = coinProgress.coinFailureIgnoreCore(
+    { count: 1, lastAt: 900 },
+    'progress',
+    1000,
+    {
+      coinFailureDecayMs: 5000,
+      coinNoProgressIgnoreMs: 400,
+      coinFailureMaxIgnoreMs: 2000
+    }
+  );
+  const coinProgressAttempt = coinProgress.updateCoinAttemptCore(null, {
+    kind: 'coin',
+    target: { id: 'progress-spike', amount: 2, distance: 1000, x: 50, y: 60 }
+  }, 1000, {
+    closeCoinStuckDistance: 100,
+    nearCoinStuckDistance: 200,
+    coinProgressMinGain: 50,
+    coinNearStuckResetGain: 20,
+    closeCoinStuckMs: 500,
+    nearCoinStuckMs: 700
+  });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -99,6 +121,9 @@ function helperStatus(config = {}) {
     coinTargetKey,
     coinTargetSnapshotCount: arrayCountRuntime.arrayCount(coinTargetSnapshot),
     coinTargetMatched,
+    coinProgressIgnoreMs: coinProgressFailure.ignoreMs,
+    coinProgressAttemptId: coinProgressAttempt.id,
+    coinProgressIntent: coinProgress.coinProgressIntentCore(sampleAction),
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

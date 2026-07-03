@@ -282,6 +282,7 @@ function main() {
   const coinDiagnosticsRuntimeModule = readText('src/browser/runtime/coin-diagnostics.js');
   const coinMotionRuntimeModule = readText('src/browser/runtime/coin-motion.js');
   const coinTargetRuntimeModule = readText('src/browser/runtime/coin-target.js');
+  const coinProgressRuntimeModule = readText('src/browser/runtime/coin-progress.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -385,6 +386,7 @@ function main() {
     coinDiagnosticsRuntimeModule,
     coinMotionRuntimeModule,
     coinTargetRuntimeModule,
+    coinProgressRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -2893,7 +2895,13 @@ function main() {
     assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeSource() {'), 'coin-progress runtime source factory not found');
     assert(coinProgressRuntimeSourceModule.includes('module.exports = { coinProgressRuntimeSource }'), 'coin-progress runtime source module export not found');
     assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('String.raw`'), 'coin-progress runtime source factory does not return raw browser source');
-    assert(coinProgressRuntimeSourceModule.includes("require('../strategy/coin-progress')"), 'coin-progress runtime source does not import coin progress strategy module');
+    assert(coinProgressRuntimeSourceModule.includes("require('./runtime/coin-progress')"), 'coin-progress runtime source does not import coin progress through browser runtime adapter');
+    assert(!coinProgressRuntimeSourceModule.includes("require('../strategy/coin-progress')"), 'coin-progress runtime source still imports coin progress directly from strategy');
+    assert(coinProgressRuntimeModule.includes("require('../../strategy/coin-progress')"), 'coin-progress runtime adapter does not reuse strategy module core');
+    assert(coinProgressRuntimeModule.includes('coinFailureIgnoreCore') && coinProgressRuntimeModule.includes('coinIgnoreCleanupIntentCore'), 'coin-progress runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/coin-progress.js'"), 'bundler spike does not import coin progress runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('coinProgress.coinFailureIgnoreCore('), 'bundler spike does not execute coin progress failure helper');
+    assert(bundlerSpikeBuildSource.includes('status.coinProgressIgnoreMs === 800'), 'bundler spike self-test does not assert coin progress failure execution');
     assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('coinFailureIgnoreCore.toString()'), 'coin-progress runtime source factory does not inline coin failure ignore core');
     assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('function trackCoinProgress'), 'coin-progress runtime source factory does not include trackCoinProgress wrapper');
     assert(sourceRuntimeText.includes('coinFailureIgnoreCore.toString()'), 'source bot does not inject coin failure ignore core');

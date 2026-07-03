@@ -10,7 +10,7 @@ const {
   buildIgnoredCoinProgressCore,
   buildIgnoredCoinPatrolActionCore,
   coinIgnoreCleanupIntentCore
-} = require('../strategy/coin-progress');
+} = require('./runtime/coin-progress');
 
 function coinProgressRuntimeSource() {
   return String.raw`  ${coinFailureIgnoreCore.toString()}
