@@ -1,6 +1,6 @@
 'use strict';
 
-import * as runtimeUtils from '../shared/runtime-utils.js';
+import runtimeUtils from '../browser/runtime/runtime-utils.js';
 import * as displayFormat from '../shared/display-format.js';
 import * as targetWhitelist from '../shared/target-whitelist.js';
 import * as actionPriority from '../strategy/action-priority.js';
