@@ -313,6 +313,7 @@ function main() {
   const opportunityClearSourceModule = readText('src/browser/opportunity-clear-source.js');
   const coinProgressRuntimeSourceModule = readText('src/browser/coin-progress-runtime-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
+  const chooseActionSourceModule = readText('src/browser/choose-action-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
@@ -381,6 +382,7 @@ function main() {
     opportunityClearSourceModule,
     coinProgressRuntimeSourceModule,
     coinTargetRuntimeSourceModule,
+    chooseActionSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
@@ -499,6 +501,7 @@ function main() {
     assert(botSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(botSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
+    assert(botSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
@@ -583,6 +586,7 @@ function main() {
     assert(botSourceModule.includes('${leaveFlowSource()}'), 'leave-flow module is not injected into browser runtime');
     assert(botSourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
+    assert(botSourceModule.includes('${chooseActionSource()}'), 'choose-action module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
@@ -842,6 +846,16 @@ function main() {
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('pickIncidentalCoinPickupsCore.toString()'), 'coin-target runtime source factory does not inline incidental pickup core');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('function markCoinCollected'), 'coin-target runtime source factory does not include tracked pickup recorder');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('function recordIncidentalCoinPickups'), 'coin-target runtime source factory does not include incidental pickup recorder');
+    assert(chooseActionSourceModule.includes('function chooseActionSource() {'), 'choose-action source factory not found');
+    assert(chooseActionSourceModule.includes('module.exports = { chooseActionSource }'), 'choose-action source module export not found');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('String.raw`'), 'choose-action source factory does not return raw browser source');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('function chooseAction(self)'), 'choose-action source factory does not include chooseAction');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('buildCoinDiagnostics'), 'choose-action source factory does not preserve coin diagnostics');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('highValueVisibleCoinPriorityNeeded'), 'choose-action source factory does not preserve high-value visible coin priority');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickPostAttackDropCoin'), 'choose-action source factory does not preserve post-attack drop coin handling');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('summarizeNearestCoinStaminaBudgetExit'), 'choose-action source factory does not preserve stamina-budget exit handling');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickBestOpportunity'), 'choose-action source factory does not preserve opportunity selection');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes("'wait-for-visible-coin-refresh'"), 'choose-action source factory does not preserve visible-coin wait reason');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
