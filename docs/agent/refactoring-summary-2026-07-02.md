@@ -878,6 +878,17 @@ This is a source-organization split only. It preserves target whitelist blocking
 
 This is a source-organization split only. It preserves the `Array.isArray(value) ? value.length : 0` fallback used by status, diagnostics, and runtime summaries, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2CB Choose-Action Source Factory
+
+`bootstrap-0.4.355` extracts the top-level `chooseAction(self)` browser decision source into a dedicated browser source module:
+
+- `src/browser/choose-action-source.js` now owns the raw browser source for `chooseAction(self)`.
+- `src/browser/bot-source.js` imports and injects `${chooseActionSource()}` after coin target runtime helpers and before `tick()`.
+- Static verification checks the new source-factory shape, injection point, and anchors for coin diagnostics, high-value visible coin priority, post-attack drop coin handling, stamina-budget exits, opportunity selection, and visible-coin wait fallback.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It isolates a 451-line decision function and reduces `src/browser/bot-source.js` to 1720 lines while preserving the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -963,9 +974,11 @@ This is a source-organization split only. It preserves the `Array.isArray(value)
 80. Tick safety source factory: integrated in `bootstrap-0.4.352`
 81. Attack-worth source factory: integrated in `bootstrap-0.4.353`
 82. Array-count source factory: integrated in `bootstrap-0.4.354`
-83. Constants: partially integrated for high-value coin defaults
-84. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-85. Run live validation sessions after each behavior-touching replacement
+83. Choose-action source factory: integrated in `bootstrap-0.4.355`
+84. Tick loop source factory: next high-value source-organization slice
+85. Constants: partially integrated for high-value coin defaults
+86. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+87. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
