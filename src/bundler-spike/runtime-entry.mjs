@@ -656,6 +656,29 @@ function helperStatus(config = {}) {
       clamp: (value, min, max) => Math.min(max, Math.max(min, value))
     }
   );
+  const exitReloginSuppressMatch = exitRelogin.isExitLoginSuppressReasonCore('combat leave');
+  const exitReloginUnsafeMin = exitRelogin.unsafeExitReloginMinDelayMsCore({
+    unsafeExitReloginMinDelayMs: 1234
+  });
+  const exitReloginPendingReason = exitRelogin.pendingExitSuppressReasonCore('enemy leave');
+  const exitReloginBudgetHold = exitRelogin.staminaBudgetExitHoldUntilCore(
+    { coin: { id: 'budget-coin' } },
+    1000,
+    () => 3000
+  );
+  const exitReloginStaminaHold = exitRelogin.staminaExitHoldUntilForDetailCore({
+    offlineSafety: {
+      staminaBudgetExit: { coin: { id: 'budget-coin' } },
+      staminaExhausted: { window: '1d' }
+    }
+  }, 1000, {
+    staminaBudgetExitHoldUntil: (detail, t) => exitRelogin.staminaBudgetExitHoldUntilCore(detail, t, () => 3000),
+    staminaResetHoldUntil: () => ({ until: 6000, reason: 'stamina reset' })
+  });
+  const exitReloginOfflineUnsafe = exitRelogin.offlineExitRequiresUnsafeReloginDelayCore(
+    'global sampling outage',
+    { samplingOutage: true }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -759,6 +782,12 @@ function helperStatus(config = {}) {
     exitReloginOfflineDisplay,
     exitReloginHpDelayMs: exitReloginHpDelay.delayMs,
     exitReloginHpDelayRepeatMinMs: exitReloginHpDelay.repeatMinMs,
+    exitReloginSuppressMatch,
+    exitReloginUnsafeMin,
+    exitReloginPendingReason,
+    exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
+    exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,
+    exitReloginOfflineUnsafe,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
