@@ -286,6 +286,7 @@ function main() {
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
+  const arrayCountSourceModule = readText('src/browser/array-count-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const tickSafetySourceModule = readText('src/browser/tick-safety-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
@@ -353,6 +354,7 @@ function main() {
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
+    arrayCountSourceModule,
     combatLogSourceModule,
     tickSafetySourceModule,
     importantLogSourceModule,
@@ -537,6 +539,7 @@ function main() {
     assert(botSourceModule.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
     assert(botSourceModule.includes('${targetWhitelistSource()}'), 'target-whitelist module is not injected into browser runtime');
     assert(botSourceModule.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
+    assert(botSourceModule.includes('${arrayCountSource()}'), 'array-count module is not injected into browser runtime');
     assert(botSourceModule.includes('${tickSafetySource()}'), 'tick-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
@@ -919,6 +922,11 @@ function main() {
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function postExitDecisionWithoutTarget'), 'exit-motion source factory does not include post-exit decision helper');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function clearPostExitTargetState'), 'exit-motion source factory does not include post-exit target cleanup helper');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('removeTargetOverlay()'), 'exit-motion source factory does not clear target overlay');
+    assert(arrayCountSourceModule.includes('function arrayCountSource() {'), 'array-count source factory not found');
+    assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
+    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('String.raw`'), 'array-count source factory does not return raw browser source');
+    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('function arrayCount'), 'array-count source factory does not include array count helper');
+    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('Array.isArray(value) ? value.length : 0'), 'array-count source factory does not preserve array length fallback');
     assert(tickSafetySourceModule.includes('function tickSafetySource() {'), 'tick-safety source factory not found');
     assert(tickSafetySourceModule.includes('module.exports = { tickSafetySource }'), 'tick-safety source module export not found');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('String.raw`'), 'tick-safety source factory does not return raw browser source');

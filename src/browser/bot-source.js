@@ -37,6 +37,7 @@ const {
 const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
 const { statusPanelSource } = require('./status-panel-source');
+const { arrayCountSource } = require('./array-count-source');
 const { combatLogSource } = require('./combat-log-source');
 const { tickSafetySource } = require('./tick-safety-source');
 const { importantLogSource } = require('./important-log-source');
@@ -718,10 +719,7 @@ ${targetOverlaySource()}
 ${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}
 
       ${safeStringify.toString()}
-
-      function arrayCount(value) {
-        return Array.isArray(value) ? value.length : 0;
-      }
+${arrayCountSource()}
 
       ${safeJsonClone.toString()}
 
