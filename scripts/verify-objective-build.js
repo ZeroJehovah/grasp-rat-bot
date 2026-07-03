@@ -267,6 +267,7 @@ function main() {
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
   const bundlerSpikeBuildSource = readText('scripts/build-bundler-spike.js');
+  const remoteBundledBuildSource = readText('scripts/build-remote-bot-bundled.js');
   const bundlerSpikeEntrySource = readText('src/bundler-spike/runtime-entry.mjs');
   const bundlerSpikeAdapterSource = readText('src/bundler-spike/page-adapter.mjs');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
@@ -423,8 +424,10 @@ function main() {
     assert(rootPackage.devDependencies?.esbuild === '0.25.11', 'esbuild spike dependency is not pinned');
     assert(rootPackage.scripts?.['build:bundler-spike'] === 'node scripts/build-bundler-spike.js', 'bundler spike build script not found');
     assert(rootPackage.scripts?.['test:bundler-spike'] === 'node scripts/build-bundler-spike.js --self-test', 'bundler spike self-test script not found');
+    assert(rootPackage.scripts?.['build:remote-bundled'] === 'node scripts/build-remote-bot-bundled.js', 'remote bundled candidate build script not found');
+    assert(rootPackage.scripts?.['test:remote-bundled'] === 'node scripts/build-remote-bot-bundled.js --self-test', 'remote bundled candidate self-test script not found');
     assert(buildRemoteSource.includes("require('../src/browser/bot-source')"), 'production remote build no longer uses the source builder');
-    assert(!buildRemoteSource.includes('build-bundler-spike') && !buildRemoteSource.includes('esbuild'), 'production remote build is coupled to the bundler spike');
+    assert(!buildRemoteSource.includes('build-bundler-spike') && !buildRemoteSource.includes('build-remote-bot-bundled') && !buildRemoteSource.includes('esbuild'), 'production remote build is coupled to the bundler candidates');
   });
 
   check('bundler spike bundles shared and strategy helpers into a browser IIFE', () => {
@@ -464,6 +467,28 @@ function main() {
     assert(bundlerSpikeBuildSource.includes("storageProbe?.scope === 'window'"), 'bundler spike self-test does not cover window localStorage');
     assert(bundlerSpikeBuildSource.includes("/require\\(['\"]\\.\\.?\\//"), 'bundler spike does not reject unresolved relative require calls');
     assert(bundlerSpikeBuildSource.includes("/\\bfrom\\s+['\"]\\.\\.?\\//"), 'bundler spike does not reject unresolved relative import calls');
+  });
+
+  check('remote bundled candidate parses the full generated runtime through esbuild', () => {
+    assert(remoteBundledBuildSource.includes("const esbuild = require('esbuild')"), 'remote bundled candidate build does not use esbuild');
+    assert(remoteBundledBuildSource.includes("const { browserBotSource } = require('../src/browser/bot-source')"), 'remote bundled candidate does not use the browser source builder');
+    assert(remoteBundledBuildSource.includes("stdin: {\n      contents: directSource"), 'remote bundled candidate does not feed generated runtime source to esbuild stdin');
+    assert(remoteBundledBuildSource.includes("format: 'iife'"), 'remote bundled candidate does not build an IIFE');
+    assert(remoteBundledBuildSource.includes("platform: 'browser'"), 'remote bundled candidate platform is not browser');
+    assert(remoteBundledBuildSource.includes("target: ['es2020']"), 'remote bundled candidate target is not es2020');
+    assert(remoteBundledBuildSource.includes("production: false"), 'remote bundled candidate manifest must stay non-production');
+    assert(remoteBundledBuildSource.includes("mode: 'full-generated-remote-candidate'"), 'remote bundled candidate manifest mode not found');
+    assert(remoteBundledBuildSource.includes('directSha256'), 'remote bundled candidate does not record direct source hash');
+    assert(remoteBundledBuildSource.includes('verifyBundledCandidate(source, manifest, result);'), 'remote bundled candidate self-test does not verify the built output');
+    assert(remoteBundledBuildSource.includes("new vm.Script(source"), 'remote bundled candidate self-test does not parse the bundled output');
+    assert(remoteBundledBuildSource.includes("source.includes('__graspRatBot')"), 'remote bundled candidate self-test does not check the bot global key');
+    assert(remoteBundledBuildSource.includes("source.includes('window[BOT_KEY] = bot')"), 'remote bundled candidate self-test does not check bot installation');
+    assert(remoteBundledBuildSource.includes("source.includes('function buildRuntimeDefaults')"), 'remote bundled candidate self-test does not check runtime defaults preservation');
+    assert(remoteBundledBuildSource.includes("source.includes('function updateBotPanel')"), 'remote bundled candidate self-test does not check status panel preservation');
+    assert(remoteBundledBuildSource.includes("source.includes('function getNativeState')"), 'remote bundled candidate self-test does not check native state preservation');
+    assert(remoteBundledBuildSource.includes("!source.includes('module.exports')"), 'remote bundled candidate self-test does not reject CommonJS exports');
+    assert(remoteBundledBuildSource.includes("/require\\(['\"]\\.\\.?\\//"), 'remote bundled candidate does not reject unresolved relative require calls');
+    assert(remoteBundledBuildSource.includes("/\\bfrom\\s+['\"]\\.\\.?\\//"), 'remote bundled candidate does not reject unresolved relative import calls');
   });
 
   for (const file of REMOTE_BOT_FILES) {
