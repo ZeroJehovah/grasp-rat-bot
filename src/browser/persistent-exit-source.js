@@ -1,6 +1,6 @@
 'use strict';
 
-function persistentExitSource() {
+function persistentExitInlineSource() {
   return String.raw`
 	  function readPersistentExitState(key, t = Date.now()) {
 	    let state = null;
@@ -61,4 +61,28 @@ function persistentExitSource() {
 	  }`;
 }
 
-module.exports = { persistentExitSource };
+function bundledPersistentExitSource() {
+  return `const {
+	    readPersistentExitStateCore,
+	    writePersistentExitStateCore
+	  } = require('./src/browser/runtime/persistent-exit');
+
+	  function readPersistentExitState(key, t = Date.now()) {
+	    return readPersistentExitStateCore(localStorage, key, refreshExitDetail, t);
+	  }
+
+	  function writePersistentExitState(key, detail) {
+	    writePersistentExitStateCore(localStorage, key, detail, refreshExitDetail);
+	  }`;
+}
+
+function persistentExitSource(options = {}) {
+  if (options.bundledRuntime) return bundledPersistentExitSource();
+  return persistentExitInlineSource();
+}
+
+module.exports = {
+  persistentExitInlineSource,
+  bundledPersistentExitSource,
+  persistentExitSource
+};

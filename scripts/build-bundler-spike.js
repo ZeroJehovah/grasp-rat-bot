@@ -102,6 +102,8 @@ async function selfTest() {
   assert(source.includes('function safeStringify'), 'shared runtime helper was not bundled');
   assert(source.includes('function formatDistance'), 'display helper was not bundled');
   assert(source.includes('function offlineLeaveSummaryText'), 'exit-summary helper was not bundled');
+  assert(source.includes('function readPersistentExitStateCore'), 'persistent-exit read helper was not bundled');
+  assert(source.includes('function writePersistentExitStateCore'), 'persistent-exit write helper was not bundled');
   assert(source.includes('function readPersistentLastSelfStateCore'), 'persistent-last-self read helper was not bundled');
   assert(source.includes('function writePersistentLastSelfStateCore'), 'persistent-last-self write helper was not bundled');
   assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
@@ -184,6 +186,11 @@ async function selfTest() {
   assert(status.persistentLastSelfId === 'last-self-spike', 'spike did not execute persistent-last-self read helper');
   assert(status.persistentLastSelfWrite === true, 'spike did not execute persistent-last-self write helper');
   assert(status.persistentLastSelfWrittenAt === 2000, 'spike did not write persistent-last-self timestamp');
+  assert(status.persistentExitReadRestored === true, 'spike did not execute persistent-exit read helper');
+  assert(status.persistentExitReadReloginUntil === 0, 'spike did not clear expired persistent-exit relogin hold');
+  assert(status.persistentExitWrite === true, 'spike did not execute persistent-exit write helper');
+  assert(status.persistentExitWrittenReason === 'offline-leave', 'spike did not write persistent-exit reason');
+  assert(status.persistentExitWrittenHoldMs === 1000, 'spike did not refresh persistent-exit hold');
   assert(status.persistentClearRemoved === true, 'spike did not execute persistent-clear helper');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
