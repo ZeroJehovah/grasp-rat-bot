@@ -103,7 +103,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-persistent-clear',
     `
 `],
-    ['pending-exit-persistence', pendingExitPersistenceSource],
+    ['pending-exit-persistence', () => pendingExitPersistenceSource(config)],
     ['separator-after-pending-exit-persistence',
     `
 `],

@@ -280,6 +280,7 @@ function main() {
   const persistentExitRuntimeModule = readText('src/browser/runtime/persistent-exit.js');
   const persistentLastSelfRuntimeModule = readText('src/browser/runtime/persistent-last-self.js');
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
+  const pendingExitPersistenceRuntimeModule = readText('src/browser/runtime/pending-exit-persistence.js');
   const refreshExitDetailRuntimeModule = readText('src/browser/runtime/refresh-exit-detail.js');
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
   const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
@@ -407,6 +408,7 @@ function main() {
     persistentExitRuntimeModule,
     persistentLastSelfRuntimeModule,
     persistentClearRuntimeModule,
+    pendingExitPersistenceRuntimeModule,
     refreshExitDetailRuntimeModule,
     restoredCoinFailuresRuntimeModule,
     loginSnapshotGateRuntimeModule,
@@ -555,6 +557,7 @@ function main() {
     assert(distSource.includes('var require_persistent_exit = __commonJS'), 'bundled production dist does not bundle the persistent-exit runtime module through esbuild');
     assert(distSource.includes('var require_persistent_last_self = __commonJS'), 'bundled production dist does not bundle the persistent-last-self runtime module through esbuild');
     assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
+    assert(distSource.includes('var require_pending_exit_persistence = __commonJS'), 'bundled production dist does not bundle the pending-exit-persistence runtime module through esbuild');
     assert(distSource.includes('var require_refresh_exit_detail = __commonJS'), 'bundled production dist does not bundle the refresh-exit-detail runtime module through esbuild');
     assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
     assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
@@ -650,6 +653,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("['persistent-last-self', () => persistentLastSelfSource(config)]"), 'persistent-last-self source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-exit', () => persistentExitSource(config)]"), 'persistent-exit source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['pending-exit-persistence', () => pendingExitPersistenceSource(config)]"), 'pending-exit-persistence source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['refresh-exit-detail', () => refreshExitDetailSource(config)]"), 'refresh-exit-detail source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['restored-coin-failures', () => restoredCoinFailuresSource(config)]"), 'restored-coin-failures source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['login-snapshot-gate', () => loginSnapshotGateSource(config)]"), 'login-snapshot-gate source is not invoked with runtime config');
@@ -1338,15 +1342,35 @@ function main() {
     assert(persistentClearBundledBody.includes("require('./src/browser/runtime/persistent-clear')"), 'persistent-clear bundled source does not hand clear helper to the bundler');
     assert(persistentClearBundledBody.includes('clearPersistentStorageKey(key)'), 'persistent-clear bundled source does not clear provided exit key');
     assert(persistentClearBundledBody.includes('clearPersistentStorageKey(PENDING_EXIT_STATE_KEY)'), 'persistent-clear bundled source does not clear pending-exit storage key');
-    assert(pendingExitPersistenceSourceModule.includes('function pendingExitPersistenceSource() {'), 'pending-exit persistence source factory not found');
-    assert(pendingExitPersistenceSourceModule.includes('module.exports = { pendingExitPersistenceSource }'), 'pending-exit persistence source module export not found');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('String.raw`'), 'pending-exit persistence source factory does not return raw browser source');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function normalizePendingExitReloadConfirmation'), 'pending-exit persistence source factory does not include reload confirmation normalizer');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function normalizePendingExitStateForStorage'), 'pending-exit persistence source factory does not include storage normalizer');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function readPersistedPendingExitState'), 'pending-exit persistence source factory does not include storage reader');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function writePersistentPendingExitState'), 'pending-exit persistence source factory does not include storage writer');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function chooseInitialPendingExitState'), 'pending-exit persistence source factory does not include initial-state chooser');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('PENDING_EXIT_STATE_KEY'), 'pending-exit persistence source factory does not use pending-exit storage key');
+    assert(pendingExitPersistenceSourceModule.includes('function pendingExitPersistenceInlineSource() {'), 'pending-exit persistence inline source factory not found');
+    assert(pendingExitPersistenceSourceModule.includes('function bundledPendingExitPersistenceSource() {'), 'pending-exit persistence bundled source factory not found');
+    assert(pendingExitPersistenceSourceModule.includes('function pendingExitPersistenceSource(options = {})'), 'pending-exit persistence source selector not found');
+    assert(pendingExitPersistenceSourceModule.includes('pendingExitPersistenceInlineSource,\n  bundledPendingExitPersistenceSource,\n  pendingExitPersistenceSource'), 'pending-exit persistence source module exports not found');
+    const pendingExitPersistenceInlineBody = functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceInlineSource');
+    assert(pendingExitPersistenceInlineBody.includes('String.raw`'), 'pending-exit persistence inline source factory does not return raw browser source');
+    assert(pendingExitPersistenceInlineBody.includes('function normalizePendingExitReloadConfirmation'), 'pending-exit persistence inline source factory does not include reload confirmation normalizer');
+    assert(pendingExitPersistenceInlineBody.includes('function normalizePendingExitStateForStorage'), 'pending-exit persistence inline source factory does not include storage normalizer');
+    assert(pendingExitPersistenceInlineBody.includes('function readPersistedPendingExitState'), 'pending-exit persistence inline source factory does not include storage reader');
+    assert(pendingExitPersistenceInlineBody.includes('function writePersistentPendingExitState'), 'pending-exit persistence inline source factory does not include storage writer');
+    assert(pendingExitPersistenceInlineBody.includes('function chooseInitialPendingExitState'), 'pending-exit persistence inline source factory does not include initial-state chooser');
+    assert(pendingExitPersistenceInlineBody.includes('PENDING_EXIT_STATE_KEY'), 'pending-exit persistence inline source factory does not use pending-exit storage key');
+    const pendingExitPersistenceBundledBody = functionBody(pendingExitPersistenceSourceModule, 'bundledPendingExitPersistenceSource');
+    assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit-persistence')"), 'pending-exit persistence bundled source does not hand helpers to the bundler');
+    assert(pendingExitPersistenceBundledBody.includes('pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs'), 'pending-exit persistence bundled source does not bind config max age');
+    assert(pendingExitPersistenceBundledBody.includes('cloneForPendingExit') && pendingExitPersistenceBundledBody.includes('pendingExitDisplayReason') && pendingExitPersistenceBundledBody.includes('pendingExitRetryMs'), 'pending-exit persistence bundled source does not bind runtime helper dependencies');
+    assert(pendingExitPersistenceBundledBody.includes('readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY'), 'pending-exit persistence bundled source does not bind storage reader');
+    assert(pendingExitPersistenceBundledBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit'), 'pending-exit persistence bundled source does not bind storage writer');
+    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('options.bundledRuntime'), 'pending-exit persistence source selector does not switch on bundled runtime mode');
+    assert(pendingExitPersistenceRuntimeModule.includes('function normalizePendingExitReloadConfirmationCore'), 'pending-exit persistence runtime reload-confirmation core not found');
+    assert(pendingExitPersistenceRuntimeModule.includes('function normalizePendingExitStateForStorageCore'), 'pending-exit persistence runtime storage-normalizer core not found');
+    assert(pendingExitPersistenceRuntimeModule.includes('function readPersistedPendingExitStateCore'), 'pending-exit persistence runtime storage-reader core not found');
+    assert(pendingExitPersistenceRuntimeModule.includes('function writePersistentPendingExitStateCore'), 'pending-exit persistence runtime storage-writer core not found');
+    assert(pendingExitPersistenceRuntimeModule.includes('function chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime initial-state chooser core not found');
+    assert(pendingExitPersistenceRuntimeModule.includes('Math.max(60000, Number(resolved.pendingExitPersistMaxMs || 3600000) || 3600000)'), 'pending-exit persistence runtime core does not enforce minimum max age');
+    assert(pendingExitPersistenceRuntimeModule.includes('restoredAfterReload && requestedAt && !reloadedAt'), 'pending-exit persistence runtime core does not mark reload restoration');
+    assert(pendingExitPersistenceRuntimeModule.includes('storage.setItem(key, resolved.stringify(normalized))'), 'pending-exit persistence runtime core does not write normalized state');
+    assert(pendingExitPersistenceRuntimeModule.includes('return storedStamp > memoryStamp ? stored : memory;'), 'pending-exit persistence runtime core does not choose newest state');
+    assert(pendingExitPersistenceRuntimeModule.includes('normalizePendingExitReloadConfirmationCore,\n  normalizePendingExitStateForStorageCore,\n  readPersistedPendingExitStateCore,\n  writePersistentPendingExitStateCore,\n  chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime exports are incomplete');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');

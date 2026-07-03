@@ -107,6 +107,7 @@ async function selfTest() {
   assert(source.includes('function readPersistentLastSelfStateCore'), 'persistent-last-self read helper was not bundled');
   assert(source.includes('function writePersistentLastSelfStateCore'), 'persistent-last-self write helper was not bundled');
   assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
+  assert(source.includes('function normalizePendingExitStateForStorageCore'), 'pending-exit persistence helper was not bundled');
   assert(source.includes('function refreshExitDetailCore'), 'refresh-exit-detail helper was not bundled');
   assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
   assert(source.includes('function normalizeLoginSnapshotGateStateCore'), 'login snapshot gate helper was not bundled');
@@ -195,6 +196,13 @@ async function selfTest() {
   assert(status.persistentExitWrittenReason === 'offline-leave', 'spike did not write persistent-exit reason');
   assert(status.persistentExitWrittenHoldMs === 1000, 'spike did not refresh persistent-exit hold');
   assert(status.persistentClearRemoved === true, 'spike did not execute persistent-clear helper');
+  assert(status.pendingExitDisplayReason === 'display:offline summary', 'spike did not normalize pending-exit display reason');
+  assert(status.pendingExitRetryMs === 450, 'spike did not fill pending-exit retry duration');
+  assert(status.pendingExitReloadRestored === true, 'spike did not mark restored pending-exit reload confirmation');
+  assert(status.pendingExitReloadAt === 1500, 'spike did not stamp restored pending-exit reload time');
+  assert(status.pendingExitReadReason === 'stored-leave', 'spike did not read persisted pending-exit state');
+  assert(status.pendingExitWrittenReason === 'offline-leave', 'spike did not write pending-exit state');
+  assert(status.pendingExitChosenReason === 'stored-leave', 'spike did not choose newer pending-exit state');
   assert(status.refreshExitHoldRemainingMs === 1400, 'spike did not refresh exit hold remaining time');
   assert(status.refreshExitSummary === 'summary:stamina budget coin leave', 'spike did not refresh stamina-budget exit summary');
   assert(status.refreshExitDisplayReason === 'summary:stamina budget coin leave', 'spike did not finalize refreshed exit display reason');

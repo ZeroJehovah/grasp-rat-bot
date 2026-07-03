@@ -1386,6 +1386,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 145. Bundler-owned `restored-coin-failures` helper binding for remote builds: integrated in `bootstrap-0.4.417`
 146. Bundler-owned `login-snapshot-gate` helper binding for remote builds: integrated in `bootstrap-0.4.418`
 147. Bundler-owned `refresh-exit-detail` helper binding for remote builds: integrated in `bootstrap-0.4.419`
+148. Bundler-owned `pending-exit-persistence` helper binding for remote builds: integrated in `bootstrap-0.4.420`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
