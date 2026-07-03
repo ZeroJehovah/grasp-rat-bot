@@ -5,7 +5,7 @@ const {
   actionFocusTargetType,
   actionFocusId,
   actionFocusSummary
-} = require('../strategy/action-priority');
+} = require('./runtime/action-priority');
 const {
   finalActionBandRank,
   finalActionReusable,
