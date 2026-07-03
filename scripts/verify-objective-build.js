@@ -291,6 +291,7 @@ function main() {
   const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
   const entityRefreshSourceModule = readText('src/browser/entity-refresh-source.js');
   const classifySourceModule = readText('src/browser/classify-source.js');
+  const coinSafetySourceModule = readText('src/browser/coin-safety-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -328,6 +329,7 @@ function main() {
     combatHistorySourceModule,
     entityRefreshSourceModule,
     classifySourceModule,
+    coinSafetySourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -472,6 +474,7 @@ function main() {
     assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityRefreshSource()}'), 'entity-refresh module is not injected into browser runtime');
     assert(botSourceModule.includes('${classifySource()}'), 'classify module is not injected into browser runtime');
+    assert(botSourceModule.includes('${coinSafetySource()}'), 'coin-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -580,6 +583,16 @@ function main() {
     assert(functionBody(classifySourceModule, 'classifySource').includes('const combatTargets = attackableEntities'), 'classify source factory does not preserve combat target classification');
     assert(functionBody(classifySourceModule, 'classifySource').includes('const combatDodgeOnlyTargets = attackableEntities'), 'classify source factory does not preserve combat dodge-only classification');
     assert(functionBody(classifySourceModule, 'classifySource').includes('const snapshotCoins = allCoins.filter'), 'classify source factory does not preserve snapshot coin classification');
+    assert(coinSafetySourceModule.includes('function coinSafetySource() {'), 'coin-safety source factory not found');
+    assert(coinSafetySourceModule.includes('module.exports = {\n  coinSafetySource'), 'coin-safety source module export not found');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('String.raw`'), 'coin-safety source factory does not return raw browser source');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('coinDiagnosticsSummary.toString()'), 'coin-safety source factory does not inline coin diagnostics summary');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('buildCoinDiagnostics.toString()'), 'coin-safety source factory does not inline coin diagnostics builder');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function coinThreatDangerRadius'), 'coin-safety source factory does not include threat radius helper');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function safeCoinCandidates'), 'coin-safety source factory does not include safe coin candidate filter');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function pickRealtimeLocalCoin'), 'coin-safety source factory does not include realtime local coin picker');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function pickCoinField'), 'coin-safety source factory does not include field coin picker');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function pickDistantCoin'), 'coin-safety source factory does not include distant coin picker');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
