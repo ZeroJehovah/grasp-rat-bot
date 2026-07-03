@@ -297,6 +297,7 @@ function main() {
   const combatAimSourceModule = readText('src/browser/combat-aim-source.js');
   const combatStateSourceModule = readText('src/browser/combat-state-source.js');
   const combatFireSourceModule = readText('src/browser/combat-fire-source.js');
+  const combatLeaveCoverSourceModule = readText('src/browser/combat-leave-cover-source.js');
   const combatActionSourceModule = readText('src/browser/combat-action-source.js');
   const opportunityStaminaSourceModule = readText('src/browser/opportunity-stamina-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
@@ -342,6 +343,7 @@ function main() {
     combatAimSourceModule,
     combatStateSourceModule,
     combatFireSourceModule,
+    combatLeaveCoverSourceModule,
     combatActionSourceModule,
     opportunityStaminaSourceModule,
     coinTargetRuntimeSourceModule,
@@ -448,6 +450,7 @@ function main() {
     assert(botSourceModule.includes("require('./combat-aim-source')"), 'combat-aim source module import not found');
     assert(botSourceModule.includes("require('./combat-state-source')"), 'combat-state source module import not found');
     assert(botSourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
+    assert(botSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(botSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
     assert(botSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
@@ -499,6 +502,7 @@ function main() {
     assert(botSourceModule.includes('${combatAimSource()}'), 'combat-aim module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatStateSource()}'), 'combat-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatFireSource()}'), 'combat-fire module is not injected into browser runtime');
+    assert(botSourceModule.includes('${combatLeaveCoverSource()}'), 'combat-leave-cover module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatActionSource()}'), 'combat-action module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityStaminaSource()}'), 'opportunity-stamina module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
@@ -670,6 +674,15 @@ function main() {
     assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatLiveAimTarget'), 'combat-fire source factory does not include live aim target helper');
     assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatAimDynamicStrategyState'), 'combat-fire source factory does not include dynamic aim strategy helper');
     assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatAimTarget'), 'combat-fire source factory does not include combat aim target helper');
+    assert(combatLeaveCoverSourceModule.includes('function combatLeaveCoverSource() {'), 'combat-leave-cover source factory not found');
+    assert(combatLeaveCoverSourceModule.includes('module.exports = { combatLeaveCoverSource }'), 'combat-leave-cover source module export not found');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('String.raw`'), 'combat-leave-cover source factory does not return raw browser source');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('function combatLeaveCoverAction'), 'combat-leave-cover source factory does not include leave cover action builder');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combatPressureThreat'), 'combat-leave-cover source factory does not include pressure threat wiring');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combatAimTarget'), 'combat-leave-cover source factory does not include aim target wiring');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combatShootingPlan'), 'combat-leave-cover source factory does not include shooting plan wiring');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combat-stamina-hold'), 'combat-leave-cover source factory does not include stamina hold reason');
+    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combat-leave-cover'), 'combat-leave-cover source factory does not include leave cover reason');
     assert(combatActionSourceModule.includes('function combatActionSource() {'), 'combat-action source factory not found');
     assert(combatActionSourceModule.includes('module.exports = { combatActionSource }'), 'combat-action source module export not found');
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('String.raw`'), 'combat-action source factory does not return raw browser source');
