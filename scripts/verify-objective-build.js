@@ -291,6 +291,7 @@ function main() {
   const arrayCountSourceModule = readText('src/browser/array-count-source.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
+  const combatLogRuntimeSourceModule = readText('src/browser/combat-log-runtime-source.js');
   const tickSafetySourceModule = readText('src/browser/tick-safety-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
@@ -367,6 +368,7 @@ function main() {
     arrayCountSourceModule,
     runtimeUtilsSourceModule,
     combatLogSourceModule,
+    combatLogRuntimeSourceModule,
     tickSafetySourceModule,
     importantLogSourceModule,
     combatHistorySourceModule,
@@ -500,6 +502,8 @@ function main() {
     assert(runtimeUtilsSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils source module import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('../shared/display-format')"), 'status-panel runtime source display-format import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
+    assert(combatLogRuntimeSourceModule.includes("require('../shared/exit-summary')"), 'combat-log runtime source exit-summary import not found');
+    assert(combatLogRuntimeSourceModule.includes("require('./combat-log-source')"), 'combat-log runtime source module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
@@ -508,7 +512,7 @@ function main() {
     assert(runtimeAssemblySourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./status-panel-runtime-source')"), 'status-panel runtime source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
+    assert(runtimeAssemblySourceModule.includes("require('./combat-log-runtime-source')"), 'combat-log runtime source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./combat-aim-source')"), 'combat-aim source module import not found');
@@ -557,6 +561,9 @@ function main() {
     assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel runtime source factory not found');
     assert(statusPanelRuntimeSourceModule.includes('module.exports = { statusPanelRuntimeSource }'), 'status-panel runtime source export not found');
     assert(statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime source does not bind display helpers');
+    assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
+    assert(combatLogRuntimeSourceModule.includes('module.exports = { combatLogRuntimeSource }'), 'combat-log runtime source export not found');
+    assert(combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime source does not bind exit-summary helper');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
     assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
@@ -589,6 +596,7 @@ function main() {
       'arrayCountSource',
       'runtimeUtilityPreludeSource',
       'runtimeUtilityCloneSource',
+      'combatLogRuntimeSource',
       'tickSafetySource',
       'importantLogSource',
       'combatHistorySource',
@@ -648,7 +656,6 @@ function main() {
     ].forEach(name => {
       assert(assemblyBody.includes(name), `${name} is not listed in the runtime assembly fragment registry`);
     });
-    assert(assemblyBody.includes('() => combatLogSource({ combatLogExitSummaryFromDecision })'), 'combat-log module is not injected into browser runtime with exit-summary helper');
     assert(assemblyBody.includes('() => controlLoginSource({ staminaExhaustedWindowLabel })'), 'control-login module is not injected into browser runtime with stamina helper');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');

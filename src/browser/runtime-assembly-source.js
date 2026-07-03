@@ -1,9 +1,6 @@
 'use strict';
 
-const {
-  staminaExhaustedWindowLabel,
-  combatLogExitSummaryFromDecision
-} = require('../shared/exit-summary');
+const { staminaExhaustedWindowLabel } = require('../shared/exit-summary');
 const { runtimeBootstrapSource } = require('./runtime-bootstrap-source');
 const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
@@ -13,7 +10,7 @@ const {
   runtimeUtilityPreludeSource,
   runtimeUtilityCloneSource
 } = require('./runtime-utils-source');
-const { combatLogSource } = require('./combat-log-source');
+const { combatLogRuntimeSource } = require('./combat-log-runtime-source');
 const { tickSafetySource } = require('./tick-safety-source');
 const { importantLogSource } = require('./important-log-source');
 const { combatHistorySource } = require('./combat-history-source');
@@ -133,7 +130,7 @@ function browserRuntimeAssemblySource(config) {
     runtimeUtilityPreludeSource,
     arrayCountSource,
     runtimeUtilityCloneSource,
-    () => combatLogSource({ combatLogExitSummaryFromDecision }),
+    combatLogRuntimeSource,
     `
 `,
     tickSafetySource,
