@@ -281,6 +281,7 @@ function main() {
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
   const actionSwitchDiagnosticsRuntimeModule = readText('src/browser/runtime/action-switch-diagnostics.js');
+  const attackWorthRuntimeModule = readText('src/browser/runtime/attack-worth.js');
   const coinDiagnosticsRuntimeModule = readText('src/browser/runtime/coin-diagnostics.js');
   const coinMotionRuntimeModule = readText('src/browser/runtime/coin-motion.js');
   const coinTargetRuntimeModule = readText('src/browser/runtime/coin-target.js');
@@ -297,6 +298,7 @@ function main() {
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
+  const strategyAttackWorthSource = readText('src/strategy/attack-worth.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
   const strategyCoinTargetSource = readText('src/strategy/coin-target.js');
@@ -537,6 +539,7 @@ function main() {
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
+    assert(distSource.includes('var require_attack_worth = __commonJS'), 'bundled production dist does not bundle the attack-worth runtime module through esbuild');
     assert(distSource.includes('var require_coin_motion = __commonJS'), 'bundled production dist does not bundle the coin-motion runtime module through esbuild');
     assert(distSource.includes('var require_coin_target = __commonJS'), 'bundled production dist does not bundle the coin-target runtime module through esbuild');
     assert(distSource.includes('var require_coin_progress = __commonJS'), 'bundled production dist does not bundle the coin-progress runtime module through esbuild');
@@ -621,6 +624,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-stamina', () => opportunityStaminaSource(config)]"), 'opportunity-stamina source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
@@ -1219,13 +1223,17 @@ function main() {
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staminaResetHoldUntil'), 'stamina-runtime source factory does not include reset hold helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function deferredStaminaExhaustionLeave'), 'stamina-runtime source factory does not include deferred leave helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staleOfflineStaminaHoldContradicted'), 'stamina-runtime source factory does not include stale offline contradiction helper');
-    assert(attackWorthSourceModule.includes('function attackWorthSource() {'), 'attack-worth source factory not found');
-    assert(attackWorthSourceModule.includes('module.exports = { attackWorthSource }'), 'attack-worth source module export not found');
-    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('String.raw`'), 'attack-worth source factory does not return raw browser source');
-    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('const attackWorthTaking = (self, target) =>'), 'attack-worth source factory does not include attack worth wrapper');
-    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('isWhitelistedTarget(target)'), 'attack-worth source factory does not preserve whitelist guard');
-    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('isAfkProfitTarget(target)'), 'attack-worth source factory does not preserve AFK profit target handling');
-    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('cfg.attackMinRewardRatio'), 'attack-worth source factory does not preserve reward ratio guard');
+    assert(attackWorthSourceModule.includes('function attackWorthInlineSource() {'), 'attack-worth inline source factory not found');
+    assert(attackWorthSourceModule.includes('function bundledAttackWorthSource() {'), 'attack-worth bundled source factory not found');
+    assert(attackWorthSourceModule.includes('function attackWorthSource(options = {}) {'), 'attack-worth source selector not found');
+    assert(attackWorthSourceModule.includes('attackWorthInlineSource') && attackWorthSourceModule.includes('bundledAttackWorthSource') && attackWorthSourceModule.includes('attackWorthSource'), 'attack-worth source module exports are incomplete');
+    const attackWorthInlineBody = functionBody(attackWorthSourceModule, 'attackWorthInlineSource');
+    assert(attackWorthInlineBody.includes('String.raw`'), 'attack-worth inline source factory does not return raw browser source');
+    assert(attackWorthInlineBody.includes('const attackWorthTaking = (self, target) =>'), 'attack-worth inline source factory does not include attack worth wrapper');
+    assert(attackWorthInlineBody.includes('isWhitelistedTarget(target)'), 'attack-worth inline source factory does not preserve whitelist guard');
+    assert(attackWorthInlineBody.includes('isAfkProfitTarget(target)'), 'attack-worth inline source factory does not preserve AFK profit target handling');
+    assert(attackWorthInlineBody.includes('cfg.attackMinRewardRatio'), 'attack-worth inline source factory does not preserve reward ratio guard');
+    assert(functionBody(attackWorthSourceModule, 'bundledAttackWorthSource').includes("require('./src/browser/runtime/attack-worth')"), 'attack-worth bundled source does not hand attack-worth core to the bundler');
     assert(exitMotionSourceModule.includes('function exitMotionSource() {'), 'exit-motion source factory not found');
     assert(exitMotionSourceModule.includes('module.exports = { exitMotionSource }'), 'exit-motion source module export not found');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('String.raw`'), 'exit-motion source factory does not return raw browser source');
@@ -3225,6 +3233,24 @@ function main() {
     assert(distSource.includes('function patrolDirectionCore'), 'bundled dist does not contain patrol direction core');
     assert(distSource.includes('patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin'), 'bundled dist patrol wrapper does not call patrol direction core');
     assert(distSource.includes('if (result?.clearPatrolHeading) bot.patrolHeading = null'), 'bundled dist patrol wrapper does not preserve patrol heading clear side effect');
+  });
+
+  check('attack worth uses strategy module core', () => {
+    assert(strategyAttackWorthSource.includes('function attackWorthTakingCore'), 'strategy attack-worth core not found');
+    assert(strategyAttackWorthSource.includes('isWhitelistedTarget(target)'), 'strategy attack-worth core does not preserve whitelist guard');
+    assert(strategyAttackWorthSource.includes('isAfkProfitTarget(target)'), 'strategy attack-worth core does not preserve AFK profit target handling');
+    assert(strategyAttackWorthSource.includes('attackMinRewardRatio'), 'strategy attack-worth core does not preserve reward ratio guard');
+    assert(attackWorthSourceModule.includes("require('./src/browser/runtime/attack-worth')"), 'attack-worth bundled source does not require the browser runtime helper module');
+    assert(!attackWorthSourceModule.includes("require('../strategy/attack-worth')"), 'attack-worth source still imports attack-worth directly from strategy');
+    assert(attackWorthRuntimeModule.includes("require('../../strategy/attack-worth')"), 'attack-worth runtime adapter does not reuse strategy module core');
+    assert(attackWorthRuntimeModule.includes('attackWorthTakingCore'), 'attack-worth runtime adapter does not export expected helper');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/attack-worth.js'"), 'bundler spike does not import attack-worth runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('attackWorth.attackWorthTakingCore('), 'bundler spike does not execute attack-worth helper');
+    assert(bundlerSpikeBuildSource.includes('status.attackWorthResult === true'), 'bundler spike self-test does not assert attack-worth execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/attack-worth')"), 'generated remote runtime does not hand attack-worth helper to the bundler');
+    assert(!generatedRuntimeSource.includes('function attackWorthTakingCore'), 'generated remote runtime still inlines attack-worth core before bundling');
+    assert(distSource.includes('function attackWorthTakingCore'), 'bundled dist does not contain attack-worth core');
+    assert(distSource.includes('attackWorthTakingCore(self, target'), 'bundled dist attack-worth wrapper does not call attack-worth core');
   });
 
   check('opportunity clear uses strategy module core', () => {

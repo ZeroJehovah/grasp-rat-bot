@@ -1,6 +1,6 @@
 'use strict';
 
-function attackWorthSource() {
+function attackWorthInlineSource() {
   return String.raw`  const attackWorthTaking = (self, target) => {
     if (isWhitelistedTarget(target)) return false;
     const targetDrop = dropValue(target);
@@ -11,4 +11,26 @@ function attackWorthSource() {
   };`;
 }
 
-module.exports = { attackWorthSource };
+function bundledAttackWorthSource() {
+  return `const { attackWorthTakingCore } = require('./src/browser/runtime/attack-worth');
+
+  const attackWorthTaking = (self, target) => attackWorthTakingCore(self, target, {
+    isWhitelistedTarget,
+    dropValue,
+    isAfkProfitTarget,
+    attackMinAfkDrop: cfg.attackMinAfkDrop,
+    attackMinDrop: cfg.attackMinDrop,
+    attackMinRewardRatio: cfg.attackMinRewardRatio
+  });`;
+}
+
+function attackWorthSource(options = {}) {
+  if (options.bundledRuntime) return bundledAttackWorthSource();
+  return attackWorthInlineSource();
+}
+
+module.exports = {
+  attackWorthInlineSource,
+  bundledAttackWorthSource,
+  attackWorthSource
+};

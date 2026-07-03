@@ -9,6 +9,7 @@ import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
 import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
+import attackWorth from '../browser/runtime/attack-worth.js';
 import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
 import coinMotion from '../browser/runtime/coin-motion.js';
 import coinTarget from '../browser/runtime/coin-target.js';
@@ -51,6 +52,13 @@ function helperStatus(config = {}) {
   const arbitrationState = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
   actionArbitration.applyFinalActionArbitrationCore(sampleAction, arbitrationState, { nowMs: 1000, holdMs: 1000 });
   const arbitrationResult = actionArbitration.applyFinalActionArbitrationCore(nextAction, arbitrationState, { nowMs: 1200, holdMs: 1000 });
+  const attackWorthResult = attackWorth.attackWorthTakingCore({ drop: 2 }, { drop: 5 }, {
+    isWhitelistedTarget: () => false,
+    dropValue: actor => Number(actor?.drop || 0),
+    isAfkProfitTarget: () => false,
+    attackMinDrop: 3,
+    attackMinRewardRatio: 2
+  });
   const coinDiagnosticResult = coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {
     realtimeNearCoins: [{ drop_id: 'coin-spike', amount: 3, distance: 100, x: 100, y: 0, native: true }],
     realtimeCoins: [
@@ -290,6 +298,7 @@ function helperStatus(config = {}) {
     actionFocus: actionPriority.actionFocusSummary(sampleAction),
     finalActionHeld: arbitrationResult.held,
     actionSwitch: switchResult.event,
+    attackWorthResult,
     coinDiagnosticsIgnored: arrayCountRuntime.arrayCount(coinDiagnosticResult.ignoredNearCoins),
     coinDiagnosticsSnapshotOnly: arrayCountRuntime.arrayCount(coinDiagnosticResult.snapshotOnlyNearCoins),
     coinMotionDirection: coinMotionResult.direction,
