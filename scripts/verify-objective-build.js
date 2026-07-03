@@ -291,6 +291,7 @@ function main() {
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
+  const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
   const networkQualitySummarySourceModule = readText('src/browser/network-quality-summary-source.js');
   const runtimeSummarySourceModule = readText('src/browser/runtime-summary-source.js');
   const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
@@ -311,6 +312,7 @@ function main() {
     controlLoginSourceModule,
     nativeStateSourceModule,
     pageNativeSnapshotSourceModule,
+    networkQualitySourceModule,
     networkQualitySummarySourceModule,
     runtimeSummarySourceModule
   ].join('\n');
@@ -397,6 +399,7 @@ function main() {
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
+    assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
     assert(botSourceModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
     assert(botSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(botSourceModule.includes('function browserBotSource(config)'), 'browserBotSource factory not found');
@@ -427,6 +430,7 @@ function main() {
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
+    assert(botSourceModule.includes('${networkQualitySource()}'), 'network-quality module is not injected into browser runtime');
     assert(botSourceModule.includes('${networkQualitySummarySource()}'), 'network-quality summary module is not injected into browser runtime');
     assert(botSourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
@@ -505,6 +509,13 @@ function main() {
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
+    assert(networkQualitySourceModule.includes('function networkQualitySource() {'), 'network-quality source factory not found');
+    assert(networkQualitySourceModule.includes('module.exports = {\n  networkQualitySource'), 'network-quality module export not found');
+    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('String.raw`'), 'network-quality source factory does not return raw browser source');
+    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function observeNativeWsFrame'), 'network-quality source factory does not include native frame observer');
+    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function recordNetworkQualityMovementCommand'), 'network-quality source factory does not include movement command tracking');
+    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function recordNetworkQualityShot'), 'network-quality source factory does not include attack shot tracking');
+    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function recordNetworkQualityAttackDamage'), 'network-quality source factory does not include attack damage ACK tracking');
     assert(networkQualitySummarySourceModule.includes('function networkQualitySummarySource() {'), 'network-quality summary source factory not found');
     assert(networkQualitySummarySourceModule.includes('module.exports = {\n  networkQualitySummarySource'), 'network-quality summary module export not found');
     assert(functionBody(networkQualitySummarySourceModule, 'networkQualitySummarySource').includes('String.raw`'), 'network-quality summary source factory does not return raw browser source');
