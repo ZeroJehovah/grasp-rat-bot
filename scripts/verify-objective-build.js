@@ -646,6 +646,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelRuntimeSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-utility-clone', () => runtimeUtilityCloneSource(config)]"), 'runtime-utility-clone fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -660,8 +661,11 @@ function main() {
     assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
     assert(statusPanelRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledStatusPanelRuntimeSource();'), 'status-panel runtime source factory does not switch to bundler-owned source in remote builds');
     assert(statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime source does not bind display helpers');
-    assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
-    assert(combatLogRuntimeSourceModule.includes('module.exports = { combatLogRuntimeSource }'), 'combat-log runtime source export not found');
+    assert(combatLogRuntimeSourceModule.includes('function bundledCombatLogRuntimeSource()'), 'bundled combat-log runtime source factory not found');
+    assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource(options = {})'), 'combat-log runtime source factory not found');
+    assert(combatLogRuntimeSourceModule.includes('module.exports = {\n  bundledCombatLogRuntimeSource,\n  combatLogRuntimeSource\n}'), 'combat-log runtime source export not found');
+    assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
+    assert(combatLogRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCombatLogRuntimeSource();'), 'combat-log runtime source factory does not switch to bundler-owned source in remote builds');
     assert(combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime source does not bind exit-summary helper');
     assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
     assert(controlLoginRuntimeSourceModule.includes('module.exports = { controlLoginRuntimeSource }'), 'control-login runtime source export not found');
@@ -838,7 +842,8 @@ function main() {
     assert(combatLogSourceModule.includes('function combatLogSource(helpers = {}) {'), 'combat-log source factory not found');
     assert(combatLogSourceModule.includes('module.exports = {\n  combatLogSource'), 'combat-log module export not found');
     assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('String.raw`'), 'combat-log source factory does not return raw browser source');
-    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};'), 'combat-log source factory does not inline exit-summary helper');
+    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('combatLogExitSummarySource'), 'combat-log source factory does not support optional exit-summary helper injection');
+    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('combatLogExitSummaryFromDecision.toString()'), 'combat-log source factory does not inline exit-summary helper');
     assert(importantLogSourceModule.includes('function importantLogSource() {'), 'important-log source factory not found');
     assert(importantLogSourceModule.includes('module.exports = {\n  importantLogSource'), 'important-log module export not found');
     assert(functionBody(importantLogSourceModule, 'importantLogSource').includes('String.raw`'), 'important-log source factory does not return raw browser source');
@@ -1858,11 +1863,11 @@ function main() {
     check(`${file} keeps specific exit reason during leave cooldown`, () => {
       const body = file === 'grasp-rat-bot.js'
         ? readText('src/shared/exit-summary.js')
-        : functionBody(text, 'combatLogExitSummaryFromDecision');
-      assert(body.includes("leaveReason !== 'cooldown'"), 'cooldown leave detail can override specific exit reason');
+        : functionBody(finalRuntimeText, 'combatLogExitSummaryFromDecision');
+      assert(body.includes("leaveReason !== 'cooldown'") || body.includes('leaveReason !== "cooldown"'), 'cooldown leave detail can override specific exit reason');
       assert(body.includes('exitishDecisionReason'), 'decision exit reason fallback not found for cooldown leave detail');
       assert(body.includes('control-(?:ws|global|combat|action)'), 'control outage decision reasons are not all treated as exit summaries');
-      assert(body.includes("pendingExit ? 'pending-exit-active'"), 'pending exit fallback not found for active pending exit frames');
+      assert(body.includes("pendingExit ? 'pending-exit-active'") || body.includes('pendingExit ? "pending-exit-active"'), 'pending exit fallback not found for active pending exit frames');
       assert(body.includes('safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed)'), 'safe relogin marker not included in top-level exit summary');
       assert(body.includes('offlineSafety: detail.offlineSafety || decision?.offlineSafety || null'), 'offline safety not included in top-level exit summary');
     });

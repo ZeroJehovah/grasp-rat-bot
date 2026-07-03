@@ -157,7 +157,7 @@ function browserRuntimeFragmentEntries(config) {
     ['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)],
     ['array-count', () => arrayCountSource(config)],
     ['runtime-utility-clone', () => runtimeUtilityCloneSource(config)],
-    ['combat-log-runtime', combatLogRuntimeSource],
+    ['combat-log-runtime', () => combatLogRuntimeSource(config)],
     ['separator-after-combat-log-runtime',
     `
 `],

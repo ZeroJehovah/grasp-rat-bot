@@ -950,7 +950,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.396" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.397" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -2901,6 +2901,7 @@
     }
     const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
     const { arrayCount } = require_array_count();
+    const { combatLogExitSummaryFromDecision } = require_exit_summary2();
     function combatLogEntryFailureKey(entry) {
       if (!entry || typeof entry !== "object") return "";
       return [
@@ -3904,36 +3905,6 @@
         });
       }
     }
-    const combatLogExitSummaryFromDecision = function combatLogExitSummaryFromDecision2(decision) {
-      const leave2 = decision?.leave || null;
-      const detail = leave2 || decision || {};
-      const leaveReason = String(leave2?.reason || "");
-      const decisionReason = String(decision?.reason || "");
-      const pendingExit = decision?.pendingExit && typeof decision.pendingExit === "object" ? decision.pendingExit : null;
-      const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : "";
-      const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat|action)|stamina-exhausted/.test(decisionReason) ? decisionReason : "";
-      const reason = canonicalCombatReason || (leaveReason && leaveReason !== "cooldown" ? leaveReason : "") || (pendingExit ? "pending-exit-active" : "") || exitishDecisionReason || decisionReason || leaveReason;
-      const isExit = Boolean(leave2) || Boolean(pendingExit) || decision?.kind === "leave" || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat|action)|stamina-exhausted/.test(reason);
-      if (!isExit) return null;
-      return {
-        reason,
-        summary: leave2?.summary || leave2?.exitSummary || pendingExit?.summary || decision?.exitSummary || decision?.displayReason || "",
-        displayReason: leave2?.displayReason || pendingExit?.displayReason || decision?.displayReason || "",
-        attempted: leave2 ? Boolean(leave2.attempted) : null,
-        error: leave2?.error || pendingExit?.lastError || "",
-        safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed),
-        offlineSafety: detail.offlineSafety || decision?.offlineSafety || null,
-        reloginUntil: detail.reloginUntil || 0,
-        holdRemainingMs: detail.holdRemainingMs || 0,
-        reloginDelayMs: detail.reloginDelayMs || 0,
-        pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
-        pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
-        pendingLoginSuppressReason: detail.pendingLoginSuppressReason || "",
-        pendingLoginSuppressMinimumDelayMs: detail.pendingLoginSuppressMinimumDelayMs || 0,
-        pendingLoginSuppressHpDelayMs: detail.pendingLoginSuppressHpDelayMs || 0,
-        pendingLoginSuppressHp: detail.pendingLoginSuppressHp || null
-      };
-    };
     function combatLogExitSummary(decision) {
       return combatLogExitSummaryFromDecision(decision);
     }
