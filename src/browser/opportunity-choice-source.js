@@ -18,7 +18,7 @@ const {
   buildMissingHeldOpportunityCore,
   opportunityRouteIds,
   rememberOpportunityChoiceCore
-} = require('../strategy/opportunity-choice');
+} = require('./runtime/opportunity-choice');
 
 function opportunityChoiceSource() {
   return String.raw`			  ${opportunityKey.toString()}
