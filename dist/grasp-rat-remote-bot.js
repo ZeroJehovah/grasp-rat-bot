@@ -41,7 +41,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.298" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.299" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5119,6 +5119,9 @@
       };
       return state2.lastResult;
     }
+    function currentBotIsInstalled() {
+      return readPageGlobal(BOT_KEY, null, pageGlobal) === bot;
+    }
     function schedulePostLoginZoomFallbackClicks(state2, reason = "") {
       const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
       const latest = state2.lastResult || {};
@@ -5130,7 +5133,7 @@
       const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
       for (let index = 0; index < clicks; index += 1) {
         setTimeout(() => {
-          if (window[BOT_KEY] !== bot || !bot.running) return;
+          if (!currentBotIsInstalled() || !bot.running) return;
           requestNativeViewportResize("post-login-zoom-fallback-click-" + (index + 1));
           const result = clickZoomOutControl();
           const current = state2.lastResult || {};
@@ -5145,14 +5148,14 @@
         }, index * intervalMs);
       }
       setTimeout(() => {
-        if (window[BOT_KEY] !== bot || !bot.running) return;
+        if (!currentBotIsInstalled() || !bot.running) return;
         finishPostLoginZoomResult(state2, "fallback-clicks");
       }, clicks * intervalMs + 20);
       return state2.lastResult;
     }
     function schedulePostLoginZoomFitStep(selfSummary, stepIndex = 0, delayMs = 0) {
       setTimeout(() => {
-        if (window[BOT_KEY] !== bot || !bot.running) return;
+        if (!currentBotIsInstalled() || !bot.running) return;
         const state2 = bot.postLoginZoom;
         if (!state2?.lastResult) return;
         const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24));
@@ -5185,7 +5188,7 @@
         state2.lastResult = latest;
         const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
         setTimeout(() => {
-          if (window[BOT_KEY] !== bot || !bot.running) return;
+          if (!currentBotIsInstalled() || !bot.running) return;
           const current = state2.lastResult || {};
           const after = postLoginZoomFitMeasurement(selfSummary);
           current.lastMeasure = after;
@@ -6221,7 +6224,7 @@
         reason = String(localStorage.getItem(PAUSE_REASON_KEY) || "");
       } catch (_) {
       }
-      return String(window.__graspRatBotPauseReason || reason || "");
+      return String(readPageGlobal("__graspRatBotPauseReason", "", pageGlobal) || reason || "");
     }
     function syncPausedFromPage(stopOnPause = true) {
       let localPaused = false;
@@ -6229,7 +6232,7 @@
         localPaused = localStorage.getItem(PAUSED_KEY) === "true";
       } catch (_) {
       }
-      const paused = Boolean(window.__graspRatBotPaused === true || localPaused);
+      const paused = Boolean(readPageGlobal("__graspRatBotPaused", false, pageGlobal) === true || localPaused);
       if (paused !== bot.paused) {
         bot.paused = paused;
         bot.pauseChangedAt = Date.now();

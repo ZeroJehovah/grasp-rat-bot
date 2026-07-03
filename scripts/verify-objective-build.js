@@ -456,6 +456,13 @@ function main() {
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('typeof staminaExhaustedWindowLabel === \'function\' ? staminaExhaustedWindowLabel.toString() : \'\''), 'control-login source factory does not inline stamina window helper');
+    assert(controlLoginSourceModule.includes('function currentBotIsInstalled()'), 'control-login source does not expose current bot helper');
+    assert(controlLoginSourceModule.includes('readPageGlobal(BOT_KEY, null, pageGlobal) === bot'), 'control-login source does not read bot identity through page-global adapter');
+    assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatBotPauseReason', '', pageGlobal)"), 'control-login source does not read pause reason through page-global adapter');
+    assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatBotPaused', false, pageGlobal) === true"), 'control-login source does not read paused state through page-global adapter');
+    assert(!controlLoginSourceModule.includes('window[BOT_KEY]'), 'control-login source still reads bot identity directly from window');
+    assert(!controlLoginSourceModule.includes('window.__graspRatBotPauseReason'), 'control-login source still reads pause reason directly from window');
+    assert(!controlLoginSourceModule.includes('window.__graspRatBotPaused'), 'control-login source still reads paused state directly from window');
     assert(nativeStateSourceModule.includes('function nativeStateSource() {'), 'native-state source factory not found');
     assert(nativeStateSourceModule.includes('module.exports = {\n  nativeStateSource'), 'native-state module export not found');
     assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('String.raw`'), 'native-state source factory does not return raw browser source');
