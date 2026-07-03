@@ -289,6 +289,7 @@ function main() {
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
+  const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
@@ -312,6 +313,7 @@ function main() {
     combatLogSourceModule,
     importantLogSourceModule,
     combatHistorySourceModule,
+    coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
     pageNativeSnapshotSourceModule,
@@ -401,6 +403,7 @@ function main() {
     assert(botSourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
     assert(botSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
     assert(botSourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
+    assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
@@ -434,6 +437,7 @@ function main() {
     assert(botSourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
+    assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
@@ -495,6 +499,14 @@ function main() {
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordKillHistoryItem'), 'combat-history source factory does not include kill history storage');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordDropMatchedKill'), 'combat-history source factory does not include drop matched kill attribution');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function updateKillHistory'), 'combat-history source factory does not include kill history update');
+    assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
+    assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('coinTargetKeyCore.toString()'), 'coin-target runtime source factory does not inline coin target key core');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('trackedCoinTargetForCollectionCore.toString()'), 'coin-target runtime source factory does not inline tracked coin target core');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('pickIncidentalCoinPickupsCore.toString()'), 'coin-target runtime source factory does not inline incidental pickup core');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('function markCoinCollected'), 'coin-target runtime source factory does not include tracked pickup recorder');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('function recordIncidentalCoinPickups'), 'coin-target runtime source factory does not include incidental pickup recorder');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
@@ -2130,21 +2142,22 @@ function main() {
     assert(strategyCoinTargetSource.includes('function pickIncidentalCoinPickupsCore'), 'strategy incidental pickup core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinWorthLongTravelCore'), 'strategy snapshot coin worth core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinNavigationReasonCore'), 'strategy snapshot coin reason core not found');
-    assert(botSourceModule.includes("require('../strategy/coin-target')"), 'source bot does not import coin target strategy module');
-    assert(sourceRuntimeText.includes('coinTargetKeyCore.toString()'), 'source bot does not inject coin target key core');
-    assert(sourceRuntimeText.includes('coinMatchesTrackedTargetCore.toString()'), 'source bot does not inject coin target matcher core');
-    assert(sourceRuntimeText.includes('trackedCoinTargetForCollectionCore.toString()'), 'source bot does not inject tracked coin target core');
-    assert(sourceRuntimeText.includes('buildNativeCoinSnapshotCore.toString()'), 'source bot does not inject native coin snapshot core');
-    assert(sourceRuntimeText.includes('pointToSegmentDistanceCore.toString()'), 'source bot does not inject point-to-segment distance core');
-    assert(sourceRuntimeText.includes('pickIncidentalCoinPickupsCore.toString()'), 'source bot does not inject incidental pickup core');
-    assert(sourceRuntimeText.includes('snapshotCoinWorthLongTravelCore.toString()'), 'source bot does not inject snapshot coin worth core');
-    assert(sourceRuntimeText.includes('snapshotCoinNavigationReasonCore.toString()'), 'source bot does not inject snapshot coin reason core');
-    assert(sourceRuntimeText.includes('function coinTargetCoreOptions'), 'source bot coin target runtime wrapper options not found');
-    assert(sourceRuntimeText.includes('trackedCoinTargetForCollectionCore({'), 'source bot tracked coin target wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('return coinTargetKeyCore(target);'), 'source bot coin target key wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('return coinMatchesTrackedTargetCore(coin, target'), 'source bot coin target matcher wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('return buildNativeCoinSnapshotCore(coins'), 'source bot native coin snapshot wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('pickIncidentalCoinPickupsCore('), 'source bot incidental pickup wrapper does not call strategy core');
+    const coinTargetRuntimeBody = functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource');
+    assert(coinTargetRuntimeSourceModule.includes("require('../strategy/coin-target')"), 'coin-target runtime source does not import coin target strategy module');
+    assert(coinTargetRuntimeBody.includes('coinTargetKeyCore.toString()'), 'coin-target runtime source does not inject coin target key core');
+    assert(coinTargetRuntimeBody.includes('coinMatchesTrackedTargetCore.toString()'), 'coin-target runtime source does not inject coin target matcher core');
+    assert(coinTargetRuntimeBody.includes('trackedCoinTargetForCollectionCore.toString()'), 'coin-target runtime source does not inject tracked coin target core');
+    assert(coinTargetRuntimeBody.includes('buildNativeCoinSnapshotCore.toString()'), 'coin-target runtime source does not inject native coin snapshot core');
+    assert(coinTargetRuntimeBody.includes('pointToSegmentDistanceCore.toString()'), 'coin-target runtime source does not inject point-to-segment distance core');
+    assert(coinTargetRuntimeBody.includes('pickIncidentalCoinPickupsCore.toString()'), 'coin-target runtime source does not inject incidental pickup core');
+    assert(coinTargetRuntimeBody.includes('snapshotCoinWorthLongTravelCore.toString()'), 'coin-target runtime source does not inject snapshot coin worth core');
+    assert(coinTargetRuntimeBody.includes('snapshotCoinNavigationReasonCore.toString()'), 'coin-target runtime source does not inject snapshot coin reason core');
+    assert(coinTargetRuntimeBody.includes('function coinTargetCoreOptions'), 'coin-target runtime wrapper options not found');
+    assert(coinTargetRuntimeBody.includes('trackedCoinTargetForCollectionCore({'), 'coin-target runtime tracked coin target wrapper does not call strategy core');
+    assert(coinTargetRuntimeBody.includes('return coinTargetKeyCore(target);'), 'coin-target runtime coin target key wrapper does not call strategy core');
+    assert(coinTargetRuntimeBody.includes('return coinMatchesTrackedTargetCore(coin, target'), 'coin-target runtime coin target matcher wrapper does not call strategy core');
+    assert(coinTargetRuntimeBody.includes('return buildNativeCoinSnapshotCore(coins'), 'coin-target runtime native coin snapshot wrapper does not call strategy core');
+    assert(coinTargetRuntimeBody.includes('pickIncidentalCoinPickupsCore('), 'coin-target runtime incidental pickup wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');

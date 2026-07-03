@@ -460,6 +460,17 @@ This is a source-organization split only. It preserves the existing strategy mod
 
 This is a source-organization split only. It preserves combat engagement bookkeeping, important kill logging, chat-confirmed kill safety checks, post-attack drop reward attribution, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AJ Coin Target Runtime Source Factory
+
+`bootstrap-0.4.308` extracts coin target identity, native coin snapshot, incidental pickup, tracked pickup, and coin pickup session accounting source generation into a dedicated browser source module:
+
+- `src/browser/coin-target-runtime-source.js` now owns the raw browser source for `setLastTarget()`, `clearCoinTracking()`, coin target core helper inlining, tracked target reconstruction, native coin snapshot normalization, incidental pickup recording, snapshot coin pruning, and `markCoinCollected()`.
+- `src/browser/bot-source.js` imports and injects `${coinTargetRuntimeSource()}` after `${actionArbitrationSource()}`.
+- Static verification checks the new source-factory shape plus coin target core inlining, tracked pickup recording, and incidental pickup recording.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves coin target identity, native snapshot memory, incidental pickup session accounting, tracked pickup confirmation, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -498,9 +509,10 @@ This is a source-organization split only. It preserves combat engagement bookkee
 33. Network quality sampler/ACK source factory: integrated in `bootstrap-0.4.305`
 34. Action arbitration source factory: integrated in `bootstrap-0.4.306`
 35. Combat history source factory: integrated in `bootstrap-0.4.307`
-36. Constants: partially integrated for high-value coin defaults
-37. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-38. Run live validation sessions after each behavior-touching replacement
+36. Coin target runtime source factory: integrated in `bootstrap-0.4.308`
+37. Constants: partially integrated for high-value coin defaults
+38. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+39. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
