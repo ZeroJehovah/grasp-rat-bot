@@ -8,6 +8,7 @@ function browserRuntimeConfig(options = {}) {
     once: Boolean(options.once),
     statusEvery: options.statusEvery
   };
+  if (options.bundledRuntime) config.bundledRuntime = true;
   if (options.version !== undefined) config.version = options.version;
   if (options.overrides && typeof options.overrides === 'object') {
     Object.assign(config, options.overrides);
@@ -24,7 +25,8 @@ function remoteBrowserRuntimeSource(options = {}) {
     dryRun: false,
     once: false,
     statusEvery: options.statusEvery,
-    version: options.version
+    version: options.version,
+    bundledRuntime: true
   });
 }
 
