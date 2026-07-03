@@ -1383,6 +1383,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 142. Bundler-owned `persistent-clear` helper binding for remote builds: integrated in `bootstrap-0.4.414`
 143. Bundler-owned `persistent-last-self` helper binding for remote builds: integrated in `bootstrap-0.4.415`
 144. Bundler-owned `persistent-exit` helper binding for remote builds: integrated in `bootstrap-0.4.416`
+145. Bundler-owned `restored-coin-failures` helper binding for remote builds: integrated in `bootstrap-0.4.417`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

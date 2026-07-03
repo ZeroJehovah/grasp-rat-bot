@@ -1,6 +1,6 @@
 'use strict';
 
-function restoredCoinFailuresSource() {
+function restoredCoinFailuresInlineSource() {
   return String.raw`
 	  function restoredCoinFailures() {
     const t = performance.now();
@@ -26,4 +26,21 @@ function restoredCoinFailuresSource() {
   }`;
 }
 
-module.exports = { restoredCoinFailuresSource };
+function bundledRestoredCoinFailuresSource() {
+  return `const { restoredCoinFailuresCore } = require('./src/browser/runtime/restored-coin-failures');
+
+	  function restoredCoinFailures() {
+	    return restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now());
+	  }`;
+}
+
+function restoredCoinFailuresSource(options = {}) {
+  if (options.bundledRuntime) return bundledRestoredCoinFailuresSource();
+  return restoredCoinFailuresInlineSource();
+}
+
+module.exports = {
+  restoredCoinFailuresInlineSource,
+  bundledRestoredCoinFailuresSource,
+  restoredCoinFailuresSource
+};

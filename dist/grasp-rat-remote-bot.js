@@ -893,6 +893,36 @@
     }
   });
 
+  // src/browser/runtime/restored-coin-failures.js
+  var require_restored_coin_failures = __commonJS({
+    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
+      "use strict";
+      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
+        const options = cfg && typeof cfg === "object" ? cfg : {};
+        return (preservedCoinFailures || []).map(([id, item]) => {
+          const next = { ...item || {} };
+          const count = Number(next.count || 0);
+          const lastAt = Number(next.lastAt || 0);
+          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
+          let ignoreUntil = Number(next.ignoreUntil || 0);
+          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
+            return null;
+          }
+          if (!staleFailure) {
+            if (count >= options.coinFailureSevereIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
+            } else if (count >= options.coinFailureHardIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
+            }
+          }
+          next.ignoreUntil = ignoreUntil;
+          return [String(id), next];
+        }).filter(Boolean);
+      }
+      module.exports = { restoredCoinFailuresCore };
+    }
+  });
+
   // src/strategy/attack-worth.js
   var require_attack_worth = __commonJS({
     "src/strategy/attack-worth.js"(exports, module) {
@@ -3725,7 +3755,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.416" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.417" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -3908,27 +3938,9 @@
       }
       return finalizeLeaveDisplayReason(detail);
     }
+    const { restoredCoinFailuresCore } = require_restored_coin_failures();
     function restoredCoinFailures() {
-      const t = performance.now();
-      return (preserved.coinFailures || []).map(([id, item]) => {
-        const next = { ...item || {} };
-        const count = Number(next.count || 0);
-        const lastAt = Number(next.lastAt || 0);
-        const staleFailure = lastAt && t - lastAt > cfg.coinFailureDecayMs;
-        let ignoreUntil = Number(next.ignoreUntil || 0);
-        if ((next.reason === "near" || next.reason === "close") && count <= 1) {
-          return null;
-        }
-        if (!staleFailure) {
-          if (count >= cfg.coinFailureSevereIgnoreCount) {
-            ignoreUntil = Math.max(ignoreUntil, t + cfg.coinFailureSevereIgnoreMs);
-          } else if (count >= cfg.coinFailureHardIgnoreCount) {
-            ignoreUntil = Math.max(ignoreUntil, t + cfg.coinFailureHardIgnoreMs);
-          }
-        }
-        next.ignoreUntil = ignoreUntil;
-        return [String(id), next];
-      }).filter(Boolean);
+      return restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now());
     }
     const restoredFailures = restoredCoinFailures();
     const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
