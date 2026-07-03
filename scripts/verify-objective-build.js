@@ -517,6 +517,8 @@ function main() {
     assert(!/\bfrom\s+['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative import');
     assert(distSource.includes('var require_array_count = __commonJS'), 'bundled production dist does not bundle the array-count runtime module through esbuild');
     assert(distSource.includes('const { arrayCount } = require_array_count();'), 'bundled production dist does not use the bundled array-count runtime module');
+    assert(distSource.includes('var require_runtime_utils = __commonJS'), 'bundled production dist does not bundle the runtime-utils module through esbuild');
+    assert(distSource.includes('safeStringify, safeJsonClone, sanitizeCombatLogIdPart'), 'bundled production dist does not use the bundled runtime-utils helpers');
     new vm.Script(distSource, { filename: 'dist/grasp-rat-remote-bot.js' });
     assert(buildRemoteSource.includes("require('./remote-bot-bundle')"), 'production build does not use the shared remote bundler');
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
@@ -632,7 +634,9 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes('source === undefined || source === null'), 'runtime fragment helper does not validate sources');
     assert(!runtimeFragmentsSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
     assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
+    assert(fragmentEntriesBody.includes("['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)]"), 'runtime-utility-prelude fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['runtime-utility-clone', () => runtimeUtilityCloneSource(config)]"), 'runtime-utility-clone fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -665,9 +669,13 @@ function main() {
     assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
     assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
     assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
-    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource()'), 'runtime utility prelude source factory not found');
-    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility clone source factory not found');
+    assert(runtimeUtilsSourceModule.includes('function bundledRuntimeUtilityPreludeSource()'), 'bundled runtime utility prelude source factory not found');
+    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource(options = {})'), 'runtime utility prelude source factory not found');
+    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource(options = {})'), 'runtime utility clone source factory not found');
     assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource,\n  runtimeUtilityCloneSource\n}'), 'runtime utility source module exports not found');
+    assert(runtimeUtilsSourceModule.includes("require('./src/browser/runtime/runtime-utils')"), 'runtime utility source factory does not expose a bundler-owned runtime helper require');
+    assert(runtimeUtilsSourceModule.includes('if (options.bundledRuntime) return bundledRuntimeUtilityPreludeSource();'), 'runtime utility prelude source factory does not switch to bundler-owned source in remote builds');
+    assert(runtimeUtilsSourceModule.includes('if (options.bundledRuntime)'), 'runtime utility clone source factory does not account for bundled runtime mode');
     assert(runtimeUtilsSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the runtime utility source module');
     assert(runtimeUtilsSourceModule.includes('${safeJsonClone.toString()}'), 'safeJsonClone is not injected from the runtime utility source module');
     assert(runtimeUtilsSourceModule.includes('${sanitizeCombatLogIdPart.toString()}'), 'sanitizeCombatLogIdPart is not injected from the runtime utility source module');
@@ -743,7 +751,7 @@ function main() {
     ].forEach(name => {
       assert(fragmentEntriesBody.includes(name), `${name} is not listed in the runtime fragment entries registry`);
     });
-    assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
+    assert((generatedRuntimeSource.includes('function safeStringify') || generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-utils')")) && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not expose shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
     assert(generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
     assert(generatedRuntimeSource.includes('const now = () => performance.now();'), 'generated runtime does not include entity clock helper');
@@ -1443,9 +1451,16 @@ function main() {
     });
     check(`${file} keeps shared runtime utility helpers available`, () => {
       const runtimeUtilsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeUtilsSource : text;
-      assert(functionBody(runtimeUtilsSource, 'safeStringify').includes('new WeakSet()'), 'safeStringify circular guard not found');
-      assert(functionBody(runtimeUtilsSource, 'safeJsonClone').includes('JSON.parse(safeStringify(value))'), 'safeJsonClone does not use safeStringify');
-      assert(functionBody(runtimeUtilsSource, 'sanitizeCombatLogIdPart').includes("replace(/[^\\w.-]+/g, '_')"), 'combat log id sanitizer not found');
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(distSource.includes('var require_runtime_utils = __commonJS'), 'bundled runtime-utils module wrapper not found');
+        assert(distSource.includes('safeStringify') && distSource.includes('new WeakSet()'), 'bundled safeStringify helper not found');
+        assert(distSource.includes('safeJsonClone') && distSource.includes('JSON.parse(safeStringify(value))'), 'bundled safeJsonClone helper not found');
+        assert(distSource.includes('sanitizeCombatLogIdPart') && distSource.includes('replace(/[^\\w.-]+/g, "_")'), 'bundled combat log id sanitizer not found');
+      } else {
+        assert(functionBody(runtimeUtilsSource, 'safeStringify').includes('new WeakSet()'), 'safeStringify circular guard not found');
+        assert(functionBody(runtimeUtilsSource, 'safeJsonClone').includes('JSON.parse(safeStringify(value))'), 'safeJsonClone does not use safeStringify');
+        assert(functionBody(runtimeUtilsSource, 'sanitizeCombatLogIdPart').includes("replace(/[^\\w.-]+/g, '_')"), 'combat log id sanitizer not found');
+      }
     });
     check(`${file} keeps shared display formatting helpers available`, () => {
       const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : text;

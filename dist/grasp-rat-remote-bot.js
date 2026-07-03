@@ -4,6 +4,66 @@
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
   };
 
+  // src/shared/runtime-utils.js
+  var require_runtime_utils = __commonJS({
+    "src/shared/runtime-utils.js"(exports, module) {
+      "use strict";
+      function safeStringify(value) {
+        const seen = /* @__PURE__ */ new WeakSet();
+        try {
+          const text = JSON.stringify(value, function(_key, item) {
+            if (typeof item === "bigint") return String(item);
+            if (item && typeof item === "object") {
+              if (seen.has(item)) return "[Circular]";
+              seen.add(item);
+            }
+            return item;
+          });
+          return String(text || "");
+        } catch (err) {
+          try {
+            return JSON.stringify({ error: err?.message || String(err) });
+          } catch (_) {
+            return '{"error":"stringify failed"}';
+          }
+        }
+      }
+      function safeJsonClone(value) {
+        try {
+          return JSON.parse(safeStringify(value));
+        } catch (_) {
+          return null;
+        }
+      }
+      function sanitizeCombatLogIdPart(value, fallback = "unknown") {
+        const text = String(value || fallback).replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
+        return text || fallback;
+      }
+      module.exports = {
+        safeStringify,
+        safeJsonClone,
+        sanitizeCombatLogIdPart
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-utils.js
+  var require_runtime_utils2 = __commonJS({
+    "src/browser/runtime/runtime-utils.js"(exports, module) {
+      "use strict";
+      var {
+        safeStringify,
+        safeJsonClone,
+        sanitizeCombatLogIdPart
+      } = require_runtime_utils();
+      module.exports = {
+        safeStringify,
+        safeJsonClone,
+        sanitizeCombatLogIdPart
+      };
+    }
+  });
+
   // src/browser/runtime/array-count.js
   var require_array_count = __commonJS({
     "src/browser/runtime/array-count.js"(exports, module) {
@@ -59,7 +119,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.393" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.394" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -2635,38 +2695,8 @@
       if (typeof log === "function") log("[bot] " + text, "info");
       console.log("[grasp-rat-bot]", text, detail || "");
     }
-    function safeStringify(value) {
-      const seen = /* @__PURE__ */ new WeakSet();
-      try {
-        const text = JSON.stringify(value, function(_key, item) {
-          if (typeof item === "bigint") return String(item);
-          if (item && typeof item === "object") {
-            if (seen.has(item)) return "[Circular]";
-            seen.add(item);
-          }
-          return item;
-        });
-        return String(text || "");
-      } catch (err) {
-        try {
-          return JSON.stringify({ error: err?.message || String(err) });
-        } catch (_) {
-          return '{"error":"stringify failed"}';
-        }
-      }
-    }
+    const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
     const { arrayCount } = require_array_count();
-    function safeJsonClone(value) {
-      try {
-        return JSON.parse(safeStringify(value));
-      } catch (_) {
-        return null;
-      }
-    }
-    function sanitizeCombatLogIdPart(value, fallback = "unknown") {
-      const text = String(value || fallback).replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
-      return text || fallback;
-    }
     function combatLogEntryFailureKey(entry) {
       if (!entry || typeof entry !== "object") return "";
       return [
