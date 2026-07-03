@@ -101,6 +101,7 @@ async function selfTest() {
   assert(!/\bfrom\s+['"]\.\.?\//.test(source), 'bundled browser output still contains unresolved relative import');
   assert(source.includes('function safeStringify'), 'shared runtime helper was not bundled');
   assert(source.includes('function formatDistance'), 'display helper was not bundled');
+  assert(source.includes('function offlineLeaveSummaryText'), 'exit-summary helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
   assert(source.includes('function arrayCount'), 'browser runtime helper was not bundled');
   new vm.Script(source, { filename: outFile });
@@ -117,6 +118,7 @@ async function selfTest() {
   assert(Array.isArray(status.names) && status.names.length === 2, 'spike did not execute target whitelist helper');
   assert(status.nameCount === 2, 'spike did not execute browser runtime helper');
   assert(status.actionFocus?.type === 'coin', 'spike did not execute action focus helper');
+  assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');
   assert(String(status.json || '').includes('"bigint":"7"'), 'spike did not execute safeStringify helper');
   const windowRoot = {

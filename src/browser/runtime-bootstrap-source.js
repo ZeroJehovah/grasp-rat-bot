@@ -4,7 +4,7 @@ const {
   staminaExhaustedLongWindows,
   staminaEvidenceRemaining,
   staminaHoldContradictedByStaminaEvidence
-} = require('../shared/exit-summary');
+} = require('./runtime/exit-summary');
 const {
   buildBrowserPreservedState
 } = require('../shared/browser-preserved-state');
