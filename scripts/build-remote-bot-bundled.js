@@ -71,7 +71,8 @@ async function bundleRemoteBot(options) {
 
 function verifyBundledCandidate(source, manifest, expected = {}) {
   assert(source.includes('__graspRatBot'), 'bundled candidate does not contain the bot global key');
-  assert(source.includes('window[BOT_KEY] = bot'), 'bundled candidate does not install the bot on window');
+  assert(source.includes('function installPageGlobal'), 'bundled candidate does not include the page-global installer');
+  assert(source.includes('installPageGlobal(BOT_KEY, bot, pageGlobal)'), 'bundled candidate does not install the bot through the page-global adapter');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime defaults helper was not preserved in the candidate');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not preserved in the candidate');
   assert(source.includes('function updateBotPanel'), 'status panel runtime was not preserved in the candidate');

@@ -270,7 +270,7 @@ function main() {
   const bundlerSpikeBuildSource = readText('scripts/build-bundler-spike.js');
   const remoteBundledBuildSource = readText('scripts/build-remote-bot-bundled.js');
   const bundlerSpikeEntrySource = readText('src/bundler-spike/runtime-entry.mjs');
-  const bundlerSpikeAdapterSource = readText('src/bundler-spike/page-adapter.mjs');
+  const browserPageGlobalCoreSource = readText('src/browser/page-global-core.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -299,6 +299,7 @@ function main() {
     sourceBot,
     runtimeSourceModule,
     botSourceModule,
+    browserPageGlobalCoreSource,
     targetOverlaySourceModule,
     statusPanelSourceModule,
     combatLogSourceModule,
@@ -347,7 +348,8 @@ function main() {
     assert(manifest.bundler?.platform === 'browser', 'production manifest bundler platform is not browser');
     assert(manifest.bundler?.target === 'es2020', 'production manifest bundler target is not es2020');
     assert(distSource.includes('__graspRatBot'), 'bundled production dist does not contain the bot global key');
-    assert(distSource.includes('window[BOT_KEY] = bot'), 'bundled production dist does not install the bot on window');
+    assert(distSource.includes('function installPageGlobal'), 'bundled production dist does not contain the page-global installer');
+    assert(distSource.includes('installPageGlobal(BOT_KEY, bot, pageGlobal)'), 'bundled production dist does not install the bot through the page-global adapter');
     assert(!/require\(['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative require()');
     assert(!/\bfrom\s+['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative import');
     assert(!distSource.includes('module.exports'), 'bundled production dist still contains CommonJS exports');
@@ -379,6 +381,7 @@ function main() {
     assert(botSourceModule.includes("require('../shared/display-format')"), 'display-format module import not found');
     assert(botSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(botSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
+    assert(botSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
     assert(botSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
     assert(botSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
     assert(botSourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
@@ -389,6 +392,13 @@ function main() {
     assert(botSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(botSourceModule.includes('function browserBotSource(config)'), 'browserBotSource factory not found');
     assert(botSourceModule.includes('module.exports = {\n  browserBotSource'), 'browserBotSource module export not found');
+    assert(botSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
+    assert(botSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
+    assert(botSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
+    assert(botSourceModule.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
+    assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
+    assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
+    assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
     assert(botSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
     assert(botSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
     assert(botSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
@@ -402,6 +412,7 @@ function main() {
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
+    assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
     assert(generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
     assert(!generatedRuntimeSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
@@ -474,7 +485,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import * as displayFormat from '../shared/display-format.js'"), 'bundler spike does not import display helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import * as targetWhitelist from '../shared/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
-    assert(bundlerSpikeEntrySource.includes("import * as pageAdapter from './page-adapter.mjs'"), 'bundler spike does not import the page-global adapter');
+    assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -482,14 +493,14 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("pageAdapter.readPageLocalStorageJson('graspRatBundlerSpikeProbe'"), 'bundler spike does not exercise localStorage adapter behavior');
     assert(!bundlerSpikeEntrySource.includes('typeof window'), 'bundler spike entry still resolves window directly');
     assert(!bundlerSpikeEntrySource.includes('typeof globalThis'), 'bundler spike entry still resolves globalThis directly');
-    assert(bundlerSpikeAdapterSource.includes('function resolvePageGlobal'), 'page-global adapter resolver not found');
-    assert(bundlerSpikeAdapterSource.includes('function readPageGlobal'), 'page-global adapter reader not found');
-    assert(bundlerSpikeAdapterSource.includes('function installPageGlobal'), 'page-global adapter installer not found');
-    assert(bundlerSpikeAdapterSource.includes('function readPageLocalStorageJson'), 'page-global adapter localStorage reader not found');
-    assert(bundlerSpikeAdapterSource.includes("typeof window !== 'undefined'"), 'page-global adapter does not handle window');
-    assert(bundlerSpikeAdapterSource.includes("typeof globalThis !== 'undefined'"), 'page-global adapter does not handle globalThis');
-    assert(bundlerSpikeAdapterSource.includes('storage.getItem(key)'), 'page-global adapter does not read localStorage through getItem');
-    assert(bundlerSpikeAdapterSource.includes('JSON.parse(raw)'), 'page-global adapter does not parse JSON localStorage values');
+    assert(browserPageGlobalCoreSource.includes('function resolvePageGlobal'), 'page-global adapter resolver not found');
+    assert(browserPageGlobalCoreSource.includes('function readPageGlobal'), 'page-global adapter reader not found');
+    assert(browserPageGlobalCoreSource.includes('function installPageGlobal'), 'page-global adapter installer not found');
+    assert(browserPageGlobalCoreSource.includes('function readPageLocalStorageJson'), 'page-global adapter localStorage reader not found');
+    assert(browserPageGlobalCoreSource.includes("typeof window !== 'undefined'"), 'page-global adapter does not handle window');
+    assert(browserPageGlobalCoreSource.includes("typeof globalThis !== 'undefined'"), 'page-global adapter does not handle globalThis');
+    assert(browserPageGlobalCoreSource.includes('storage.getItem(key)'), 'page-global adapter does not read localStorage through getItem');
+    assert(browserPageGlobalCoreSource.includes('JSON.parse(raw)'), 'page-global adapter does not parse JSON localStorage values');
     assert(bundlerSpikeEntrySource.includes('installBundlerSpike(runtimeConfig);'), 'bundler spike entry does not install itself');
     assert(bundlerSpikeBuildSource.includes("const esbuild = require('esbuild')"), 'bundler spike build does not use esbuild');
     assert(bundlerSpikeBuildSource.includes("format: 'iife'"), 'bundler spike does not build an IIFE');
@@ -519,7 +530,7 @@ function main() {
     assert(remoteBundledBuildSource.includes('verifyBundledCandidate(source, manifest, result);'), 'remote bundled candidate self-test does not verify the built output');
     assert(remoteBundledBuildSource.includes("new vm.Script(source"), 'remote bundled candidate self-test does not parse the bundled output');
     assert(remoteBundledBuildSource.includes("source.includes('__graspRatBot')"), 'remote bundled candidate self-test does not check the bot global key');
-    assert(remoteBundledBuildSource.includes("source.includes('window[BOT_KEY] = bot')"), 'remote bundled candidate self-test does not check bot installation');
+    assert(remoteBundledBuildSource.includes("source.includes('installPageGlobal(BOT_KEY, bot, pageGlobal)')"), 'remote bundled candidate self-test does not check adapter bot installation');
     assert(remoteBundledBuildSource.includes("source.includes('function buildRuntimeDefaults')"), 'remote bundled candidate self-test does not check runtime defaults preservation');
     assert(remoteBundledBuildSource.includes("source.includes('function updateBotPanel')"), 'remote bundled candidate self-test does not check status panel preservation');
     assert(remoteBundledBuildSource.includes("source.includes('function getNativeState')"), 'remote bundled candidate self-test does not check native state preservation');
