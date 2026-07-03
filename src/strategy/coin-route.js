@@ -89,6 +89,19 @@ function coinRoutePoints(route) {
     .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
 }
 
+function coinRouteActionMetaCore(route, fallbackFirstDistance = 0) {
+  return route ? {
+    ids: route.ids,
+    points: Array.isArray(route.points) ? route.points : null,
+    value: Number(route.value || 0),
+    staminaCost: Math.round(Number(route.staminaCost || 0)),
+    legCount: Number(route.legCount || 0),
+    totalDistance: Math.round(Number(route.totalDistance || 0)),
+    firstDistance: Math.round(Number(route.firstDistance || fallbackFirstDistance || 0)),
+    kind: route.kind || ''
+  } : null;
+}
+
 function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, options = {}) {
   if (!self || !anchor) return null;
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
@@ -320,6 +333,7 @@ module.exports = {
   coinRoutePointLimitCore,
   coinRouteSummaryCore,
   coinRoutePoints,
+  coinRouteActionMetaCore,
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
   coinRouteSkipsHeldSingleCoinCore,

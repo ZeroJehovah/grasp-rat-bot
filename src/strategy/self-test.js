@@ -39,6 +39,7 @@ const {
 } = require('./coin-progress');
 const {
   buildCoinRouteFromAnchorCore,
+  coinRouteActionMetaCore,
   coinRouteSkipsCloserFirstCoinCore,
   pickCoinRouteOpportunityCore
 } = require('./coin-route');
@@ -813,6 +814,31 @@ function runStrategyModuleSelfTests() {
       && builtRoute.coinRoute?.points?.length === 3
       && builtRoute.coinRoute?.ids?.join(',') === '1,2,3'
       && builtRoute.routeKind === 'short'
+  });
+
+  const routeActionMeta = coinRouteActionMetaCore({
+    ids: ['a', 'b'],
+    points: [{ id: 'a' }],
+    value: 2.5,
+    staminaCost: 123.6,
+    legCount: 2.2,
+    totalDistance: 456.7,
+    kind: 'short'
+  }, 321.4);
+  const routeActionMetaFallback = coinRouteActionMetaCore({ ids: ['x'] }, 321.4);
+  results.push({
+    name: 'coin-route-action-meta-rounds-and-falls-back',
+    passed: routeActionMeta?.ids?.join(',') === 'a,b'
+      && routeActionMeta.points?.length === 1
+      && routeActionMeta.value === 2.5
+      && routeActionMeta.staminaCost === 124
+      && routeActionMeta.legCount === 2.2
+      && routeActionMeta.totalDistance === 457
+      && routeActionMeta.firstDistance === 321
+      && routeActionMeta.kind === 'short'
+      && routeActionMetaFallback.firstDistance === 321
+      && routeActionMetaFallback.points === null
+      && coinRouteActionMetaCore(null, 999) === null
   });
 
   results.push({
