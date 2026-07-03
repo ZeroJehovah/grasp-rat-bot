@@ -130,7 +130,7 @@ Created **8 new modules** totaling **1,686 lines** of well-documented, tested co
 ✓ Test coverage  
 ✓ Performance characteristics  
 
-As of the later `bootstrap-0.4.345` source-builder extraction, the main file (`grasp-rat-bot.js`) is **320 lines** and keeps the Node/CDP CLI, status/diagnose flow, `--print-source` wrapper, and self-test delegation. The browser runtime source generator lives behind `src/browser/runtime-source.js` / `src/browser/bot-source.js`, with large browser runtime fragments split into dedicated source factories such as combat, opportunity, post-attack, opportunity-action, opportunity-route, opportunity-candidate, opportunity-choice, opportunity-pick, patrol, opportunity-clear, exit-motion, persistent-last-self, persistent-exit, and coin-progress modules. The generated remote bot remains a single browser script.
+As of the later `bootstrap-0.4.346` source-builder extraction, the main file (`grasp-rat-bot.js`) is **320 lines** and keeps the Node/CDP CLI, status/diagnose flow, `--print-source` wrapper, and self-test delegation. The browser runtime source generator lives behind `src/browser/runtime-source.js` / `src/browser/bot-source.js`, with large browser runtime fragments split into dedicated source factories such as combat, opportunity, post-attack, opportunity-action, opportunity-route, opportunity-candidate, opportunity-choice, opportunity-pick, patrol, opportunity-clear, exit-motion, persistent-last-self, persistent-exit, persistent-clear, and coin-progress modules. The generated remote bot remains a single browser script.
 
 ---
 
@@ -158,6 +158,7 @@ grasp-rat-bot/
 │   │   ├── exit-motion-source.js
 │   │   ├── persistent-last-self-source.js
 │   │   ├── persistent-exit-source.js
+│   │   ├── persistent-clear-source.js
 │   │   ├── coin-progress-runtime-source.js
 │   │   ├── entity-activity-source.js
 │   │   ├── stamina-runtime-source.js
@@ -332,13 +333,15 @@ Treat the combat target selection, combat movement, and combat fire-discipline m
 
 `bootstrap-0.4.345` applies the same fixed-source proof to persistent exit source generation while preserving localStorage read/write behavior, expired relogin hold cleanup, `refreshExitDetail` display behavior, and payload shape.
 
+`bootstrap-0.4.346` applies the same fixed-source proof to persistent clear source generation while preserving persistent exit hold clearing, persisted pending-exit clearing, and existing call sites.
+
 ## Conclusion
 
 This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The browser source builder split, browser runtime source boundary, page-global core, control-login page-global guard cleanup, manual-login page-global gate cleanup, page-native observer global/source cleanup, target whitelist source cleanup, network quality source cleanup, action arbitration source cleanup, combat history source cleanup, entity-refresh source cleanup, classify source cleanup, coin-safety source cleanup, target-selection source cleanup, combat-movement source cleanup, combat-aim source cleanup, combat-state source cleanup, combat-fire source cleanup, combat-leave-cover source cleanup, combat-action source cleanup, opportunity-stamina source cleanup, opportunity-snapshot source cleanup, opportunity-actions source cleanup, opportunity-route source cleanup, opportunity-candidate source cleanup, opportunity-choice source cleanup, opportunity-pick source cleanup, patrol source cleanup, opportunity-clear source cleanup, exit-motion source cleanup, coin-progress runtime source cleanup, coin target runtime source cleanup, native control source cleanup, coin motion runtime source cleanup, return-block source cleanup, entity activity source cleanup, stamina runtime source cleanup, exit/relogin source cleanup, pending-exit source cleanup, leave-command/Clash-rescue/issue source cleanup, auto-login source cleanup, leave-flow source cleanup, offline safety source cleanup, production esbuild remote build, action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner/action metadata, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 
-The persistent-last-self source cleanup is also integrated as of `bootstrap-0.4.344`. The persistent-exit source cleanup is integrated as of `bootstrap-0.4.345`.
+The persistent-last-self source cleanup is also integrated as of `bootstrap-0.4.344`. The persistent-exit source cleanup is integrated as of `bootstrap-0.4.345`. The persistent-clear source cleanup is integrated as of `bootstrap-0.4.346`.
 
 **Status**: ✅ **REFACTORING COMPLETE**  
 **Risk Level**: LOW (all changes validated)  

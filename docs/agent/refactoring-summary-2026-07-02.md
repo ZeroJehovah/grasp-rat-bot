@@ -779,6 +779,17 @@ This is a source-organization split only. It preserves persistent last-self loca
 
 This is a source-organization split only. It preserves persistent exit localStorage read/write behavior, expired relogin hold cleanup, finalized display updates, payload shape, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BS Persistent Clear Source Factory
+
+`bootstrap-0.4.346` extracts persistent clear source generation into a dedicated browser source module:
+
+- `src/browser/persistent-clear-source.js` now owns the raw browser source for `clearPersistentExitState()` and `clearPersistentPendingExitState()`.
+- `src/browser/bot-source.js` imports and injects `${persistentClearSource()}` immediately after `${persistentExitSource()}`, preserving generated runtime order before pending-exit normalization helpers.
+- Static verification checks the new source-factory shape, injection point, exit clear helper, pending-exit clear helper, and `PENDING_EXIT_STATE_KEY` anchor.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves persistent exit hold clearing, persisted pending-exit clearing, existing call sites, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -855,9 +866,10 @@ This is a source-organization split only. It preserves persistent exit localStor
 71. Exit motion source factory: integrated in `bootstrap-0.4.343`
 72. Persistent last-self source factory: integrated in `bootstrap-0.4.344`
 73. Persistent exit source factory: integrated in `bootstrap-0.4.345`
-74. Constants: partially integrated for high-value coin defaults
-75. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-76. Run live validation sessions after each behavior-touching replacement
+74. Persistent clear source factory: integrated in `bootstrap-0.4.346`
+75. Constants: partially integrated for high-value coin defaults
+76. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+77. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
