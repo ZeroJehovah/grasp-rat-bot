@@ -5,7 +5,7 @@ const {
   summarizeCoinDiagnosticsList,
   addCoinFilterDiagnostic,
   buildCoinDiagnostics
-} = require('../strategy/coin-diagnostics');
+} = require('./runtime/coin-diagnostics');
 
 function coinSafetySource() {
   return String.raw`  function coinThreatDangerRadius(threat) {

@@ -9,6 +9,7 @@ import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
 import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
+import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -38,6 +39,21 @@ function helperStatus(config = {}) {
   const arbitrationState = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
   actionArbitration.applyFinalActionArbitrationCore(sampleAction, arbitrationState, { nowMs: 1000, holdMs: 1000 });
   const arbitrationResult = actionArbitration.applyFinalActionArbitrationCore(nextAction, arbitrationState, { nowMs: 1200, holdMs: 1000 });
+  const coinDiagnosticResult = coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {
+    realtimeNearCoins: [{ drop_id: 'coin-spike', amount: 3, distance: 100, x: 100, y: 0, native: true }],
+    realtimeCoins: [
+      { drop_id: 'coin-spike', amount: 3, distance: 100, x: 100, y: 0, native: true },
+      { drop_id: 'ignored-spike', amount: 1, distance: 120, x: 120, y: 0, native: true }
+    ],
+    realtimeGlobalCoins: [],
+    realtimePatrolCoins: [],
+    snapshotCoins: [{ drop_id: 'snapshot-spike', amount: 2, distance: 150, x: 150, y: 0, snapshot: true }]
+  }, {
+    nearDistance: 200,
+    limit: 4,
+    nowMs: 1000,
+    ignoredCoinUntil: coin => String(coin?.drop_id || '') === 'ignored-spike' ? 1800 : 0
+  });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -49,6 +65,8 @@ function helperStatus(config = {}) {
     actionFocus: actionPriority.actionFocusSummary(sampleAction),
     finalActionHeld: arbitrationResult.held,
     actionSwitch: switchResult.event,
+    coinDiagnosticsIgnored: arrayCountRuntime.arrayCount(coinDiagnosticResult.ignoredNearCoins),
+    coinDiagnosticsSnapshotOnly: arrayCountRuntime.arrayCount(coinDiagnosticResult.snapshotOnlyNearCoins),
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

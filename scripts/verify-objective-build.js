@@ -279,6 +279,7 @@ function main() {
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
   const actionSwitchDiagnosticsRuntimeModule = readText('src/browser/runtime/action-switch-diagnostics.js');
+  const coinDiagnosticsRuntimeModule = readText('src/browser/runtime/coin-diagnostics.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -379,6 +380,7 @@ function main() {
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
     actionSwitchDiagnosticsRuntimeModule,
+    coinDiagnosticsRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1260,6 +1262,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import actionPriority from '../browser/runtime/action-priority.js'"), 'bundler spike does not import action-priority through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionArbitration from '../browser/runtime/action-arbitration.js'"), 'bundler spike does not import action-arbitration through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js'"), 'bundler spike does not import action-switch diagnostics through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import coinDiagnostics from '../browser/runtime/coin-diagnostics.js'"), 'bundler spike does not import coin diagnostics through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
@@ -1268,6 +1271,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('defaultStatusEvery: runtimeDefaults.buildRuntimeDefaults({ statusEvery: 0 }, false).statusEvery'), 'bundler spike does not execute the runtime-defaults helper module');
     assert(bundlerSpikeEntrySource.includes('actionArbitration.applyFinalActionArbitrationCore(sampleAction, arbitrationState, { nowMs: 1000, holdMs: 1000 })'), 'bundler spike does not execute the action-arbitration helper module');
     assert(bundlerSpikeEntrySource.includes('actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(sampleAction, switchState, { nowMs: 1000 })'), 'bundler spike does not execute the action-switch diagnostics helper module');
+    assert(bundlerSpikeEntrySource.includes('coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -2784,6 +2788,10 @@ function main() {
   check('coin diagnostics expose filtered visible coin candidates', () => {
     assert(strategyCoinDiagnosticsSource.includes('function buildCoinDiagnostics'), 'strategy coin diagnostics builder not found');
     assert(strategyCoinDiagnosticsSource.includes('function addCoinFilterDiagnostic'), 'strategy coin filter diagnostic recorder not found');
+    assert(coinSafetySourceModule.includes("require('./runtime/coin-diagnostics')"), 'coin-safety source does not import coin diagnostics through the browser runtime helper module');
+    assert(!coinSafetySourceModule.includes("require('../strategy/coin-diagnostics')"), 'coin-safety source still imports coin diagnostics directly from strategy');
+    assert(coinDiagnosticsRuntimeModule.includes("require('../../strategy/coin-diagnostics')"), 'browser coin diagnostics helper module does not reuse the strategy coin diagnostics helpers');
+    assert(coinDiagnosticsRuntimeModule.includes('coinDiagnosticsSummary') && coinDiagnosticsRuntimeModule.includes('addCoinFilterDiagnostic') && coinDiagnosticsRuntimeModule.includes('buildCoinDiagnostics'), 'browser coin diagnostics helper module exports are incomplete');
     assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'"), 'strategy snapshot-only coin diagnostics not exposed');
     assert(generatedRuntimeSource.includes('function buildCoinDiagnostics'), 'generated runtime does not inline coin diagnostics builder');
     assert(generatedRuntimeSource.includes('function addCoinFilterDiagnostic'), 'generated runtime does not inline coin filter diagnostic recorder');
