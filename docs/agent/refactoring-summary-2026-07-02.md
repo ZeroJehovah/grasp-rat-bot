@@ -493,6 +493,17 @@ This is a source-organization split only. It preserves movement transport, stop 
 
 This is a source-organization split only. It preserves coin movement direction, pickup pulse metadata, approach-lock behavior, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AM Return Block Source Factory
+
+`bootstrap-0.4.311` extracts return-block and active-threat helper source generation into a dedicated browser source module:
+
+- `src/browser/return-block-source.js` now owns the raw browser source for flee direction helpers, return-block radius/resume calculations, lateral scan direction/action construction, return-block pressure tracking, and `blockThreatReturnAction()`.
+- `src/browser/bot-source.js` imports and injects `${returnBlockSource()}` after `${coinMotionRuntimeSource()}`.
+- Static verification checks the new source-factory shape plus generated runtime presence for `blockThreatReturnAction`, `active-threat-return-block`, and `return-block-lateral-scan`.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves active-threat return-block behavior, return-block lateral scan behavior, flee-lock semantics, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -534,9 +545,10 @@ This is a source-organization split only. It preserves coin movement direction, 
 36. Coin target runtime source factory: integrated in `bootstrap-0.4.308`
 37. Native control source factory: integrated in `bootstrap-0.4.309`
 38. Coin motion runtime source factory: integrated in `bootstrap-0.4.310`
-39. Constants: partially integrated for high-value coin defaults
-40. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-41. Run live validation sessions after each behavior-touching replacement
+39. Return-block source factory: integrated in `bootstrap-0.4.311`
+40. Constants: partially integrated for high-value coin defaults
+41. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+42. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
