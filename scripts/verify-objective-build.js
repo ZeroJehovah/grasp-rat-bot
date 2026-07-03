@@ -298,6 +298,7 @@ function main() {
   const combatStateSourceModule = readText('src/browser/combat-state-source.js');
   const combatFireSourceModule = readText('src/browser/combat-fire-source.js');
   const combatActionSourceModule = readText('src/browser/combat-action-source.js');
+  const opportunityStaminaSourceModule = readText('src/browser/opportunity-stamina-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -342,6 +343,7 @@ function main() {
     combatStateSourceModule,
     combatFireSourceModule,
     combatActionSourceModule,
+    opportunityStaminaSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -447,6 +449,7 @@ function main() {
     assert(botSourceModule.includes("require('./combat-state-source')"), 'combat-state source module import not found');
     assert(botSourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
     assert(botSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
+    assert(botSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
@@ -497,6 +500,7 @@ function main() {
     assert(botSourceModule.includes('${combatStateSource()}'), 'combat-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatFireSource()}'), 'combat-fire module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatActionSource()}'), 'combat-action module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityStaminaSource()}'), 'opportunity-stamina module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -675,6 +679,15 @@ function main() {
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatTrendState'), 'combat-action source factory does not include combat trend wiring');
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatShootingPlan'), 'combat-action source factory does not include shooting plan wiring');
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatState'), 'combat-action source factory does not include combat state logging');
+    assert(opportunityStaminaSourceModule.includes('function opportunityStaminaSource() {'), 'opportunity-stamina source factory not found');
+    assert(opportunityStaminaSourceModule.includes('module.exports = { opportunityStaminaSource }'), 'opportunity-stamina source module export not found');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('String.raw`'), 'opportunity-stamina source factory does not return raw browser source');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function opportunityEffectiveStaminaCost'), 'opportunity-stamina source factory does not include effective stamina helper');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'opportunity-stamina source factory does not inline daily stamina budget core');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('summarizeNearestCoinStaminaBudgetExitCore.toString()'), 'opportunity-stamina source factory does not inline nearest stamina exit core');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function dailyStaminaFinalCoinAction'), 'opportunity-stamina source factory does not include daily final coin action');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function staminaBudgetCoinLeaveAction'), 'opportunity-stamina source factory does not include stamina budget leave action');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function mergeCoinRouteDisplay'), 'opportunity-stamina source factory does not include coin route display wrapper');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
@@ -2554,8 +2567,8 @@ function main() {
     assert(strategyStaminaBudgetSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'strategy blocked stamina summary core not found');
     assert(strategyStaminaBudgetSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'strategy nearest coin stamina exit core not found');
     assert(strategyStaminaBudgetSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'strategy daily final coin picker core not found');
-    assert(botSourceModule.includes("require('../strategy/stamina-budget')"), 'source bot does not import stamina budget strategy module');
-    assert(sourceRuntimeText.includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'source bot does not inject daily stamina budget core');
+    assert(opportunityStaminaSourceModule.includes("require('../strategy/stamina-budget')"), 'opportunity-stamina source does not import stamina budget strategy module');
+    assert(sourceRuntimeText.includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'source modules do not inject daily stamina budget core');
     assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore.toString()'), 'source bot does not inject blocked stamina summary core');
     assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore.toString()'), 'source bot does not inject nearest stamina exit core');
     assert(sourceRuntimeText.includes('pickNearestDailyStaminaFinalCoinCore.toString()'), 'source bot does not inject daily final coin picker core');
