@@ -647,6 +647,17 @@ This is a source-organization split only. It preserves combat retreat-ignore sta
 
 This is a source-organization split only. It preserves combat action arbitration inputs, leave cover fallback behavior, HP/trade/pressure exits, finish-pressure/reengage decisions, movement/aim/shoot metadata, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BG Post-Attack Source Factory
+
+`bootstrap-0.4.334` extracts post-attack drop source generation into a dedicated browser source module:
+
+- `src/browser/post-attack-source.js` now owns the raw browser source for attack-history target matching, target resolution timing, visible post-attack drop coin matching, post-attack wait target selection, and wait action construction.
+- `src/browser/bot-source.js` imports and injects `${postAttackSource()}` at the original boundary before `enemyOpportunityCandidates()`, preserving the generated runtime order after profitable combat target selection.
+- Static verification checks the new source-factory shape, injection point, drop coin picker, wait target picker, wait action builder, post-attack strategy import, and core inlining anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves post-attack visible drop attribution, recovery drop override thresholds, killed-target wait behavior, post-attack strategy-core wrapper calls, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -711,9 +722,10 @@ This is a source-organization split only. It preserves combat action arbitration
 59. Opportunity stamina source factory: integrated in `bootstrap-0.4.331`
 60. Combat leave cover source factory: integrated in `bootstrap-0.4.332`
 61. Opportunity snapshot source factory: integrated in `bootstrap-0.4.333`
-62. Constants: partially integrated for high-value coin defaults
-63. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-64. Run live validation sessions after each behavior-touching replacement
+62. Post-attack source factory: integrated in `bootstrap-0.4.334`
+63. Constants: partially integrated for high-value coin defaults
+64. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+65. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
