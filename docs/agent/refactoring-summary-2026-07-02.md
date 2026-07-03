@@ -709,9 +709,10 @@ This is a source-organization split only. It preserves combat action arbitration
 57. Combat state source factory: integrated in `bootstrap-0.4.329`
 58. Combat action source factory: integrated in `bootstrap-0.4.330`
 59. Opportunity stamina source factory: integrated in `bootstrap-0.4.331`
-60. Constants: partially integrated for high-value coin defaults
-61. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-62. Run live validation sessions after each behavior-touching replacement
+60. Combat leave cover source factory: integrated in `bootstrap-0.4.332`
+61. Constants: partially integrated for high-value coin defaults
+62. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+63. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
