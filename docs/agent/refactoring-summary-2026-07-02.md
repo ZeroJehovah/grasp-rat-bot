@@ -790,6 +790,17 @@ This is a source-organization split only. It preserves persistent exit localStor
 
 This is a source-organization split only. It preserves persistent exit hold clearing, persisted pending-exit clearing, existing call sites, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BT Pending-Exit Persistence Source Factory
+
+`bootstrap-0.4.347` extracts pending-exit persistence source generation into a dedicated browser source module:
+
+- `src/browser/pending-exit-persistence-source.js` now owns the raw browser source for `normalizePendingExitReloadConfirmation()`, `normalizePendingExitStateForStorage()`, `readPersistedPendingExitState()`, `writePersistentPendingExitState()`, and `chooseInitialPendingExitState()`.
+- `src/browser/bot-source.js` imports and injects `${pendingExitPersistenceSource()}` immediately after `${persistentClearSource()}`, preserving generated runtime order before exit-detail refresh helpers.
+- Static verification checks the new source-factory shape, injection point, reload normalizer, storage normalizer, reader, writer, initial-state chooser, and `PENDING_EXIT_STATE_KEY` anchor.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves pending-exit storage schema, reload-confirmation restoration, max-age cleanup, localStorage read/write behavior, initial memory-vs-storage selection, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -867,9 +878,10 @@ This is a source-organization split only. It preserves persistent exit hold clea
 72. Persistent last-self source factory: integrated in `bootstrap-0.4.344`
 73. Persistent exit source factory: integrated in `bootstrap-0.4.345`
 74. Persistent clear source factory: integrated in `bootstrap-0.4.346`
-75. Constants: partially integrated for high-value coin defaults
-76. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-77. Run live validation sessions after each behavior-touching replacement
+75. Pending-exit persistence source factory: integrated in `bootstrap-0.4.347`
+76. Constants: partially integrated for high-value coin defaults
+77. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+78. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
