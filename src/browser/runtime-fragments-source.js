@@ -218,7 +218,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['coin-motion-runtime', coinMotionRuntimeSource],
+    ['coin-motion-runtime', () => coinMotionRuntimeSource(config)],
     ['separator-after-coin-motion-runtime',
     `
 
