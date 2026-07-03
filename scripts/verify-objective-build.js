@@ -292,6 +292,7 @@ function main() {
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
+  const nativeControlSourceModule = readText('src/browser/native-control-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -316,6 +317,7 @@ function main() {
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
+    nativeControlSourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -406,6 +408,7 @@ function main() {
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
+    assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -440,6 +443,7 @@ function main() {
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
+    assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${actionArbitrationSource()}'), 'action-arbitration module is not injected into browser runtime');
     assert(botSourceModule.includes('${networkQualitySource()}'), 'network-quality module is not injected into browser runtime');
@@ -533,6 +537,14 @@ function main() {
     assert(nativeStateSourceModule.includes('module.exports = {\n  nativeStateSource'), 'native-state module export not found');
     assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('String.raw`'), 'native-state source factory does not return raw browser source');
     assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('function getNativeState()'), 'native-state source factory does not include native state helpers');
+    assert(nativeControlSourceModule.includes('function nativeControlSource() {'), 'native-control source factory not found');
+    assert(nativeControlSourceModule.includes('module.exports = {\n  nativeControlSource'), 'native-control module export not found');
+    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('String.raw`'), 'native-control source factory does not return raw browser source');
+    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function sendDirectNativeVelocity'), 'native-control source factory does not include direct velocity sender');
+    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function scheduleDirectVelocityRepeat'), 'native-control source factory does not include velocity repeat scheduler');
+    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function stopMotionSafely'), 'native-control source factory does not include safe stop helper');
+    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function sendNativeShoot'), 'native-control source factory does not include native shoot helper');
+    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function shootAt'), 'native-control source factory does not include shoot cadence wrapper');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
