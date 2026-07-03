@@ -542,6 +542,9 @@ function main() {
     assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
+    assert(runtimeSourceModule.includes('function renderRuntimeFragment(fragment)'), 'single-fragment renderer not found');
+    assert(runtimeSourceModule.includes("Object.prototype.hasOwnProperty.call(fragment, 'source')"), 'runtime source renderer does not handle named fragment objects');
+    assert(runtimeSourceModule.includes('return fragments.map(renderRuntimeFragment).join'), 'runtime source renderer does not render through the single-fragment adapter');
     assert(runtimeSourceModule.includes('function renderRuntimeFragments(fragments)'), 'runtime source fragment renderer not found');
     assert(!runtimeSourceModule.includes('browserRuntimeAssemblySource'), 'runtime source boundary should not depend on the removed assembly adapter');
     assert(runtimeUtilsSourceModule.includes("require('./runtime/runtime-utils')"), 'runtime-utils source module does not import the browser runtime helper module');
@@ -607,11 +610,14 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
     assert(runtimeFragmentsSourceModule.includes('function browserRuntimeFragments(config)'), 'runtime fragments source factory not found');
-    assert(runtimeFragmentsSourceModule.includes('module.exports = {\n  browserRuntimeFragments'), 'runtime fragments source export not found');
+    assert(runtimeFragmentsSourceModule.includes('module.exports = {\n  runtimeFragment,\n  runtimeFragmentName,\n  browserRuntimeFragments'), 'runtime fragments source export not found');
     const runtimeSourceBody = functionBody(runtimeSourceModule, 'browserRuntimeSource');
     const fragmentRegistryBody = functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragments');
     assert(runtimeSourceBody.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime source does not render the fragment registry');
     assert(fragmentRegistryBody.includes('const fragments = ['), 'runtime fragments source does not use an explicit fragment registry');
+    assert(runtimeFragmentsSourceModule.includes('function runtimeFragment(name, source)'), 'runtime fragment metadata helper not found');
+    assert(runtimeFragmentsSourceModule.includes('function runtimeFragmentName(source, index)'), 'runtime fragment name helper not found');
+    assert(fragmentRegistryBody.includes('].map((source, index) => runtimeFragment(runtimeFragmentName(source, index), source));'), 'runtime fragments are not converted to named fragment objects');
     assert(fragmentRegistryBody.includes('return fragments;'), 'runtime fragments source does not return the fragment registry');
     assert(fragmentRegistryBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
     assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');

@@ -68,6 +68,16 @@ const { networkQualitySource } = require('./network-quality-source');
 const { networkQualitySummarySource } = require('./network-quality-summary-source');
 const { runtimeSummarySource } = require('./runtime-summary-source');
 
+function runtimeFragment(name, source) {
+  return { name, source };
+}
+
+function runtimeFragmentName(source, index) {
+  if (typeof source === 'function' && source.name) return source.name;
+  if (index === 0) return 'runtime-iife-open';
+  return `inline-${index}`;
+}
+
 function browserRuntimeFragments(config) {
   const fragments = [
     `
@@ -229,10 +239,12 @@ function browserRuntimeFragments(config) {
     `
 	})()
 `
-  ];
+  ].map((source, index) => runtimeFragment(runtimeFragmentName(source, index), source));
   return fragments;
 }
 
 module.exports = {
+  runtimeFragment,
+  runtimeFragmentName,
   browserRuntimeFragments
 };
