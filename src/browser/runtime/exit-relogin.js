@@ -120,6 +120,156 @@ function updateEnemyLeaveStreakCore(detail, t, helpers) {
   return streak;
 }
 
+function combatExitSummaryCore(reason, target, combatState = {}, helpers) {
+  const cfg = helpers.cfg;
+  const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
+  const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
+  const hpGap = Number(combatState.hpGap ?? (Number.isFinite(targetHp) && Number.isFinite(selfHp) ? targetHp - selfHp : NaN));
+  if (reason === 'combat-critical-hp-leave') {
+    return '与' + helpers.actorLabel(target) + '战斗，血量' + helpers.hpDisplay(selfHp) + '低于' + cfg.combatCriticalHpLeaveThreshold + '，紧急退出';
+  }
+  if (reason === 'combat-hp-disadvantage-leave') {
+    if (combatState?.serverStallNoDamage) {
+      const noDamageText = Number.isFinite(Number(combatState.serverStallNoDamage.noDamageMs))
+        ? '，' + Math.round(Number(combatState.serverStallNoDamage.noDamageMs) / 1000) + '秒未造成伤害'
+        : '';
+      const gapText = Number.isFinite(hpGap) ? '，差距' + helpers.hpDisplay(hpGap) : '';
+      return '与' + helpers.actorLabel(target) + '战斗，服务端位置停滞下血量' + helpers.hpDisplay(selfHp) + '，对方血量' + helpers.hpDisplay(targetHp) + gapText + noDamageText + '，劣势退出';
+    }
+    if (combatState?.pressureDisadvantage) {
+      const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance))
+        ? '，距离' + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + '米'
+        : '';
+      return '与' + helpers.actorLabel(target) + '战斗，近身弹压下血量' + helpers.hpDisplay(selfHp) + '，对方血量' + helpers.hpDisplay(targetHp) + '，差距' + helpers.hpDisplay(hpGap) + distanceText + '，提前劣势退出';
+    }
+    if (combatState?.sustainedPressureDisadvantage) {
+      const pressure = combatState.sustainedPressureDisadvantage;
+      const noDamageText = Number.isFinite(Number(pressure.noDamageMs))
+        ? '，' + Math.round(Number(pressure.noDamageMs) / 1000) + '秒未造成伤害'
+        : '';
+      const distanceText = Number.isFinite(Number(pressure.distance))
+        ? '，距离' + Math.round(Number(pressure.distance) / 100) + '米'
+        : '';
+      return '与' + helpers.actorLabel(target) + '战斗，持续弹压下血量' + helpers.hpDisplay(selfHp) + '，对方血量' + helpers.hpDisplay(targetHp) + '，差距' + helpers.hpDisplay(hpGap) + noDamageText + distanceText + '，提前劣势退出';
+    }
+    if (combatState?.tradeEstimate) {
+      const estimate = combatState.tradeEstimate;
+      const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? '，预计承伤倒计时' + helpers.formatDurationMs(estimate.tDeathMs) : '';
+      const killText = Number.isFinite(Number(estimate.tKillMs)) ? '，预计击杀需' + helpers.formatDurationMs(estimate.tKillMs) : '';
+      return '与' + helpers.actorLabel(target) + '战斗，交换比劣势' + deathText + killText + '，提前退出';
+    }
+    return '与' + helpers.actorLabel(target) + '战斗，血量' + helpers.hpDisplay(selfHp) + '，对方血量' + helpers.hpDisplay(targetHp) + '，差距' + helpers.hpDisplay(hpGap) + '，劣势退出';
+  }
+  if (reason === 'combat-low-hp-no-damage-leave') {
+    const noDamageText = Number.isFinite(Number(combatState.noDamageMs))
+      ? '，' + Math.round(Number(combatState.noDamageMs) / 1000) + '秒未造成伤害'
+      : '';
+    return '与' + helpers.actorLabel(target) + '战斗，血量' + helpers.hpDisplay(selfHp) + '，对方血量' + helpers.hpDisplay(targetHp) + noDamageText + '，低血久攻未中退出';
+  }
+  if (reason === 'combat-low-hp-leave' && combatState?.closeRisk) {
+    const distanceText = Number.isFinite(Number(combatState.closeRisk.distance))
+      ? '，距离' + Math.round(Number(combatState.closeRisk.distance) / 100) + '米'
+      : '';
+    return '与' + helpers.actorLabel(target) + '战斗，血量' + helpers.hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方血量' + helpers.hpDisplay(targetHp) + distanceText + '，低血近身风险退出';
+  }
+  return '与' + helpers.actorLabel(target) + '战斗，血量' + helpers.hpDisplay(selfHp) + '不足' + cfg.combatLowHpLeaveThreshold + '，对方血量' + helpers.hpDisplay(targetHp) + '，劣势退出';
+}
+
+function combatLeaveActionCore(reason, baseTarget, combatState = {}, cover = null, helpers) {
+  const exitSummary = helpers.combatExitSummary(reason, baseTarget, combatState);
+  const normalizedCover = cover ? { ...cover, target: cover.target || baseTarget } : null;
+  return {
+    kind: 'leave',
+    reason,
+    exitSummary,
+    displayReason: exitSummary,
+    combat: true,
+    ignoreReturnBlock: true,
+    dx: normalizedCover ? helpers.clamp(Math.round(Number(normalizedCover.dx) || 0), -1, 1) : 0,
+    dy: normalizedCover ? helpers.clamp(Math.round(Number(normalizedCover.dy) || 0), -1, 1) : 0,
+    shoot: Boolean(normalizedCover?.shoot),
+    forceShoot: Boolean(normalizedCover?.forceShoot),
+    shootEveryMs: normalizedCover?.shootEveryMs,
+    aimTarget: normalizedCover?.aimTarget || null,
+    incomingBullet: normalizedCover?.incomingBullet || null,
+    target: baseTarget,
+    combatCover: normalizedCover,
+    combatState: {
+      ...combatState,
+      leaveCover: normalizedCover
+    }
+  };
+}
+
+function pursuitLeaveSummaryCore(pursuit, helpers) {
+  const target = pursuit || {};
+  const duration = Number(target.durationMs);
+  const durationText = Number.isFinite(duration) && duration > 0 ? '，持续' + helpers.formatDurationMs(duration) : '';
+  const distance = Number(target.distance);
+  const distanceText = Number.isFinite(distance) ? '，距离' + helpers.formatDistance(distance) : '';
+  return '被' + helpers.actorLabel(target) + '持续追击' + durationText + distanceText + '，退出等待重连';
+}
+
+function injuryLeaveSummaryCore(injury, helpers) {
+  const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
+  const previousHp = Number(injury?.previousHp ?? NaN);
+  const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
+  const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp)
+    ? '，血量从' + helpers.hpDisplay(previousHp) + '降到' + helpers.hpDisplay(currentHp)
+    : (Number.isFinite(currentHp) ? '，当前血量' + helpers.hpDisplay(currentHp) : '');
+  return (actor ? '受到' + helpers.actorLabel(actor) + '伤害/附近威胁' : '检测到血量下降') + hpText + '，退出等待重连';
+}
+
+function offlineLeaveSummaryCore(reason, offlineSafety, helpers) {
+  if (offlineSafety?.staminaBudgetExit) {
+    return helpers.staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit);
+  }
+  const staminaLabel = helpers.staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
+  if (staminaLabel === '1h') return '一小时体力到达限制，退出等待重连';
+  if (staminaLabel === '1d') return '一天体力到达限制，退出等待重连';
+  if (staminaLabel === '1h/1d') return '一小时和一天体力到达限制，退出等待重连';
+  const text = String(reason || '').toLowerCase();
+  if (text.includes('stamina')) return '长周期体力到达限制，退出等待重连';
+  if (offlineSafety?.loginPointSafetyGate || text.includes('login point safety')) return '登录点安全快照未满足，退出等待安全重连';
+  if (offlineSafety?.noSelfGameSession || text.includes('missing self')) return '已登录但自身实体不可见，退出等待重连';
+  if (text.includes('combat tick gap') || offlineSafety?.combatTickGap) return '战斗主循环断档，按网络波动退出等待重连';
+  if (text.includes('sampling outage') || offlineSafety?.samplingOutage) return '网络采样超时，按网络波动退出等待重连';
+  if (text.includes('reconnect churn') || offlineSafety?.reconnectChurn) return '网络连接反复重连，退出等待重连';
+  if (text.includes('action settlement') || offlineSafety?.actionSettlementStall) return '移动/开火结算卡死，按离线处理，退出等待重连';
+  if (text.includes('server position')) return '服务端位置停止，按离线处理，退出等待重连';
+  if (offlineSafety?.unsafe) return '网络连接离线且周围危险，退出等待重连';
+  return '网络连接离线，退出等待重连';
+}
+
+function currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '', helpers) {
+  const currentSummary = helpers.offlineLeaveSummary(reason, offlineSafety);
+  const leaveDisplay = String(leaveResult?.displayReason || '');
+  const leaveSummary = String(leaveResult?.summary || leaveResult?.exitSummary || '');
+  if (currentSummary && leaveDisplay && (leaveSummary === currentSummary || leaveDisplay.includes(currentSummary))) {
+    return leaveDisplay;
+  }
+  if (currentSummary) return currentSummary;
+  return leaveDisplay || String(offlineDetail?.displayReason || '') || String(fallback || '');
+}
+
+function reloginDelayForHpCore(selfLike, detail, helpers) {
+  const cfg = helpers.cfg;
+  const info = helpers.hpInfoForRelogin(selfLike, detail);
+  const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
+  const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);
+  const baseMaxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs ?? minMs) || 0);
+  const maxMs = Math.max(baseMaxMs, repeatMinMs);
+  const dangerFactor = Math.pow(1 - info.ratio, 1.35);
+  const jitterMs = Math.max(0, Number(cfg.enemyReloginJitterMs) || 0);
+  const hpDelayMs = helpers.clamp(
+    Math.round(minMs + (maxMs - minMs) * dangerFactor + helpers.randomBetween(0, jitterMs)),
+    minMs,
+    maxMs
+  );
+  const delayMs = Math.max(hpDelayMs, repeatMinMs);
+  return { delayMs, hpDelayMs, minMs, maxMs, baseMaxMs, repeatMinMs, hp: info };
+}
+
 module.exports = {
   leaveWaitDisplayCore,
   finalizeLeaveDisplayReasonCore,
@@ -128,5 +278,12 @@ module.exports = {
   enemyRepeatDelayMsForCountCore,
   readEnemyLeaveStreakCore,
   writeEnemyLeaveStreakCore,
-  updateEnemyLeaveStreakCore
+  updateEnemyLeaveStreakCore,
+  combatExitSummaryCore,
+  combatLeaveActionCore,
+  pursuitLeaveSummaryCore,
+  injuryLeaveSummaryCore,
+  offlineLeaveSummaryCore,
+  currentOfflineDisplayReasonCore,
+  reloginDelayForHpCore
 };

@@ -578,6 +578,84 @@ function helperStatus(config = {}) {
       enemyRepeatDelayMsForCount: count => exitRelogin.enemyRepeatDelayMsForCountCore(count, exitReloginStreakCfg)
     }
   );
+  const exitReloginSummaryHelpers = {
+    cfg: {
+      combatCriticalHpLeaveThreshold: 25,
+      combatLowHpLeaveThreshold: 45
+    },
+    actorLabel: actor => String(actor?.name || actor?.targetName || actor?.id || 'unknown'),
+    hpDisplay: hp => `${Math.round(Number(hp) || 0)}HP`,
+    formatDurationMs: displayFormat.formatDurationMs
+  };
+  const exitReloginCombatSummary = exitRelogin.combatExitSummaryCore(
+    'combat-hp-disadvantage-leave',
+    { name: '强敌', hp: 80 },
+    { selfHp: 50, targetHp: 80, pressureDisadvantage: { distance: 1234 } },
+    exitReloginSummaryHelpers
+  );
+  const exitReloginCombatAction = exitRelogin.combatLeaveActionCore(
+    'combat-low-hp-leave',
+    { name: '强敌', hp: 70 },
+    { selfHp: 30, targetHp: 70, closeRisk: { distance: 3000 } },
+    { dx: 2, dy: -2, shoot: true, forceShoot: true },
+    {
+      combatExitSummary: (reason, target, state) => exitRelogin.combatExitSummaryCore(reason, target, state, exitReloginSummaryHelpers),
+      clamp: (value, min, max) => Math.min(max, Math.max(min, value))
+    }
+  );
+  const exitReloginPursuitSummary = exitRelogin.pursuitLeaveSummaryCore({
+    name: '追击者',
+    durationMs: 2500,
+    distance: 12345
+  }, {
+    actorLabel: exitReloginSummaryHelpers.actorLabel,
+    formatDurationMs: displayFormat.formatDurationMs,
+    formatDistance: displayFormat.formatDistance
+  });
+  const exitReloginInjurySummary = exitRelogin.injuryLeaveSummaryCore({
+    nearestHuman: { name: '伤害者' },
+    previousHp: 90,
+    currentHp: 55
+  }, {
+    actorLabel: exitReloginSummaryHelpers.actorLabel,
+    hpDisplay: exitReloginSummaryHelpers.hpDisplay
+  });
+  const exitReloginOfflineSummary = exitRelogin.offlineLeaveSummaryCore('action settlement', {
+    actionSettlementStall: true
+  }, {
+    staminaBudgetCoinLeaveSummary: () => 'stamina budget summary',
+    staminaExhaustedWindowLabel: () => ''
+  });
+  const exitReloginOfflineDisplay = exitRelogin.currentOfflineDisplayReasonCore(
+    'sampling outage',
+    { samplingOutage: true },
+    {
+      summary: '网络采样超时，按网络波动退出等待重连',
+      displayReason: '网络采样超时，按网络波动退出等待重连，等待3秒'
+    },
+    null,
+    '',
+    {
+      offlineLeaveSummary: (reason, safety) => exitRelogin.offlineLeaveSummaryCore(reason, safety, {
+        staminaBudgetCoinLeaveSummary: () => 'stamina budget summary',
+        staminaExhaustedWindowLabel: () => ''
+      })
+    }
+  );
+  const exitReloginHpDelay = exitRelogin.reloginDelayForHpCore(
+    { hp: 25 },
+    { enemyLeaveStreak: { reloginMinMs: 6000 } },
+    {
+      cfg: {
+        enemyReloginMinDelayMs: 1000,
+        enemyReloginMaxDelayMs: 5000,
+        enemyReloginJitterMs: 0
+      },
+      hpInfoForRelogin: () => ({ ratio: 0.25, hp: 25 }),
+      randomBetween: () => 0,
+      clamp: (value, min, max) => Math.min(max, Math.max(min, value))
+    }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -672,6 +750,15 @@ function helperStatus(config = {}) {
     exitReloginUpdatedRepeatDelay: exitReloginUpdateDetail.reloginRepeatDelayMs,
     exitReloginWrittenStreakCount: exitReloginStreakStorage.writtenValue?.count,
     exitReloginBotStreakKey: exitReloginStreakBot.enemyLeaveStreak?.key,
+    exitReloginCombatSummary,
+    exitReloginCombatActionDx: exitReloginCombatAction.dx,
+    exitReloginCombatActionShoot: exitReloginCombatAction.shoot,
+    exitReloginPursuitSummary,
+    exitReloginInjurySummary,
+    exitReloginOfflineSummary,
+    exitReloginOfflineDisplay,
+    exitReloginHpDelayMs: exitReloginHpDelay.delayMs,
+    exitReloginHpDelayRepeatMinMs: exitReloginHpDelay.repeatMinMs,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
