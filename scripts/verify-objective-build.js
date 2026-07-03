@@ -333,6 +333,7 @@ function main() {
   const pendingExitPersistenceSourceModule = readText('src/browser/pending-exit-persistence-source.js');
   const refreshExitDetailSourceModule = readText('src/browser/refresh-exit-detail-source.js');
   const restoredCoinFailuresSourceModule = readText('src/browser/restored-coin-failures-source.js');
+  const restoredRuntimeStateSourceModule = readText('src/browser/restored-runtime-state-source.js');
   const loginSnapshotGateSourceModule = readText('src/browser/login-snapshot-gate-source.js');
   const runtimeDiagnosticsSourceModule = readText('src/browser/runtime-diagnostics-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
@@ -406,6 +407,7 @@ function main() {
     pendingExitPersistenceSourceModule,
     refreshExitDetailSourceModule,
     restoredCoinFailuresSourceModule,
+    restoredRuntimeStateSourceModule,
     loginSnapshotGateSourceModule,
     runtimeDiagnosticsSourceModule,
     exitReloginSourceModule,
@@ -527,6 +529,7 @@ function main() {
     assert(runtimeAssemblySourceModule.includes("require('./persistent-exit-source')"), 'persistent-exit source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
+    assert(runtimeAssemblySourceModule.includes("require('./restored-runtime-state-source')"), 'restored runtime state source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -540,6 +543,11 @@ function main() {
     assert(assemblyBody.includes('const fragments = ['), 'runtime assembly source does not use an explicit fragment registry');
     assert(assemblyBody.includes('return renderRuntimeFragments(fragments);'), 'runtime assembly source does not render the fragment registry');
     assert(assemblyBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
+    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');
+    assert(restoredRuntimeStateSourceModule.includes('module.exports = { restoredRuntimeStateSource }'), 'restored runtime state source module export not found');
+    assert(restoredRuntimeStateSourceModule.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state source does not restore coin failures');
+    assert(restoredRuntimeStateSourceModule.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not restore pending exit state');
+    assert(restoredRuntimeStateSourceModule.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not choose initial pending exit state');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
     assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
@@ -597,6 +605,7 @@ function main() {
       'pendingExitPersistenceSource',
       'refreshExitDetailSource',
       'restoredCoinFailuresSource',
+      'restoredRuntimeStateSource',
       'loginSnapshotGateSource',
       'runtimeDiagnosticsSource',
       'exitReloginSource',
