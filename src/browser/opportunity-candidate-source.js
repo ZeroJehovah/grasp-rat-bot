@@ -13,7 +13,29 @@ const {
   bestCoinOpportunityScoreCore
 } = require('./runtime/opportunity-candidates');
 
-function opportunityCandidateSource(options = {}) {
+function opportunityCandidateInlineSource(helpers = {}, options = {}) {
+  const {
+    opportunityEffectiveStaminaCostCore,
+    opportunityValueScoreCore,
+    opportunityPriorityTierCore,
+    mergeCoinRouteDisplayCore,
+    uniqueVisibleRouteCoinsCore,
+    buildCoinOpportunityCandidatesCore,
+    buildEnemyOpportunityCandidatesCore,
+    buildOpportunityCandidatesCore,
+    bestCoinOpportunityScoreCore
+  } = helpers;
+  const opportunityCandidateHelperSource = [
+    opportunityEffectiveStaminaCostCore,
+    opportunityValueScoreCore,
+    opportunityPriorityTierCore,
+    mergeCoinRouteDisplayCore,
+    uniqueVisibleRouteCoinsCore,
+    buildCoinOpportunityCandidatesCore,
+    buildEnemyOpportunityCandidatesCore,
+    buildOpportunityCandidatesCore,
+    bestCoinOpportunityScoreCore
+  ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
   return String.raw`
   function opportunityPriorityTier(item) {
     return opportunityPriorityTierCore(item, {
@@ -22,15 +44,7 @@ function opportunityCandidateSource(options = {}) {
     });
   }
 
-	  ${opportunityEffectiveStaminaCostCore.toString()}
-	  ${opportunityValueScoreCore.toString()}
-	  ${opportunityPriorityTierCore.toString()}
-	  ${mergeCoinRouteDisplayCore.toString()}
-	  ${uniqueVisibleRouteCoinsCore.toString()}
-	  ${buildCoinOpportunityCandidatesCore.toString()}
-	  ${buildEnemyOpportunityCandidatesCore.toString()}
-	  ${buildOpportunityCandidatesCore.toString()}
-	  ${bestCoinOpportunityScoreCore.toString()}
+${opportunityCandidateHelperSource}
 
 ${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(self = null) {
 	    return {
@@ -82,4 +96,39 @@ ${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(se
 `;
 }
 
-module.exports = { opportunityCandidateSource };
+function bundledOpportunityCandidateSource(options = {}) {
+  return `const {
+  opportunityEffectiveStaminaCostCore,
+  opportunityValueScoreCore,
+  opportunityPriorityTierCore,
+  mergeCoinRouteDisplayCore,
+  uniqueVisibleRouteCoinsCore,
+  buildCoinOpportunityCandidatesCore,
+  buildEnemyOpportunityCandidatesCore,
+  buildOpportunityCandidatesCore,
+  bestCoinOpportunityScoreCore
+} = require('./src/browser/runtime/opportunity-candidates');
+
+${opportunityCandidateInlineSource({}, options)}`;
+}
+
+function opportunityCandidateSource(options = {}) {
+  if (options.bundledRuntime) return bundledOpportunityCandidateSource(options);
+  return opportunityCandidateInlineSource({
+    opportunityEffectiveStaminaCostCore,
+    opportunityValueScoreCore,
+    opportunityPriorityTierCore,
+    mergeCoinRouteDisplayCore,
+    uniqueVisibleRouteCoinsCore,
+    buildCoinOpportunityCandidatesCore,
+    buildEnemyOpportunityCandidatesCore,
+    buildOpportunityCandidatesCore,
+    bestCoinOpportunityScoreCore
+  }, options);
+}
+
+module.exports = {
+  bundledOpportunityCandidateSource,
+  opportunityCandidateInlineSource,
+  opportunityCandidateSource
+};
