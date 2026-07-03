@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const esbuild = require('esbuild');
-const { browserBotSource } = require('../src/browser/bot-source');
+const {
+  buildVersion,
+  writeRemoteBotBundle
+} = require('./remote-bot-bundle');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_OUT_FILE = path.join(ROOT, 'dist', 'spikes', 'grasp-rat-remote-bot.bundled-candidate.js');
@@ -42,19 +43,6 @@ function parseArgs(args) {
   return out;
 }
 
-function buildVersion() {
-  const d = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  return [
-    d.getUTCFullYear(),
-    pad(d.getUTCMonth() + 1),
-    pad(d.getUTCDate()),
-    pad(d.getUTCHours()),
-    pad(d.getUTCMinutes()),
-    pad(d.getUTCSeconds())
-  ].join('');
-}
-
 function printHelp() {
   console.log(`Usage: node scripts/build-remote-bot-bundled.js [options]
 
@@ -70,74 +58,15 @@ Options:
 `);
 }
 
-function sha256Hex(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
-}
-
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function remoteSourceFor(options) {
-  return browserBotSource({
-    dryRun: false,
-    once: false,
-    statusEvery: options.statusEvery,
-    version: options.version
-  });
-}
-
 async function bundleRemoteBot(options) {
-  const directSource = remoteSourceFor(options);
-  fs.mkdirSync(path.dirname(options.outFile), { recursive: true });
-  fs.mkdirSync(path.dirname(options.manifestFile), { recursive: true });
-  await esbuild.build({
-    stdin: {
-      contents: directSource,
-      sourcefile: 'grasp-rat-remote-bot.generated.js',
-      resolveDir: ROOT,
-      loader: 'js'
-    },
-    outfile: options.outFile,
-    bundle: true,
-    format: 'iife',
-    platform: 'browser',
-    target: ['es2020'],
-    minify: false,
-    sourcemap: false,
-    legalComments: 'none',
-    logLevel: 'silent'
-  });
-  const bundledSource = fs.readFileSync(options.outFile, 'utf8');
-  const directSha256 = sha256Hex(directSource);
-  const bundledSha256 = sha256Hex(bundledSource);
-  const manifest = {
-    version: options.version,
-    builtAt: new Date().toISOString(),
-    scriptUrl: options.scriptUrl,
-    sha256: bundledSha256,
-    statusEvery: options.statusEvery,
+  return writeRemoteBotBundle(options, {
     production: false,
-    bundler: {
-      name: 'esbuild',
-      mode: 'full-generated-remote-candidate',
-      directSha256,
-      format: 'iife',
-      platform: 'browser',
-      target: 'es2020'
-    },
-    config: {}
-  };
-  fs.writeFileSync(options.manifestFile, JSON.stringify(manifest, null, 2) + '\n');
-  return {
-    outFile: options.outFile,
-    manifestFile: options.manifestFile,
-    version: options.version,
-    directBytes: Buffer.byteLength(directSource),
-    directSha256,
-    bytes: Buffer.byteLength(bundledSource),
-    sha256: bundledSha256
-  };
+    mode: 'full-generated-remote-candidate'
+  });
 }
 
 function verifyBundledCandidate(source, manifest, expected = {}) {

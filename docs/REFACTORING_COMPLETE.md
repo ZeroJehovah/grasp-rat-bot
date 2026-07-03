@@ -207,7 +207,7 @@ const value = Number(cfg.someValue ?? SOME_CONSTANTS.SOME_VALUE);
 
 ## Later Source-Builder Extraction
 
-`bootstrap-0.4.295` moved `browserBotSource(config)` out of `grasp-rat-bot.js` into `src/browser/bot-source.js` and changed `scripts/build-remote-bot.js` to call that module directly. A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, and the direct build output matched the same baseline. Static verification now checks the extracted source builder plus the generated single-file dist output.
+`bootstrap-0.4.295` moved `browserBotSource(config)` out of `grasp-rat-bot.js` into `src/browser/bot-source.js` and changed the release build to generate source through that module directly. A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, and the direct build output matched the same baseline. `bootstrap-0.4.296` then routes the production remote artifact through the shared esbuild bundler while preserving the direct generated source as the canonical behavior source for verification.
 
 This update changes source organization and build coupling only; remote runtime behavior remains equivalent apart from the release version string.
 
@@ -307,13 +307,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.295` moves the browser runtime source generator into `src/browser/bot-source.js` and changes the release build to call that module directly. `grasp-rat-bot.js` now serves as the Node/CDP CLI entrypoint while still supporting `--print-source` through the extracted builder.
 
-The source-only bundler migration work after `bootstrap-0.4.295` adds a pinned esbuild dev dependency, `src/bundler-spike/runtime-entry.mjs`, `src/bundler-spike/page-adapter.mjs`, `scripts/build-bundler-spike.js`, and `scripts/build-remote-bot-bundled.js`. The spike proves a small browser module can import existing shared/strategy helpers, route page-global access through an adapter, and bundle into a browser IIFE that executes in VM validation. The full generated-runtime candidate proves the current `browserBotSource()` output can also be parsed and wrapped by esbuild as a non-production browser IIFE, while production `scripts/build-remote-bot.js` remains unchanged.
+The bundler migration work after `bootstrap-0.4.295` adds a pinned esbuild dev dependency, `src/bundler-spike/runtime-entry.mjs`, `src/bundler-spike/page-adapter.mjs`, `scripts/build-bundler-spike.js`, `scripts/build-remote-bot-bundled.js`, and the shared `scripts/remote-bot-bundle.js`. The spike proves a small browser module can import existing shared/strategy helpers, route page-global access through an adapter, and bundle into a browser IIFE that executes in VM validation. `bootstrap-0.4.296` switches production `scripts/build-remote-bot.js` to the shared esbuild path; the manifest records production/bundler metadata and the direct generated-source hash, while static verification regenerates the bundled dist and keeps behavior checks anchored to the direct source.
 
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The browser source builder split, action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner/action metadata, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The browser source builder split, production esbuild remote build, action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner/action metadata, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 

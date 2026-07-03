@@ -326,21 +326,21 @@ This is intended as an equivalent extraction of route metadata object constructi
 
 This is intended as an equivalent structural split only; the generated remote bot remains a single browser script and strategy behavior is unchanged apart from the release version string.
 
-## 2026-07-03 Follow-up: Phase 2X Bundler Spike
+## 2026-07-03 Follow-up: Phase 2X Bundler Spike and Production Switch
 
-The first bundler spike is source-only and does not change the production remote script:
+The first bundler spike proved the module/global-adapter path, then `bootstrap-0.4.296` switched production remote generation to the shared esbuild wrapper:
 
 - Root `package.json` now pins `esbuild` and exposes `npm run build:bundler-spike` / `npm run test:bundler-spike`.
 - `src/bundler-spike/runtime-entry.mjs` is a small ordinary browser module that imports existing shared/strategy CommonJS modules through ESM syntax.
 - `src/bundler-spike/page-adapter.mjs` centralizes the spike's page-global access for `window` / `globalThis` resolution, config reads, global installation, and localStorage JSON reads, so the entrypoint no longer reaches for `window` or `globalThis` directly.
 - `scripts/build-bundler-spike.js` builds that entry as a readable browser IIFE with `format: 'iife'`, `platform: 'browser'`, and `globalName: '__graspRatBundlerSpikeBundle'`.
 - The spike self-test builds into a temp directory, rejects unresolved relative `require()` / `import` paths, checks that shared/runtime/display/target-whitelist/action-priority/page-adapter helpers are bundled, and executes the output in a VM through both `globalThis.__graspRatBundlerSpike.status()` and `window.__graspRatBundlerSpike.status()`.
-- `scripts/build-remote-bot-bundled.js` is the next candidate step: it feeds the full generated remote runtime from `browserBotSource()` through esbuild as a non-production browser IIFE, writes a candidate manifest with both direct-source and bundled-output hashes, rejects unresolved relative `require()` / `import` paths and CommonJS exports, and parses the bundled result with `vm.Script`.
-- `scripts/verify-objective-build.js` checks the spike source modules, full generated-runtime candidate, and self-test coverage instead of depending on exact generated bundle wrapping text. It verifies production build isolation, adapter ownership of page globals, the absence of direct `window` / `globalThis` access in the spike entrypoint, and esbuild parsing of the complete current remote runtime.
-- esbuild can bundle the current CommonJS helper modules, but the output necessarily contains esbuild's internal CommonJS wrapper (`module.exports` / `__commonJS`). That is browser-safe for the spike, but a future production migration should prefer true browser ESM modules or accept that wrapper explicitly in verification.
-- `scripts/build-remote-bot.js` remains isolated from esbuild; production remote generation still uses `src/browser/bot-source.js`.
+- `scripts/remote-bot-bundle.js` now centralizes `browserBotSource()` generation, esbuild IIFE wrapping, direct/bundled SHA-256 calculation, manifest bundler metadata, and output writes.
+- `scripts/build-remote-bot.js` now writes the production `dist/grasp-rat-remote-bot.js` and `dist/manifest.json` through the shared bundler with `production: true`, `mode: production-full-generated-remote`, and a recorded direct-source hash.
+- `scripts/build-remote-bot-bundled.js` remains a non-production candidate/self-test path, but it now reuses the same shared bundler instead of carrying a parallel esbuild implementation.
+- `scripts/verify-objective-build.js` regenerates both direct and bundled production sources, requires the final dist to match the regenerated bundle hash, checks production bundler metadata and direct-source hash, parses the bundled dist with `vm.Script`, rejects unresolved relative imports/requires and CommonJS exports in the final dist, and keeps behavior/static source checks anchored to the canonical direct generated source.
 
-This proves the bundler direction is technically viable for a controlled entrypoint, that the page-global adapter pattern can be verified without relying on exact bundle text, and that the current full generated remote runtime can be parsed and wrapped by esbuild. It does not yet switch the production remote build or prove true browser-module ownership of the large runtime slices; those should still be converted in stages.
+This switches the production build path without converting the large runtime slices into true browser ESM modules yet. Future extraction can still move selected browser/shared helpers toward real ESM ownership, but the release artifact is now produced by esbuild instead of the old raw source write.
 
 ## Next Steps (Not Implemented Yet)
 
@@ -366,15 +366,16 @@ This proves the bundler direction is technically viable for a controlled entrypo
 19. Ignored coin cleanup intent: integrated in `bootstrap-0.4.293`
 20. Coin route action metadata: integrated in `bootstrap-0.4.294`
 21. Browser source builder extraction/direct build path: integrated in `bootstrap-0.4.295`
-22. Source-only esbuild bundler spike plus spike page-global adapter: implemented after `bootstrap-0.4.295`
+22. Esbuild bundler spike plus spike page-global adapter: implemented after `bootstrap-0.4.295`
 23. Full generated remote runtime esbuild candidate: implemented after `bootstrap-0.4.295`
-24. Constants: partially integrated for high-value coin defaults
-25. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-26. Run live validation sessions after each behavior-touching replacement
+24. Production esbuild remote build: integrated in `bootstrap-0.4.296`
+25. Constants: partially integrated for high-value coin defaults
+26. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+27. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
-2. Extend the spike page-global adapter to the real native page functions before bundling live runtime slices
+2. Extend the spike page-global adapter to real native page functions before converting live runtime slices to true ESM ownership
 3. Profit/opportunity selection module
 4. Safety/avoidance module
 5. Movement execution module
