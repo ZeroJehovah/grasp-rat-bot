@@ -294,6 +294,7 @@ function main() {
   const coinSafetySourceModule = readText('src/browser/coin-safety-source.js');
   const targetSelectionSourceModule = readText('src/browser/target-selection-source.js');
   const combatMovementSourceModule = readText('src/browser/combat-movement-source.js');
+  const combatAimSourceModule = readText('src/browser/combat-aim-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -334,6 +335,7 @@ function main() {
     coinSafetySourceModule,
     targetSelectionSourceModule,
     combatMovementSourceModule,
+    combatAimSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -435,6 +437,7 @@ function main() {
     assert(botSourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
     assert(botSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
     assert(botSourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
+    assert(botSourceModule.includes("require('./combat-aim-source')"), 'combat-aim source module import not found');
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
@@ -481,6 +484,7 @@ function main() {
     assert(botSourceModule.includes('${coinSafetySource()}'), 'coin-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${targetSelectionSource()}'), 'target-selection module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatMovementSource()}'), 'combat-movement module is not injected into browser runtime');
+    assert(botSourceModule.includes('${combatAimSource()}'), 'combat-aim module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -622,6 +626,14 @@ function main() {
     assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatOutOfRangeReengageState'), 'combat-movement source factory does not include out-of-range reengage helper');
     assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatPassiveRunnerState'), 'combat-movement source factory does not include passive runner helper');
     assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatOutOfRangeDodgeAction'), 'combat-movement source factory does not include out-of-range dodge action');
+    assert(combatAimSourceModule.includes('function combatAimSource() {'), 'combat-aim source factory not found');
+    assert(combatAimSourceModule.includes('module.exports = { combatAimSource }'), 'combat-aim source module export not found');
+    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('String.raw`'), 'combat-aim source factory does not return raw browser source');
+    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatAimJitterLimit'), 'combat-aim source factory does not include jitter helper');
+    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatAimMotionScale'), 'combat-aim source factory does not include motion scale helper');
+    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatMotionSamplesWithCurrent'), 'combat-aim source factory does not include motion history helper');
+    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatOpponentProfile'), 'combat-aim source factory does not include opponent profile helper');
+    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatTradeEstimate'), 'combat-aim source factory does not include trade estimate helper');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
