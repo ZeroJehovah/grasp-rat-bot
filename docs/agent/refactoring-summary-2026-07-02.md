@@ -581,6 +581,17 @@ This is a source-organization split only. It preserves realtime/native entity me
 
 This is a source-organization split only. It preserves active threat coin blocking, invulnerable coin heading avoidance, ignored-coin cleanup, near-coin diagnostic collection, coin stamina diagnostics, realtime-only local coin fallback, field migration nearby-coin suppression, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BA Target Selection Source Factory
+
+`bootstrap-0.4.325` extracts high-value coin priority, combat target selection, engaged target retention, and opportunistic shot source generation into a dedicated browser source module:
+
+- `src/browser/target-selection-source.js` now owns the raw browser source for high-value coin priority thresholds, visible high-value coin picking, low-value active combat classification, proactive active-combat stamina gating, defensive/profit combat target selection, engaged combat target re-selection, defensive override checks, and opportunistic AFK drop shot wrapping.
+- `src/browser/bot-source.js` imports and injects `${targetSelectionSource()}` immediately after `${coinSafetySource()}`, preserving the generated runtime order before combat movement helpers.
+- Static verification checks the new source-factory shape, injection point, high-value coin helper, high-value visible coin picker, defensive combat classifier, combat target picker, engaged combat picker, defensive override helper, opportunistic shot attachment, and opportunistic shot wait builder anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves high-value coin priority behavior, low-value active combat threat evidence rules, proactive active-combat stamina gating, incoming-bullet defensive target selection, engaged target grace handling, retreat-ignore cleanup, and opportunistic AFK shot metadata.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -636,6 +647,7 @@ This is a source-organization split only. It preserves active threat coin blocki
 50. Entity refresh source factory: integrated in `bootstrap-0.4.322`
 51. Classify source factory: integrated in `bootstrap-0.4.323`
 52. Coin safety source factory: integrated in `bootstrap-0.4.324`
+53. Target selection source factory: integrated in `bootstrap-0.4.325`
 51. Constants: partially integrated for high-value coin defaults
 52. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 53. Run live validation sessions after each behavior-touching replacement
