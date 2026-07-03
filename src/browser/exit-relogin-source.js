@@ -94,7 +94,7 @@ function bundledExitReloginActorSource() {
 `;
 }
 
-function exitReloginRemainderSource() {
+function exitReloginStreakInlineSource() {
   return String.raw`
   function readEnemyLeaveStreak(t = Date.now()) {
     let streak = null;
@@ -165,7 +165,38 @@ function exitReloginRemainderSource() {
     }
     return streak;
   }
+`;
+}
 
+function bundledExitReloginStreakSource() {
+  return `	  const {
+	    readEnemyLeaveStreakCore,
+	    writeEnemyLeaveStreakCore,
+	    updateEnemyLeaveStreakCore
+	  } = require('./src/browser/runtime/exit-relogin');
+
+	  function readEnemyLeaveStreak(t = Date.now()) {
+	    return readEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, cfg, t, enemyRepeatDelayMsForCount);
+	  }
+
+	  function writeEnemyLeaveStreak(streak) {
+	    return writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak);
+	  }
+
+\t  function updateEnemyLeaveStreak(detail, t = Date.now()) {
+\t    return updateEnemyLeaveStreakCore(detail, t, {
+\t      cfg,
+\t      enemyActorFromLeaveDetail,
+\t      readEnemyLeaveStreak,
+\t      writeEnemyLeaveStreak,
+\t      enemyRepeatDelayMsForCount
+\t    });
+\t  }
+`;
+}
+
+function exitReloginRemainderSource() {
+  return String.raw`
   function combatExitSummary(reason, target, combatState = {}) {
     const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
     const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
@@ -699,7 +730,10 @@ function exitReloginSource(options = {}) {
   const actorSource = options.bundledRuntime
     ? bundledExitReloginActorSource()
     : exitReloginActorInlineSource();
-  return displaySource + actorSource + exitReloginRemainderSource();
+  const streakSource = options.bundledRuntime
+    ? bundledExitReloginStreakSource()
+    : exitReloginStreakInlineSource();
+  return displaySource + actorSource + streakSource + exitReloginRemainderSource();
 }
 
 module.exports = {
@@ -707,6 +741,8 @@ module.exports = {
   bundledExitReloginDisplaySource,
   exitReloginActorInlineSource,
   bundledExitReloginActorSource,
+  exitReloginStreakInlineSource,
+  bundledExitReloginStreakSource,
   exitReloginRemainderSource,
   exitReloginSource
 };

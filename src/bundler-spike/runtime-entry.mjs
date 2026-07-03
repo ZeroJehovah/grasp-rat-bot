@@ -519,6 +519,65 @@ function helperStatus(config = {}) {
     enemyReloginRepeatSecondMaxMs: 2000,
     enemyReloginRepeatThirdMaxMs: 5000
   });
+  const exitReloginStreakBot = { enemyLeaveStreak: null };
+  const exitReloginStreakCfg = {
+    enemyReloginRepeatResetMs: 10000,
+    enemyReloginRepeatSecondMaxMs: 2000,
+    enemyReloginRepeatThirdMaxMs: 5000
+  };
+  const exitReloginStreakStorage = {
+    value: JSON.stringify({
+      key: 'id:42',
+      id: 42,
+      name: '追击者',
+      count: 1,
+      at: 1000
+    }),
+    getItem() {
+      return this.value;
+    },
+    setItem(key, value) {
+      this.writtenKey = key;
+      this.writtenValue = JSON.parse(value);
+      this.value = value;
+    },
+    removeItem(key) {
+      this.removedKey = key;
+      this.value = 'null';
+    }
+  };
+  const exitReloginReadStreak = exitRelogin.readEnemyLeaveStreakCore(
+    exitReloginStreakStorage,
+    'enemy-streak-key',
+    exitReloginStreakBot,
+    exitReloginStreakCfg,
+    1500,
+    count => exitRelogin.enemyRepeatDelayMsForCountCore(count, exitReloginStreakCfg)
+  );
+  const exitReloginUpdateDetail = { target: { user_id: 42, name: '追击者' } };
+  const exitReloginUpdatedStreak = exitRelogin.updateEnemyLeaveStreakCore(
+    exitReloginUpdateDetail,
+    2000,
+    {
+      cfg: exitReloginStreakCfg,
+      enemyActorFromLeaveDetail: detail => exitRelogin.enemyActorFromLeaveDetailCore(detail, exitRelogin.normalizeEnemyActorCore),
+      readEnemyLeaveStreak: t => exitRelogin.readEnemyLeaveStreakCore(
+        exitReloginStreakStorage,
+        'enemy-streak-key',
+        exitReloginStreakBot,
+        exitReloginStreakCfg,
+        t,
+        count => exitRelogin.enemyRepeatDelayMsForCountCore(count, exitReloginStreakCfg)
+      ),
+      writeEnemyLeaveStreak: streak => exitRelogin.writeEnemyLeaveStreakCore(
+        exitReloginStreakStorage,
+        'enemy-streak-key',
+        exitReloginStreakBot,
+        streak
+      ),
+      enemyRepeatDelayMsForCount: count => exitRelogin.enemyRepeatDelayMsForCountCore(count, exitReloginStreakCfg)
+    }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -608,6 +667,11 @@ function helperStatus(config = {}) {
     exitReloginActorLabel: exitReloginActor?.label,
     exitReloginFallbackActorKey: exitReloginFallbackActor?.key,
     exitReloginRepeatDelay,
+    exitReloginReadStreakCount: exitReloginReadStreak?.count,
+    exitReloginUpdatedStreakCount: exitReloginUpdatedStreak?.count,
+    exitReloginUpdatedRepeatDelay: exitReloginUpdateDetail.reloginRepeatDelayMs,
+    exitReloginWrittenStreakCount: exitReloginStreakStorage.writtenValue?.count,
+    exitReloginBotStreakKey: exitReloginStreakBot.enemyLeaveStreak?.key,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),

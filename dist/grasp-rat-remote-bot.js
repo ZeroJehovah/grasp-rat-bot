@@ -1418,12 +1418,84 @@
         if (n >= 2) return secondMs;
         return 0;
       }
+      function readEnemyLeaveStreakCore(storage, key, bot, cfg, t, enemyRepeatDelayMsForCount) {
+        let streak = null;
+        try {
+          streak = JSON.parse(storage.getItem(key) || "null");
+        } catch (_) {
+          streak = null;
+        }
+        if (!streak || typeof streak !== "object" || !streak.key) return null;
+        const resetMs = Math.max(0, Number(cfg.enemyReloginRepeatResetMs) || 0);
+        if (resetMs && t - Number(streak.at || 0) > resetMs) {
+          try {
+            storage.removeItem(key);
+          } catch (_) {
+          }
+          if (bot.enemyLeaveStreak?.key === streak.key) bot.enemyLeaveStreak = null;
+          return null;
+        }
+        const normalized = {
+          key: String(streak.key),
+          id: streak.id === void 0 || streak.id === null ? "" : String(streak.id),
+          name: String(streak.name || ""),
+          label: String(streak.label || streak.name || (streak.id ? "#" + streak.id : "")),
+          count: Math.max(1, Number(streak.count || 1)),
+          firstAt: Number(streak.firstAt || streak.at || t),
+          previousAt: Number(streak.previousAt || 0),
+          at: Number(streak.at || t),
+          resetMs
+        };
+        normalized.reloginMinMs = enemyRepeatDelayMsForCount(normalized.count);
+        bot.enemyLeaveStreak = normalized;
+        return normalized;
+      }
+      function writeEnemyLeaveStreakCore(storage, key, bot, streak) {
+        bot.enemyLeaveStreak = streak;
+        try {
+          storage.setItem(key, JSON.stringify(streak));
+        } catch (_) {
+        }
+      }
+      function updateEnemyLeaveStreakCore(detail, t, helpers) {
+        const actor = helpers.enemyActorFromLeaveDetail(detail);
+        if (!actor) {
+          helpers.readEnemyLeaveStreak(t);
+          if (detail) detail.enemyLeaveStreak = null;
+          return null;
+        }
+        const previous = helpers.readEnemyLeaveStreak(t);
+        const same = previous && previous.key === actor.key;
+        const count = same ? Number(previous.count || 1) + 1 : 1;
+        const streak = {
+          ...actor,
+          count,
+          firstAt: same ? Number(previous.firstAt || previous.at || t) : t,
+          previousAt: same ? Number(previous.at || 0) : 0,
+          at: t,
+          resetMs: Math.max(0, Number(helpers.cfg.enemyReloginRepeatResetMs) || 0),
+          reloginMinMs: helpers.enemyRepeatDelayMsForCount(count)
+        };
+        helpers.writeEnemyLeaveStreak(streak);
+        if (detail) {
+          detail.enemyActor = actor;
+          detail.enemyLeaveStreak = streak;
+          if (streak.reloginMinMs > 0) {
+            detail.reloginRepeatDelayMs = streak.reloginMinMs;
+            detail.reloginRepeatCount = streak.count;
+          }
+        }
+        return streak;
+      }
       module.exports = {
         leaveWaitDisplayCore,
         finalizeLeaveDisplayReasonCore,
         normalizeEnemyActorCore,
         enemyActorFromLeaveDetailCore,
-        enemyRepeatDelayMsForCountCore
+        enemyRepeatDelayMsForCountCore,
+        readEnemyLeaveStreakCore,
+        writeEnemyLeaveStreakCore,
+        updateEnemyLeaveStreakCore
       };
     }
   });
@@ -4030,7 +4102,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.424" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.425" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -9580,74 +9652,25 @@
     function enemyRepeatDelayMsForCount(count) {
       return enemyRepeatDelayMsForCountCore(count, cfg);
     }
+    const {
+      readEnemyLeaveStreakCore,
+      writeEnemyLeaveStreakCore,
+      updateEnemyLeaveStreakCore
+    } = require_exit_relogin();
     function readEnemyLeaveStreak(t = Date.now()) {
-      let streak = null;
-      try {
-        streak = JSON.parse(localStorage.getItem(ENEMY_LEAVE_STREAK_KEY) || "null");
-      } catch (_) {
-        streak = null;
-      }
-      if (!streak || typeof streak !== "object" || !streak.key) return null;
-      const resetMs = Math.max(0, Number(cfg.enemyReloginRepeatResetMs) || 0);
-      if (resetMs && t - Number(streak.at || 0) > resetMs) {
-        try {
-          localStorage.removeItem(ENEMY_LEAVE_STREAK_KEY);
-        } catch (_) {
-        }
-        if (bot.enemyLeaveStreak?.key === streak.key) bot.enemyLeaveStreak = null;
-        return null;
-      }
-      const normalized = {
-        key: String(streak.key),
-        id: streak.id === void 0 || streak.id === null ? "" : String(streak.id),
-        name: String(streak.name || ""),
-        label: String(streak.label || streak.name || (streak.id ? "#" + streak.id : "")),
-        count: Math.max(1, Number(streak.count || 1)),
-        firstAt: Number(streak.firstAt || streak.at || t),
-        previousAt: Number(streak.previousAt || 0),
-        at: Number(streak.at || t),
-        resetMs
-      };
-      normalized.reloginMinMs = enemyRepeatDelayMsForCount(normalized.count);
-      bot.enemyLeaveStreak = normalized;
-      return normalized;
+      return readEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, cfg, t, enemyRepeatDelayMsForCount);
     }
     function writeEnemyLeaveStreak(streak) {
-      bot.enemyLeaveStreak = streak;
-      try {
-        localStorage.setItem(ENEMY_LEAVE_STREAK_KEY, JSON.stringify(streak));
-      } catch (_) {
-      }
+      return writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak);
     }
     function updateEnemyLeaveStreak(detail, t = Date.now()) {
-      const actor = enemyActorFromLeaveDetail(detail);
-      if (!actor) {
-        readEnemyLeaveStreak(t);
-        if (detail) detail.enemyLeaveStreak = null;
-        return null;
-      }
-      const previous = readEnemyLeaveStreak(t);
-      const same = previous && previous.key === actor.key;
-      const count = same ? Number(previous.count || 1) + 1 : 1;
-      const streak = {
-        ...actor,
-        count,
-        firstAt: same ? Number(previous.firstAt || previous.at || t) : t,
-        previousAt: same ? Number(previous.at || 0) : 0,
-        at: t,
-        resetMs: Math.max(0, Number(cfg.enemyReloginRepeatResetMs) || 0),
-        reloginMinMs: enemyRepeatDelayMsForCount(count)
-      };
-      writeEnemyLeaveStreak(streak);
-      if (detail) {
-        detail.enemyActor = actor;
-        detail.enemyLeaveStreak = streak;
-        if (streak.reloginMinMs > 0) {
-          detail.reloginRepeatDelayMs = streak.reloginMinMs;
-          detail.reloginRepeatCount = streak.count;
-        }
-      }
-      return streak;
+      return updateEnemyLeaveStreakCore(detail, t, {
+        cfg,
+        enemyActorFromLeaveDetail,
+        readEnemyLeaveStreak,
+        writeEnemyLeaveStreak,
+        enemyRepeatDelayMsForCount
+      });
     }
     function combatExitSummary(reason, target, combatState = {}) {
       const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);

@@ -115,6 +115,7 @@ async function selfTest() {
   assert(source.includes('function recordRuntimeDiagnosticsCore'), 'runtime diagnostics helper was not bundled');
   assert(source.includes('function leaveWaitDisplayCore'), 'exit-relogin display helper was not bundled');
   assert(source.includes('function normalizeEnemyActorCore'), 'exit-relogin actor helper was not bundled');
+  assert(source.includes('function readEnemyLeaveStreakCore'), 'exit-relogin streak helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -233,6 +234,11 @@ async function selfTest() {
   assert(status.exitReloginActorLabel === '追击者', 'spike did not preserve exit relogin actor label');
   assert(status.exitReloginFallbackActorKey === 'name:fallback-enemy', 'spike did not resolve exit relogin fallback actor');
   assert(status.exitReloginRepeatDelay === 5000, 'spike did not calculate exit relogin repeat delay');
+  assert(status.exitReloginReadStreakCount === 1, 'spike did not read exit relogin streak');
+  assert(status.exitReloginUpdatedStreakCount === 2, 'spike did not update exit relogin streak');
+  assert(status.exitReloginUpdatedRepeatDelay === 2000, 'spike did not attach exit relogin repeat delay');
+  assert(status.exitReloginWrittenStreakCount === 2, 'spike did not write exit relogin streak');
+  assert(status.exitReloginBotStreakKey === 'id:42', 'spike did not update bot exit relogin streak');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');
