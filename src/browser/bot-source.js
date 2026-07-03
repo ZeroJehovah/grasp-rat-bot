@@ -73,6 +73,7 @@ const { persistentLastSelfSource } = require('./persistent-last-self-source');
 const { persistentExitSource } = require('./persistent-exit-source');
 const { persistentClearSource } = require('./persistent-clear-source');
 const { pendingExitPersistenceSource } = require('./pending-exit-persistence-source');
+const { refreshExitDetailSource } = require('./refresh-exit-detail-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -166,18 +167,7 @@ ${persistentLastSelfSource()}
 ${persistentExitSource()}
 ${persistentClearSource()}
 ${pendingExitPersistenceSource()}
-
-		  function refreshExitDetail(detail, t = Date.now()) {
-	    if (!detail || typeof detail !== 'object') return detail;
-	    const reloginUntil = Number(detail.reloginUntil || 0);
-	    if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
-	    if (detail.offlineSafety?.staminaBudgetExit) {
-	      detail.summary = offlineLeaveSummary(detail.reason || 'stamina budget coin leave', detail.offlineSafety);
-	    } else if (detail.offlineSafety?.staminaExhausted) {
-	      detail.summary = offlineLeaveSummary(detail.reason || 'stamina exhausted', detail.offlineSafety);
-	    }
-	    return finalizeLeaveDisplayReason(detail);
-	  }
+${refreshExitDetailSource()}
 
 	  function restoredCoinFailures() {
     const t = performance.now();
