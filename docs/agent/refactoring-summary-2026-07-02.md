@@ -526,6 +526,17 @@ This is a source-organization split only. It preserves entity activity classific
 
 This is a source-organization split only. It preserves HP summaries, stamina exhaustion/hold behavior, startup stamina deferral, stale offline hold cleanup, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AV Auto-login Source Factory
+
+`bootstrap-0.4.320` extracts automatic/manual login source generation into a dedicated browser source module:
+
+- `src/browser/auto-login-source.js` now owns the raw browser source for `maybeStartAutoLogin()` and `forceLoginNow()`.
+- `src/browser/bot-source.js` imports and injects `${autoLoginSource()}` immediately after `${leaveCommandSource()}`, preserving the generated runtime order before the leave wrapper functions.
+- Static verification checks the new source-factory shape, injection point, page-global login adapter anchors, live-session takeover bypass handling, and generated runtime presence for the auto/manual login functions.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves automatic relogin gating, manual login bypass behavior, exit/important-log flush blocking, login-point snapshot gating, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -576,9 +587,10 @@ This is a source-organization split only. It preserves HP summaries, stamina exh
 45. Leave command helper source factory: integrated in `bootstrap-0.4.317`
 46. Clash leave rescue helper source factory: integrated in `bootstrap-0.4.318`
 47. Leave command completion/issue source factory: integrated in `bootstrap-0.4.319`
-48. Constants: partially integrated for high-value coin defaults
-49. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-50. Run live validation sessions after each behavior-touching replacement
+48. Auto/manual login source factory: integrated in `bootstrap-0.4.320`
+49. Constants: partially integrated for high-value coin defaults
+50. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+51. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

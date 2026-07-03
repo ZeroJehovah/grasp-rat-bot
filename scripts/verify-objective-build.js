@@ -300,6 +300,7 @@ function main() {
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
+  const autoLoginSourceModule = readText('src/browser/auto-login-source.js');
   const offlineSafetySourceModule = readText('src/browser/offline-safety-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
@@ -333,6 +334,7 @@ function main() {
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
+    autoLoginSourceModule,
     offlineSafetySourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
@@ -442,12 +444,12 @@ function main() {
     assert(botSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
     assert(botSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
     assert(botSourceModule.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
-    assert(botSourceModule.includes("const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'login availability does not read startLinuxDoLogin through page-global adapter');
-    assert(botSourceModule.includes("readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal)"), 'manual login does not read raw startLinuxDoLogin through page-global adapter');
-    assert(botSourceModule.includes("const startLinuxDoLoginFn = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'manual login does not read guarded startLinuxDoLogin through page-global adapter');
-    assert(botSourceModule.includes('const result = startLoginFn.call(pageGlobal);'), 'manual login does not call page-global login function with page-global this');
-    assert(!botSourceModule.includes('window.__graspRatBotRawStartLinuxDoLogin'), 'manual login still reads raw startLinuxDoLogin directly from window');
-    assert(!botSourceModule.includes('typeof startLinuxDoLogin ==='), 'login availability still checks bare startLinuxDoLogin instead of page-global adapter');
+    assert(autoLoginSourceModule.includes("const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'login availability does not read startLinuxDoLogin through page-global adapter');
+    assert(autoLoginSourceModule.includes("readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal)"), 'manual login does not read raw startLinuxDoLogin through page-global adapter');
+    assert(autoLoginSourceModule.includes("const startLinuxDoLoginFn = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'manual login does not read guarded startLinuxDoLogin through page-global adapter');
+    assert(autoLoginSourceModule.includes('const result = startLoginFn.call(pageGlobal);'), 'manual login does not call page-global login function with page-global this');
+    assert(!autoLoginSourceModule.includes('window.__graspRatBotRawStartLinuxDoLogin'), 'manual login still reads raw startLinuxDoLogin directly from window');
+    assert(!autoLoginSourceModule.includes('typeof startLinuxDoLogin ==='), 'login availability still checks bare startLinuxDoLogin instead of page-global adapter');
     assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
     assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
     assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
@@ -467,6 +469,7 @@ function main() {
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
+    assert(botSourceModule.includes('${autoLoginSource()}'), 'auto-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
@@ -653,6 +656,12 @@ function main() {
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function maybeConfirmPendingExitFromLeaveDetail'), 'leave-command source factory does not include pending-exit confirmation helper');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function completeLeaveRequest'), 'leave-command source factory does not include leave request completion helper');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('async function issueLeaveCommand'), 'leave-command source factory does not include leave command issuer');
+    assert(autoLoginSourceModule.includes('function autoLoginSource() {'), 'auto-login source factory not found');
+    assert(autoLoginSourceModule.includes('module.exports = {\n  autoLoginSource'), 'auto-login source module export not found');
+    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('String.raw`'), 'auto-login source factory does not return raw browser source');
+    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function maybeStartAutoLogin'), 'auto-login source factory does not include auto login starter');
+    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function forceLoginNow'), 'auto-login source factory does not include manual login starter');
+    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('allowLiveSessionTakeoverBypass'), 'auto-login source factory does not preserve live-session takeover bypass handling');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
