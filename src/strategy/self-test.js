@@ -28,7 +28,11 @@ const {
 } = require('./coin-target');
 const {
   coinFailureIgnoreCore,
-  staleCoinEscapeDirectionCore
+  staleCoinEscapeDirectionCore,
+  coinProgressIntentCore,
+  coinAttemptExpiredCore,
+  updateCoinAttemptCore,
+  updateCoinProgressRecordCore
 } = require('./coin-progress');
 const {
   buildCoinRouteFromAnchorCore,
@@ -569,6 +573,14 @@ function runStrategyModuleSelfTests() {
 
   // Test coin progress/failure helpers
   const coinProgressOptions = {
+    coinIgnoreMs: 100,
+    coinProgressMinGain: 100,
+    coinNearStuckResetGain: 5,
+    closeCoinStuckDistance: 50,
+    nearCoinStuckDistance: 200,
+    closeCoinStuckMs: 400,
+    nearCoinStuckMs: 900,
+    coinNoProgressMs: 1500,
     coinFailureDecayMs: 1000,
     coinCloseFailureIgnoreMs: 200,
     coinNearFailureIgnoreMs: 300,
@@ -617,6 +629,83 @@ function runStrategyModuleSelfTests() {
     passed: escapeFallback.dx === 0
       && escapeFallback.dy === -1
       && escapeFallback.state.until === 3750
+  });
+
+  results.push({
+    name: 'coin-progress-intent-and-attempt-expiry',
+    passed: coinProgressIntentCore({ kind: 'coin', target: { id: 'a' } })
+      && coinProgressIntentCore({ kind: 'seek-coin', target: { id: 'b' } })
+      && coinProgressIntentCore({ kind: 'patrol', reason: 'coin sweep', target: { id: 'c' } })
+      && !coinProgressIntentCore({ kind: 'patrol', reason: 'walk', target: { id: 'c' } })
+      && coinAttemptExpiredCore({ startedAt: 0, lastSeenAt: 100 }, 500, coinProgressOptions)
+      && !coinAttemptExpiredCore({ startedAt: 0, lastSeenAt: 250 }, 500, coinProgressOptions)
+  });
+
+  const improvedAttempt = updateCoinAttemptCore(
+    { id: 'coin', startedAt: 100, lastImprovedAt: 100, bestDistance: 1000, lastDistance: 1000, amount: 1, x: 0, y: 0 },
+    { kind: 'coin', target: { id: 'coin', distance: 850, amount: 2, x: 5, y: 6, postAttackTarget: { id: 'enemy' } } },
+    1000,
+    coinProgressOptions
+  );
+  results.push({
+    name: 'coin-progress-attempt-updates-improvement-and-target',
+    passed: improvedAttempt.attempt.bestDistance === 850
+      && improvedAttempt.attempt.lastImprovedAt === 1000
+      && improvedAttempt.attempt.lastDistance === 850
+      && improvedAttempt.attempt.amount === 2
+      && improvedAttempt.attempt.x === 5
+      && improvedAttempt.attempt.y === 6
+      && improvedAttempt.attempt.postAttackTarget.id === 'enemy'
+      && !improvedAttempt.closeStuck
+      && !improvedAttempt.nearStuck
+  });
+
+  const closeStuckAttempt = updateCoinAttemptCore(
+    { id: 'coin', startedAt: 500, lastImprovedAt: 500, bestDistance: 40, lastDistance: 40, amount: 1, x: 0, y: 0, closeStartedAt: 1000, nearStartedAt: 0 },
+    { kind: 'coin', target: { id: 'coin', distance: 40, amount: 1, x: 1, y: 1 } },
+    1500,
+    coinProgressOptions
+  );
+  results.push({
+    name: 'coin-progress-attempt-detects-close-stale',
+    passed: closeStuckAttempt.closeStuck
+      && !closeStuckAttempt.nearStuck
+      && closeStuckAttempt.attempt.closeStartedAt === 1000
+      && closeStuckAttempt.attempt.nearStartedAt === 1500
+  });
+
+  const newProgress = updateCoinProgressRecordCore(
+    null,
+    { id: 'coin', amount: 3, x: 1, y: 2, postAttackTarget: { id: 'drop' } },
+    500,
+    1000,
+    coinProgressOptions
+  );
+  const improvedProgress = updateCoinProgressRecordCore(
+    { id: 'coin', startedAt: 0, lastImprovedAt: 0, bestDistance: 1000, lastDistance: 1000, postAttackTarget: { id: 'old' } },
+    { id: 'coin', amount: 3, x: 2, y: 3 },
+    850,
+    1000,
+    coinProgressOptions
+  );
+  const staleProgress = updateCoinProgressRecordCore(
+    { id: 'coin', startedAt: 100, lastImprovedAt: 100, bestDistance: 1000, lastDistance: 1000, postAttackTarget: { id: 'old' } },
+    { id: 'coin', amount: 4, x: 4, y: 5 },
+    950,
+    2000,
+    coinProgressOptions
+  );
+  results.push({
+    name: 'coin-progress-record-initial-improved-and-stale',
+    passed: newProgress.progress.startedAt === 1000
+      && newProgress.progress.bestDistance === 500
+      && newProgress.progress.postAttackTarget.id === 'drop'
+      && improvedProgress.improved
+      && improvedProgress.progress.bestDistance === 850
+      && improvedProgress.progress.lastImprovedAt === 1000
+      && staleProgress.stale
+      && staleProgress.progress.lastDistance === 950
+      && staleProgress.progress.postAttackTarget.id === 'old'
   });
 
   // Test coin route planning
