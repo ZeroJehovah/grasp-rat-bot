@@ -290,6 +290,7 @@ function main() {
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
   const entityRefreshSourceModule = readText('src/browser/entity-refresh-source.js');
+  const classifySourceModule = readText('src/browser/classify-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -326,6 +327,7 @@ function main() {
     importantLogSourceModule,
     combatHistorySourceModule,
     entityRefreshSourceModule,
+    classifySourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -469,6 +471,7 @@ function main() {
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityRefreshSource()}'), 'entity-refresh module is not injected into browser runtime');
+    assert(botSourceModule.includes('${classifySource()}'), 'classify module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -569,6 +572,14 @@ function main() {
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('function markRecentMovement'), 'entity-refresh source factory does not include recent movement marker');
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('async function refreshGlobalState'), 'entity-refresh source factory does not include global refresh helper');
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('passive-snapshot-only-active-game-api-disabled'), 'entity-refresh source factory does not preserve passive snapshot skip diagnostic');
+    assert(classifySourceModule.includes('function classifySource() {'), 'classify source factory not found');
+    assert(classifySourceModule.includes('module.exports = {\n  classifySource'), 'classify source module export not found');
+    assert(functionBody(classifySourceModule, 'classifySource').includes('String.raw`'), 'classify source factory does not return raw browser source');
+    assert(functionBody(classifySourceModule, 'classifySource').includes('function classify(self)'), 'classify source factory does not include classify helper');
+    assert(functionBody(classifySourceModule, 'classifySource').includes('markRecentMovement(localEntities)'), 'classify source factory does not preserve recent movement marking');
+    assert(functionBody(classifySourceModule, 'classifySource').includes('const combatTargets = attackableEntities'), 'classify source factory does not preserve combat target classification');
+    assert(functionBody(classifySourceModule, 'classifySource').includes('const combatDodgeOnlyTargets = attackableEntities'), 'classify source factory does not preserve combat dodge-only classification');
+    assert(functionBody(classifySourceModule, 'classifySource').includes('const snapshotCoins = allCoins.filter'), 'classify source factory does not preserve snapshot coin classification');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
