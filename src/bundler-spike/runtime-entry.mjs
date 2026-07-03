@@ -8,6 +8,7 @@ import preservedState from '../browser/runtime/browser-preserved-state.js';
 import persistentExit from '../browser/runtime/persistent-exit.js';
 import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
+import pendingExitPersistence from '../browser/runtime/pending-exit-persistence.js';
 import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
@@ -370,6 +371,66 @@ function helperStatus(config = {}) {
     2000
   );
   const persistentClearRemoved = persistentClear.clearPersistentStorageKey('persistent-clear-spike');
+  const pendingExitHelpers = {
+    pendingExitPersistMaxMs: 10000,
+    cloneForPendingExit: value => value && typeof value === 'object' ? { ...value, cloned: true } : value,
+    pendingExitDisplayReason: summary => `display:${summary}`,
+    pendingExitRetryMs: pending => Number(pending.retryCount || 0) * 100 + 250,
+    stringify: JSON.stringify
+  };
+  const pendingExitNormalized = pendingExitPersistence.normalizePendingExitStateForStorageCore({
+    at: 1000,
+    updatedAt: 1200,
+    reason: 'offline-leave',
+    summary: 'offline summary',
+    retryCount: 2,
+    self: { id: 'pending-self' },
+    lastResult: {
+      at: 1100,
+      reason: 'offline-leave',
+      reloadConfirmation: {
+        required: true,
+        requestedAt: 1050
+      }
+    }
+  }, 1500, { markReloaded: true }, pendingExitHelpers);
+  const pendingExitStorage = {
+    value: JSON.stringify({
+      at: 1000,
+      updatedAt: 1250,
+      reason: 'stored-leave',
+      summary: 'stored summary',
+      retryCount: 1
+    }),
+    getItem() {
+      return this.value;
+    },
+    setItem(key, value) {
+      this.writtenKey = key;
+      this.writtenValue = JSON.parse(value);
+    }
+  };
+  const pendingExitRead = pendingExitPersistence.readPersistedPendingExitStateCore(
+    pendingExitStorage,
+    'pending-exit-key',
+    1500,
+    {},
+    pendingExitHelpers
+  );
+  const pendingExitWritten = pendingExitPersistence.writePersistentPendingExitStateCore(
+    pendingExitStorage,
+    'pending-exit-key',
+    pendingExitNormalized,
+    1600,
+    pendingExitHelpers
+  );
+  const pendingExitChosen = pendingExitPersistence.chooseInitialPendingExitStateCore(
+    { at: 1000, updatedAt: 1100, reason: 'memory-leave', summary: 'memory summary' },
+    { at: 1000, updatedAt: 1250, reason: 'stored-leave', summary: 'stored summary' },
+    1500,
+    {},
+    pendingExitHelpers
+  );
   const refreshedExitDetail = refreshExitDetail.refreshExitDetailCore({
     reason: '',
     reloginUntil: 2400,
@@ -454,6 +515,13 @@ function helperStatus(config = {}) {
     persistentExitWrittenReason: persistentExitStorage.writtenValue?.reason,
     persistentExitWrittenHoldMs: persistentExitStorage.writtenValue?.holdRemainingMs,
     persistentClearRemoved,
+    pendingExitDisplayReason: pendingExitNormalized.displayReason,
+    pendingExitRetryMs: pendingExitNormalized.retryMs,
+    pendingExitReloadRestored: pendingExitNormalized.reloadConfirmation?.restoredAfterReload,
+    pendingExitReloadAt: pendingExitNormalized.reloadConfirmation?.reloadedAt,
+    pendingExitReadReason: pendingExitRead?.reason,
+    pendingExitWrittenReason: pendingExitStorage.writtenValue?.reason,
+    pendingExitChosenReason: pendingExitChosen?.reason,
     refreshExitHoldRemainingMs: refreshedExitDetail.holdRemainingMs,
     refreshExitSummary: refreshedExitDetail.summary,
     refreshExitDisplayReason: refreshedExitDetail.displayReason,

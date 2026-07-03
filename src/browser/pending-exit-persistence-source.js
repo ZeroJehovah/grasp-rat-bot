@@ -1,6 +1,6 @@
 'use strict';
 
-function pendingExitPersistenceSource() {
+function pendingExitPersistenceInlineSource() {
   return String.raw`
 		  function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
 		    const raw = value && typeof value === 'object'
@@ -101,4 +101,54 @@ function pendingExitPersistenceSource() {
 		  }`;
 }
 
-module.exports = { pendingExitPersistenceSource };
+function bundledPendingExitPersistenceSource() {
+  return `const {
+		    normalizePendingExitReloadConfirmationCore,
+		    normalizePendingExitStateForStorageCore,
+		    readPersistedPendingExitStateCore,
+		    writePersistentPendingExitStateCore,
+		    chooseInitialPendingExitStateCore
+		  } = require('./src/browser/runtime/pending-exit-persistence');
+
+		  function pendingExitPersistenceCoreHelpers() {
+		    return {
+		      pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs,
+		      cloneForPendingExit,
+		      pendingExitDisplayReason,
+		      pendingExitRetryMs,
+		      stringify: safeStringify,
+		      clearPersistentPendingExitState
+		    };
+		  }
+
+		  function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
+		    return normalizePendingExitReloadConfirmationCore(value, pending, t, options);
+		  }
+
+		  function normalizePendingExitStateForStorage(value, t = Date.now(), options = {}) {
+		    return normalizePendingExitStateForStorageCore(value, t, options, pendingExitPersistenceCoreHelpers());
+		  }
+
+		  function readPersistedPendingExitState(t = Date.now(), options = {}) {
+		    return readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers());
+		  }
+
+		  function writePersistentPendingExitState(pending = null) {
+		    return writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
+		  }
+
+		  function chooseInitialPendingExitState(memoryState, storedState, t = Date.now(), options = {}) {
+		    return chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers());
+		  }`;
+}
+
+function pendingExitPersistenceSource(options = {}) {
+  if (options.bundledRuntime) return bundledPendingExitPersistenceSource();
+  return pendingExitPersistenceInlineSource();
+}
+
+module.exports = {
+  pendingExitPersistenceInlineSource,
+  bundledPendingExitPersistenceSource,
+  pendingExitPersistenceSource
+};
