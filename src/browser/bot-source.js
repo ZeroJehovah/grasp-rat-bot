@@ -69,6 +69,7 @@ const { returnBlockSource } = require('./return-block-source');
 const { entityActivitySource } = require('./entity-activity-source');
 const { staminaRuntimeSource } = require('./stamina-runtime-source');
 const { exitMotionSource } = require('./exit-motion-source');
+const { persistentLastSelfSource } = require('./persistent-last-self-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -158,31 +159,7 @@ function browserBotSource(config) {
 	    lastError: '',
 	    lastReason: preservedTargetWhitelistNames.length ? 'preserved' : 'empty'
 	  };
-
-	  function readPersistentLastSelfState(t = Date.now()) {
-	    let state = null;
-	    try {
-	      state = JSON.parse(localStorage.getItem(LAST_SELF_STATE_KEY) || 'null');
-	    } catch (_) {
-	      state = null;
-	    }
-	    if (!state || typeof state !== 'object') return null;
-	    const at = Number(state.at || state.updatedAt || 0) || 0;
-	    const maxAgeMs = Math.max(3600000, Number(cfg.lastSelfPersistMaxMs || 172800000) || 172800000);
-	    if (at && t - at > maxAgeMs) return null;
-	    const self = state.self && typeof state.self === 'object' ? state.self : state;
-	    return self && typeof self === 'object' ? { ...self } : null;
-	  }
-
-	  function writePersistentLastSelfState(selfSummary, t = Date.now()) {
-	    if (!selfSummary || typeof selfSummary !== 'object') return;
-	    try {
-	      localStorage.setItem(LAST_SELF_STATE_KEY, JSON.stringify({
-	        at: t,
-	        self: selfSummary
-	      }));
-	    } catch (_) {}
-	  }
+${persistentLastSelfSource()}
 
 	  function readPersistentExitState(key, t = Date.now()) {
 	    let state = null;
