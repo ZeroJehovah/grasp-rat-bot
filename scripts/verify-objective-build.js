@@ -308,6 +308,7 @@ function main() {
   const opportunityChoiceSourceModule = readText('src/browser/opportunity-choice-source.js');
   const opportunityPickSourceModule = readText('src/browser/opportunity-pick-source.js');
   const patrolSourceModule = readText('src/browser/patrol-source.js');
+  const opportunityClearSourceModule = readText('src/browser/opportunity-clear-source.js');
   const coinProgressRuntimeSourceModule = readText('src/browser/coin-progress-runtime-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
@@ -363,6 +364,7 @@ function main() {
     opportunityChoiceSourceModule,
     opportunityPickSourceModule,
     patrolSourceModule,
+    opportunityClearSourceModule,
     coinProgressRuntimeSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
@@ -531,6 +533,7 @@ function main() {
     assert(botSourceModule.includes('${opportunityChoiceSource()}'), 'opportunity-choice module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityPickSource()}'), 'opportunity-pick module is not injected into browser runtime');
     assert(botSourceModule.includes('${patrolSource()}'), 'patrol module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityClearSource()}'), 'opportunity-clear module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinProgressRuntimeSource()}'), 'coin-progress runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
@@ -779,6 +782,12 @@ function main() {
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('function patrolDirection'), 'patrol source factory does not include patrolDirection');
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('scan-toward-distant-coin'), 'patrol source factory does not include distant coin patrol branch');
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('maintain-safe-spacing'), 'patrol source factory does not include safe spacing patrol branch');
+    assert(opportunityClearSourceModule.includes('function opportunityClearSource() {'), 'opportunity-clear source factory not found');
+    assert(opportunityClearSourceModule.includes('module.exports = { opportunityClearSource }'), 'opportunity-clear source module export not found');
+    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('String.raw`'), 'opportunity-clear source factory does not return raw browser source');
+    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('function clearOpportunityChoiceFor'), 'opportunity-clear source factory does not include clearOpportunityChoiceFor');
+    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('bot.opportunityChoice = null'), 'opportunity-clear source factory does not clear opportunity choice');
+    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('resetOpportunitySwitchLock()'), 'opportunity-clear source factory does not reset switch lock');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource() {'), 'opportunity-route source factory not found');
     assert(opportunityRouteSourceModule.includes('module.exports = { opportunityRouteSource }'), 'opportunity-route source module export not found');
     assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('String.raw`'), 'opportunity-route source factory does not return raw browser source');
