@@ -1938,6 +1938,8 @@ function main() {
     assert(strategyCoinProgressSource.includes('function coinAttemptExpiredCore'), 'strategy coin attempt expiry core not found');
     assert(strategyCoinProgressSource.includes('function updateCoinAttemptCore'), 'strategy coin attempt update core not found');
     assert(strategyCoinProgressSource.includes('function updateCoinProgressRecordCore'), 'strategy coin progress record core not found');
+    assert(strategyCoinProgressSource.includes('function buildIgnoredCoinProgressCore'), 'strategy ignored coin progress core not found');
+    assert(strategyCoinProgressSource.includes('function buildIgnoredCoinPatrolActionCore'), 'strategy ignored coin patrol action core not found');
     assert(sourceBot.includes("require('./src/strategy/coin-progress')"), 'source bot does not import coin progress strategy module');
     assert(sourceBot.includes('coinFailureIgnoreCore.toString()'), 'source bot does not inject coin failure ignore core');
     assert(sourceBot.includes('staleCoinEscapeDirectionCore.toString()'), 'source bot does not inject stale coin escape core');
@@ -1945,6 +1947,8 @@ function main() {
     assert(sourceBot.includes('coinAttemptExpiredCore.toString()'), 'source bot does not inject coin attempt expiry core');
     assert(sourceBot.includes('updateCoinAttemptCore.toString()'), 'source bot does not inject coin attempt update core');
     assert(sourceBot.includes('updateCoinProgressRecordCore.toString()'), 'source bot does not inject coin progress record core');
+    assert(sourceBot.includes('buildIgnoredCoinProgressCore.toString()'), 'source bot does not inject ignored coin progress core');
+    assert(sourceBot.includes('buildIgnoredCoinPatrolActionCore.toString()'), 'source bot does not inject ignored coin patrol action core');
     assert(sourceBot.includes('function coinProgressCoreOptions'), 'source bot coin progress runtime wrapper options not found');
     assert(sourceBot.includes('coinFailureIgnoreCore(bot.coinFailures.get(id)'), 'source bot coin failure wrapper does not call strategy core');
     assert(sourceBot.includes('staleCoinEscapeDirectionCore(action, self'), 'source bot stale coin escape wrapper does not call strategy core');
@@ -1952,6 +1956,9 @@ function main() {
     assert(sourceBot.includes('coinProgressIntentCore(action)'), 'source bot coin intent wrapper does not call strategy core');
     assert(sourceBot.includes('updateCoinAttemptCore(bot.coinAttempts.get'), 'source bot coin attempt wrapper does not call strategy core');
     assert(sourceBot.includes('updateCoinProgressRecordCore(previous, attempt, distance, t, options)'), 'source bot coin progress wrapper does not call strategy core');
+    assert(sourceBot.includes("buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck')"), 'source bot stuck ignored progress does not call strategy core');
+    assert(sourceBot.includes("buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress')"), 'source bot no-progress ignored progress does not call strategy core');
+    assert(sourceBot.includes('buildIgnoredCoinPatrolActionCore('), 'source bot ignored coin action does not call strategy core');
     assert(sourceBot.includes('bot.coinFailures.set(id') && sourceBot.includes('bot.ignoredCoins.set(id'), 'source bot coin failure wrapper does not retain runtime state writes');
     assert(sourceBot.includes('bot.staleCoinEscape = result.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
     assert(sourceBot.includes('bot.coinAttempts.set(id, attempt)'), 'source bot coin attempt wrapper does not retain runtime map write');
@@ -1962,6 +1969,8 @@ function main() {
     assert(distSource.includes('function coinAttemptExpiredCore'), 'generated runtime does not inline coin attempt expiry core');
     assert(distSource.includes('function updateCoinAttemptCore'), 'generated runtime does not inline coin attempt update core');
     assert(distSource.includes('function updateCoinProgressRecordCore'), 'generated runtime does not inline coin progress record core');
+    assert(distSource.includes('function buildIgnoredCoinProgressCore'), 'generated runtime does not inline ignored coin progress core');
+    assert(distSource.includes('function buildIgnoredCoinPatrolActionCore'), 'generated runtime does not inline ignored coin patrol action core');
   });
 
   check('coin route planner uses strategy module core', () => {

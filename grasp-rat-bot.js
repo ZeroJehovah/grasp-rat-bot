@@ -95,7 +95,9 @@ const {
   coinProgressIntentCore,
   coinAttemptExpiredCore,
   updateCoinAttemptCore,
-  updateCoinProgressRecordCore
+  updateCoinProgressRecordCore,
+  buildIgnoredCoinProgressCore,
+  buildIgnoredCoinPatrolActionCore
 } = require('./src/strategy/coin-progress');
 const {
   defaultDist,
@@ -11153,6 +11155,8 @@ ${importantLogSource()}
   ${coinAttemptExpiredCore.toString()}
   ${updateCoinAttemptCore.toString()}
   ${updateCoinProgressRecordCore.toString()}
+  ${buildIgnoredCoinProgressCore.toString()}
+  ${buildIgnoredCoinPatrolActionCore.toString()}
 
   function coinProgressCoreOptions(extra = {}) {
     return {
@@ -11219,15 +11223,7 @@ ${importantLogSource()}
       const failure = coinFailureIgnore(id, closeStuck ? 'close' : 'near', t);
       const ignoreUntil = failure.ignoreUntil;
       bot.coinAttempts.delete(id);
-      bot.coinProgress = {
-        id,
-        startedAt: attempt.startedAt,
-        lastImprovedAt: attempt.lastImprovedAt,
-        bestDistance: Number(attempt.bestDistance),
-        lastDistance: distance,
-        ignoredAt: t,
-        ignoreUntil
-      };
+      bot.coinProgress = buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck');
 	      if (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === id) {
 	        bot.lastTarget = null;
 	        bot.lastTargetAt = 0;
@@ -11235,23 +11231,17 @@ ${importantLogSource()}
 	      clearOpportunityChoiceFor('coin', id);
 	      if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
       const escape = staleCoinEscapeDirection(action, self, t);
-      return {
-        kind: 'patrol',
-        reason: closeStuck ? 'ignore-close-stale-coin' : 'ignore-near-stale-coin',
-        target: action.target,
-        dx: escape.dx,
-        dy: escape.dy,
-        ignoredCoin: {
-          id,
-          distance,
-          bestDistance: Number(attempt.bestDistance),
-          closeAgeMs: attempt.closeStartedAt ? Math.round(t - attempt.closeStartedAt) : 0,
-          nearAgeMs: attempt.nearStartedAt ? Math.round(t - attempt.nearStartedAt) : 0,
-          ageMs: Math.round(t - Number(attempt.startedAt || t)),
-          ignoreMs: failure.ignoreMs,
-          failureCount: failure.count
-        }
-      };
+      return buildIgnoredCoinPatrolActionCore(
+        action,
+        id,
+        distance,
+        attempt,
+        failure,
+        escape,
+        t,
+        closeStuck ? 'ignore-close-stale-coin' : 'ignore-near-stale-coin',
+        true
+      );
     }
 
     const previous = bot.coinProgress;
@@ -11264,11 +11254,7 @@ ${importantLogSource()}
     const failure = coinFailureIgnore(id, 'progress', t);
     const ignoreUntil = failure.ignoreUntil;
     bot.coinAttempts.delete(id);
-    bot.coinProgress = {
-      ...bot.coinProgress,
-      ignoredAt: t,
-      ignoreUntil
-    };
+    bot.coinProgress = buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress');
 	    if (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === id) {
 	      bot.lastTarget = null;
 	      bot.lastTargetAt = 0;
@@ -11276,20 +11262,16 @@ ${importantLogSource()}
 	    clearOpportunityChoiceFor('coin', id);
 	    if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
     const escape = staleCoinEscapeDirection(action, self, t);
-    return {
-      kind: 'patrol',
-      reason: 'ignore-stale-coin-no-progress',
-      target: action.target,
-      dx: escape.dx,
-      dy: escape.dy,
-      ignoredCoin: {
-        id,
-        distance,
-        bestDistance: Number(previous.bestDistance),
-        ignoreMs: failure.ignoreMs,
-        failureCount: failure.count
-      }
-    };
+    return buildIgnoredCoinPatrolActionCore(
+      action,
+      id,
+      distance,
+      previous,
+      failure,
+      escape,
+      t,
+      'ignore-stale-coin-no-progress'
+    );
   }
 
   function targetSwitchHistoryLimit() {

@@ -32,7 +32,9 @@ const {
   coinProgressIntentCore,
   coinAttemptExpiredCore,
   updateCoinAttemptCore,
-  updateCoinProgressRecordCore
+  updateCoinProgressRecordCore,
+  buildIgnoredCoinProgressCore,
+  buildIgnoredCoinPatrolActionCore
 } = require('./coin-progress');
 const {
   buildCoinRouteFromAnchorCore,
@@ -706,6 +708,55 @@ function runStrategyModuleSelfTests() {
       && staleProgress.stale
       && staleProgress.progress.lastDistance === 950
       && staleProgress.progress.postAttackTarget.id === 'old'
+  });
+
+  const ignoredStuckProgress = buildIgnoredCoinProgressCore('coin', closeStuckAttempt.attempt, 40, 1500, 1700, 'stuck');
+  const ignoredStuckAction = buildIgnoredCoinPatrolActionCore(
+    { kind: 'coin', target: { id: 'coin' } },
+    'coin',
+    40,
+    closeStuckAttempt.attempt,
+    { ignoreMs: 200, count: 2 },
+    { dx: -1, dy: 0 },
+    1500,
+    'ignore-close-stale-coin',
+    true
+  );
+  results.push({
+    name: 'coin-progress-ignored-stuck-record-and-action',
+    passed: ignoredStuckProgress.ignoredAt === 1500
+      && ignoredStuckProgress.ignoreUntil === 1700
+      && ignoredStuckProgress.bestDistance === 40
+      && ignoredStuckAction.kind === 'patrol'
+      && ignoredStuckAction.dx === -1
+      && ignoredStuckAction.ignoredCoin.closeAgeMs === 500
+      && ignoredStuckAction.ignoredCoin.nearAgeMs === 0
+      && ignoredStuckAction.ignoredCoin.ageMs === 1000
+      && ignoredStuckAction.ignoredCoin.failureCount === 2
+  });
+
+  const ignoredProgressRecord = buildIgnoredCoinProgressCore('coin', staleProgress.progress, 950, 2000, 2400, 'progress');
+  const ignoredProgressAction = buildIgnoredCoinPatrolActionCore(
+    { kind: 'coin', target: { id: 'coin' } },
+    'coin',
+    950,
+    staleProgress.progress,
+    { ignoreMs: 400, count: 3 },
+    { dx: 0, dy: 1 },
+    2000,
+    'ignore-stale-coin-no-progress'
+  );
+  results.push({
+    name: 'coin-progress-ignored-no-progress-record-and-action',
+    passed: ignoredProgressRecord.ignoredAt === 2000
+      && ignoredProgressRecord.ignoreUntil === 2400
+      && ignoredProgressRecord.lastDistance === 950
+      && ignoredProgressAction.reason === 'ignore-stale-coin-no-progress'
+      && ignoredProgressAction.dy === 1
+      && ignoredProgressAction.ignoredCoin.bestDistance === 1000
+      && ignoredProgressAction.ignoredCoin.ignoreMs === 400
+      && ignoredProgressAction.ignoredCoin.failureCount === 3
+      && !Object.prototype.hasOwnProperty.call(ignoredProgressAction.ignoredCoin, 'ageMs')
   });
 
   // Test coin route planning

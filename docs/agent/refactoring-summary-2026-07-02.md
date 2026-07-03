@@ -281,6 +281,17 @@ This is intended as an equivalent extraction of small coin-progress helpers only
 
 This is intended as an equivalent extraction of record construction and stale-state decisions only; Map writes, target cleanup, and patrol action construction remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2T Coin Progress Ignored Actions
+
+`bootstrap-0.4.292` extracts ignored coin progress/action construction:
+
+- `src/strategy/coin-progress.js` now also owns ignored coin progress record construction and ignored coin patrol action metadata construction.
+- The browser runtime still owns `bot.coinAttempts`, `bot.coinProgress`, `bot.coinFailures`, `bot.ignoredCoins`, `bot.staleCoinEscape`, target cleanup, and escape direction state writes.
+- `src/strategy/self-test.js` now has 76 tests, including two additional coin-progress cases covering stuck-ignore record/action metadata and no-progress ignore action metadata staying age-free.
+- Static verification checks both the strategy source module and generated remote runtime for the ignored progress/action cores and wrapper wiring.
+
+This is intended as an equivalent extraction of ignore-result object construction only; stale target cleanup and runtime state writes remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -301,9 +312,10 @@ This is intended as an equivalent extraction of record construction and stale-st
 15. Snapshot coin worth/reason helpers: integrated in `bootstrap-0.4.289`
 16. Coin progress failure/escape helpers: integrated in `bootstrap-0.4.290`
 17. Coin progress state-transition helpers: integrated in `bootstrap-0.4.291`
-18. Constants: partially integrated for high-value coin defaults
-19. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-20. Run live validation sessions after each behavior-touching replacement
+18. Coin progress ignored action helpers: integrated in `bootstrap-0.4.292`
+19. Constants: partially integrated for high-value coin defaults
+20. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+21. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

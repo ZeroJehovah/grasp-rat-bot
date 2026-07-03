@@ -106,8 +106,9 @@ Builds coin progress helper decisions:
 - Coin-progress intent and attempt expiry checks
 - Coin attempt update records and stuck detection
 - Coin progress record initialization, improvement, and stale checks
+- Ignored coin progress records and patrol action metadata
 
-This module is authoritative for coin failure ignore/backoff calculation and stale coin escape direction construction as of `bootstrap-0.4.290`, and for coin progress intent/expiry/attempt/progress record update helpers as of `bootstrap-0.4.291`; the browser runtime wrapper still owns `bot.coinFailures`, `bot.ignoredCoins`, `bot.staleCoinEscape`, `bot.coinAttempts`, `bot.coinProgress`, config access, target cleanup, escape action construction, and the larger `trackCoinProgress()` control flow.
+This module is authoritative for coin failure ignore/backoff calculation and stale coin escape direction construction as of `bootstrap-0.4.290`, for coin progress intent/expiry/attempt/progress record update helpers as of `bootstrap-0.4.291`, and for ignored progress/action metadata construction as of `bootstrap-0.4.292`; the browser runtime wrapper still owns `bot.coinFailures`, `bot.ignoredCoins`, `bot.staleCoinEscape`, `bot.coinAttempts`, `bot.coinProgress`, config access, target cleanup, and escape direction state writes.
 
 #### `coin-route.js`
 Builds native visible coin routes and route-switch guards:
@@ -223,7 +224,7 @@ Automated test suite:
 - Coin diagnostics (2 tests)
 - Coin motion direction/pulse/metadata (9 tests)
 - Coin target identity/matching/incidental pickup/snapshot helpers (12 tests)
-- Coin progress failure/escape/state-transition helpers (8 tests)
+- Coin progress failure/escape/state-transition/ignored-action helpers (10 tests)
 - Coin route planning (3 tests)
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
@@ -231,7 +232,7 @@ Automated test suite:
 - Stamina budget summaries/selectors (4 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 74 tests, all passing**
+- **Total: 76 tests, all passing**
 
 ## Usage Example
 

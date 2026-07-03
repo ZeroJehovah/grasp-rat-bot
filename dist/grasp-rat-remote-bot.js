@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.291"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.292"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -19696,6 +19696,48 @@ function hpDisplay(value) {
     stale: t - Number(previousProgress.lastImprovedAt || previousProgress.startedAt || t) >= options.coinNoProgressMs
   };
 }
+  function buildIgnoredCoinProgressCore(id, previous, distance, nowMs = 0, ignoreUntil = 0, mode = '') {
+  const t = Number(nowMs) || 0;
+  if (mode === 'stuck') {
+    return {
+      id,
+      startedAt: previous?.startedAt,
+      lastImprovedAt: previous?.lastImprovedAt,
+      bestDistance: Number(previous?.bestDistance),
+      lastDistance: distance,
+      ignoredAt: t,
+      ignoreUntil
+    };
+  }
+  return {
+    ...(previous || {}),
+    ignoredAt: t,
+    ignoreUntil
+  };
+}
+  function buildIgnoredCoinPatrolActionCore(action, id, distance, source, failure, escape, nowMs = 0, reason = '', includeAges = false) {
+  const t = Number(nowMs) || 0;
+  const ignoredCoin = {
+    id,
+    distance,
+    bestDistance: Number(source?.bestDistance),
+    ignoreMs: failure?.ignoreMs,
+    failureCount: failure?.count
+  };
+  if (includeAges) {
+    ignoredCoin.closeAgeMs = source.closeStartedAt ? Math.round(t - source.closeStartedAt) : 0;
+    ignoredCoin.nearAgeMs = source.nearStartedAt ? Math.round(t - source.nearStartedAt) : 0;
+    ignoredCoin.ageMs = Math.round(t - Number(source.startedAt || t));
+  }
+  return {
+    kind: 'patrol',
+    reason,
+    target: action?.target,
+    dx: escape?.dx,
+    dy: escape?.dy,
+    ignoredCoin
+  };
+}
 
   function coinProgressCoreOptions(extra = {}) {
     return {
@@ -19762,15 +19804,7 @@ function hpDisplay(value) {
       const failure = coinFailureIgnore(id, closeStuck ? 'close' : 'near', t);
       const ignoreUntil = failure.ignoreUntil;
       bot.coinAttempts.delete(id);
-      bot.coinProgress = {
-        id,
-        startedAt: attempt.startedAt,
-        lastImprovedAt: attempt.lastImprovedAt,
-        bestDistance: Number(attempt.bestDistance),
-        lastDistance: distance,
-        ignoredAt: t,
-        ignoreUntil
-      };
+      bot.coinProgress = buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck');
 	      if (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === id) {
 	        bot.lastTarget = null;
 	        bot.lastTargetAt = 0;
@@ -19778,23 +19812,17 @@ function hpDisplay(value) {
 	      clearOpportunityChoiceFor('coin', id);
 	      if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
       const escape = staleCoinEscapeDirection(action, self, t);
-      return {
-        kind: 'patrol',
-        reason: closeStuck ? 'ignore-close-stale-coin' : 'ignore-near-stale-coin',
-        target: action.target,
-        dx: escape.dx,
-        dy: escape.dy,
-        ignoredCoin: {
-          id,
-          distance,
-          bestDistance: Number(attempt.bestDistance),
-          closeAgeMs: attempt.closeStartedAt ? Math.round(t - attempt.closeStartedAt) : 0,
-          nearAgeMs: attempt.nearStartedAt ? Math.round(t - attempt.nearStartedAt) : 0,
-          ageMs: Math.round(t - Number(attempt.startedAt || t)),
-          ignoreMs: failure.ignoreMs,
-          failureCount: failure.count
-        }
-      };
+      return buildIgnoredCoinPatrolActionCore(
+        action,
+        id,
+        distance,
+        attempt,
+        failure,
+        escape,
+        t,
+        closeStuck ? 'ignore-close-stale-coin' : 'ignore-near-stale-coin',
+        true
+      );
     }
 
     const previous = bot.coinProgress;
@@ -19807,11 +19835,7 @@ function hpDisplay(value) {
     const failure = coinFailureIgnore(id, 'progress', t);
     const ignoreUntil = failure.ignoreUntil;
     bot.coinAttempts.delete(id);
-    bot.coinProgress = {
-      ...bot.coinProgress,
-      ignoredAt: t,
-      ignoreUntil
-    };
+    bot.coinProgress = buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress');
 	    if (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === id) {
 	      bot.lastTarget = null;
 	      bot.lastTargetAt = 0;
@@ -19819,20 +19843,16 @@ function hpDisplay(value) {
 	    clearOpportunityChoiceFor('coin', id);
 	    if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
     const escape = staleCoinEscapeDirection(action, self, t);
-    return {
-      kind: 'patrol',
-      reason: 'ignore-stale-coin-no-progress',
-      target: action.target,
-      dx: escape.dx,
-      dy: escape.dy,
-      ignoredCoin: {
-        id,
-        distance,
-        bestDistance: Number(previous.bestDistance),
-        ignoreMs: failure.ignoreMs,
-        failureCount: failure.count
-      }
-    };
+    return buildIgnoredCoinPatrolActionCore(
+      action,
+      id,
+      distance,
+      previous,
+      failure,
+      escape,
+      t,
+      'ignore-stale-coin-no-progress'
+    );
   }
 
   function targetSwitchHistoryLimit() {
