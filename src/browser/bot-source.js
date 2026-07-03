@@ -42,29 +42,13 @@ const { importantLogSource } = require('./important-log-source');
 const { controlLoginSource } = require('./control-login-source');
 const { nativeStateSource } = require('./native-state-source');
 const { pageNativeSnapshotSource } = require('./page-native-snapshot-source');
+const { actionArbitrationSource } = require('./action-arbitration-source');
 const { networkQualitySource } = require('./network-quality-source');
 const { networkQualitySummarySource } = require('./network-quality-summary-source');
 const { runtimeSummarySource } = require('./runtime-summary-source');
 // Strategy modules for centralized constants and logic.
 const { COMBAT_CONSTANTS } = require('../strategy/combat-constants');
 const { OPPORTUNITY_CONSTANTS } = require('../strategy/opportunity-constants');
-const {
-  actionPriorityBand,
-  actionFocusTargetType,
-  actionFocusId,
-  actionFocusSummary
-} = require('../strategy/action-priority');
-const {
-  finalActionBandRank,
-  finalActionReusable,
-  shouldHoldPreviousFinalAction,
-  applyFinalActionArbitrationCore
-} = require('../strategy/action-arbitration');
-const {
-  actionSwitchPairKey,
-  buildPreviousDecisionSummary,
-  recordActionSwitchDiagnosticsCore
-} = require('../strategy/action-switch-diagnostics');
 const {
   coinDiagnosticsSummary,
   summarizeCoinDiagnosticsList,
@@ -10537,86 +10521,7 @@ ${importantLogSource()}
     );
   }
 
-  function targetSwitchHistoryLimit() {
-    return Math.max(4, Math.round(Number(cfg.targetSwitchDiagnosticsHistoryLimit || 24) || 24));
-  }
-
-  function targetSwitchOscillationWindowMs() {
-    return Math.max(1000, Math.round(Number(cfg.targetSwitchOscillationWindowMs || 10000) || 10000));
-  }
-
-  function roundedNullable(value) {
-    const number = Number(value);
-    return Number.isFinite(number) ? Math.round(number) : null;
-  }
-
-  ${actionPriorityBand.toString()}
-
-  ${actionFocusTargetType.toString()}
-
-  ${actionFocusId.toString()}
-
-  ${actionFocusSummary.toString()}
-
-  function ensureTargetSwitchDiagnostics() {
-    if (!bot.targetSwitchDiagnostics || typeof bot.targetSwitchDiagnostics !== 'object') {
-      bot.targetSwitchDiagnostics = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
-    }
-    if (!Array.isArray(bot.targetSwitchDiagnostics.events)) bot.targetSwitchDiagnostics.events = [];
-    return bot.targetSwitchDiagnostics;
-  }
-
-  ${actionSwitchPairKey.toString()}
-
-  ${buildPreviousDecisionSummary.toString()}
-
-  ${recordActionSwitchDiagnosticsCore.toString()}
-
-  function recordActionSwitchDiagnostics(action, source = '') {
-    const state = ensureTargetSwitchDiagnostics();
-    return recordActionSwitchDiagnosticsCore(action, state, {
-      source,
-      tickCount: bot.tickCount,
-      previousDecision: bot.lastDecision,
-      historyLimit: targetSwitchHistoryLimit(),
-      oscillationWindowMs: targetSwitchOscillationWindowMs(),
-      clone: safeJsonClone
-    }).action;
-  }
-
-  function finalActionArbitrationHoldMs() {
-    return Math.max(0, Math.round(Number(cfg.finalActionArbitrationHoldMs || 0) || 0));
-  }
-
-  function finalActionArbitrationHistoryLimit() {
-    return Math.max(4, Math.round(Number(cfg.finalActionArbitrationHistoryLimit || 24) || 24));
-  }
-
-  function ensureFinalActionArbitration() {
-    if (!bot.finalActionArbitration || typeof bot.finalActionArbitration !== 'object') {
-      bot.finalActionArbitration = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
-    }
-    if (!Array.isArray(bot.finalActionArbitration.history)) bot.finalActionArbitration.history = [];
-    return bot.finalActionArbitration;
-  }
-
-  ${finalActionBandRank.toString()}
-
-  ${finalActionReusable.toString()}
-
-  ${shouldHoldPreviousFinalAction.toString()}
-
-  ${applyFinalActionArbitrationCore.toString()}
-
-  function applyFinalActionArbitration(action, source = '') {
-    const state = ensureFinalActionArbitration();
-    return applyFinalActionArbitrationCore(action, state, {
-      source,
-      holdMs: finalActionArbitrationHoldMs(),
-      historyLimit: finalActionArbitrationHistoryLimit(),
-      clone: safeJsonClone
-    }).action;
-  }
+${actionArbitrationSource()}
 
   function setLastTarget(kind, id) {
     if (!id && id !== 0) return;
