@@ -18,6 +18,7 @@ import opportunityChoice from '../browser/runtime/opportunity-choice.js';
 import opportunityClear from '../browser/runtime/opportunity-clear.js';
 import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
 import opportunityPick from '../browser/runtime/opportunity-pick.js';
+import patrol from '../browser/runtime/patrol.js';
 import postAttackDrop from '../browser/runtime/post-attack-drop.js';
 import staminaBudget from '../browser/runtime/stamina-budget.js';
 import opportunityConstants from '../browser/runtime/opportunity-constants.js';
@@ -233,6 +234,16 @@ function helperStatus(config = {}) {
       disableMissingHold: true
     }
   );
+  const patrolScanResult = patrol.patrolDirectionCore(
+    { x: 0, y: 0 },
+    [],
+    [],
+    { x: 300, y: 0 },
+    {
+      patrolPrecisionTolerance: 10,
+      patrolCoinMaxDistance: 500
+    }
+  );
   const postAttackVisibleCoinExists = postAttackDrop.postAttackVisibleCoinExistsCore(
     [{ drop_id: 'post-attack-visible', amount: 3, x: 10, y: 0 }],
     { id: 'post-attack-target', x: 0, y: 0 },
@@ -302,6 +313,8 @@ function helperStatus(config = {}) {
     opportunityBestCoinScore,
     opportunityPickId: opportunityPickResult?.pickedId,
     opportunityPickKind: opportunityPickResult?.kind,
+    patrolReason: patrolScanResult.direction?.reason,
+    patrolClearHeading: patrolScanResult.clearPatrolHeading,
     postAttackVisibleCoinExists,
     postAttackDropSelectedId: postAttackDropResult.selected?.drop_id,
     staminaBudgetDailyLimited,

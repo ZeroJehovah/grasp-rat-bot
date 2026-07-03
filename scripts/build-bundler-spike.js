@@ -115,6 +115,7 @@ async function selfTest() {
   assert(source.includes('function chooseStableOpportunityCore'), 'opportunity choice helper was not bundled');
   assert(source.includes('function buildOpportunityCandidatesCore'), 'opportunity candidate helper was not bundled');
   assert(source.includes('function pickBestOpportunityCore'), 'opportunity pick helper was not bundled');
+  assert(source.includes('function patrolDirectionCore'), 'patrol helper was not bundled');
   assert(source.includes('function pickPostAttackDropCoinCore'), 'post-attack drop helper was not bundled');
   assert(source.includes('function dailyStaminaBudgetIsLimitingCore'), 'stamina budget helper was not bundled');
   assert(source.includes('function calculateOpportunityROI'), 'opportunity constants helper was not bundled');
@@ -158,6 +159,8 @@ async function selfTest() {
   assert(status.opportunityBestCoinScore === 4, 'spike did not execute best coin opportunity score helper');
   assert(status.opportunityPickId === 'pick-coin', 'spike did not execute opportunity pick helper');
   assert(status.opportunityPickKind === 'coin', 'spike did not execute opportunity pick action builder');
+  assert(status.patrolReason === 'scan-toward-distant-coin', 'spike did not execute patrol helper');
+  assert(status.patrolClearHeading === false, 'spike did not preserve patrol scan heading behavior');
   assert(status.postAttackVisibleCoinExists === true, 'spike did not execute post-attack visible coin helper');
   assert(status.postAttackDropSelectedId === 'post-attack-coin', 'spike did not execute post-attack drop picker helper');
   assert(status.staminaBudgetDailyLimited === true, 'spike did not execute daily stamina budget helper');
