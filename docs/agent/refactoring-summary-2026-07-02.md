@@ -388,6 +388,17 @@ This is still an equivalent runtime-boundary cleanup only. It reduces direct pag
 
 This keeps the same browser global names and login behavior while reducing another runtime-global dependency before true browser module ownership replaces the generated-source internals.
 
+## 2026-07-03 Follow-up: Phase 2AC Page-Native Observer Globals
+
+`bootstrap-0.4.301` migrates two remaining custom page-global reads in the generated runtime:
+
+- `installPageNativeSnapshotObserver()` now stores the shared observer state through `readPageGlobal()` / `installPageGlobal()` instead of `window[key]`.
+- The passive observer now reads the page `Response` and `XMLHttpRequest` constructors through `readPageGlobal()` before hooking their prototypes, preserving the existing passive snapshot behavior without direct `window.Response` / `window.XMLHttpRequest` coupling.
+- `clashLeaveRescueHook()` now reads the externally installed `__graspRatBotClashLeaveRescue` function through `readPageGlobal()`, preserving the public hook name used by local bootstrap code.
+- Static verification checks both direct source and generated dist for the adapter-based observer/hook paths and rejects the old direct `window` access in those migrated functions.
+
+This is another behavior-equivalent page-global boundary cleanup. The bootstrap userscript/extension still install the Clash rescue hook on the page global; only the remote bot's internal read path changes.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -419,9 +430,10 @@ This keeps the same browser global names and login behavior while reducing anoth
 26. Page-global core integration: integrated in `bootstrap-0.4.298`
 27. Control-login page-global guards: integrated in `bootstrap-0.4.299`
 28. Manual login page-global gate: integrated in `bootstrap-0.4.300`
-29. Constants: partially integrated for high-value coin defaults
-30. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-31. Run live validation sessions after each behavior-touching replacement
+29. Page-native observer globals: integrated in `bootstrap-0.4.301`
+30. Constants: partially integrated for high-value coin defaults
+31. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+32. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
