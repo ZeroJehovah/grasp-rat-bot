@@ -856,6 +856,17 @@ This is a source-organization split only. It preserves guarded `bot.runtimeDiagn
 
 This is a source-organization split only. It preserves bounded `bot.errors` recording, console error logging, runtime tick diagnostics, tick promise error capture, async callback rejection capture, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BZ Attack-Worth Source Factory
+
+`bootstrap-0.4.353` extracts attack-worth source generation into a dedicated browser source module:
+
+- `src/browser/attack-worth-source.js` now owns the raw browser source for `attackWorthTaking()`.
+- `src/browser/bot-source.js` imports and injects `${attackWorthSource()}` immediately after `${staminaRuntimeSource()}`, preserving generated runtime order before exit-motion helpers and before target-selection/opportunity-action consumers.
+- Static verification checks the new source-factory shape, injection point, attack-worth wrapper, whitelist guard, AFK profit target handling, and reward-ratio guard.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves target whitelist blocking, AFK profit target drop threshold handling, own-drop reward ratio comparison, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -939,9 +950,10 @@ This is a source-organization split only. It preserves bounded `bot.errors` reco
 78. Login snapshot gate source factory: integrated in `bootstrap-0.4.350`
 79. Runtime diagnostics source factory: integrated in `bootstrap-0.4.351`
 80. Tick safety source factory: integrated in `bootstrap-0.4.352`
-81. Constants: partially integrated for high-value coin defaults
-82. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-83. Run live validation sessions after each behavior-touching replacement
+81. Attack-worth source factory: integrated in `bootstrap-0.4.353`
+82. Constants: partially integrated for high-value coin defaults
+83. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+84. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
