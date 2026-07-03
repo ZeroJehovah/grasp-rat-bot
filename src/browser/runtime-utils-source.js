@@ -4,7 +4,7 @@ const {
   safeStringify,
   safeJsonClone,
   sanitizeCombatLogIdPart
-} = require('../shared/runtime-utils');
+} = require('./runtime/runtime-utils');
 
 function runtimeUtilityPreludeSource() {
   return `

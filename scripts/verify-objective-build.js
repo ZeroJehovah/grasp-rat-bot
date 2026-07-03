@@ -291,6 +291,7 @@ function main() {
   const arrayCountSourceModule = readText('src/browser/array-count-source.js');
   const arrayCountRuntimeModule = readText('src/browser/runtime/array-count.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
+  const runtimeUtilsRuntimeModule = readText('src/browser/runtime/runtime-utils.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const combatLogRuntimeSourceModule = readText('src/browser/combat-log-runtime-source.js');
   const tickSafetySourceModule = readText('src/browser/tick-safety-source.js');
@@ -370,6 +371,7 @@ function main() {
     arrayCountSourceModule,
     arrayCountRuntimeModule,
     runtimeUtilsSourceModule,
+    runtimeUtilsRuntimeModule,
     combatLogSourceModule,
     combatLogRuntimeSourceModule,
     tickSafetySourceModule,
@@ -505,7 +507,9 @@ function main() {
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
     assert(runtimeSourceModule.includes('function renderRuntimeFragments(fragments)'), 'runtime source fragment renderer not found');
     assert(!runtimeSourceModule.includes('browserRuntimeAssemblySource'), 'runtime source boundary should not depend on the removed assembly adapter');
-    assert(runtimeUtilsSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils source module import not found');
+    assert(runtimeUtilsSourceModule.includes("require('./runtime/runtime-utils')"), 'runtime-utils source module does not import the browser runtime helper module');
+    assert(runtimeUtilsRuntimeModule.includes("require('../../shared/runtime-utils')"), 'browser runtime-utils helper module does not reuse shared runtime utilities');
+    assert(runtimeUtilsRuntimeModule.includes('safeStringify') && runtimeUtilsRuntimeModule.includes('safeJsonClone') && runtimeUtilsRuntimeModule.includes('sanitizeCombatLogIdPart'), 'browser runtime-utils helper module exports are incomplete');
     assert(statusPanelRuntimeSourceModule.includes("require('../shared/display-format')"), 'status-panel runtime source display-format import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
     assert(combatLogRuntimeSourceModule.includes("require('../shared/exit-summary')"), 'combat-log runtime source exit-summary import not found');
@@ -1209,7 +1213,7 @@ function main() {
   });
 
   check('bundler spike bundles shared and strategy helpers into a browser IIFE', () => {
-    assert(bundlerSpikeEntrySource.includes("import * as runtimeUtils from '../shared/runtime-utils.js'"), 'bundler spike does not import shared runtime utils as a module');
+    assert(bundlerSpikeEntrySource.includes("import runtimeUtils from '../browser/runtime/runtime-utils.js'"), 'bundler spike does not import runtime utils through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import * as displayFormat from '../shared/display-format.js'"), 'bundler spike does not import display helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import * as targetWhitelist from '../shared/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
