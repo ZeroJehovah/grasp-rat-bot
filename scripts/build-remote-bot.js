@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('crypto');
-const fs = require('fs');
 const path = require('path');
-const { browserBotSource } = require('../src/browser/bot-source');
+const {
+  buildVersion,
+  writeRemoteBotBundle
+} = require('./remote-bot-bundle');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -33,23 +34,10 @@ function parseArgs(args) {
   return out;
 }
 
-function buildVersion() {
-  const d = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  return [
-    d.getUTCFullYear(),
-    pad(d.getUTCMonth() + 1),
-    pad(d.getUTCDate()),
-    pad(d.getUTCHours()),
-    pad(d.getUTCMinutes()),
-    pad(d.getUTCSeconds())
-  ].join('');
-}
-
 function printHelp() {
   console.log(`Usage: node scripts/build-remote-bot.js [options]
 
-Generates dist/grasp-rat-remote-bot.js and dist/manifest.json.
+Generates bundled dist/grasp-rat-remote-bot.js and dist/manifest.json.
 
 Options:
   --out-dir <dir>          Output directory. Default: dist
@@ -60,36 +48,28 @@ Options:
 `);
 }
 
-function sha256Hex(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
-}
-
 function main() {
   const options = parseArgs(process.argv.slice(2));
-  fs.mkdirSync(options.outDir, { recursive: true });
-
-  const source = browserBotSource({
-    dryRun: false,
-    once: false,
-    statusEvery: options.statusEvery,
-    version: options.version,
-  });
-
   const scriptPath = path.join(options.outDir, options.fileName);
   const manifestPath = path.join(options.outDir, 'manifest.json');
-  const hash = sha256Hex(source);
-  const manifest = {
+  const result = writeRemoteBotBundle({
+    outFile: scriptPath,
+    manifestFile: manifestPath,
     version: options.version,
-    builtAt: new Date().toISOString(),
     scriptUrl: options.scriptUrl,
-    sha256: hash,
-    statusEvery: options.statusEvery,
-    config: {}
-  };
-
-  fs.writeFileSync(scriptPath, source);
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-  console.log(JSON.stringify({ scriptPath, manifestPath, version: options.version, sha256: hash }, null, 2));
+    statusEvery: options.statusEvery
+  }, {
+    production: true,
+    mode: 'production-full-generated-remote'
+  });
+  console.log(JSON.stringify({
+    scriptPath,
+    manifestPath,
+    version: result.version,
+    sha256: result.sha256,
+    directSha256: result.directSha256,
+    bundler: 'esbuild'
+  }, null, 2));
 }
 
 main();

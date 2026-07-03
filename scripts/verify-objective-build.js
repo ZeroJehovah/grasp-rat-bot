@@ -4,7 +4,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { browserBotSource } = require('../src/browser/bot-source');
+const vm = require('vm');
+const { bundledRemoteSourceFor } = require('./remote-bot-bundle');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -239,13 +240,11 @@ function countMatches(text, re) {
   return matches ? matches.length : 0;
 }
 
-function generateRemoteSource(manifest) {
+function generateRemoteBuild(manifest) {
   const statusEvery = Number(manifest.statusEvery) === 0
     ? 0
     : Number(manifest.statusEvery || 1000);
-  return browserBotSource({
-    dryRun: false,
-    once: false,
+  return bundledRemoteSourceFor({
     statusEvery,
     version: String(manifest.version || ''),
   });
@@ -266,6 +265,7 @@ function main() {
   const botSourceModule = readText('src/browser/bot-source.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
+  const remoteBundleSource = readText('scripts/remote-bot-bundle.js');
   const bundlerSpikeBuildSource = readText('scripts/build-bundler-spike.js');
   const remoteBundledBuildSource = readText('scripts/build-remote-bot-bundled.js');
   const bundlerSpikeEntrySource = readText('src/bundler-spike/runtime-entry.mjs');
@@ -305,7 +305,9 @@ function main() {
     nativeStateSourceModule,
     runtimeSummarySourceModule
   ].join('\n');
-  const generatedSource = generateRemoteSource(manifest);
+  const generatedBuild = generateRemoteBuild(manifest);
+  const generatedSource = generatedBuild.bundledSource;
+  const generatedRuntimeSource = generatedBuild.directSource;
   const distHash = sha256Hex(distSource);
   const generatedHash = sha256Hex(generatedSource);
 
@@ -332,6 +334,31 @@ function main() {
   check('generated remote bot hash matches manifest', () => {
     assert(String(manifest.sha256 || '') === generatedHash, `manifest=${manifest.sha256 || '(empty)'} generated=${generatedHash}`);
     return generatedHash;
+  });
+
+  check('production remote bot is generated through esbuild bundling', () => {
+    assert(manifest.production === true, 'production manifest does not mark the bundled build as production');
+    assert(manifest.bundler?.name === 'esbuild', 'production manifest does not record esbuild');
+    assert(manifest.bundler?.mode === 'production-full-generated-remote', 'production manifest mode is not the production bundle mode');
+    assert(manifest.bundler?.directSha256 === generatedBuild.directSha256, `direct source hash mismatch: manifest=${manifest.bundler?.directSha256 || '(empty)'} generated=${generatedBuild.directSha256}`);
+    assert(manifest.bundler?.format === 'iife', 'production manifest bundler format is not iife');
+    assert(manifest.bundler?.platform === 'browser', 'production manifest bundler platform is not browser');
+    assert(manifest.bundler?.target === 'es2020', 'production manifest bundler target is not es2020');
+    assert(distSource.includes('__graspRatBot'), 'bundled production dist does not contain the bot global key');
+    assert(distSource.includes('window[BOT_KEY] = bot'), 'bundled production dist does not install the bot on window');
+    assert(!/require\(['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative require()');
+    assert(!/\bfrom\s+['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative import');
+    assert(!distSource.includes('module.exports'), 'bundled production dist still contains CommonJS exports');
+    new vm.Script(distSource, { filename: 'dist/grasp-rat-remote-bot.js' });
+    assert(buildRemoteSource.includes("require('./remote-bot-bundle')"), 'production build does not use the shared remote bundler');
+    assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
+    assert(!buildRemoteSource.includes('browserBotSource'), 'production build should not bypass the shared remote bundler');
+    assert(remoteBundleSource.includes("const esbuild = require('esbuild')"), 'shared remote bundler does not use esbuild');
+    assert(remoteBundleSource.includes("const { browserBotSource } = require('../src/browser/bot-source')"), 'shared remote bundler does not use the browser source builder');
+    assert(remoteBundleSource.includes('write: false'), 'shared remote bundler should generate source through esbuild outputFiles');
+    assert(remoteBundleSource.includes("format: BUNDLER_INFO.format"), 'shared remote bundler does not centralize IIFE format');
+    assert(remoteBundleSource.includes("platform: BUNDLER_INFO.platform"), 'shared remote bundler does not centralize browser platform');
+    assert(remoteBundleSource.includes("target: [BUNDLER_INFO.target]"), 'shared remote bundler does not centralize es2020 target');
   });
 
   check('source modules split browser source generation while generated runtime stays single file', () => {
@@ -363,9 +390,9 @@ function main() {
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
-    assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
-    assert(distSource.includes('function normalizeTargetWhitelistName') && distSource.includes('function parseTargetWhitelistNames') && distSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
-    assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
+    assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
+    assert(generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
+    assert(!generatedRuntimeSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
   check('dist target whitelist is a standalone username list', () => {
@@ -418,16 +445,17 @@ function main() {
     assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('function assessServerPositionStall(self)'), 'runtime-summary source factory does not include server-position stall helper');
   });
 
-  check('bundler spike is isolated from the production remote build', () => {
+  check('bundler scripts are wired without coupling spike and production entrypoints', () => {
     assert(rootPackage.private === true, 'root package must stay private for the spike dependency');
     assert(rootPackage.type === 'commonjs', 'root package type should keep existing CommonJS scripts unchanged');
-    assert(rootPackage.devDependencies?.esbuild === '0.25.11', 'esbuild spike dependency is not pinned');
+    assert(rootPackage.devDependencies?.esbuild === '0.25.11', 'esbuild dependency is not pinned');
     assert(rootPackage.scripts?.['build:bundler-spike'] === 'node scripts/build-bundler-spike.js', 'bundler spike build script not found');
     assert(rootPackage.scripts?.['test:bundler-spike'] === 'node scripts/build-bundler-spike.js --self-test', 'bundler spike self-test script not found');
     assert(rootPackage.scripts?.['build:remote-bundled'] === 'node scripts/build-remote-bot-bundled.js', 'remote bundled candidate build script not found');
     assert(rootPackage.scripts?.['test:remote-bundled'] === 'node scripts/build-remote-bot-bundled.js --self-test', 'remote bundled candidate self-test script not found');
-    assert(buildRemoteSource.includes("require('../src/browser/bot-source')"), 'production remote build no longer uses the source builder');
-    assert(!buildRemoteSource.includes('build-bundler-spike') && !buildRemoteSource.includes('build-remote-bot-bundled') && !buildRemoteSource.includes('esbuild'), 'production remote build is coupled to the bundler candidates');
+    assert(!buildRemoteSource.includes('build-bundler-spike') && !buildRemoteSource.includes('build-remote-bot-bundled'), 'production remote build is coupled to spike/candidate scripts instead of the shared bundler');
+    assert(bundlerSpikeBuildSource.includes("const esbuild = require('esbuild')"), 'small bundler spike build does not use esbuild independently');
+    assert(remoteBundledBuildSource.includes("require('./remote-bot-bundle')"), 'remote bundled candidate does not use the shared remote bundler');
   });
 
   check('bundler spike bundles shared and strategy helpers into a browser IIFE', () => {
@@ -470,15 +498,13 @@ function main() {
   });
 
   check('remote bundled candidate parses the full generated runtime through esbuild', () => {
-    assert(remoteBundledBuildSource.includes("const esbuild = require('esbuild')"), 'remote bundled candidate build does not use esbuild');
-    assert(remoteBundledBuildSource.includes("const { browserBotSource } = require('../src/browser/bot-source')"), 'remote bundled candidate does not use the browser source builder');
-    assert(remoteBundledBuildSource.includes("stdin: {\n      contents: directSource"), 'remote bundled candidate does not feed generated runtime source to esbuild stdin');
-    assert(remoteBundledBuildSource.includes("format: 'iife'"), 'remote bundled candidate does not build an IIFE');
-    assert(remoteBundledBuildSource.includes("platform: 'browser'"), 'remote bundled candidate platform is not browser');
-    assert(remoteBundledBuildSource.includes("target: ['es2020']"), 'remote bundled candidate target is not es2020');
-    assert(remoteBundledBuildSource.includes("production: false"), 'remote bundled candidate manifest must stay non-production');
+    assert(remoteBundleSource.includes('function bundleRemoteSource(directSource)'), 'shared remote bundler does not expose source bundling');
+    assert(remoteBundleSource.includes("stdin: {\n      contents: directSource"), 'shared remote bundler does not feed generated runtime source to esbuild stdin');
+    assert(remoteBundleSource.includes('function writeRemoteBotBundle'), 'shared remote bundler does not write bundle outputs');
+    assert(remoteBundledBuildSource.includes('writeRemoteBotBundle(options'), 'remote bundled candidate does not write through the shared bundler');
+    assert(remoteBundledBuildSource.includes('production: false'), 'remote bundled candidate manifest must stay non-production');
     assert(remoteBundledBuildSource.includes("mode: 'full-generated-remote-candidate'"), 'remote bundled candidate manifest mode not found');
-    assert(remoteBundledBuildSource.includes('directSha256'), 'remote bundled candidate does not record direct source hash');
+    assert(remoteBundleSource.includes('directSha256'), 'shared remote bundler does not record direct source hash');
     assert(remoteBundledBuildSource.includes('verifyBundledCandidate(source, manifest, result);'), 'remote bundled candidate self-test does not verify the built output');
     assert(remoteBundledBuildSource.includes("new vm.Script(source"), 'remote bundled candidate self-test does not parse the bundled output');
     assert(remoteBundledBuildSource.includes("source.includes('__graspRatBot')"), 'remote bundled candidate self-test does not check the bot global key');
@@ -492,7 +518,7 @@ function main() {
   });
 
   for (const file of REMOTE_BOT_FILES) {
-    const text = file === 'grasp-rat-bot.js' ? sourceRuntimeText : distSource;
+    const text = file === 'grasp-rat-bot.js' ? sourceRuntimeText : generatedRuntimeSource;
     const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
     for (const invariant of NUMERIC_INVARIANTS) {
       check(`${file} has ${invariant.key}=${invariant.value}`, () => {
@@ -1943,15 +1969,15 @@ function main() {
     assert(strategyCoinDiagnosticsSource.includes('function buildCoinDiagnostics'), 'strategy coin diagnostics builder not found');
     assert(strategyCoinDiagnosticsSource.includes('function addCoinFilterDiagnostic'), 'strategy coin filter diagnostic recorder not found');
     assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'"), 'strategy snapshot-only coin diagnostics not exposed');
-    assert(distSource.includes('function buildCoinDiagnostics'), 'generated runtime does not inline coin diagnostics builder');
-    assert(distSource.includes('function addCoinFilterDiagnostic'), 'generated runtime does not inline coin filter diagnostic recorder');
-    assert(distSource.includes("reason: 'snapshot-only'"), 'generated runtime snapshot-only coin diagnostics not exposed');
+    assert(generatedRuntimeSource.includes('function buildCoinDiagnostics'), 'generated runtime does not inline coin diagnostics builder');
+    assert(generatedRuntimeSource.includes('function addCoinFilterDiagnostic'), 'generated runtime does not inline coin filter diagnostic recorder');
+    assert(generatedRuntimeSource.includes("reason: 'snapshot-only'"), 'generated runtime snapshot-only coin diagnostics not exposed');
     assert(sourceRuntimeText.includes('buildCoinDiagnostics.toString()'), 'coin diagnostics builder is not injected from module');
     assert(sourceRuntimeText.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
     assert(sourceRuntimeText.includes("recordCoinFilterDiagnostic(c, 'ignored'"), 'ignored coin diagnostics not recorded');
     assert(sourceRuntimeText.includes("recordCoinFilterDiagnostic(c, 'threat-blocked'"), 'threat-blocked coin diagnostics not recorded');
     assert(sourceRuntimeText.includes("reason = 'stamina-unaffordable'") && sourceRuntimeText.includes('coinStaminaAffordableWithDiagnostic'), 'stamina-unaffordable coin diagnostics not recorded');
-    assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'") && distSource.includes("reason: 'snapshot-only'"), 'snapshot-only coin diagnostics not exposed');
+    assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'") && generatedRuntimeSource.includes("reason: 'snapshot-only'"), 'snapshot-only coin diagnostics not exposed');
     assert(sourceRuntimeText.includes('coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics)'), 'last decision does not carry coin diagnostics');
     assert(combatLogSourceModule.includes('coinDiagnostics: decision?.coinDiagnostics || bot.coinDiagnostics || null'), 'combat logs do not expose coin diagnostics');
     assert(combatLogSourceModule.includes("type: 'coin-diagnostics'"), 'standalone coin diagnostic log entry not found');
@@ -1972,10 +1998,10 @@ function main() {
     assert(sourceRuntimeText.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'source bot coin direction wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'source bot coin direction wrapper does not apply lock updates');
     assert(sourceRuntimeText.includes('return coinMotionMetaCore(dir);'), 'source bot coin motion metadata wrapper does not call strategy core');
-    assert(distSource.includes('function coinDirectionToCore'), 'generated runtime does not inline coin direction core');
-    assert(distSource.includes('function coinPickupPrecisionPulseMsCore'), 'generated runtime does not inline coin pickup pulse core');
-    assert(distSource.includes('function coinMotionCoreOptions'), 'generated runtime coin motion wrapper options not found');
-    assert(distSource.includes('function applyCoinApproachLockUpdate'), 'generated runtime coin approach lock wrapper not found');
+    assert(generatedRuntimeSource.includes('function coinDirectionToCore'), 'generated runtime does not inline coin direction core');
+    assert(generatedRuntimeSource.includes('function coinPickupPrecisionPulseMsCore'), 'generated runtime does not inline coin pickup pulse core');
+    assert(generatedRuntimeSource.includes('function coinMotionCoreOptions'), 'generated runtime coin motion wrapper options not found');
+    assert(generatedRuntimeSource.includes('function applyCoinApproachLockUpdate'), 'generated runtime coin approach lock wrapper not found');
   });
 
   check('coin target identity uses strategy module core', () => {
@@ -2004,14 +2030,14 @@ function main() {
     assert(sourceRuntimeText.includes('pickIncidentalCoinPickupsCore('), 'source bot incidental pickup wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
-    assert(distSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');
-    assert(distSource.includes('function coinMatchesTrackedTargetCore'), 'generated runtime does not inline coin target matcher core');
-    assert(distSource.includes('function trackedCoinTargetForCollectionCore'), 'generated runtime does not inline tracked coin target core');
-    assert(distSource.includes('function buildNativeCoinSnapshotCore'), 'generated runtime does not inline native coin snapshot core');
-    assert(distSource.includes('function pointToSegmentDistanceCore'), 'generated runtime does not inline point-to-segment distance core');
-    assert(distSource.includes('function pickIncidentalCoinPickupsCore'), 'generated runtime does not inline incidental pickup core');
-    assert(distSource.includes('function snapshotCoinWorthLongTravelCore'), 'generated runtime does not inline snapshot coin worth core');
-    assert(distSource.includes('function snapshotCoinNavigationReasonCore'), 'generated runtime does not inline snapshot coin reason core');
+    assert(generatedRuntimeSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');
+    assert(generatedRuntimeSource.includes('function coinMatchesTrackedTargetCore'), 'generated runtime does not inline coin target matcher core');
+    assert(generatedRuntimeSource.includes('function trackedCoinTargetForCollectionCore'), 'generated runtime does not inline tracked coin target core');
+    assert(generatedRuntimeSource.includes('function buildNativeCoinSnapshotCore'), 'generated runtime does not inline native coin snapshot core');
+    assert(generatedRuntimeSource.includes('function pointToSegmentDistanceCore'), 'generated runtime does not inline point-to-segment distance core');
+    assert(generatedRuntimeSource.includes('function pickIncidentalCoinPickupsCore'), 'generated runtime does not inline incidental pickup core');
+    assert(generatedRuntimeSource.includes('function snapshotCoinWorthLongTravelCore'), 'generated runtime does not inline snapshot coin worth core');
+    assert(generatedRuntimeSource.includes('function snapshotCoinNavigationReasonCore'), 'generated runtime does not inline snapshot coin reason core');
   });
 
   check('coin progress failure helpers use strategy module core', () => {
@@ -2051,15 +2077,15 @@ function main() {
     assert(sourceRuntimeText.includes('bot.staleCoinEscape = result.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
     assert(sourceRuntimeText.includes('bot.coinAttempts.set(id, attempt)'), 'source bot coin attempt wrapper does not retain runtime map write');
     assert(sourceRuntimeText.includes('bot.coinProgress = progressResult.progress'), 'source bot coin progress wrapper does not retain runtime state write');
-    assert(distSource.includes('function coinFailureIgnoreCore'), 'generated runtime does not inline coin failure ignore core');
-    assert(distSource.includes('function staleCoinEscapeDirectionCore'), 'generated runtime does not inline stale coin escape core');
-    assert(distSource.includes('function coinProgressIntentCore'), 'generated runtime does not inline coin progress intent core');
-    assert(distSource.includes('function coinAttemptExpiredCore'), 'generated runtime does not inline coin attempt expiry core');
-    assert(distSource.includes('function updateCoinAttemptCore'), 'generated runtime does not inline coin attempt update core');
-    assert(distSource.includes('function updateCoinProgressRecordCore'), 'generated runtime does not inline coin progress record core');
-    assert(distSource.includes('function buildIgnoredCoinProgressCore'), 'generated runtime does not inline ignored coin progress core');
-    assert(distSource.includes('function buildIgnoredCoinPatrolActionCore'), 'generated runtime does not inline ignored coin patrol action core');
-    assert(distSource.includes('function coinIgnoreCleanupIntentCore'), 'generated runtime does not inline coin ignore cleanup intent core');
+    assert(generatedRuntimeSource.includes('function coinFailureIgnoreCore'), 'generated runtime does not inline coin failure ignore core');
+    assert(generatedRuntimeSource.includes('function staleCoinEscapeDirectionCore'), 'generated runtime does not inline stale coin escape core');
+    assert(generatedRuntimeSource.includes('function coinProgressIntentCore'), 'generated runtime does not inline coin progress intent core');
+    assert(generatedRuntimeSource.includes('function coinAttemptExpiredCore'), 'generated runtime does not inline coin attempt expiry core');
+    assert(generatedRuntimeSource.includes('function updateCoinAttemptCore'), 'generated runtime does not inline coin attempt update core');
+    assert(generatedRuntimeSource.includes('function updateCoinProgressRecordCore'), 'generated runtime does not inline coin progress record core');
+    assert(generatedRuntimeSource.includes('function buildIgnoredCoinProgressCore'), 'generated runtime does not inline ignored coin progress core');
+    assert(generatedRuntimeSource.includes('function buildIgnoredCoinPatrolActionCore'), 'generated runtime does not inline ignored coin patrol action core');
+    assert(generatedRuntimeSource.includes('function coinIgnoreCleanupIntentCore'), 'generated runtime does not inline coin ignore cleanup intent core');
   });
 
   check('coin route planner uses strategy module core', () => {
@@ -2074,9 +2100,9 @@ function main() {
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
     assert(sourceRuntimeText.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
-    assert(distSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
-    assert(distSource.includes('function coinRouteActionMetaCore'), 'generated runtime does not inline coin route action metadata core');
-    assert(distSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
+    assert(generatedRuntimeSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
+    assert(generatedRuntimeSource.includes('function coinRouteActionMetaCore'), 'generated runtime does not inline coin route action metadata core');
+    assert(generatedRuntimeSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
   });
 
   check('opportunity choice stability uses strategy module core', () => {
@@ -2093,10 +2119,10 @@ function main() {
     assert(sourceRuntimeText.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice'), 'source bot missing-held wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
     assert(sourceRuntimeText.includes('switchHoldMs: cfg.opportunitySwitchHoldMs'), 'source bot opportunity choice persistence hold config not wired');
-    assert(distSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
-    assert(distSource.includes('function rememberOpportunityChoiceCore'), 'generated runtime does not inline opportunity choice persistence core');
-    assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'generated runtime does not inline missing-held opportunity core');
-    assert(distSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
+    assert(generatedRuntimeSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
+    assert(generatedRuntimeSource.includes('function rememberOpportunityChoiceCore'), 'generated runtime does not inline opportunity choice persistence core');
+    assert(generatedRuntimeSource.includes('function buildMissingHeldOpportunityCore'), 'generated runtime does not inline missing-held opportunity core');
+    assert(generatedRuntimeSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
   });
 
   check('opportunity candidate construction uses strategy module core', () => {
@@ -2108,8 +2134,8 @@ function main() {
     assert(botSourceModule.includes("require('../strategy/opportunity-candidates')"), 'source bot does not import opportunity candidate strategy module');
     assert(sourceRuntimeText.includes('buildOpportunityCandidatesCore.toString()'), 'source bot does not inject opportunity candidate core');
     assert(sourceRuntimeText.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
-    assert(distSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
-    assert(distSource.includes('function opportunityCandidateCoreOptions'), 'generated runtime opportunity candidate wrapper options not found');
+    assert(generatedRuntimeSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
+    assert(generatedRuntimeSource.includes('function opportunityCandidateCoreOptions'), 'generated runtime opportunity candidate wrapper options not found');
   });
 
   check('post-attack drop wait uses strategy module core', () => {
@@ -2125,9 +2151,9 @@ function main() {
     assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore.toString()'), 'source bot does not inject post-attack wait picker core');
     assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
-    assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
-    assert(distSource.includes('function pickPostAttackDropCoinCore'), 'generated runtime does not inline post-attack drop coin picker core');
-    assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
+    assert(generatedRuntimeSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
+    assert(generatedRuntimeSource.includes('function pickPostAttackDropCoinCore'), 'generated runtime does not inline post-attack drop coin picker core');
+    assert(generatedRuntimeSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
   });
 
   check('stamina budget helpers use strategy module core', () => {
@@ -2144,10 +2170,10 @@ function main() {
     assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore(coins, targets'), 'source bot blocked stamina wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore(self, coins'), 'source bot nearest stamina exit wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('pickNearestDailyStaminaFinalCoinCore('), 'source bot daily final coin wrapper does not call strategy core');
-    assert(distSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'generated runtime does not inline daily stamina budget core');
-    assert(distSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'generated runtime does not inline blocked stamina summary core');
-    assert(distSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'generated runtime does not inline nearest stamina exit core');
-    assert(distSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'generated runtime does not inline daily final coin picker core');
+    assert(generatedRuntimeSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'generated runtime does not inline daily stamina budget core');
+    assert(generatedRuntimeSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'generated runtime does not inline blocked stamina summary core');
+    assert(generatedRuntimeSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'generated runtime does not inline nearest stamina exit core');
+    assert(generatedRuntimeSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'generated runtime does not inline daily final coin picker core');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
@@ -2155,8 +2181,8 @@ function main() {
     assert(strategyActionSwitchDiagnosticsSource.includes('function recordActionSwitchDiagnosticsCore'), 'strategy target switch diagnostic core not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('function actionSwitchPairKey'), 'strategy target switch pair key helper not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('targetSwitch: snapshot'), 'strategy target switch event is not attached to decisions');
-    assert(distSource.includes('function recordActionSwitchDiagnosticsCore'), 'generated runtime does not inline target switch diagnostic core');
-    assert(distSource.includes('targetSwitch: snapshot'), 'generated runtime target switch event is not attached to decisions');
+    assert(generatedRuntimeSource.includes('function recordActionSwitchDiagnosticsCore'), 'generated runtime does not inline target switch diagnostic core');
+    assert(generatedRuntimeSource.includes('targetSwitch: snapshot'), 'generated runtime target switch event is not attached to decisions');
     assert(sourceRuntimeText.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
     assert(sourceRuntimeText.includes('action = recordActionSwitchDiagnostics(action, source);'), 'final action path does not record target switch diagnostics');
     assert(combatLogSourceModule.includes("type: 'target-switch'"), 'standalone target-switch log entry not found');
@@ -2169,9 +2195,9 @@ function main() {
     assert(strategyActionArbitrationSource.includes('function finalActionBandRank'), 'strategy final action priority band rank helper not found');
     assert(strategyActionArbitrationSource.includes('function applyFinalActionArbitrationCore'), 'strategy final action arbitration core not found');
     assert(strategyActionPrioritySource.includes('function actionFocusSummary'), 'strategy action focus summary helper not found');
-    assert(distSource.includes('function finalActionBandRank'), 'generated runtime does not inline final action priority band rank helper');
-    assert(distSource.includes('function applyFinalActionArbitrationCore'), 'generated runtime does not inline final action arbitration core');
-    assert(distSource.includes('higher-priority-band-stick'), 'final action hysteresis reason not found in generated runtime');
+    assert(generatedRuntimeSource.includes('function finalActionBandRank'), 'generated runtime does not inline final action priority band rank helper');
+    assert(generatedRuntimeSource.includes('function applyFinalActionArbitrationCore'), 'generated runtime does not inline final action arbitration core');
+    assert(generatedRuntimeSource.includes('higher-priority-band-stick'), 'final action hysteresis reason not found in generated runtime');
     assert(sourceRuntimeText.includes('action = applyFinalActionArbitration(action, source);'), 'final action path does not run arbitration before diagnostics');
     assert(sourceRuntimeText.indexOf('action = applyFinalActionArbitration(action, source);') < sourceRuntimeText.indexOf('action = recordActionSwitchDiagnostics(action, source);'), 'final action arbitration must run before target-switch diagnostics');
     assert(sourceRuntimeText.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');
