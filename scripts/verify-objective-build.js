@@ -303,6 +303,7 @@ function main() {
   const opportunitySnapshotSourceModule = readText('src/browser/opportunity-snapshot-source.js');
   const postAttackSourceModule = readText('src/browser/post-attack-source.js');
   const opportunityActionsSourceModule = readText('src/browser/opportunity-actions-source.js');
+  const opportunityCandidateSourceModule = readText('src/browser/opportunity-candidate-source.js');
   const opportunityRouteSourceModule = readText('src/browser/opportunity-route-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
@@ -353,6 +354,7 @@ function main() {
     opportunitySnapshotSourceModule,
     postAttackSourceModule,
     opportunityActionsSourceModule,
+    opportunityCandidateSourceModule,
     opportunityRouteSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
@@ -517,7 +519,7 @@ function main() {
     assert(botSourceModule.includes('${opportunitySnapshotSource()}'), 'opportunity-snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${postAttackSource()}'), 'post-attack module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
-    assert(botSourceModule.includes('${opportunityRouteSource()}'), 'opportunity-route module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityCandidateSource()}'), 'opportunity-candidate module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -738,6 +740,13 @@ function main() {
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function enemyOpportunityCandidates'), 'opportunity-actions source factory does not include enemy candidate helper');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
+    assert(opportunityCandidateSourceModule.includes('function opportunityCandidateSource() {'), 'opportunity-candidate source factory not found');
+    assert(opportunityCandidateSourceModule.includes('module.exports = { opportunityCandidateSource }'), 'opportunity-candidate source module export not found');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('String.raw`'), 'opportunity-candidate source factory does not return raw browser source');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('${opportunityRouteSource()}'), 'opportunity-candidate source factory does not inject route source');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('buildOpportunityCandidatesCore.toString()'), 'opportunity-candidate source factory does not inline opportunity candidate core');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function opportunityCandidateCoreOptions'), 'opportunity-candidate source factory does not include core options wrapper');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function pickProfitableCombatTarget'), 'opportunity-candidate source factory does not include profitable combat comparison wrapper');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource() {'), 'opportunity-route source factory not found');
     assert(opportunityRouteSourceModule.includes('module.exports = { opportunityRouteSource }'), 'opportunity-route source module export not found');
     assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('String.raw`'), 'opportunity-route source factory does not return raw browser source');
@@ -2594,7 +2603,7 @@ function main() {
     assert(strategyOpportunityCandidatesSource.includes('function buildEnemyOpportunityCandidatesCore'), 'strategy enemy opportunity candidate core not found');
     assert(strategyOpportunityCandidatesSource.includes('function bestCoinOpportunityScoreCore'), 'strategy best coin opportunity score core not found');
     assert(strategyOpportunityCandidatesSource.includes('function opportunityValueScoreCore'), 'strategy opportunity value score core not found');
-    assert(botSourceModule.includes("require('../strategy/opportunity-candidates')"), 'source bot does not import opportunity candidate strategy module');
+    assert(opportunityCandidateSourceModule.includes("require('../strategy/opportunity-candidates')"), 'opportunity-candidate source does not import opportunity candidate strategy module');
     assert(sourceRuntimeText.includes('buildOpportunityCandidatesCore.toString()'), 'source bot does not inject opportunity candidate core');
     assert(sourceRuntimeText.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
     assert(generatedRuntimeSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
