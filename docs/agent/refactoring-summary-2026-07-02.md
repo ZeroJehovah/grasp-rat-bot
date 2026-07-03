@@ -1032,6 +1032,18 @@ This is a source-organization split only. It reduces `src/browser/runtime-assemb
 
 This is a source-organization split only. It completes the remaining browser source assembly audit: no runtime logic is owned by a separate assembly adapter anymore, and `src/browser/runtime-source.js` is now the single browser source boundary.
 
+## 2026-07-04 Follow-up: Phase 2CP Array Count Runtime Helper Module
+
+`bootstrap-0.4.369` starts the true browser runtime-module migration with the smallest pure helper:
+
+- `src/browser/runtime/array-count.js` now owns the actual `arrayCount(value)` implementation as a reusable runtime module.
+- `src/browser/array-count-source.js` imports that runtime module and inlines `arrayCount.toString()` with stable indentation, so generated browser source keeps the previous helper text.
+- `src/bundler-spike/runtime-entry.mjs` imports and executes the runtime helper module, and the bundler spike self-test now verifies both bundling and runtime execution through `nameCount`.
+- Static verification checks the runtime helper module, the source-factory inlining path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.369` hash stayed `8049986c2d9f9b9b0f72a027ed311dd66630c9d1af90873419bc1da57bfcad1d` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It does not change runtime behavior, but it creates the first `src/browser/runtime/` helper owned as executable browser code rather than only as a raw source string.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1131,9 +1143,10 @@ This is a source-organization split only. It completes the remaining browser sou
 94. Control-login runtime source factory: integrated in `bootstrap-0.4.366`
 95. Runtime fragment registry source: integrated in `bootstrap-0.4.367`
 96. Remaining browser source assembly audit / adapter removal: integrated in `bootstrap-0.4.368`
-97. Constants: partially integrated for high-value coin defaults
-98. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-99. Run live validation sessions after each behavior-touching replacement
+97. Array-count true runtime helper module: integrated in `bootstrap-0.4.369`
+98. Constants: partially integrated for high-value coin defaults
+99. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+100. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
