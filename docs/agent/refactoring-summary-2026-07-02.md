@@ -933,6 +933,17 @@ This is a source-organization split only. It reduces `src/browser/bot-source.js`
 
 This is a source-organization split only. It reduces `src/browser/bot-source.js` to 159 lines while preserving the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2CG Runtime Assembly Boundary
+
+`bootstrap-0.4.360` renames the remaining browser runtime assembly boundary and removes the legacy `bot-source.js` file:
+
+- `src/browser/runtime-assembly-source.js` now owns the remaining source-fragment assembly function, renamed to `browserRuntimeAssemblySource(config)`.
+- `src/browser/runtime-source.js` imports `browserRuntimeAssemblySource()` directly instead of importing the legacy `browserBotSource()` from `bot-source.js`.
+- `src/browser/bot-source.js` is removed; static verification checks that it no longer exists and that the runtime boundary uses `runtime-assembly-source.js`.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the rename, proving the generated browser source is unchanged by the boundary rename.
+
+This is a source-organization split only. It keeps the remaining 159-line assembly layer but gives it an accurate runtime-assembly name and removes the old bot-source boundary.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1023,13 +1034,14 @@ This is a source-organization split only. It reduces `src/browser/bot-source.js`
 85. Startup install/restore tail source factory: integrated in `bootstrap-0.4.357`
 86. Bot object/status source factory: integrated in `bootstrap-0.4.358`
 87. Runtime bootstrap source factory: integrated in `bootstrap-0.4.359`
-88. Remaining browser source assembly audit: identify any residual runtime logic still owned by `bot-source.js`
-89. Constants: partially integrated for high-value coin defaults
-90. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-91. Run live validation sessions after each behavior-touching replacement
+88. Runtime assembly boundary rename: integrated in `bootstrap-0.4.360`
+89. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
+90. Constants: partially integrated for high-value coin defaults
+91. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+92. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
-1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
+1. Replace the remaining `browserRuntimeAssemblySource()` generated-source assembly behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
 2. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
 3. Continue migrating remaining direct page-global access through `src/browser/page-global-core.js` before converting live runtime slices to true ESM ownership
 4. Profit/opportunity selection module
