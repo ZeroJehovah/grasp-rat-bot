@@ -889,6 +889,17 @@ This is a source-organization split only. It preserves the `Array.isArray(value)
 
 This is a source-organization split only. It isolates a 451-line decision function and reduces `src/browser/bot-source.js` to 1720 lines while preserving the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2CC Tick Source Factory
+
+`bootstrap-0.4.356` extracts the main `tick(source = 'timer')` browser runtime loop into a dedicated browser source module:
+
+- `src/browser/tick-source.js` now owns the raw browser source for the 885-line tick loop.
+- `src/browser/bot-source.js` imports and injects `${tickSource()}` after `${chooseActionSource()}` and before startup install/restore flow.
+- Static verification checks the new source-factory shape, injection point, and anchors for pending-exit handling, login/no-self handling, offline leave handling, action selection, coin progress tracking, final action arbitration, important combat tick logging, and combat-log tick logging.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It reduces `src/browser/bot-source.js` to 843 lines while preserving the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -975,10 +986,11 @@ This is a source-organization split only. It isolates a 451-line decision functi
 81. Attack-worth source factory: integrated in `bootstrap-0.4.353`
 82. Array-count source factory: integrated in `bootstrap-0.4.354`
 83. Choose-action source factory: integrated in `bootstrap-0.4.355`
-84. Tick loop source factory: next high-value source-organization slice
-85. Constants: partially integrated for high-value coin defaults
-86. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-87. Run live validation sessions after each behavior-touching replacement
+84. Tick loop source factory: integrated in `bootstrap-0.4.356`
+85. Startup install/restore tail source factory: next high-value source-organization slice
+86. Constants: partially integrated for high-value coin defaults
+87. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+88. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
