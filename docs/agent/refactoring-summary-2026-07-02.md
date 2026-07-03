@@ -812,6 +812,17 @@ This is a source-organization split only. It preserves pending-exit storage sche
 
 This is a source-organization split only. It preserves relogin hold remaining-time refresh, stamina-budget/stamina-exhausted offline summary refresh, final leave display reason normalization, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BV Restored Coin Failures Source Factory
+
+`bootstrap-0.4.349` extracts restored coin-failure source generation into a dedicated browser source module:
+
+- `src/browser/restored-coin-failures-source.js` now owns the raw browser source for `restoredCoinFailures()`.
+- `src/browser/bot-source.js` imports and injects `${restoredCoinFailuresSource()}` immediately after `${refreshExitDetailSource()}`, preserving generated runtime order before restored exit-state initialization.
+- Static verification checks the new source-factory shape, injection point, restore helper, preserved failure reads, severe ignore restoration, and hard ignore restoration anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves preserved coin-failure replay, near/close single-failure cleanup, stale failure handling, hard/severe ignore-window restoration, startup `ignoredCoins` / `coinFailures` inputs, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -891,9 +902,10 @@ This is a source-organization split only. It preserves relogin hold remaining-ti
 74. Persistent clear source factory: integrated in `bootstrap-0.4.346`
 75. Pending-exit persistence source factory: integrated in `bootstrap-0.4.347`
 76. Refresh exit detail source factory: integrated in `bootstrap-0.4.348`
-77. Constants: partially integrated for high-value coin defaults
-78. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-79. Run live validation sessions after each behavior-touching replacement
+77. Restored coin failures source factory: integrated in `bootstrap-0.4.349`
+78. Constants: partially integrated for high-value coin defaults
+79. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+80. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
