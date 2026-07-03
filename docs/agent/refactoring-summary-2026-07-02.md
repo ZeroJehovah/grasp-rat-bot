@@ -801,6 +801,17 @@ This is a source-organization split only. It preserves persistent exit hold clea
 
 This is a source-organization split only. It preserves pending-exit storage schema, reload-confirmation restoration, max-age cleanup, localStorage read/write behavior, initial memory-vs-storage selection, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BU Refresh Exit Detail Source Factory
+
+`bootstrap-0.4.348` extracts exit-detail refresh source generation into a dedicated browser source module:
+
+- `src/browser/refresh-exit-detail-source.js` now owns the raw browser source for `refreshExitDetail()`.
+- `src/browser/bot-source.js` imports and injects `${refreshExitDetailSource()}` immediately after `${pendingExitPersistenceSource()}`, preserving generated runtime order before restored coin-failure helpers.
+- Static verification checks the new source-factory shape, injection point, refresh helper, relogin hold remaining-time update, stamina-budget summary branch, and display finalization anchor.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves relogin hold remaining-time refresh, stamina-budget/stamina-exhausted offline summary refresh, final leave display reason normalization, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -879,9 +890,10 @@ This is a source-organization split only. It preserves pending-exit storage sche
 73. Persistent exit source factory: integrated in `bootstrap-0.4.345`
 74. Persistent clear source factory: integrated in `bootstrap-0.4.346`
 75. Pending-exit persistence source factory: integrated in `bootstrap-0.4.347`
-76. Constants: partially integrated for high-value coin defaults
-77. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-78. Run live validation sessions after each behavior-touching replacement
+76. Refresh exit detail source factory: integrated in `bootstrap-0.4.348`
+77. Constants: partially integrated for high-value coin defaults
+78. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+79. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
