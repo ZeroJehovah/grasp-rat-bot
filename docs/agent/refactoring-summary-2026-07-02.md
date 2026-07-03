@@ -955,6 +955,17 @@ This is a source-organization split only. It keeps the remaining 159-line assemb
 
 This is a source-organization split only. It does not reduce line count; it makes the remaining assembly order explicit so later slices can replace entries with true browser-module ownership under a smaller diff.
 
+## 2026-07-03 Follow-up: Phase 2CI Restored Runtime State Source Factory
+
+`bootstrap-0.4.362` extracts the cold-start restored runtime state initialization into a dedicated browser source module:
+
+- `src/browser/restored-runtime-state-source.js` now owns restored coin failures binding, enemy/offline leave-state reads, persisted pending-exit restoration, and initial pending-exit selection.
+- `src/browser/runtime-assembly-source.js` imports and lists `restoredRuntimeStateSource` between `restoredCoinFailuresSource` and `loginSnapshotGateSource`.
+- Static verification checks the source-factory shape, module export, registry entry, source-runtime aggregation, restored failure binding, pending-exit restoration with reload marker, and initial pending-exit selection anchor.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.362` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 263 lines and keeps the new restored runtime state source factory to 14 lines.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1047,10 +1058,11 @@ This is a source-organization split only. It does not reduce line count; it make
 87. Runtime bootstrap source factory: integrated in `bootstrap-0.4.359`
 88. Runtime assembly boundary rename: integrated in `bootstrap-0.4.360`
 89. Runtime assembly fragment registry: integrated in `bootstrap-0.4.361`
-90. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
-91. Constants: partially integrated for high-value coin defaults
-92. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-93. Run live validation sessions after each behavior-touching replacement
+90. Restored runtime state source factory: integrated in `bootstrap-0.4.362`
+91. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
+92. Constants: partially integrated for high-value coin defaults
+93. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+94. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the remaining `browserRuntimeAssemblySource()` generated-source assembly behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
