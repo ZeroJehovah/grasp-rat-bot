@@ -257,7 +257,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['coin-progress-runtime', coinProgressRuntimeSource],
+    ['coin-progress-runtime', () => coinProgressRuntimeSource(config)],
     ['separator-after-coin-progress-runtime',
     `
 `],
