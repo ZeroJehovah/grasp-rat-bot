@@ -923,6 +923,33 @@
     }
   });
 
+  // src/browser/runtime/login-snapshot-gate.js
+  var require_login_snapshot_gate = __commonJS({
+    "src/browser/runtime/login-snapshot-gate.js"(exports, module) {
+      "use strict";
+      function loginSnapshotSuccessRequiredCore() {
+        return 0;
+      }
+      function normalizeLoginSnapshotGateStateCore(state2 = null, required = loginSnapshotSuccessRequiredCore()) {
+        return {
+          streak: Math.max(0, Math.round(Number(state2?.streak || 0) || 0)),
+          required,
+          lastOkAt: Number(state2?.lastOkAt || 0) || 0,
+          lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
+          lastSampleAt: Number(state2?.lastSampleAt || state2?.lastOkAt || state2?.lastErrorAt || 0) || 0,
+          lastError: String(state2?.lastError || ""),
+          lastTick: Number(state2?.lastTick || 0) || 0,
+          resetAt: Number(state2?.resetAt || 0) || 0,
+          resetReason: String(state2?.resetReason || "")
+        };
+      }
+      module.exports = {
+        loginSnapshotSuccessRequiredCore,
+        normalizeLoginSnapshotGateStateCore
+      };
+    }
+  });
+
   // src/strategy/attack-worth.js
   var require_attack_worth = __commonJS({
     "src/strategy/attack-worth.js"(exports, module) {
@@ -3755,7 +3782,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.417" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.418" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -3947,22 +3974,15 @@
     const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
     const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
     const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
+    const {
+      loginSnapshotSuccessRequiredCore,
+      normalizeLoginSnapshotGateStateCore
+    } = require_login_snapshot_gate();
     function loginSnapshotSuccessRequired() {
-      return 0;
+      return loginSnapshotSuccessRequiredCore();
     }
     function normalizeLoginSnapshotGateState(state2 = null) {
-      const required = loginSnapshotSuccessRequired();
-      return {
-        streak: Math.max(0, Math.round(Number(state2?.streak || 0) || 0)),
-        required,
-        lastOkAt: Number(state2?.lastOkAt || 0) || 0,
-        lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
-        lastSampleAt: Number(state2?.lastSampleAt || state2?.lastOkAt || state2?.lastErrorAt || 0) || 0,
-        lastError: String(state2?.lastError || ""),
-        lastTick: Number(state2?.lastTick || 0) || 0,
-        resetAt: Number(state2?.resetAt || 0) || 0,
-        resetReason: String(state2?.resetReason || "")
-      };
+      return normalizeLoginSnapshotGateStateCore(state2, loginSnapshotSuccessRequired());
     }
     function recordRuntimeDiagnostics(values = {}) {
       try {

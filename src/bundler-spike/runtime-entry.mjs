@@ -9,6 +9,7 @@ import persistentExit from '../browser/runtime/persistent-exit.js';
 import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
+import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
@@ -379,6 +380,13 @@ function helperStatus(config = {}) {
     coinFailureSevereIgnoreCount: 5,
     coinFailureSevereIgnoreMs: 1000
   }, 1000);
+  const loginSnapshotRequired = loginSnapshotGate.loginSnapshotSuccessRequiredCore();
+  const loginSnapshotGateState = loginSnapshotGate.normalizeLoginSnapshotGateStateCore({
+    streak: 2.6,
+    lastOkAt: 900,
+    lastError: 404,
+    resetReason: 'spike-reset'
+  }, loginSnapshotRequired);
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -438,6 +446,10 @@ function helperStatus(config = {}) {
     restoredFailureCount: arrayCountRuntime.arrayCount(restoredFailureList),
     restoredFailureHardIgnoreUntil: restoredFailureList.find(([id]) => id === 'hard-drop')?.[1]?.ignoreUntil,
     restoredFailureStaleIgnoreUntil: restoredFailureList.find(([id]) => id === 'stale-drop')?.[1]?.ignoreUntil,
+    loginSnapshotRequired,
+    loginSnapshotStreak: loginSnapshotGateState.streak,
+    loginSnapshotLastSampleAt: loginSnapshotGateState.lastSampleAt,
+    loginSnapshotResetReason: loginSnapshotGateState.resetReason,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
