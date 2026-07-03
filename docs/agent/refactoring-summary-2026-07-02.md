@@ -419,6 +419,16 @@ This is a structural source split only. Passive snapshot behavior, page-global a
 
 This is another structural source split only. It preserves the existing shared target-whitelist parser, remote target whitelist URL derivation, polling behavior, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AF Network Quality Summary Source Factory
+
+`bootstrap-0.4.304` extracts the network quality status summary function into its own browser source module:
+
+- `src/browser/network-quality-summary-source.js` now owns `summarizeNetworkQuality()` source generation.
+- `src/browser/bot-source.js` imports and injects `${networkQualitySummarySource()}` after the network quality sampler/update helpers.
+- Static verification checks the new source-factory shape and confirms the generated runtime still exposes the native WebSocket network quality summary used by status, runtime summary, and combat-log diagnostics.
+
+This is a diagnostic/status source split only. It preserves network quality sampling, action acknowledgement tracking, panel display data, combat-log network diagnostics, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -453,9 +463,10 @@ This is another structural source split only. It preserves the existing shared t
 29. Page-native observer globals: integrated in `bootstrap-0.4.301`
 30. Page-native snapshot source factory: integrated in `bootstrap-0.4.302`
 31. Target whitelist source factory: integrated in `bootstrap-0.4.303`
-32. Constants: partially integrated for high-value coin defaults
-33. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-34. Run live validation sessions after each behavior-touching replacement
+32. Network quality summary source factory: integrated in `bootstrap-0.4.304`
+33. Constants: partially integrated for high-value coin defaults
+34. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+35. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
