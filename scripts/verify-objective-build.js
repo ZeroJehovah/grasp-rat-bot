@@ -284,6 +284,7 @@ function main() {
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
   const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
+  const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
@@ -302,6 +303,7 @@ function main() {
     botSourceModule,
     browserPageGlobalCoreSource,
     targetOverlaySourceModule,
+    targetWhitelistSourceModule,
     statusPanelSourceModule,
     combatLogSourceModule,
     importantLogSourceModule,
@@ -386,6 +388,7 @@ function main() {
     assert(botSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
     assert(botSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
     assert(botSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
+    assert(botSourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
     assert(botSourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
     assert(botSourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
     assert(botSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
@@ -414,6 +417,7 @@ function main() {
     assert(botSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
     assert(botSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
     assert(botSourceModule.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
+    assert(botSourceModule.includes('${targetWhitelistSource()}'), 'target-whitelist module is not injected into browser runtime');
     assert(botSourceModule.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
@@ -447,10 +451,15 @@ function main() {
     assert(deriveBody.includes("return source.replace(/[^/?#]*([?#].*)?$/, 'target-whitelist.json')"), 'target whitelist URL does not handle non-URL source paths');
   });
 
-  check('browser UI source modules export overlay, status panel, combat-log, important-log, and control-login runtime fragments', () => {
+  check('browser UI source modules export overlay, whitelist, status panel, combat-log, important-log, and control-login runtime fragments', () => {
     assert(targetOverlaySourceModule.includes('function targetOverlaySource() {'), 'target-overlay source factory not found');
     assert(targetOverlaySourceModule.includes('module.exports = {\n  targetOverlaySource'), 'target-overlay module export not found');
     assert(functionBody(targetOverlaySourceModule, 'targetOverlaySource').includes('String.raw`'), 'target-overlay source factory does not return raw browser source');
+    assert(targetWhitelistSourceModule.includes('function targetWhitelistSource() {'), 'target-whitelist source factory not found');
+    assert(targetWhitelistSourceModule.includes('module.exports = {\n  targetWhitelistSource'), 'target-whitelist module export not found');
+    assert(functionBody(targetWhitelistSourceModule, 'targetWhitelistSource').includes('String.raw`'), 'target-whitelist source factory does not return raw browser source');
+    assert(functionBody(targetWhitelistSourceModule, 'targetWhitelistSource').includes('function refreshTargetWhitelist'), 'target-whitelist source factory does not include refresh helper');
+    assert(functionBody(targetWhitelistSourceModule, 'targetWhitelistSource').includes('function startTargetWhitelistPolling'), 'target-whitelist source factory does not include polling helper');
     assert(statusPanelSourceModule.includes('function statusPanelSource(helpers = {}) {'), 'status-panel source factory not found');
     assert(statusPanelSourceModule.includes('module.exports = {\n  statusPanelSource'), 'status-panel module export not found');
     assert(functionBody(statusPanelSourceModule, 'statusPanelSource').includes('typeof escapeHtml === \'function\' ? escapeHtml.toString() : \'\''), 'status-panel source factory does not inline shared display helpers');

@@ -409,6 +409,16 @@ This is another behavior-equivalent page-global boundary cleanup. The bootstrap 
 
 This is a structural source split only. Passive snapshot behavior, page-global adapter reads, and the generated remote runtime surface remain equivalent.
 
+## 2026-07-03 Follow-up: Phase 2AE Target Whitelist Source Factory
+
+`bootstrap-0.4.303` extracts target whitelist browser runtime source into its own module:
+
+- `src/browser/target-whitelist-source.js` now owns `isWhitelistedTarget()`, `summarizeTargetWhitelistStatus()`, `targetWhitelistFetchUrl()`, `refreshTargetWhitelist()`, and `startTargetWhitelistPolling()` source generation.
+- `src/browser/bot-source.js` imports and injects `${targetWhitelistSource()}` instead of carrying those browser functions inline.
+- Static verification treats the new source factory as canonical while still checking generated source and dist for username-only matching, cache-busted fetches, configured timeout use, failure behavior that preserves the previous whitelist, and startup/interval polling.
+
+This is another structural source split only. It preserves the existing shared target-whitelist parser, remote target whitelist URL derivation, polling behavior, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -442,9 +452,10 @@ This is a structural source split only. Passive snapshot behavior, page-global a
 28. Manual login page-global gate: integrated in `bootstrap-0.4.300`
 29. Page-native observer globals: integrated in `bootstrap-0.4.301`
 30. Page-native snapshot source factory: integrated in `bootstrap-0.4.302`
-31. Constants: partially integrated for high-value coin defaults
-32. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-33. Run live validation sessions after each behavior-touching replacement
+31. Target whitelist source factory: integrated in `bootstrap-0.4.303`
+32. Constants: partially integrated for high-value coin defaults
+33. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+34. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

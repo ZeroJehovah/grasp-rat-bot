@@ -41,7 +41,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.302" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.303" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -1553,6 +1553,64 @@
         lastError: String(state2?.lastError || ""),
         lastReason: String(state2?.lastReason || "")
       };
+    }
+    function targetWhitelistFetchUrl(url) {
+      const raw = String(url || "").trim();
+      if (!raw) return "";
+      try {
+        const parsed = new URL(raw, location.href);
+        parsed.searchParams.set("_graspRatWhitelistTs", String(Date.now()));
+        return parsed.toString();
+      } catch (_) {
+        return raw + (raw.includes("?") ? "&" : "?") + "_graspRatWhitelistTs=" + Date.now();
+      }
+    }
+    async function refreshTargetWhitelist(reason = "manual") {
+      const state2 = bot.targetWhitelist || targetWhitelistState;
+      const url = String(state2.url || "").trim();
+      const t = Date.now();
+      if (!url) {
+        state2.lastFetchAt = t;
+        state2.lastReason = "no-url";
+        return summarizeTargetWhitelistStatus();
+      }
+      if (state2.fetching) return summarizeTargetWhitelistStatus();
+      state2.fetching = true;
+      state2.lastFetchAt = t;
+      try {
+        const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
+        const validPayload = Array.isArray(payload) || Array.isArray(payload?.names) || Array.isArray(payload?.usernames);
+        if (!validPayload) throw new Error("target whitelist JSON must be an array or contain names/usernames array");
+        const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
+        state2.names = names;
+        state2.nameSet = new Set(names);
+        state2.lastOkAt = Date.now();
+        state2.lastError = "";
+        state2.lastErrorAt = 0;
+        state2.lastReason = String(reason || "refresh");
+        return summarizeTargetWhitelistStatus();
+      } catch (err) {
+        state2.lastError = err?.message || String(err);
+        state2.lastErrorAt = Date.now();
+        state2.lastReason = String(reason || "refresh") + "-failed";
+        return summarizeTargetWhitelistStatus();
+      } finally {
+        state2.fetching = false;
+      }
+    }
+    function startTargetWhitelistPolling() {
+      const state2 = bot.targetWhitelist || targetWhitelistState;
+      if (!String(state2.url || "").trim()) {
+        state2.lastReason = "no-url";
+        return;
+      }
+      refreshTargetWhitelist("startup").catch((err) => recordUnhandledTickError("target-whitelist-startup", err));
+      const pollMs = Math.max(0, Number(cfg.targetWhitelistPollMs || 0) || 0);
+      if (pollMs > 0 && !cfg.once) {
+        state2.timer = setInterval(() => {
+          refreshTargetWhitelist("interval").catch((err) => recordUnhandledTickError("target-whitelist-interval", err));
+        }, pollMs);
+      }
     }
     const hpValue = (e) => Number(e?.hp ?? 0) || 0;
     const combatHpValue = (e) => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
@@ -4193,64 +4251,6 @@
           return void 0;
         }
       };
-    }
-    function targetWhitelistFetchUrl(url) {
-      const raw = String(url || "").trim();
-      if (!raw) return "";
-      try {
-        const parsed = new URL(raw, location.href);
-        parsed.searchParams.set("_graspRatWhitelistTs", String(Date.now()));
-        return parsed.toString();
-      } catch (_) {
-        return raw + (raw.includes("?") ? "&" : "?") + "_graspRatWhitelistTs=" + Date.now();
-      }
-    }
-    async function refreshTargetWhitelist(reason = "manual") {
-      const state2 = bot.targetWhitelist || targetWhitelistState;
-      const url = String(state2.url || "").trim();
-      const t = Date.now();
-      if (!url) {
-        state2.lastFetchAt = t;
-        state2.lastReason = "no-url";
-        return summarizeTargetWhitelistStatus();
-      }
-      if (state2.fetching) return summarizeTargetWhitelistStatus();
-      state2.fetching = true;
-      state2.lastFetchAt = t;
-      try {
-        const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
-        const validPayload = Array.isArray(payload) || Array.isArray(payload?.names) || Array.isArray(payload?.usernames);
-        if (!validPayload) throw new Error("target whitelist JSON must be an array or contain names/usernames array");
-        const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
-        state2.names = names;
-        state2.nameSet = new Set(names);
-        state2.lastOkAt = Date.now();
-        state2.lastError = "";
-        state2.lastErrorAt = 0;
-        state2.lastReason = String(reason || "refresh");
-        return summarizeTargetWhitelistStatus();
-      } catch (err) {
-        state2.lastError = err?.message || String(err);
-        state2.lastErrorAt = Date.now();
-        state2.lastReason = String(reason || "refresh") + "-failed";
-        return summarizeTargetWhitelistStatus();
-      } finally {
-        state2.fetching = false;
-      }
-    }
-    function startTargetWhitelistPolling() {
-      const state2 = bot.targetWhitelist || targetWhitelistState;
-      if (!String(state2.url || "").trim()) {
-        state2.lastReason = "no-url";
-        return;
-      }
-      refreshTargetWhitelist("startup").catch((err) => recordUnhandledTickError("target-whitelist-startup", err));
-      const pollMs = Math.max(0, Number(cfg.targetWhitelistPollMs || 0) || 0);
-      if (pollMs > 0 && !cfg.once) {
-        state2.timer = setInterval(() => {
-          refreshTargetWhitelist("interval").catch((err) => recordUnhandledTickError("target-whitelist-interval", err));
-        }, pollMs);
-      }
     }
     function staminaExhaustedWindowLabel(staminaState) {
       return staminaExhaustedLongWindows(staminaState).join("/");
