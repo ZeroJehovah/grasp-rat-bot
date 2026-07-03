@@ -8,6 +8,7 @@ import preservedState from '../browser/runtime/browser-preserved-state.js';
 import persistentExit from '../browser/runtime/persistent-exit.js';
 import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
+import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
@@ -367,6 +368,17 @@ function helperStatus(config = {}) {
     2000
   );
   const persistentClearRemoved = persistentClear.clearPersistentStorageKey('persistent-clear-spike');
+  const restoredFailureList = restoredCoinFailures.restoredCoinFailuresCore([
+    ['near-drop', { count: 1, reason: 'near', lastAt: 900 }],
+    ['hard-drop', { count: 3, reason: 'progress', lastAt: 900 }],
+    ['stale-drop', { count: 9, reason: 'progress', lastAt: 400, ignoreUntil: 1200 }]
+  ], {
+    coinFailureDecayMs: 500,
+    coinFailureHardIgnoreCount: 3,
+    coinFailureHardIgnoreMs: 600,
+    coinFailureSevereIgnoreCount: 5,
+    coinFailureSevereIgnoreMs: 1000
+  }, 1000);
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -423,6 +435,9 @@ function helperStatus(config = {}) {
     persistentExitWrittenReason: persistentExitStorage.writtenValue?.reason,
     persistentExitWrittenHoldMs: persistentExitStorage.writtenValue?.holdRemainingMs,
     persistentClearRemoved,
+    restoredFailureCount: arrayCountRuntime.arrayCount(restoredFailureList),
+    restoredFailureHardIgnoreUntil: restoredFailureList.find(([id]) => id === 'hard-drop')?.[1]?.ignoreUntil,
+    restoredFailureStaleIgnoreUntil: restoredFailureList.find(([id]) => id === 'stale-drop')?.[1]?.ignoreUntil,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),

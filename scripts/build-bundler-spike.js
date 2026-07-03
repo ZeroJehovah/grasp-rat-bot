@@ -107,6 +107,7 @@ async function selfTest() {
   assert(source.includes('function readPersistentLastSelfStateCore'), 'persistent-last-self read helper was not bundled');
   assert(source.includes('function writePersistentLastSelfStateCore'), 'persistent-last-self write helper was not bundled');
   assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
+  assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -192,6 +193,9 @@ async function selfTest() {
   assert(status.persistentExitWrittenReason === 'offline-leave', 'spike did not write persistent-exit reason');
   assert(status.persistentExitWrittenHoldMs === 1000, 'spike did not refresh persistent-exit hold');
   assert(status.persistentClearRemoved === true, 'spike did not execute persistent-clear helper');
+  assert(status.restoredFailureCount === 2, 'spike did not filter restored near coin failures');
+  assert(status.restoredFailureHardIgnoreUntil === 1600, 'spike did not extend restored hard coin failure ignore window');
+  assert(status.restoredFailureStaleIgnoreUntil === 1200, 'spike did not preserve stale restored coin failure ignore window');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

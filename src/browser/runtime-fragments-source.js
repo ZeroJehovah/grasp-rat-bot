@@ -111,7 +111,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-refresh-exit-detail',
     `
 `],
-    ['restored-coin-failures', restoredCoinFailuresSource],
+    ['restored-coin-failures', () => restoredCoinFailuresSource(config)],
     ['restored-runtime-state', restoredRuntimeStateSource],
     ['login-snapshot-gate', loginSnapshotGateSource],
     ['separator-after-login-snapshot-gate',

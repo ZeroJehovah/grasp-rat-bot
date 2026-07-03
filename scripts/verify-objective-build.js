@@ -280,6 +280,7 @@ function main() {
   const persistentExitRuntimeModule = readText('src/browser/runtime/persistent-exit.js');
   const persistentLastSelfRuntimeModule = readText('src/browser/runtime/persistent-last-self.js');
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
+  const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
@@ -404,6 +405,7 @@ function main() {
     persistentExitRuntimeModule,
     persistentLastSelfRuntimeModule,
     persistentClearRuntimeModule,
+    restoredCoinFailuresRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
@@ -549,6 +551,7 @@ function main() {
     assert(distSource.includes('var require_persistent_exit = __commonJS'), 'bundled production dist does not bundle the persistent-exit runtime module through esbuild');
     assert(distSource.includes('var require_persistent_last_self = __commonJS'), 'bundled production dist does not bundle the persistent-last-self runtime module through esbuild');
     assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
+    assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
@@ -641,6 +644,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("['persistent-last-self', () => persistentLastSelfSource(config)]"), 'persistent-last-self source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-exit', () => persistentExitSource(config)]"), 'persistent-exit source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['restored-coin-failures', () => restoredCoinFailuresSource(config)]"), 'restored-coin-failures source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['exit-motion', () => exitMotionSource(config)]"), 'exit-motion source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
@@ -1342,13 +1346,26 @@ function main() {
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('holdRemainingMs'), 'refresh-exit-detail source factory does not refresh relogin hold remaining time');
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('staminaBudgetExit'), 'refresh-exit-detail source factory does not refresh stamina-budget exit summary');
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail source factory does not finalize display reason');
-    assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresSource() {'), 'restored-coin-failures source factory not found');
-    assert(restoredCoinFailuresSourceModule.includes('module.exports = { restoredCoinFailuresSource }'), 'restored-coin-failures source module export not found');
-    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('String.raw`'), 'restored-coin-failures source factory does not return raw browser source');
-    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('function restoredCoinFailures'), 'restored-coin-failures source factory does not include restore helper');
-    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('preserved.coinFailures'), 'restored-coin-failures source factory does not read preserved failures');
-    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures source factory does not restore severe ignore windows');
-    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('coinFailureHardIgnoreCount'), 'restored-coin-failures source factory does not restore hard ignore windows');
+    assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresInlineSource() {'), 'restored-coin-failures inline source factory not found');
+    assert(restoredCoinFailuresSourceModule.includes('function bundledRestoredCoinFailuresSource() {'), 'restored-coin-failures bundled source factory not found');
+    assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresSource(options = {})'), 'restored-coin-failures source selector not found');
+    assert(restoredCoinFailuresSourceModule.includes('restoredCoinFailuresInlineSource,\n  bundledRestoredCoinFailuresSource,\n  restoredCoinFailuresSource'), 'restored-coin-failures source module exports not found');
+    const restoredCoinFailuresInlineBody = functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresInlineSource');
+    assert(restoredCoinFailuresInlineBody.includes('String.raw`'), 'restored-coin-failures inline source factory does not return raw browser source');
+    assert(restoredCoinFailuresInlineBody.includes('function restoredCoinFailures'), 'restored-coin-failures inline source factory does not include restore helper');
+    assert(restoredCoinFailuresInlineBody.includes('preserved.coinFailures'), 'restored-coin-failures inline source factory does not read preserved failures');
+    assert(restoredCoinFailuresInlineBody.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures inline source factory does not restore severe ignore windows');
+    assert(restoredCoinFailuresInlineBody.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures inline source factory does not restore hard ignore windows');
+    const restoredCoinFailuresBundledBody = functionBody(restoredCoinFailuresSourceModule, 'bundledRestoredCoinFailuresSource');
+    assert(restoredCoinFailuresBundledBody.includes("require('./src/browser/runtime/restored-coin-failures')"), 'restored-coin-failures bundled source does not hand restore helper to the bundler');
+    assert(restoredCoinFailuresBundledBody.includes('restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now())'), 'restored-coin-failures bundled source does not bind runtime preserved/cfg state');
+    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('options.bundledRuntime'), 'restored-coin-failures source selector does not switch on bundled runtime mode');
+    assert(restoredCoinFailuresRuntimeModule.includes('function restoredCoinFailuresCore(preservedCoinFailures, cfg, t)'), 'restored-coin-failures runtime core not found');
+    assert(restoredCoinFailuresRuntimeModule.includes('preservedCoinFailures || []'), 'restored-coin-failures runtime core does not read provided failures');
+    assert(restoredCoinFailuresRuntimeModule.includes("next.reason === 'near' || next.reason === 'close'"), 'restored-coin-failures runtime core does not filter single near/close failures');
+    assert(restoredCoinFailuresRuntimeModule.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures runtime core does not restore severe ignore windows');
+    assert(restoredCoinFailuresRuntimeModule.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures runtime core does not restore hard ignore windows');
+    assert(restoredCoinFailuresRuntimeModule.includes('module.exports = { restoredCoinFailuresCore }'), 'restored-coin-failures runtime core export not found');
     assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateSource() {'), 'login-snapshot-gate source factory not found');
     assert(loginSnapshotGateSourceModule.includes('module.exports = { loginSnapshotGateSource }'), 'login-snapshot-gate source module export not found');
     assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('String.raw`'), 'login-snapshot-gate source factory does not return raw browser source');
