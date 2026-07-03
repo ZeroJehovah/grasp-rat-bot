@@ -306,6 +306,7 @@ function main() {
   const opportunityCandidateSourceModule = readText('src/browser/opportunity-candidate-source.js');
   const opportunityRouteSourceModule = readText('src/browser/opportunity-route-source.js');
   const opportunityChoiceSourceModule = readText('src/browser/opportunity-choice-source.js');
+  const coinProgressRuntimeSourceModule = readText('src/browser/coin-progress-runtime-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -358,6 +359,7 @@ function main() {
     opportunityCandidateSourceModule,
     opportunityRouteSourceModule,
     opportunityChoiceSourceModule,
+    coinProgressRuntimeSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -523,6 +525,7 @@ function main() {
     assert(botSourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityCandidateSource()}'), 'opportunity-candidate module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityChoiceSource()}'), 'opportunity-choice module is not injected into browser runtime');
+    assert(botSourceModule.includes('${coinProgressRuntimeSource()}'), 'coin-progress runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -2533,7 +2536,12 @@ function main() {
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinProgressCore'), 'strategy ignored coin progress core not found');
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinPatrolActionCore'), 'strategy ignored coin patrol action core not found');
     assert(strategyCoinProgressSource.includes('function coinIgnoreCleanupIntentCore'), 'strategy coin ignore cleanup intent core not found');
-    assert(botSourceModule.includes("require('../strategy/coin-progress')"), 'source bot does not import coin progress strategy module');
+    assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeSource() {'), 'coin-progress runtime source factory not found');
+    assert(coinProgressRuntimeSourceModule.includes('module.exports = { coinProgressRuntimeSource }'), 'coin-progress runtime source module export not found');
+    assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('String.raw`'), 'coin-progress runtime source factory does not return raw browser source');
+    assert(coinProgressRuntimeSourceModule.includes("require('../strategy/coin-progress')"), 'coin-progress runtime source does not import coin progress strategy module');
+    assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('coinFailureIgnoreCore.toString()'), 'coin-progress runtime source factory does not inline coin failure ignore core');
+    assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('function trackCoinProgress'), 'coin-progress runtime source factory does not include trackCoinProgress wrapper');
     assert(sourceRuntimeText.includes('coinFailureIgnoreCore.toString()'), 'source bot does not inject coin failure ignore core');
     assert(sourceRuntimeText.includes('staleCoinEscapeDirectionCore.toString()'), 'source bot does not inject stale coin escape core');
     assert(sourceRuntimeText.includes('coinProgressIntentCore.toString()'), 'source bot does not inject coin progress intent core');
