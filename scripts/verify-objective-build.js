@@ -296,6 +296,7 @@ function main() {
   const coinMotionRuntimeSourceModule = readText('src/browser/coin-motion-runtime-source.js');
   const returnBlockSourceModule = readText('src/browser/return-block-source.js');
   const entityActivitySourceModule = readText('src/browser/entity-activity-source.js');
+  const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -324,6 +325,7 @@ function main() {
     coinMotionRuntimeSourceModule,
     returnBlockSourceModule,
     entityActivitySourceModule,
+    staminaRuntimeSourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -418,6 +420,7 @@ function main() {
     assert(botSourceModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
     assert(botSourceModule.includes("require('./return-block-source')"), 'return-block source module import not found');
     assert(botSourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
+    assert(botSourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -450,6 +453,7 @@ function main() {
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
+    assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
@@ -467,6 +471,9 @@ function main() {
     assert(generatedRuntimeSource.includes('const now = () => performance.now();'), 'generated runtime does not include entity clock helper');
     assert(generatedRuntimeSource.includes('function recentlyActionedForAfk'), 'generated runtime does not include recent-activity helper');
     assert(generatedRuntimeSource.includes('const isAfkProfitTarget'), 'generated runtime does not include AFK profit target helper');
+    assert(generatedRuntimeSource.includes('function summarizeStamina'), 'generated runtime does not include stamina summary helper');
+    assert(generatedRuntimeSource.includes('function staminaResetHoldUntil'), 'generated runtime does not include stamina reset hold helper');
+    assert(generatedRuntimeSource.includes('function staleOfflineStaminaHoldContradicted'), 'generated runtime does not include stale offline stamina contradiction helper');
     assert(!generatedRuntimeSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
@@ -583,6 +590,15 @@ function main() {
     assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('function recentlyActionedForAfk'), 'entity-activity source factory does not include recent-activity helper');
     assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('function isIdleInvulnerableTarget'), 'entity-activity source factory does not include idle invulnerable helper');
     assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('const isAfkProfitTarget'), 'entity-activity source factory does not include AFK profit helper');
+    assert(staminaRuntimeSourceModule.includes('function staminaRuntimeSource() {'), 'stamina-runtime source factory not found');
+    assert(staminaRuntimeSourceModule.includes('module.exports = {\n  staminaRuntimeSource'), 'stamina-runtime source module export not found');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('String.raw`'), 'stamina-runtime source factory does not return raw browser source');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('const hpValue = e =>'), 'stamina-runtime source factory does not include HP helper');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('const decorateActiveThreat'), 'stamina-runtime source factory does not include active threat decoration helper');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function summarizeStamina'), 'stamina-runtime source factory does not include stamina summary helper');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staminaResetHoldUntil'), 'stamina-runtime source factory does not include reset hold helper');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function deferredStaminaExhaustionLeave'), 'stamina-runtime source factory does not include deferred leave helper');
+    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staleOfflineStaminaHoldContradicted'), 'stamina-runtime source factory does not include stale offline contradiction helper');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
