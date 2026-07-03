@@ -922,6 +922,17 @@ This is a source-organization split only. It reduces `src/browser/bot-source.js`
 
 This is a source-organization split only. It reduces `src/browser/bot-source.js` to 252 lines while preserving the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2CF Runtime Bootstrap Source Factory
+
+`bootstrap-0.4.359` extracts the runtime bootstrap prelude into a dedicated browser source module:
+
+- `src/browser/runtime-bootstrap-source.js` now owns the raw browser source for page-global helper injection, runtime config merging, storage keys, shared helper inlining, previous-bot preservation, runtime default construction, and target whitelist initial state.
+- `src/browser/bot-source.js` imports and injects `${runtimeBootstrapSource(config)}` immediately after the IIFE open.
+- Static verification checks the new source-factory shape, injection point, and anchors for page-global adapter injection, runtime config reads, previous bot reads, preserved-state/defaults/target-whitelist helper imports, runtime defaults inlining, target whitelist helper inlining, and generated runtime helper presence.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It reduces `src/browser/bot-source.js` to 159 lines while preserving the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1011,10 +1022,11 @@ This is a source-organization split only. It reduces `src/browser/bot-source.js`
 84. Tick loop source factory: integrated in `bootstrap-0.4.356`
 85. Startup install/restore tail source factory: integrated in `bootstrap-0.4.357`
 86. Bot object/status source factory: integrated in `bootstrap-0.4.358`
-87. Remaining browser source assembly audit: identify any residual runtime logic still owned by `bot-source.js`
-88. Constants: partially integrated for high-value coin defaults
-89. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-90. Run live validation sessions after each behavior-touching replacement
+87. Runtime bootstrap source factory: integrated in `bootstrap-0.4.359`
+88. Remaining browser source assembly audit: identify any residual runtime logic still owned by `bot-source.js`
+89. Constants: partially integrated for high-value coin defaults
+90. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+91. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
