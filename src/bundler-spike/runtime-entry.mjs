@@ -4,7 +4,7 @@ import * as runtimeUtils from '../shared/runtime-utils.js';
 import * as displayFormat from '../shared/display-format.js';
 import * as targetWhitelist from '../shared/target-whitelist.js';
 import * as actionPriority from '../strategy/action-priority.js';
-import * as pageAdapter from './page-adapter.mjs';
+import pageAdapter from '../browser/page-global-core.js';
 
 const SPIKE_KEY = '__graspRatBundlerSpike';
 const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__';

@@ -1,10 +1,51 @@
 (() => {
   // grasp-rat-remote-bot.generated.js
   (() => {
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.297" };
+    function pageGlobalObject(value) {
+      return value && (typeof value === "object" || typeof value === "function") ? value : null;
+    }
+    function resolvePageGlobal(fallback = {}) {
+      if (typeof window !== "undefined" && pageGlobalObject(window)) return window;
+      if (typeof globalThis !== "undefined" && pageGlobalObject(globalThis)) return globalThis;
+      return pageGlobalObject(fallback) || {};
+    }
+    function readPageGlobal(key, fallback = void 0, root = resolvePageGlobal()) {
+      if (typeof key !== "string" || key.length === 0) return fallback;
+      const source = pageGlobalObject(root) || resolvePageGlobal();
+      if (!Object.prototype.hasOwnProperty.call(source, key)) return fallback;
+      return source[key];
+    }
+    function installPageGlobal(key, value, root = resolvePageGlobal()) {
+      if (typeof key !== "string" || key.length === 0) return false;
+      const target = pageGlobalObject(root) || resolvePageGlobal();
+      if (!target) return false;
+      target[key] = value;
+      return true;
+    }
+    function readPageLocalStorageJson(key, fallback = null, root = resolvePageGlobal()) {
+      if (typeof key !== "string" || key.length === 0) return fallback;
+      const source = pageGlobalObject(root) || resolvePageGlobal();
+      const storage = source && source.localStorage;
+      if (!storage || typeof storage.getItem !== "function") return fallback;
+      let raw;
+      try {
+        raw = storage.getItem(key);
+      } catch (err) {
+        return fallback;
+      }
+      if (typeof raw !== "string" || raw.length === 0) return fallback;
+      try {
+        return JSON.parse(raw);
+      } catch (err) {
+        return fallback;
+      }
+    }
+    const pageGlobal = resolvePageGlobal();
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.298" };
     const runtimeConfig = (() => {
       try {
-        return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === "object" ? window.__graspRatBotRuntimeConfig : {};
+        const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
+        return value && typeof value === "object" ? value : {};
       } catch (_) {
         return {};
       }
@@ -625,7 +666,7 @@
         return remaining !== null && remaining >= threshold;
       });
     }
-    const previousBot = window[BOT_KEY] || null;
+    const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);
     const preserved = buildBrowserPreservedState(previousBot);
     const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
     const cfg = buildRuntimeDefaults(config, combatLogEndpointConfigured);
@@ -1143,7 +1184,7 @@
       lastDebugAt: 0,
       stopReason: "",
       targetWhitelist: targetWhitelistState,
-      paused: Boolean(config.paused || window.__graspRatBotPaused),
+      paused: Boolean(config.paused || readPageGlobal("__graspRatBotPaused", false, pageGlobal)),
       pauseReason: "",
       pauseChangedAt: 0,
       stop(reason = "manual") {
@@ -1164,7 +1205,7 @@
         } catch (_) {
         }
         logStatus("stopped: " + reason);
-        if (window[BOT_KEY] === this) {
+        if (readPageGlobal(BOT_KEY, null, pageGlobal) === this) {
           removeBotPanel();
           removeTargetOverlay();
         }
@@ -1177,8 +1218,8 @@
         this.pauseReason = next ? String(reason || "manual") : "";
         const reasonChanged = previousReason !== this.pauseReason;
         if (changed) this.pauseChangedAt = Date.now();
-        window.__graspRatBotPaused = next;
-        window.__graspRatBotPauseReason = this.pauseReason;
+        installPageGlobal("__graspRatBotPaused", next, pageGlobal);
+        installPageGlobal("__graspRatBotPauseReason", this.pauseReason, pageGlobal);
         try {
           localStorage.setItem(PAUSED_KEY, next ? "true" : "false");
           if (next) localStorage.setItem(PAUSE_REASON_KEY, this.pauseReason || "manual");
@@ -19914,7 +19955,7 @@
     restorePersistedCombatLogPendingEntries();
     restoreImportantLogsForRemote();
     installNativeLoginGateInterceptors();
-    window[BOT_KEY] = bot;
+    installPageGlobal(BOT_KEY, bot, pageGlobal);
     if (previousBot && previousBot !== bot && previousBot.stop) {
       try {
         previousBot.stop("replaced by " + cfg.version);

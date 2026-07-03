@@ -332,7 +332,7 @@ The first bundler spike proved the module/global-adapter path, then `bootstrap-0
 
 - Root `package.json` now pins `esbuild` and exposes `npm run build:bundler-spike` / `npm run test:bundler-spike`.
 - `src/bundler-spike/runtime-entry.mjs` is a small ordinary browser module that imports existing shared/strategy CommonJS modules through ESM syntax.
-- `src/bundler-spike/page-adapter.mjs` centralizes the spike's page-global access for `window` / `globalThis` resolution, config reads, global installation, and localStorage JSON reads, so the entrypoint no longer reaches for `window` or `globalThis` directly.
+- `src/browser/page-global-core.js` centralizes page-global access for `window` / `globalThis` resolution, config reads, global installation, and localStorage JSON reads. It was introduced from the spike adapter path and is now shared by the spike and generated runtime.
 - `scripts/build-bundler-spike.js` builds that entry as a readable browser IIFE with `format: 'iife'`, `platform: 'browser'`, and `globalName: '__graspRatBundlerSpikeBundle'`.
 - The spike self-test builds into a temp directory, rejects unresolved relative `require()` / `import` paths, checks that shared/runtime/display/target-whitelist/action-priority/page-adapter helpers are bundled, and executes the output in a VM through both `globalThis.__graspRatBundlerSpike.status()` and `window.__graspRatBundlerSpike.status()`.
 - `scripts/remote-bot-bundle.js` now centralizes `browserBotSource()` generation, esbuild IIFE wrapping, direct/bundled SHA-256 calculation, manifest bundler metadata, and output writes.
@@ -353,6 +353,18 @@ This switches the production build path without converting the large runtime sli
 - Static verification checks this boundary, the absence of direct `bot-source.js` imports from the CLI and production bundler, and the regenerated bundled dist.
 
 This is an equivalent build/source-boundary migration only. It does not change strategy behavior, but it creates a stable interface for replacing the current full-source generator with a real browser runtime entry in later steps.
+
+## 2026-07-03 Follow-up: Phase 2Z Page-Global Core Integration
+
+`bootstrap-0.4.298` graduates the page-global adapter from a spike-only helper into real browser runtime source:
+
+- `src/browser/page-global-core.js` now owns `resolvePageGlobal()`, `readPageGlobal()`, `installPageGlobal()`, `readPageLocalStorageJson()`, and `browserPageGlobalSource()`.
+- `src/bundler-spike/runtime-entry.mjs` imports the shared browser page-global core, so the spike no longer owns a separate adapter file.
+- `src/browser/bot-source.js` injects `browserPageGlobalSource()` into the generated runtime and uses it for runtime config reads, previous bot lookup, bot installation, and pause globals.
+- `scripts/build-remote-bot-bundled.js` and `scripts/verify-objective-build.js` now check adapter-based bot installation instead of the old direct `window[BOT_KEY] = bot` assignment.
+- The generated production dist still remains single-file and does not contain CommonJS exports or unresolved relative imports.
+
+This is a small real-runtime migration slice. It does not remove every direct `window` access yet; remaining page-global reads inside larger browser fragments should be migrated through this shared core in later validated steps.
 
 ## Next Steps (Not Implemented Yet)
 
@@ -378,18 +390,19 @@ This is an equivalent build/source-boundary migration only. It does not change s
 19. Ignored coin cleanup intent: integrated in `bootstrap-0.4.293`
 20. Coin route action metadata: integrated in `bootstrap-0.4.294`
 21. Browser source builder extraction/direct build path: integrated in `bootstrap-0.4.295`
-22. Esbuild bundler spike plus spike page-global adapter: implemented after `bootstrap-0.4.295`
+22. Esbuild bundler spike plus page-global adapter: implemented after `bootstrap-0.4.295`
 23. Full generated remote runtime esbuild candidate: implemented after `bootstrap-0.4.295`
 24. Production esbuild remote build: integrated in `bootstrap-0.4.296`
 25. Browser runtime source boundary: integrated in `bootstrap-0.4.297`
-26. Constants: partially integrated for high-value coin defaults
-27. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-28. Run live validation sessions after each behavior-touching replacement
+26. Page-global core integration: integrated in `bootstrap-0.4.298`
+27. Constants: partially integrated for high-value coin defaults
+28. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+29. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
 2. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
-3. Extend the spike page-global adapter to real native page functions before converting live runtime slices to true ESM ownership
+3. Continue migrating remaining direct page-global access through `src/browser/page-global-core.js` before converting live runtime slices to true ESM ownership
 4. Profit/opportunity selection module
 5. Safety/avoidance module
 6. Movement execution module
