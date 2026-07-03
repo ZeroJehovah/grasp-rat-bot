@@ -1,0 +1,253 @@
+'use strict';
+
+function leaveFlowSource() {
+  return String.raw`  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    const skipped = pendingExitSkipNewLeave('offline', reason, {
+      self: selfSummary,
+      offlineSafety,
+      summary: offlineLeaveSummary(reason, offlineSafety)
+    });
+    if (skipped) return skipped;
+    const retryMs = Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
+    if (t - Number(bot.lastOfflineLeaveAt || 0) < retryMs) {
+      const active = activeOfflineLeaveDetail(t);
+      const summary = offlineLeaveSummary(reason, offlineSafety);
+      const detail = {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastOfflineLeaveAt || 0)))),
+        offlineSafety,
+        summary: summary || active?.summary || '',
+        reloginUntil: active?.reloginUntil || bot.offlineReloginUntil || 0,
+        reloginDelayMs: active?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || 0
+      };
+      return finalizeLeaveDisplayReason(detail);
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason,
+      at: t,
+      userId: getCurrentUserId() || null,
+      self: selfSummary,
+      offlineSafety,
+      summary: offlineLeaveSummary(reason, offlineSafety),
+      error: ''
+    };
+    startExitAudit(detail, { scope: 'offline', source: 'offline', reason, self: selfSummary, offlineSafety });
+    bot.lastOfflineLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted) {
+      const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
+      if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)) {
+        primePendingUnsafeExitLoginSuppress('offline leave', reason, detail, selfSummary);
+      }
+    }
+    if (detail.attempted || detail.exitAuditId) {
+      rememberPendingExit('offline', 'offline', detail, selfSummary);
+    }
+    finalizeLeaveDisplayReason(detail);
+    bot.lastOfflineLeaveResult = detail;
+    return detail;
+  }
+
+  async function leaveForInjury(injury) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    const skipped = pendingExitSkipNewLeave('injury', 'injury hp drop', {
+      injury,
+      summary: injuryLeaveSummary(injury)
+    });
+    if (skipped) return skipped;
+    if (t - Number(bot.lastInjuryLeaveAt || 0) < cfg.combatLeaveRetryMs) {
+      const detail = {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastInjuryLeaveAt || 0)))),
+        injury,
+        summary: injuryLeaveSummary(injury)
+      };
+      return finalizeLeaveDisplayReason(detail);
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason: 'injury hp drop',
+      at: t,
+      userId: getCurrentUserId() || null,
+      injury,
+      summary: injuryLeaveSummary(injury),
+      error: ''
+    };
+    startExitAudit(detail, { scope: 'enemy', source: 'injury', reason: detail.reason, self: injury?.self || injury, injury });
+    bot.lastInjuryLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted) {
+      primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, injury?.self || injury);
+    }
+    if (detail.attempted || detail.exitAuditId) {
+      rememberPendingExit('enemy', 'injury', detail, injury?.self || injury);
+      bot.pendingInjuryLeave = null;
+    }
+    bot.lastInjuryLeaveResult = detail;
+    return detail;
+  }
+
+  async function leaveForPursuit(pursuit, selfSummary = null) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    const pursuitSummary = summarizePursuit(pursuit);
+    const skipped = pendingExitSkipNewLeave('pursuit', 'sustained pursuit', {
+      self: selfSummary,
+      pursuit: pursuitSummary,
+      summary: pursuitLeaveSummary(pursuitSummary)
+    });
+    if (skipped) return skipped;
+    if (t - Number(bot.lastPursuitLeaveAt || 0) < cfg.pursuitLeaveRetryMs) {
+      const detail = {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.pursuitLeaveRetryMs - (t - Number(bot.lastPursuitLeaveAt || 0)))),
+        pursuit: pursuitSummary,
+        summary: pursuitLeaveSummary(pursuitSummary)
+      };
+      return finalizeLeaveDisplayReason(detail);
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason: 'sustained pursuit',
+      at: t,
+      userId: getCurrentUserId() || null,
+      self: selfSummary,
+      pursuit: pursuitSummary,
+      summary: pursuitLeaveSummary(pursuitSummary),
+      error: ''
+    };
+    startExitAudit(detail, { scope: 'enemy', source: 'pursuit', reason: detail.reason, self: selfSummary, pursuit: pursuitSummary });
+    bot.lastPursuitLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted) {
+      primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, selfSummary);
+    }
+    if (detail.attempted || detail.exitAuditId) {
+      rememberPendingExit('enemy', 'pursuit', detail, selfSummary);
+      bot.pursuit = null;
+      if (bot.lastSafety) bot.lastSafety.pursuit = null;
+    }
+    bot.lastPursuitLeaveResult = detail;
+    return detail;
+  }
+
+  async function leaveForCombat(action, selfSummary = null) {
+    const t = Date.now();
+    if (cfg.dryRun || cfg.once) return null;
+    const reason = action?.reason === 'combat-critical-hp-leave'
+      ? 'combat critical hp'
+      : action?.reason === 'combat-hp-disadvantage-leave'
+        ? 'combat hp disadvantage'
+        : action?.reason === 'combat-low-hp-no-damage-leave'
+          ? 'combat low hp no damage'
+          : 'combat low hp disadvantage';
+    const skipped = pendingExitSkipNewLeave('combat', reason, {
+      self: selfSummary,
+      target: action?.target || null,
+      combat: action?.combatState || null,
+      combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
+      summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {})
+    });
+    if (skipped) return skipped;
+    if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
+      const detail = {
+        attempted: false,
+        reason: 'cooldown',
+        cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastCombatLeaveAt || 0)))),
+        combat: action?.combatState || null,
+        combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
+        target: action?.target || null,
+        summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {})
+      };
+      finalizeLeaveDisplayReason(detail);
+      rememberPendingCombatLeave(action, selfSummary, detail);
+      return detail;
+    }
+    const detail = {
+      attempted: false,
+      method: '',
+      reason,
+      at: t,
+      userId: getCurrentUserId() || null,
+      self: selfSummary,
+      target: action?.target || null,
+      combat: action?.combatState || null,
+      combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
+      summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {}),
+      error: ''
+    };
+    startExitAudit(detail, { scope: 'enemy', source: 'combat', reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null });
+    bot.lastCombatLeaveAt = t;
+    await issueLeaveCommand(detail);
+    if (detail.attempted) {
+      primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, selfSummary);
+    }
+    if (detail.attempted || detail.exitAuditId) {
+      rememberPendingExit('enemy', 'combat', detail, selfSummary);
+      bot.pendingCombatLeave = null;
+    } else {
+      rememberPendingCombatLeave(action, selfSummary, detail);
+    }
+    bot.lastCombatLeaveResult = detail;
+    return detail;
+  }
+
+  async function leaveDuringEnemyHold(reason = 'enemy leave wait') {
+    const t = Date.now();
+    const retryMs = Math.max(cfg.pursuitLeaveRetryMs, cfg.combatLeaveRetryMs);
+    if (cfg.dryRun || cfg.once) return null;
+    const skipped = pendingExitSkipNewLeave('enemy-hold-retry', reason, {
+      summary: activeEnemyLeaveDetail(t)?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || ''
+    });
+    if (skipped) return skipped;
+	    const active = activeEnemyLeaveDetail(t);
+	    if (t - Number(bot.lastEnemyLeaveRetryAt || 0) < retryMs) {
+	      const detail = {
+	        attempted: false,
+	        reason: 'cooldown',
+	        cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastEnemyLeaveRetryAt || 0)))),
+	        holdRemainingMs: enemyReloginHoldRemainingMs(),
+        summary: active?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || '',
+        reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
+        reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0
+	      };
+      return finalizeLeaveDisplayReason(detail);
+	    }
+		    const detail = {
+		      attempted: false,
+		      method: '',
+		      reason,
+      at: t,
+		      userId: getCurrentUserId() || null,
+		      holdRemainingMs: enemyReloginHoldRemainingMs(),
+      summary: active?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || '',
+      reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
+      reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0,
+	      error: ''
+	    };
+    startExitAudit(detail, { scope: 'enemy', source: 'enemy-hold-retry', reason });
+    bot.lastEnemyLeaveRetryAt = t;
+    await issueLeaveCommand(detail);
+	    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
+	    detail.holdRemainingMs = enemyReloginHoldRemainingMs();
+    finalizeLeaveDisplayReason(detail);
+	    bot.lastEnemyLeaveRetryResult = detail;
+    return detail;
+  }
+
+`;
+}
+
+module.exports = {
+  leaveFlowSource
+};

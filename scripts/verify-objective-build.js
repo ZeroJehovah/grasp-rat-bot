@@ -301,6 +301,7 @@ function main() {
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
   const autoLoginSourceModule = readText('src/browser/auto-login-source.js');
+  const leaveFlowSourceModule = readText('src/browser/leave-flow-source.js');
   const offlineSafetySourceModule = readText('src/browser/offline-safety-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
@@ -335,6 +336,7 @@ function main() {
     pendingExitSourceModule,
     leaveCommandSourceModule,
     autoLoginSourceModule,
+    leaveFlowSourceModule,
     offlineSafetySourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
@@ -470,6 +472,7 @@ function main() {
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
     assert(botSourceModule.includes('${autoLoginSource()}'), 'auto-login module is not injected into browser runtime');
+    assert(botSourceModule.includes('${leaveFlowSource()}'), 'leave-flow module is not injected into browser runtime');
     assert(botSourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
@@ -662,6 +665,15 @@ function main() {
     assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function maybeStartAutoLogin'), 'auto-login source factory does not include auto login starter');
     assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function forceLoginNow'), 'auto-login source factory does not include manual login starter');
     assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('allowLiveSessionTakeoverBypass'), 'auto-login source factory does not preserve live-session takeover bypass handling');
+    assert(leaveFlowSourceModule.includes('function leaveFlowSource() {'), 'leave-flow source factory not found');
+    assert(leaveFlowSourceModule.includes('module.exports = {\n  leaveFlowSource'), 'leave-flow source module export not found');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('String.raw`'), 'leave-flow source factory does not return raw browser source');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveOffline'), 'leave-flow source factory does not include offline leave wrapper');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForInjury'), 'leave-flow source factory does not include injury leave wrapper');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForPursuit'), 'leave-flow source factory does not include pursuit leave wrapper');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForCombat'), 'leave-flow source factory does not include combat leave wrapper');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveDuringEnemyHold'), 'leave-flow source factory does not include enemy-hold leave wrapper');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pendingExitSkipNewLeave'), 'leave-flow source factory does not preserve pending-exit duplicate leave guard');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
