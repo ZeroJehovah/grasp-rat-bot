@@ -58,6 +58,7 @@ const { opportunityCandidateSource } = require('./opportunity-candidate-source')
 const { opportunityChoiceSource } = require('./opportunity-choice-source');
 const { opportunityPickSource } = require('./opportunity-pick-source');
 const { patrolSource } = require('./patrol-source');
+const { opportunityClearSource } = require('./opportunity-clear-source');
 const { coinProgressRuntimeSource } = require('./coin-progress-runtime-source');
 const { coinTargetRuntimeSource } = require('./coin-target-runtime-source');
 const { controlLoginSource } = require('./control-login-source');
@@ -1094,22 +1095,7 @@ ${returnBlockSource()}
 
 ${classifySource()}${offlineSafetySource()}
 	${coinSafetySource()}${targetSelectionSource()}${combatMovementSource()}${combatAimSource()}${opportunityStaminaSource()}
-${combatStateSource()}${combatFireSource()}${combatLeaveCoverSource()}${combatActionSource()}${opportunitySnapshotSource()}${opportunityCandidateSource()}${postAttackSource()}${opportunityActionsSource()}${opportunityChoiceSource()}${opportunityPickSource()}${patrolSource()}
-
-		  function clearOpportunityChoiceFor(type, id = null) {
-		    const choice = bot.opportunityChoice;
-		    if (!choice || opportunityChoiceType(choice) !== String(type || '')) return;
-		    if (id === null || id === undefined || id === '') {
-		      bot.opportunityChoice = null;
-		      resetOpportunitySwitchLock();
-		      return;
-		    }
-		    const choiceId = opportunityChoiceId(choice);
-		    if (String(choiceId) === String(id)) {
-		      bot.opportunityChoice = null;
-		      resetOpportunitySwitchLock();
-		    }
-		  }
+${combatStateSource()}${combatFireSource()}${combatLeaveCoverSource()}${combatActionSource()}${opportunitySnapshotSource()}${opportunityCandidateSource()}${postAttackSource()}${opportunityActionsSource()}${opportunityChoiceSource()}${opportunityPickSource()}${patrolSource()}${opportunityClearSource()}
 
 ${coinProgressRuntimeSource()}
 ${actionArbitrationSource()}
