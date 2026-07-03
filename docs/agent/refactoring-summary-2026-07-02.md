@@ -724,6 +724,17 @@ This is a source-organization split only. It preserves stale coin ignore/backoff
 
 This is a source-organization split only. It preserves visible opportunity selection, route-aware opportunity scoring, missing-held insertion, stable choice selection, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BN Patrol Source Factory
+
+`bootstrap-0.4.341` extracts patrol direction source generation into a dedicated browser source module:
+
+- `src/browser/patrol-source.js` now owns the raw browser source for `patrolDirection()`, including distant visible-coin scan movement, nearby-human safe-spacing vectors, active-threat spacing vectors, patrol-heading reset, and wait-for-visible-coin-refresh fallback.
+- `src/browser/bot-source.js` imports and injects `${patrolSource()}` immediately after `${opportunityPickSource()}`, preserving generated runtime order before opportunity-choice clearing and coin progress runtime helpers.
+- Static verification checks the new source-factory shape, injection point, `patrolDirection()` wrapper, distant-coin scan branch, and safe-spacing branch anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves patrol movement selection, safe-spacing behavior, patrol-heading reset behavior, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -795,9 +806,10 @@ This is a source-organization split only. It preserves visible opportunity selec
 66. Opportunity choice source factory: integrated in `bootstrap-0.4.338`
 67. Coin progress runtime source factory: integrated in `bootstrap-0.4.339`
 68. Opportunity pick source factory: integrated in `bootstrap-0.4.340`
-69. Constants: partially integrated for high-value coin defaults
-70. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-71. Run live validation sessions after each behavior-touching replacement
+69. Patrol source factory: integrated in `bootstrap-0.4.341`
+70. Constants: partially integrated for high-value coin defaults
+71. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+72. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
