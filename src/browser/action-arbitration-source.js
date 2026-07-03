@@ -18,7 +18,37 @@ const {
   recordActionSwitchDiagnosticsCore
 } = require('./runtime/action-switch-diagnostics');
 
-function actionArbitrationSource() {
+function actionArbitrationInlineSource(helpers = {}) {
+  const {
+    actionPriorityBand,
+    actionFocusTargetType,
+    actionFocusId,
+    actionFocusSummary,
+    actionSwitchPairKey,
+    buildPreviousDecisionSummary,
+    recordActionSwitchDiagnosticsCore,
+    finalActionBandRank,
+    finalActionReusable,
+    shouldHoldPreviousFinalAction,
+    applyFinalActionArbitrationCore
+  } = helpers;
+  const actionPriorityHelperSource = [
+    actionPriorityBand,
+    actionFocusTargetType,
+    actionFocusId,
+    actionFocusSummary
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n\n');
+  const actionSwitchHelperSource = [
+    actionSwitchPairKey,
+    buildPreviousDecisionSummary,
+    recordActionSwitchDiagnosticsCore
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n\n');
+  const finalActionHelperSource = [
+    finalActionBandRank,
+    finalActionReusable,
+    shouldHoldPreviousFinalAction,
+    applyFinalActionArbitrationCore
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n\n');
   return String.raw`
   function targetSwitchHistoryLimit() {
     return Math.max(4, Math.round(Number(cfg.targetSwitchDiagnosticsHistoryLimit || 24) || 24));
@@ -33,13 +63,7 @@ function actionArbitrationSource() {
     return Number.isFinite(number) ? Math.round(number) : null;
   }
 
-  ${actionPriorityBand.toString()}
-
-  ${actionFocusTargetType.toString()}
-
-  ${actionFocusId.toString()}
-
-  ${actionFocusSummary.toString()}
+${actionPriorityHelperSource}
 
   function ensureTargetSwitchDiagnostics() {
     if (!bot.targetSwitchDiagnostics || typeof bot.targetSwitchDiagnostics !== 'object') {
@@ -49,11 +73,7 @@ function actionArbitrationSource() {
     return bot.targetSwitchDiagnostics;
   }
 
-  ${actionSwitchPairKey.toString()}
-
-  ${buildPreviousDecisionSummary.toString()}
-
-  ${recordActionSwitchDiagnosticsCore.toString()}
+${actionSwitchHelperSource}
 
   function recordActionSwitchDiagnostics(action, source = '') {
     const state = ensureTargetSwitchDiagnostics();
@@ -83,13 +103,7 @@ function actionArbitrationSource() {
     return bot.finalActionArbitration;
   }
 
-  ${finalActionBandRank.toString()}
-
-  ${finalActionReusable.toString()}
-
-  ${shouldHoldPreviousFinalAction.toString()}
-
-  ${applyFinalActionArbitrationCore.toString()}
+${finalActionHelperSource}
 
   function applyFinalActionArbitration(action, source = '') {
     const state = ensureFinalActionArbitration();
@@ -103,6 +117,47 @@ function actionArbitrationSource() {
 `;
 }
 
+function bundledActionArbitrationSource() {
+  return `const {
+  actionPriorityBand,
+  actionFocusTargetType,
+  actionFocusId,
+  actionFocusSummary
+} = require('./src/browser/runtime/action-priority');
+const {
+  actionSwitchPairKey,
+  buildPreviousDecisionSummary,
+  recordActionSwitchDiagnosticsCore
+} = require('./src/browser/runtime/action-switch-diagnostics');
+const {
+  finalActionBandRank,
+  finalActionReusable,
+  shouldHoldPreviousFinalAction,
+  applyFinalActionArbitrationCore
+} = require('./src/browser/runtime/action-arbitration');
+
+${actionArbitrationInlineSource()}`;
+}
+
+function actionArbitrationSource(options = {}) {
+  if (options.bundledRuntime) return bundledActionArbitrationSource(options);
+  return actionArbitrationInlineSource({
+    actionPriorityBand,
+    actionFocusTargetType,
+    actionFocusId,
+    actionFocusSummary,
+    actionSwitchPairKey,
+    buildPreviousDecisionSummary,
+    recordActionSwitchDiagnosticsCore,
+    finalActionBandRank,
+    finalActionReusable,
+    shouldHoldPreviousFinalAction,
+    applyFinalActionArbitrationCore
+  });
+}
+
 module.exports = {
+  actionArbitrationInlineSource,
+  bundledActionArbitrationSource,
   actionArbitrationSource
 };
