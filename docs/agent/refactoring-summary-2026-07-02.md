@@ -1010,6 +1010,28 @@ This is a source-organization split only. It reduces `src/browser/runtime-assemb
 
 This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 242 lines and keeps the new control-login runtime source factory to 10 lines.
 
+## 2026-07-04 Follow-up: Phase 2CN Runtime Fragment Registry Source
+
+`bootstrap-0.4.367` extracts the ordered runtime fragment registry into a dedicated browser source module:
+
+- `src/browser/runtime-fragments-source.js` now owns the source-factory imports and explicit fragment list.
+- `src/browser/runtime-assembly-source.js` was reduced to the generic `renderRuntimeFragments(fragments)` renderer plus a call to `browserRuntimeFragments(config)`.
+- Static verification checks the fragment registry source, the renderer, runtime-bootstrap config closure, helper-bound status/combat-log/control-login fragments, and generated runtime anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.367` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 15 lines and keeps the fragment ordering explicit in `src/browser/runtime-fragments-source.js`.
+
+## 2026-07-04 Follow-up: Phase 2CO Runtime Assembly Adapter Removal
+
+`bootstrap-0.4.368` removes the empty runtime assembly adapter:
+
+- `src/browser/runtime-source.js` now imports `browserRuntimeFragments()` directly and owns `renderRuntimeFragments(fragments)`.
+- `src/browser/runtime-assembly-source.js` is removed because it no longer owned runtime logic or fragment ordering.
+- Static verification now requires the legacy assembly adapter to be absent, the runtime source boundary to depend directly on `runtime-fragments-source.js`, and the direct generated runtime to remain free of unresolved runtime imports/requires.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.368` hash stayed `cda4cc309a6986d20597be0728c416e17485c34ccf2486fc633bd4d7844ac6d5` before and after the adapter removal, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It completes the remaining browser source assembly audit: no runtime logic is owned by a separate assembly adapter anymore, and `src/browser/runtime-source.js` is now the single browser source boundary.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1107,13 +1129,14 @@ This is a source-organization split only. It reduces `src/browser/runtime-assemb
 92. Status panel runtime source factory: integrated in `bootstrap-0.4.364`
 93. Combat-log runtime source factory: integrated in `bootstrap-0.4.365`
 94. Control-login runtime source factory: integrated in `bootstrap-0.4.366`
-95. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
-96. Constants: partially integrated for high-value coin defaults
-97. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-98. Run live validation sessions after each behavior-touching replacement
+95. Runtime fragment registry source: integrated in `bootstrap-0.4.367`
+96. Remaining browser source assembly audit / adapter removal: integrated in `bootstrap-0.4.368`
+97. Constants: partially integrated for high-value coin defaults
+98. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+99. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
-1. Replace the remaining `browserRuntimeAssemblySource()` generated-source assembly behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
+1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
 2. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
 3. Continue migrating remaining direct page-global access through `src/browser/page-global-core.js` before converting live runtime slices to true ESM ownership
 4. Profit/opportunity selection module
