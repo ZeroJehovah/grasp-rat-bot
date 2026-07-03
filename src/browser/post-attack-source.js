@@ -8,7 +8,21 @@ const {
   pickPostAttackDropWaitTargetCore
 } = require('./runtime/post-attack-drop');
 
-function postAttackSource() {
+function postAttackInlineSource(helpers = {}) {
+  const {
+    postAttackVisibleCoinExistsCore,
+    resolvedRecentPostAttackDropsCore,
+    buildPostAttackDropCoinCandidateCore,
+    pickPostAttackDropCoinCore,
+    pickPostAttackDropWaitTargetCore
+  } = helpers;
+  const postAttackDropHelperSource = [
+    postAttackVisibleCoinExistsCore,
+    resolvedRecentPostAttackDropsCore,
+    buildPostAttackDropCoinCandidateCore,
+    pickPostAttackDropCoinCore,
+    pickPostAttackDropWaitTargetCore
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
   return String.raw`  function attackEntityMatches(entity, attack) {
     const id = String(attack?.id ?? '');
     const name = String(attack?.name || '');
@@ -65,11 +79,7 @@ function postAttackSource() {
     return result.selected || null;
   }
 
-  ${postAttackVisibleCoinExistsCore.toString()}
-  ${resolvedRecentPostAttackDropsCore.toString()}
-  ${buildPostAttackDropCoinCandidateCore.toString()}
-  ${pickPostAttackDropCoinCore.toString()}
-  ${pickPostAttackDropWaitTargetCore.toString()}
+${postAttackDropHelperSource}
 
   function postAttackVisibleCoinExists(coins, attack) {
     return postAttackVisibleCoinExistsCore(coins, attack, {
@@ -132,4 +142,31 @@ function postAttackSource() {
 `;
 }
 
-module.exports = { postAttackSource };
+function bundledPostAttackSource() {
+  return `const {
+  postAttackVisibleCoinExistsCore,
+  resolvedRecentPostAttackDropsCore,
+  buildPostAttackDropCoinCandidateCore,
+  pickPostAttackDropCoinCore,
+  pickPostAttackDropWaitTargetCore
+} = require('./src/browser/runtime/post-attack-drop');
+
+${postAttackInlineSource()}`;
+}
+
+function postAttackSource(options = {}) {
+  if (options.bundledRuntime) return bundledPostAttackSource();
+  return postAttackInlineSource({
+    postAttackVisibleCoinExistsCore,
+    resolvedRecentPostAttackDropsCore,
+    buildPostAttackDropCoinCandidateCore,
+    pickPostAttackDropCoinCore,
+    pickPostAttackDropWaitTargetCore
+  });
+}
+
+module.exports = {
+  bundledPostAttackSource,
+  postAttackInlineSource,
+  postAttackSource
+};
