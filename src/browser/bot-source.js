@@ -74,6 +74,7 @@ const { persistentExitSource } = require('./persistent-exit-source');
 const { persistentClearSource } = require('./persistent-clear-source');
 const { pendingExitPersistenceSource } = require('./pending-exit-persistence-source');
 const { refreshExitDetailSource } = require('./refresh-exit-detail-source');
+const { restoredCoinFailuresSource } = require('./restored-coin-failures-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -168,29 +169,7 @@ ${persistentExitSource()}
 ${persistentClearSource()}
 ${pendingExitPersistenceSource()}
 ${refreshExitDetailSource()}
-
-	  function restoredCoinFailures() {
-    const t = performance.now();
-    return (preserved.coinFailures || []).map(([id, item]) => {
-      const next = { ...(item || {}) };
-      const count = Number(next.count || 0);
-      const lastAt = Number(next.lastAt || 0);
-      const staleFailure = lastAt && t - lastAt > cfg.coinFailureDecayMs;
-      let ignoreUntil = Number(next.ignoreUntil || 0);
-      if ((next.reason === 'near' || next.reason === 'close') && count <= 1) {
-        return null;
-      }
-      if (!staleFailure) {
-        if (count >= cfg.coinFailureSevereIgnoreCount) {
-          ignoreUntil = Math.max(ignoreUntil, t + cfg.coinFailureSevereIgnoreMs);
-        } else if (count >= cfg.coinFailureHardIgnoreCount) {
-          ignoreUntil = Math.max(ignoreUntil, t + cfg.coinFailureHardIgnoreMs);
-        }
-      }
-      next.ignoreUntil = ignoreUntil;
-      return [String(id), next];
-    }).filter(Boolean);
-  }
+${restoredCoinFailuresSource()}
 
 			  const restoredFailures = restoredCoinFailures();
 			  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
