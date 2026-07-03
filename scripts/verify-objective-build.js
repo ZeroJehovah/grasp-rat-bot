@@ -294,6 +294,7 @@ function main() {
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
   const coinMotionRuntimeSourceModule = readText('src/browser/coin-motion-runtime-source.js');
+  const returnBlockSourceModule = readText('src/browser/return-block-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -320,6 +321,7 @@ function main() {
     nativeStateSourceModule,
     nativeControlSourceModule,
     coinMotionRuntimeSourceModule,
+    returnBlockSourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -412,6 +414,7 @@ function main() {
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
     assert(botSourceModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
+    assert(botSourceModule.includes("require('./return-block-source')"), 'return-block source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -448,6 +451,7 @@ function main() {
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinMotionRuntimeSource()}'), 'coin-motion runtime module is not injected into browser runtime');
+    assert(botSourceModule.includes('${returnBlockSource()}'), 'return-block module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${actionArbitrationSource()}'), 'action-arbitration module is not injected into browser runtime');
     assert(botSourceModule.includes('${networkQualitySource()}'), 'network-quality module is not injected into browser runtime');
@@ -555,6 +559,14 @@ function main() {
     assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('coinDirectionToCore.toString()'), 'coin-motion runtime source factory does not inline coin direction core');
     assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('function coinMotionCoreOptions'), 'coin-motion runtime source factory does not include core options wrapper');
     assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime source factory does not include lock update wrapper');
+    assert(returnBlockSourceModule.includes('function returnBlockSource() {'), 'return-block source factory not found');
+    assert(returnBlockSourceModule.includes('module.exports = {\n  returnBlockSource'), 'return-block source module export not found');
+    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('String.raw`'), 'return-block source factory does not return raw browser source');
+    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function fleeDirection'), 'return-block source factory does not include flee direction helper');
+    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function lockedFleeDirection'), 'return-block source factory does not include locked flee helper');
+    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function returnBlockScanDirection'), 'return-block source factory does not include scan direction helper');
+    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function buildReturnBlockScanAction'), 'return-block source factory does not include scan action builder');
+    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function blockThreatReturnAction'), 'return-block source factory does not include threat return-block helper');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
@@ -2357,6 +2369,9 @@ function main() {
     assert(sourceRuntimeText.includes('preserved.finalActionArbitration?.lastAction'), 'runtime does not restore final action arbitration state');
     assert(sharedPreservedStateSource.includes('finalActionArbitration: previousBot?.finalActionArbitration'), 'hot-update preserved state omits final action arbitration');
     assert(sharedRuntimeDefaultsSource.includes('finalActionArbitrationHoldMs: 480'), 'final action arbitration hold default not found');
+    assert(generatedRuntimeSource.includes('function blockThreatReturnAction'), 'generated runtime does not include return-block helper');
+    assert(generatedRuntimeSource.includes("'active-threat-return-block'"), 'generated runtime does not include active threat return-block action');
+    assert(generatedRuntimeSource.includes("'return-block-lateral-scan'"), 'generated runtime does not include return-block lateral scan action');
     assert(sourceRuntimeText.includes('action.ignoreReturnBlock = true;') && sourceRuntimeText.includes("'high-value-visible-coin-priority'"), 'high-value coin priority does not bypass return-block rewrite');
     assert(nodeSelfTestSource.includes("name: 'final arbitration keeps recent safety action over profit'"), 'final arbitration safety/profit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'final arbitration keeps recent combat action over recovery'"), 'final arbitration combat/recover self-test not found');
