@@ -289,6 +289,7 @@ function main() {
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
+  const entityRefreshSourceModule = readText('src/browser/entity-refresh-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -324,6 +325,7 @@ function main() {
     combatLogSourceModule,
     importantLogSourceModule,
     combatHistorySourceModule,
+    entityRefreshSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -466,6 +468,7 @@ function main() {
     assert(botSourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
+    assert(botSourceModule.includes('${entityRefreshSource()}'), 'entity-refresh module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -560,6 +563,12 @@ function main() {
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordKillHistoryItem'), 'combat-history source factory does not include kill history storage');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordDropMatchedKill'), 'combat-history source factory does not include drop matched kill attribution');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function updateKillHistory'), 'combat-history source factory does not include kill history update');
+    assert(entityRefreshSourceModule.includes('function entityRefreshSource() {'), 'entity-refresh source factory not found');
+    assert(entityRefreshSourceModule.includes('module.exports = {\n  entityRefreshSource'), 'entity-refresh source module export not found');
+    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('String.raw`'), 'entity-refresh source factory does not return raw browser source');
+    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('function markRecentMovement'), 'entity-refresh source factory does not include recent movement marker');
+    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('async function refreshGlobalState'), 'entity-refresh source factory does not include global refresh helper');
+    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('passive-snapshot-only-active-game-api-disabled'), 'entity-refresh source factory does not preserve passive snapshot skip diagnostic');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
