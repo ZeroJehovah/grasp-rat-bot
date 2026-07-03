@@ -31,9 +31,18 @@ function remoteBrowserRuntimeSource(options = {}) {
 module.exports = {
   browserRuntimeConfig,
   browserRuntimeSource,
-  remoteBrowserRuntimeSource
+  remoteBrowserRuntimeSource,
+  renderRuntimeFragment,
+  renderRuntimeFragments
 };
 
+function renderRuntimeFragment(fragment) {
+  const source = fragment && typeof fragment === 'object' && Object.prototype.hasOwnProperty.call(fragment, 'source')
+    ? fragment.source
+    : fragment;
+  return typeof source === 'function' ? source() : source;
+}
+
 function renderRuntimeFragments(fragments) {
-  return fragments.map(fragment => (typeof fragment === 'function' ? fragment() : fragment)).join('');
+  return fragments.map(renderRuntimeFragment).join('');
 }
