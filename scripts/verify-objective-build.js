@@ -288,6 +288,7 @@ function main() {
   const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const arrayCountSourceModule = readText('src/browser/array-count-source.js');
+  const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const tickSafetySourceModule = readText('src/browser/tick-safety-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
@@ -362,6 +363,7 @@ function main() {
     targetWhitelistSourceModule,
     statusPanelSourceModule,
     arrayCountSourceModule,
+    runtimeUtilsSourceModule,
     combatLogSourceModule,
     tickSafetySourceModule,
     importantLogSourceModule,
@@ -493,7 +495,7 @@ function main() {
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
     assert(runtimeAssemblySourceModule.includes("require('../shared/exit-summary')"), 'exit-summary module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils module import not found');
+    assert(runtimeUtilsSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('../shared/display-format')"), 'display-format module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
@@ -502,6 +504,7 @@ function main() {
     assert(runtimeAssemblySourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
+    assert(runtimeAssemblySourceModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
@@ -563,7 +566,12 @@ function main() {
     assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
     assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
     assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
-    assert(assemblyBody.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
+    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource()'), 'runtime utility prelude source factory not found');
+    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility clone source factory not found');
+    assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource,\n  runtimeUtilityCloneSource\n}'), 'runtime utility source module exports not found');
+    assert(runtimeUtilsSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the runtime utility source module');
+    assert(runtimeUtilsSourceModule.includes('${safeJsonClone.toString()}'), 'safeJsonClone is not injected from the runtime utility source module');
+    assert(runtimeUtilsSourceModule.includes('${sanitizeCombatLogIdPart.toString()}'), 'sanitizeCombatLogIdPart is not injected from the runtime utility source module');
     assert(runtimeBootstrapSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
     assert(runtimeBootstrapSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
     assert(runtimeBootstrapSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
@@ -572,6 +580,8 @@ function main() {
       'targetOverlaySource',
       'targetWhitelistSource',
       'arrayCountSource',
+      'runtimeUtilityPreludeSource',
+      'runtimeUtilityCloneSource',
       'tickSafetySource',
       'importantLogSource',
       'combatHistorySource',
