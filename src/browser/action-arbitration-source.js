@@ -11,7 +11,7 @@ const {
   finalActionReusable,
   shouldHoldPreviousFinalAction,
   applyFinalActionArbitrationCore
-} = require('../strategy/action-arbitration');
+} = require('./runtime/action-arbitration');
 const {
   actionSwitchPairKey,
   buildPreviousDecisionSummary,
