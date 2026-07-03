@@ -18,6 +18,7 @@ import opportunityChoice from '../browser/runtime/opportunity-choice.js';
 import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
 import postAttackDrop from '../browser/runtime/post-attack-drop.js';
 import staminaBudget from '../browser/runtime/stamina-budget.js';
+import opportunityConstants from '../browser/runtime/opportunity-constants.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -218,6 +219,8 @@ function helperStatus(config = {}) {
       reloginDelayMs: 1800000
     }
   );
+  const opportunityConstantHighValue = opportunityConstants.OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT;
+  const opportunityConstantRoi = opportunityConstants.calculateOpportunityROI(10, 2);
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -252,6 +255,8 @@ function helperStatus(config = {}) {
     postAttackDropSelectedId: postAttackDropResult.selected?.drop_id,
     staminaBudgetDailyLimited,
     staminaBudgetExitShortageMs: staminaBudgetExit?.shortageMs,
+    opportunityConstantHighValue,
+    opportunityConstantRoi,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

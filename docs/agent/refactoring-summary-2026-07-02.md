@@ -1354,7 +1354,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 113. Opportunity-candidates true runtime helper module: integrated in `bootstrap-0.4.385`
 114. Post-attack-drop true runtime helper module: integrated in `bootstrap-0.4.386`
 115. Stamina-budget true runtime helper module: integrated in `bootstrap-0.4.387`
-116. Constants: partially integrated for high-value coin defaults
+116. Opportunity-constants true runtime helper module: integrated in `bootstrap-0.4.388`
 117. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 118. Run live validation sessions after each behavior-touching replacement
 
