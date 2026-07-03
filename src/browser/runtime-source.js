@@ -1,6 +1,6 @@
 'use strict';
 
-const { browserRuntimeAssemblySource } = require('./runtime-assembly-source');
+const { browserRuntimeFragments } = require('./runtime-fragments-source');
 
 function browserRuntimeConfig(options = {}) {
   const config = {
@@ -16,7 +16,7 @@ function browserRuntimeConfig(options = {}) {
 }
 
 function browserRuntimeSource(options = {}) {
-  return browserRuntimeAssemblySource(browserRuntimeConfig(options));
+  return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));
 }
 
 function remoteBrowserRuntimeSource(options = {}) {
@@ -33,3 +33,7 @@ module.exports = {
   browserRuntimeSource,
   remoteBrowserRuntimeSource
 };
+
+function renderRuntimeFragments(fragments) {
+  return fragments.map(fragment => (typeof fragment === 'function' ? fragment() : fragment)).join('');
+}
