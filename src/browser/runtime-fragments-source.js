@@ -107,7 +107,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-pending-exit-persistence',
     `
 `],
-    ['refresh-exit-detail', refreshExitDetailSource],
+    ['refresh-exit-detail', () => refreshExitDetailSource(config)],
     ['separator-after-refresh-exit-detail',
     `
 `],
