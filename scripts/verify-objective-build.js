@@ -289,6 +289,7 @@ function main() {
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
+  const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const runtimeSummarySourceModule = readText('src/browser/runtime-summary-source.js');
   const sharedRuntimeUtilsSource = readText('src/shared/runtime-utils.js');
   const sharedDisplayFormatSource = readText('src/shared/display-format.js');
@@ -306,6 +307,7 @@ function main() {
     importantLogSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
+    pageNativeSnapshotSourceModule,
     runtimeSummarySourceModule
   ].join('\n');
   const generatedBuild = generateRemoteBuild(manifest);
@@ -389,6 +391,7 @@ function main() {
     assert(botSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
+    assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(botSourceModule.includes('function browserBotSource(config)'), 'browserBotSource factory not found');
     assert(botSourceModule.includes('module.exports = {\n  browserBotSource'), 'browserBotSource module export not found');
@@ -416,6 +419,7 @@ function main() {
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
+    assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
@@ -484,6 +488,10 @@ function main() {
     assert(nativeStateSourceModule.includes('module.exports = {\n  nativeStateSource'), 'native-state module export not found');
     assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('String.raw`'), 'native-state source factory does not return raw browser source');
     assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('function getNativeState()'), 'native-state source factory does not include native state helpers');
+    assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
+    assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
+    assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
+    assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
     assert(runtimeSummarySourceModule.includes('function runtimeSummarySource() {'), 'runtime-summary source factory not found');
     assert(runtimeSummarySourceModule.includes('module.exports = {\n  runtimeSummarySource'), 'runtime-summary module export not found');
     assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('String.raw`'), 'runtime-summary source factory does not return raw browser source');
@@ -1550,6 +1558,8 @@ function main() {
       const passiveSnapshotObserverBody = functionBody(text, 'installPageNativeSnapshotObserver');
       assert(passiveSnapshotBody.includes('noteLoginSnapshotProbe(true'), 'page-native snapshot success does not update login-point safety probe');
       assert(passiveSnapshotBody.includes('Array.isArray(payload?.entities)') && passiveSnapshotBody.includes('/snapshot invalid payload'), 'page-native snapshot success can advance without a valid entities array');
+      assert(generatedRuntimeSource.includes('replace(/^;\\s*/'), 'page-native snapshot error cleanup lost whitespace regex');
+      assert(!generatedRuntimeSource.includes('replace(/^;\\\\s*/'), 'page-native snapshot error cleanup regex was double-escaped');
       assert(passiveSnapshotErrorBody.includes('noteLoginSnapshotProbe(false'), 'page-native snapshot failure does not reset login-point safety probe');
       assert(passiveSnapshotObserverBody.includes('readPageGlobal') && passiveSnapshotObserverBody.includes('ResponseCtor') && passiveSnapshotObserverBody.includes('ResponseCtor.prototype'), 'page-native snapshot observer does not read Response through page-global adapter');
       assert(passiveSnapshotObserverBody.includes('XMLHttpRequestCtor') && passiveSnapshotObserverBody.includes('XMLHttpRequestCtor.prototype'), 'page-native snapshot observer does not read XMLHttpRequest through page-global adapter');

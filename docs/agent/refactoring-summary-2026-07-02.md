@@ -399,6 +399,16 @@ This keeps the same browser global names and login behavior while reducing anoth
 
 This is another behavior-equivalent page-global boundary cleanup. The bootstrap userscript/extension still install the Clash rescue hook on the page global; only the remote bot's internal read path changes.
 
+## 2026-07-03 Follow-up: Phase 2AD Page-Native Snapshot Source Factory
+
+`bootstrap-0.4.302` extracts the passive page-native snapshot observer source into its own browser source module:
+
+- `src/browser/page-native-snapshot-source.js` now owns `pageNativeSnapshotUrl()`, `pageNativeSnapshotPayload()`, `pageNativeSnapshotError()`, and `installPageNativeSnapshotObserver()` source generation.
+- `src/browser/bot-source.js` imports and injects `${pageNativeSnapshotSource()}` instead of carrying that observer block inline.
+- Static verification treats the new source factory as canonical, checks its export/raw-source shape, and still verifies the generated single-file runtime contains the same observer behavior.
+
+This is a structural source split only. Passive snapshot behavior, page-global adapter reads, and the generated remote runtime surface remain equivalent.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -431,9 +441,10 @@ This is another behavior-equivalent page-global boundary cleanup. The bootstrap 
 27. Control-login page-global guards: integrated in `bootstrap-0.4.299`
 28. Manual login page-global gate: integrated in `bootstrap-0.4.300`
 29. Page-native observer globals: integrated in `bootstrap-0.4.301`
-30. Constants: partially integrated for high-value coin defaults
-31. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-32. Run live validation sessions after each behavior-touching replacement
+30. Page-native snapshot source factory: integrated in `bootstrap-0.4.302`
+31. Constants: partially integrated for high-value coin defaults
+32. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+33. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
