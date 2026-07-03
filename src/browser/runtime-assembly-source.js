@@ -65,6 +65,7 @@ const { persistentClearSource } = require('./persistent-clear-source');
 const { pendingExitPersistenceSource } = require('./pending-exit-persistence-source');
 const { refreshExitDetailSource } = require('./refresh-exit-detail-source');
 const { restoredCoinFailuresSource } = require('./restored-coin-failures-source');
+const { restoredRuntimeStateSource } = require('./restored-runtime-state-source');
 const { loginSnapshotGateSource } = require('./login-snapshot-gate-source');
 const { runtimeDiagnosticsSource } = require('./runtime-diagnostics-source');
 const { exitReloginSource } = require('./exit-relogin-source');
@@ -104,14 +105,7 @@ function browserRuntimeAssemblySource(config) {
     `
 `,
     restoredCoinFailuresSource,
-    `
-
-			  const restoredFailures = restoredCoinFailures();
-			  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-			  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
-			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
-`,
+    restoredRuntimeStateSource,
     loginSnapshotGateSource,
     `
 `,
