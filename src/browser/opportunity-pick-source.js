@@ -1,6 +1,6 @@
 'use strict';
 
-function opportunityPickSource() {
+function opportunityPickInlineSource() {
   return String.raw`
   function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
     const enemyTargets = enemyOpportunityCandidates(self, enemyGroups.flat(), activeThreats);
@@ -38,4 +38,32 @@ function opportunityPickSource() {
 		  }`;
 }
 
-module.exports = { opportunityPickSource };
+function bundledOpportunityPickSource() {
+  return `const { pickBestOpportunityCore } = require('./src/browser/runtime/opportunity-pick');
+
+  function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
+    return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups, {
+      ...options,
+      enemyOpportunityCandidates,
+      uniqueVisibleRouteCoins,
+      pickCoinRouteOpportunity,
+      opportunityCandidateCoreOptions,
+      buildCoinAction,
+      buildEnemyAction,
+      buildMissingHeldOpportunity,
+      chooseStableOpportunity,
+      rememberOpportunityChoice
+    });
+  }`;
+}
+
+function opportunityPickSource(options = {}) {
+  if (options.bundledRuntime) return bundledOpportunityPickSource();
+  return opportunityPickInlineSource();
+}
+
+module.exports = {
+  bundledOpportunityPickSource,
+  opportunityPickInlineSource,
+  opportunityPickSource
+};

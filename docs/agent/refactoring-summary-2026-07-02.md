@@ -1376,6 +1376,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 135. Bundler-owned `opportunity-choice` helper bindings for remote builds: integrated in `bootstrap-0.4.407`
 136. Bundler-owned `action-arbitration` priority/switch/final-action helper bindings for remote builds: integrated in `bootstrap-0.4.408`
 137. Bundler-owned `opportunity-clear` helper binding for remote builds: integrated in `bootstrap-0.4.409`
+138. Bundler-owned `opportunity-pick` helper binding for remote builds: integrated in `bootstrap-0.4.410`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

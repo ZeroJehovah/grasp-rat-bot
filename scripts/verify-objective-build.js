@@ -289,6 +289,7 @@ function main() {
   const opportunityChoiceRuntimeModule = readText('src/browser/runtime/opportunity-choice.js');
   const opportunityClearRuntimeModule = readText('src/browser/runtime/opportunity-clear.js');
   const opportunityCandidatesRuntimeModule = readText('src/browser/runtime/opportunity-candidates.js');
+  const opportunityPickRuntimeModule = readText('src/browser/runtime/opportunity-pick.js');
   const postAttackDropRuntimeModule = readText('src/browser/runtime/post-attack-drop.js');
   const staminaBudgetRuntimeModule = readText('src/browser/runtime/stamina-budget.js');
   const opportunityConstantsRuntimeModule = readText('src/browser/runtime/opportunity-constants.js');
@@ -303,6 +304,7 @@ function main() {
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
   const strategyOpportunityClearSource = readText('src/strategy/opportunity-clear.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
+  const strategyOpportunityPickSource = readText('src/strategy/opportunity-pick.js');
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
   const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
   const strategyOpportunityConstantsSource = readText('src/strategy/opportunity-constants.js');
@@ -539,6 +541,7 @@ function main() {
     assert(distSource.includes('var require_coin_route = __commonJS'), 'bundled production dist does not bundle the coin-route runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_candidates = __commonJS'), 'bundled production dist does not bundle the opportunity-candidates runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_choice = __commonJS'), 'bundled production dist does not bundle the opportunity-choice runtime module through esbuild');
+    assert(distSource.includes('var require_opportunity_pick = __commonJS'), 'bundled production dist does not bundle the opportunity-pick runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_clear = __commonJS'), 'bundled production dist does not bundle the opportunity-clear runtime module through esbuild');
     assert(distSource.includes('var require_coin_diagnostics = __commonJS'), 'bundled production dist does not bundle the coin-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_stamina_budget = __commonJS'), 'bundled production dist does not bundle the stamina-budget runtime module through esbuild');
@@ -620,6 +623,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-candidate', () => opportunityCandidateSource(config)]"), 'opportunity-candidate source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-choice', () => opportunityChoiceSource(config)]"), 'opportunity-choice source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['opportunity-pick', () => opportunityPickSource(config)]"), 'opportunity-pick source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-clear', () => opportunityClearSource(config)]"), 'opportunity-clear source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['post-attack', () => postAttackSource(config)]"), 'post-attack source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
@@ -1043,12 +1047,16 @@ function main() {
     assert(opportunityChoiceInlineBody.includes('function opportunityChoiceCoreOptions'), 'opportunity-choice inline source factory does not include core options wrapper');
     assert(opportunityChoiceInlineBody.includes('function buildMissingHeldOpportunity'), 'opportunity-choice inline source factory does not include missing-held wrapper');
     assert(functionBody(opportunityChoiceSourceModule, 'bundledOpportunityChoiceSource').includes("require('./src/browser/runtime/opportunity-choice')"), 'opportunity-choice bundled source does not hand choice helpers to the bundler');
-    assert(opportunityPickSourceModule.includes('function opportunityPickSource() {'), 'opportunity-pick source factory not found');
-    assert(opportunityPickSourceModule.includes('module.exports = { opportunityPickSource }'), 'opportunity-pick source module export not found');
-    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('String.raw`'), 'opportunity-pick source factory does not return raw browser source');
-    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('function pickBestOpportunity'), 'opportunity-pick source factory does not include pickBestOpportunity');
-    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('pickCoinRouteOpportunity'), 'opportunity-pick source factory does not include route opportunity selection');
-    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('buildOpportunityCandidatesCore'), 'opportunity-pick source factory does not include candidate core call');
+    assert(opportunityPickSourceModule.includes('function opportunityPickInlineSource() {'), 'opportunity-pick inline source factory not found');
+    assert(opportunityPickSourceModule.includes('function bundledOpportunityPickSource() {'), 'opportunity-pick bundled source factory not found');
+    assert(opportunityPickSourceModule.includes('function opportunityPickSource(options = {}) {'), 'opportunity-pick source selector not found');
+    assert(opportunityPickSourceModule.includes('bundledOpportunityPickSource') && opportunityPickSourceModule.includes('opportunityPickInlineSource') && opportunityPickSourceModule.includes('opportunityPickSource'), 'opportunity-pick source module exports are incomplete');
+    const opportunityPickInlineBody = functionBody(opportunityPickSourceModule, 'opportunityPickInlineSource');
+    assert(opportunityPickInlineBody.includes('String.raw`'), 'opportunity-pick inline source factory does not return raw browser source');
+    assert(opportunityPickInlineBody.includes('function pickBestOpportunity'), 'opportunity-pick inline source factory does not include pickBestOpportunity');
+    assert(opportunityPickInlineBody.includes('pickCoinRouteOpportunity'), 'opportunity-pick inline source factory does not include route opportunity selection');
+    assert(opportunityPickInlineBody.includes('buildOpportunityCandidatesCore'), 'opportunity-pick inline source factory does not include candidate core call');
+    assert(functionBody(opportunityPickSourceModule, 'bundledOpportunityPickSource').includes("require('./src/browser/runtime/opportunity-pick')"), 'opportunity-pick bundled source does not hand picker core to the bundler');
     assert(patrolSourceModule.includes('function patrolSource() {'), 'patrol source factory not found');
     assert(patrolSourceModule.includes('module.exports = { patrolSource }'), 'patrol source module export not found');
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('String.raw`'), 'patrol source factory does not return raw browser source');
@@ -1745,6 +1753,8 @@ function main() {
       const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
       const bestBody = functionBody(text, 'bestCoinOpportunityScore');
       const pickBody = functionBody(text, 'pickBestOpportunity');
+      const pickCoreSource = file === 'grasp-rat-bot.js' ? strategyOpportunityPickSource : finalRuntimeText;
+      const pickCoreBody = functionBody(pickCoreSource, 'pickBestOpportunityCore');
       const opportunityCandidateCoreSource = file === 'grasp-rat-bot.js' ? strategyOpportunityCandidatesSource : finalRuntimeText;
       const coinCandidateBody = functionBody(opportunityCandidateCoreSource, 'buildCoinOpportunityCandidatesCore');
       assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
@@ -1768,8 +1778,8 @@ function main() {
       assert(text.includes('heldChoice: currentHeldCoinChoice()') && routeCoreBody.includes('coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, options)'), 'coin route planner can skip the held nearby single coin');
       assert(text.includes('heldRouteChoice: currentHeldCoinRouteChoice()') && routeCoreBody.includes('heldCoinRouteBeatsSwitchCore(heldRoute, best, options)'), 'coin route planner does not stabilize held route first coin');
       assert(bestBody.includes('pickCoinRouteOpportunity') && bestBody.includes('bestCoinOpportunityScoreCore'), 'profitable combat comparison does not include coin route score');
-      assert(pickBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
-      assert(pickBody.includes('buildOpportunityCandidatesCore'), 'visible opportunity selection does not use opportunity candidate core');
+      assert(pickBody.includes('pickCoinRouteOpportunity') || pickCoreBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
+      assert(pickBody.includes('buildOpportunityCandidatesCore') || pickCoreBody.includes('buildOpportunityCandidatesCore'), 'visible opportunity selection does not use opportunity candidate core');
       assert(coinCandidateBody.includes('mergeCoinRouteDisplayCore(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
       assert(coinCandidateBody.includes('routeHeld: Boolean(coin.routeHeld)'), 'coin route held metadata is not propagated to opportunity choice');
       assert(coinCandidateBody.includes("actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance") && coinCandidateBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
@@ -3171,6 +3181,23 @@ function main() {
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'bundled dist does not contain opportunity choice persistence core');
     assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'bundled dist does not contain missing-held opportunity core');
     assert(generatedRuntimeSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
+  });
+
+  check('opportunity pick uses strategy module core', () => {
+    assert(strategyOpportunityPickSource.includes('function pickBestOpportunityCore'), 'strategy opportunity pick core not found');
+    assert(strategyOpportunityPickSource.includes("require('./opportunity-candidates')"), 'strategy opportunity pick core does not reuse candidate core module');
+    assert(strategyOpportunityPickSource.includes('enemyGroups.flat()'), 'strategy opportunity pick core does not preserve enemy group flattening');
+    assert(opportunityPickSourceModule.includes("require('./src/browser/runtime/opportunity-pick')"), 'opportunity-pick bundled source does not require the browser runtime helper module');
+    assert(!opportunityPickSourceModule.includes("require('../strategy/opportunity-pick')"), 'opportunity-pick source still imports opportunity pick directly from strategy');
+    assert(opportunityPickRuntimeModule.includes("require('../../strategy/opportunity-pick')"), 'opportunity-pick runtime adapter does not reuse strategy module core');
+    assert(opportunityPickRuntimeModule.includes('pickBestOpportunityCore'), 'opportunity-pick runtime adapter does not export expected helper');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-pick.js'"), 'bundler spike does not import opportunity pick runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('opportunityPick.pickBestOpportunityCore('), 'bundler spike does not execute opportunity pick helper');
+    assert(bundlerSpikeBuildSource.includes("status.opportunityPickId === 'pick-coin'"), 'bundler spike self-test does not assert opportunity pick execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-pick')"), 'generated remote runtime does not hand opportunity pick helper to the bundler');
+    assert(!generatedRuntimeSource.includes('function pickBestOpportunityCore'), 'generated remote runtime still inlines opportunity pick core before bundling');
+    assert(distSource.includes('function pickBestOpportunityCore'), 'bundled dist does not contain opportunity pick core');
+    assert(distSource.includes('return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups'), 'bundled dist pick wrapper does not call opportunity pick core');
   });
 
   check('opportunity clear uses strategy module core', () => {

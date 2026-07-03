@@ -2426,6 +2426,77 @@
     }
   });
 
+  // src/strategy/opportunity-pick.js
+  var require_opportunity_pick = __commonJS({
+    "src/strategy/opportunity-pick.js"(exports, module) {
+      "use strict";
+      var { buildOpportunityCandidatesCore } = require_opportunity_candidates();
+      function requiredFunction(options, name) {
+        const fn = options?.[name];
+        if (typeof fn !== "function") {
+          throw new TypeError(`opportunity pick option ${name} must be a function`);
+        }
+        return fn;
+      }
+      function pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups, options = {}) {
+        const enemyOpportunityCandidates = requiredFunction(options, "enemyOpportunityCandidates");
+        const uniqueVisibleRouteCoins = requiredFunction(options, "uniqueVisibleRouteCoins");
+        const pickCoinRouteOpportunity = requiredFunction(options, "pickCoinRouteOpportunity");
+        const opportunityCandidateCoreOptions = requiredFunction(options, "opportunityCandidateCoreOptions");
+        const buildCoinAction = requiredFunction(options, "buildCoinAction");
+        const buildEnemyAction = requiredFunction(options, "buildEnemyAction");
+        const buildMissingHeldOpportunity = requiredFunction(options, "buildMissingHeldOpportunity");
+        const chooseStableOpportunity = requiredFunction(options, "chooseStableOpportunity");
+        const rememberOpportunityChoice = requiredFunction(options, "rememberOpportunityChoice");
+        const enemyTargets = enemyOpportunityCandidates(self, enemyGroups.flat(), activeThreats);
+        const routeCoin = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
+        const opportunities = buildOpportunityCandidatesCore(
+          self,
+          activeThreats,
+          coinGroups,
+          enemyTargets,
+          routeCoin,
+          opportunityCandidateCoreOptions(self)
+        ).map((item) => {
+          if (item.type === "coin") {
+            const coin = item.sourceCoin || item;
+            return {
+              ...item,
+              action: () => buildCoinAction(self, coin, item.reason, item.actionKind === "seek-coin" ? "seek-coin" : "coin")
+            };
+          }
+          const target = item.sourceTarget || item;
+          return {
+            ...item,
+            action: () => buildEnemyAction(self, target, item.reason || "")
+          };
+        });
+        if (!options.disableMissingHold) {
+          const missingHeld = buildMissingHeldOpportunity(self, activeThreats, opportunities);
+          if (missingHeld) opportunities.push(missingHeld);
+        }
+        const best = chooseStableOpportunity(opportunities);
+        if (!best) return null;
+        const action = best.action();
+        return rememberOpportunityChoice(best, action);
+      }
+      module.exports = { pickBestOpportunityCore };
+    }
+  });
+
+  // src/browser/runtime/opportunity-pick.js
+  var require_opportunity_pick2 = __commonJS({
+    "src/browser/runtime/opportunity-pick.js"(exports, module) {
+      "use strict";
+      var {
+        pickBestOpportunityCore
+      } = require_opportunity_pick();
+      module.exports = {
+        pickBestOpportunityCore
+      };
+    }
+  });
+
   // src/strategy/opportunity-clear.js
   var require_opportunity_clear = __commonJS({
     "src/strategy/opportunity-clear.js"(exports, module) {
@@ -3346,7 +3417,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.409" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.410" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19267,38 +19338,20 @@
       bot.opportunitySwitchLock = result.switchLock;
       return result.chosen;
     }
+    const { pickBestOpportunityCore } = require_opportunity_pick2();
     function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
-      const enemyTargets = enemyOpportunityCandidates(self, enemyGroups.flat(), activeThreats);
-      const routeCoin = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
-      const opportunities = buildOpportunityCandidatesCore(
-        self,
-        activeThreats,
-        coinGroups,
-        enemyTargets,
-        routeCoin,
-        opportunityCandidateCoreOptions(self)
-      ).map((item) => {
-        if (item.type === "coin") {
-          const coin = item.sourceCoin || item;
-          return {
-            ...item,
-            action: () => buildCoinAction(self, coin, item.reason, item.actionKind === "seek-coin" ? "seek-coin" : "coin")
-          };
-        }
-        const target = item.sourceTarget || item;
-        return {
-          ...item,
-          action: () => buildEnemyAction(self, target, item.reason || "")
-        };
+      return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups, {
+        ...options,
+        enemyOpportunityCandidates,
+        uniqueVisibleRouteCoins,
+        pickCoinRouteOpportunity,
+        opportunityCandidateCoreOptions,
+        buildCoinAction,
+        buildEnemyAction,
+        buildMissingHeldOpportunity,
+        chooseStableOpportunity,
+        rememberOpportunityChoice
       });
-      if (!options.disableMissingHold) {
-        const missingHeld = buildMissingHeldOpportunity(self, activeThreats, opportunities);
-        if (missingHeld) opportunities.push(missingHeld);
-      }
-      const best = chooseStableOpportunity(opportunities);
-      if (!best) return null;
-      const action = best.action();
-      return rememberOpportunityChoice(best, action);
     }
     function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
       if (scanCoin) {
