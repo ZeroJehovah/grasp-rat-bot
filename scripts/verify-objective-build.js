@@ -1471,6 +1471,9 @@ function main() {
       assert(rescueBody.includes('const http403 = leaveDetailHasHttp403(detail)'), 'Clash leave rescue does not detect HTTP 403 as a first-class failure');
       assert(rescueBody.includes('if (!detail.error && !http403) return false'), 'Clash leave rescue still requires a generic error even for HTTP 403');
       assert(rescueBody.includes('if (leaveDetailSucceeded(detail)) return false'), 'Clash leave rescue does not reject successful leaves');
+      const rescueHookBody = functionBody(text, 'clashLeaveRescueHook');
+      assert(rescueHookBody.includes('readPageGlobal') && rescueHookBody.includes('__graspRatBotClashLeaveRescue'), 'Clash rescue hook is not read through page-global adapter');
+      assert(!rescueHookBody.includes('window.__graspRatBotClashLeaveRescue'), 'Clash rescue hook still reads directly from window');
       assert(text.includes("const CLASH_LEAVE_RESCUE_STAGE_ORDER = ['auto', 'direct', 'manual']"), 'Clash leave rescue order is not auto -> direct -> manual');
       const nextStageBody = functionBody(text, 'nextClashLeaveRescueStage');
       assert(nextStageBody.includes('CLASH_LEAVE_RESCUE_STAGE_ORDER'), 'Clash leave rescue stage selection does not use the ordered stage list');
@@ -1548,8 +1551,13 @@ function main() {
       assert(passiveSnapshotBody.includes('noteLoginSnapshotProbe(true'), 'page-native snapshot success does not update login-point safety probe');
       assert(passiveSnapshotBody.includes('Array.isArray(payload?.entities)') && passiveSnapshotBody.includes('/snapshot invalid payload'), 'page-native snapshot success can advance without a valid entities array');
       assert(passiveSnapshotErrorBody.includes('noteLoginSnapshotProbe(false'), 'page-native snapshot failure does not reset login-point safety probe');
-      assert(passiveSnapshotObserverBody.includes('window.Response') && passiveSnapshotObserverBody.includes('Response.prototype'), 'page-native snapshot observer does not inspect parsed fetch responses passively');
+      assert(passiveSnapshotObserverBody.includes('readPageGlobal') && passiveSnapshotObserverBody.includes('ResponseCtor') && passiveSnapshotObserverBody.includes('ResponseCtor.prototype'), 'page-native snapshot observer does not read Response through page-global adapter');
+      assert(passiveSnapshotObserverBody.includes('XMLHttpRequestCtor') && passiveSnapshotObserverBody.includes('XMLHttpRequestCtor.prototype'), 'page-native snapshot observer does not read XMLHttpRequest through page-global adapter');
+      assert(passiveSnapshotObserverBody.includes('installPageGlobal') && passiveSnapshotObserverBody.includes('__graspRatPageNativeSnapshotObserver'), 'page-native snapshot observer state is not stored through page-global adapter');
       assert(passiveSnapshotObserverBody.includes('originalResponseJson') && passiveSnapshotObserverBody.includes('originalResponseText'), 'page-native snapshot observer does not hook response body parsing');
+      assert(!passiveSnapshotObserverBody.includes('window[key]'), 'page-native snapshot observer still stores state directly on window');
+      assert(!passiveSnapshotObserverBody.includes('window.Response'), 'page-native snapshot observer still reads Response directly from window');
+      assert(!passiveSnapshotObserverBody.includes('window.XMLHttpRequest'), 'page-native snapshot observer still reads XMLHttpRequest directly from window');
       assert(!passiveSnapshotObserverBody.includes('window.fetch ='), 'page-native snapshot observer still wraps fetch and can alter request initiators');
       assert(!passiveSnapshotObserverBody.includes('originalFetch'), 'page-native snapshot observer still stores original fetch');
       assert(!passiveSnapshotObserverBody.includes('proto.send ='), 'page-native snapshot observer still wraps XHR send and can alter request initiators');

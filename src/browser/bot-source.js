@@ -1549,14 +1549,14 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 
 	  function installPageNativeSnapshotObserver() {
 	    const key = '__graspRatPageNativeSnapshotObserver';
-	    const state = window[key] || {
+	    const state = readPageGlobal(key, null, pageGlobal) || {
 	      installed: false,
 	      originalResponseJson: null,
 	      originalResponseText: null,
 	      originalXhrOpen: null,
 	      observedXhrs: null
 	    };
-	    window[key] = state;
+	    installPageGlobal(key, state, pageGlobal);
 	    state.handleSnapshotPayload = pageNativeSnapshotPayload;
 	    state.handleSnapshotError = pageNativeSnapshotError;
 	    if (state.installed) return;
@@ -1574,8 +1574,9 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        })
 	        .catch(err => state.handleSnapshotError?.(err, { source, url: snapshotUrl }));
 	    };
-	    if (typeof window.Response === 'function' && window.Response.prototype) {
-	      const responseProto = window.Response.prototype;
+	    const ResponseCtor = readPageGlobal('Response', null, pageGlobal);
+	    if (typeof ResponseCtor === 'function' && ResponseCtor.prototype) {
+	      const responseProto = ResponseCtor.prototype;
 	      if (typeof responseProto.json === 'function') {
 	        state.originalResponseJson = responseProto.json;
 	        responseProto.json = function graspRatObservedResponseJson() {
@@ -1598,8 +1599,9 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 	        };
 	      }
 	    }
-	    if (typeof window.XMLHttpRequest === 'function') {
-	      const proto = window.XMLHttpRequest.prototype;
+	    const XMLHttpRequestCtor = readPageGlobal('XMLHttpRequest', null, pageGlobal);
+	    if (typeof XMLHttpRequestCtor === 'function') {
+	      const proto = XMLHttpRequestCtor.prototype;
 	      state.originalXhrOpen = proto.open;
 	      state.observedXhrs = typeof WeakSet === 'function' ? new WeakSet() : null;
 	      proto.open = function graspRatObservedXhrOpen(method, url) {
@@ -3411,9 +3413,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 
   function clashLeaveRescueHook() {
     try {
-      return typeof window.__graspRatBotClashLeaveRescue === 'function'
-        ? window.__graspRatBotClashLeaveRescue
-        : null;
+      const hook = readPageGlobal('__graspRatBotClashLeaveRescue', null, pageGlobal);
+      return typeof hook === 'function' ? hook : null;
     } catch (_) {
       return null;
     }

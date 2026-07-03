@@ -41,7 +41,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.300" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.301" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -6339,14 +6339,14 @@
     }
     function installPageNativeSnapshotObserver() {
       const key = "__graspRatPageNativeSnapshotObserver";
-      const state2 = window[key] || {
+      const state2 = readPageGlobal(key, null, pageGlobal) || {
         installed: false,
         originalResponseJson: null,
         originalResponseText: null,
         originalXhrOpen: null,
         observedXhrs: null
       };
-      window[key] = state2;
+      installPageGlobal(key, state2, pageGlobal);
       state2.handleSnapshotPayload = pageNativeSnapshotPayload;
       state2.handleSnapshotError = pageNativeSnapshotError;
       if (state2.installed) return;
@@ -6362,8 +6362,9 @@
           state2.handleSnapshotPayload?.(payload, { source, url: snapshotUrl });
         }).catch((err) => state2.handleSnapshotError?.(err, { source, url: snapshotUrl }));
       };
-      if (typeof window.Response === "function" && window.Response.prototype) {
-        const responseProto = window.Response.prototype;
+      const ResponseCtor = readPageGlobal("Response", null, pageGlobal);
+      if (typeof ResponseCtor === "function" && ResponseCtor.prototype) {
+        const responseProto = ResponseCtor.prototype;
         if (typeof responseProto.json === "function") {
           state2.originalResponseJson = responseProto.json;
           responseProto.json = function graspRatObservedResponseJson() {
@@ -6386,8 +6387,9 @@
           };
         }
       }
-      if (typeof window.XMLHttpRequest === "function") {
-        const proto = window.XMLHttpRequest.prototype;
+      const XMLHttpRequestCtor = readPageGlobal("XMLHttpRequest", null, pageGlobal);
+      if (typeof XMLHttpRequestCtor === "function") {
+        const proto = XMLHttpRequestCtor.prototype;
         state2.originalXhrOpen = proto.open;
         state2.observedXhrs = typeof WeakSet === "function" ? /* @__PURE__ */ new WeakSet() : null;
         proto.open = function graspRatObservedXhrOpen(method, url) {
@@ -8064,7 +8066,8 @@
     }
     function clashLeaveRescueHook() {
       try {
-        return typeof window.__graspRatBotClashLeaveRescue === "function" ? window.__graspRatBotClashLeaveRescue : null;
+        const hook = readPageGlobal("__graspRatBotClashLeaveRescue", null, pageGlobal);
+        return typeof hook === "function" ? hook : null;
       } catch (_) {
         return null;
       }
