@@ -2673,6 +2673,427 @@
     }
   });
 
+  // src/strategy/action-priority.js
+  var require_action_priority = __commonJS({
+    "src/strategy/action-priority.js"(exports, module) {
+      "use strict";
+      var ACTION_PRIORITY_BANDS = {
+        exit: "exit",
+        safety: "safety",
+        combat: "combat",
+        profit: "profit",
+        recover: "recover",
+        wait: "wait"
+      };
+      function roundedNullable(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.round(number) : null;
+      }
+      function actionPriorityBand(action) {
+        const kind = String(action?.kind || "");
+        if (kind === "leave") return "exit";
+        if (kind === "flee") return "safety";
+        if (kind === "recover") return "recover";
+        if (action?.combat || kind === "wait" && action?.target && action?.combat) return "combat";
+        if (kind === "attack" || kind === "seek-enemy" || kind === "seek-drop" || kind === "coin" || kind === "seek-coin") return "profit";
+        if (kind === "patrol" && (action?.target || String(action?.reason || "").includes("coin"))) return "profit";
+        if (kind === "wait" || kind === "idle") return "wait";
+        return kind || "action";
+      }
+      function actionFocusTargetType(action, target) {
+        const kind = String(action?.kind || "");
+        const reason = String(action?.reason || "");
+        if (kind === "coin" || kind === "seek-coin") return "coin";
+        if (kind === "patrol" && (String(reason).includes("coin") || target?.amount !== void 0)) return "coin";
+        if (target?.coinRoute || target?.amount !== void 0 || target?.fieldAmount !== void 0) return "coin";
+        return "enemy";
+      }
+      function actionFocusId(target, fallback = "") {
+        const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
+        if (id !== void 0 && id !== null && id !== "") return String(id);
+        const name = target?.name || target?.label;
+        if (name) return "name:" + String(name);
+        const x = Number(target?.x);
+        const y = Number(target?.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) return "xy:" + Math.round(x) + ":" + Math.round(y);
+        return String(fallback || "");
+      }
+      function actionFocusSummary(action, options = {}) {
+        if (!action || typeof action !== "object") return null;
+        const kind = String(action.kind || "");
+        const reason = String(action.reason || "");
+        const band = actionPriorityBand(action);
+        const target = action.target && typeof action.target === "object" ? action.target : null;
+        let type = "";
+        let id = "";
+        let label = "";
+        let targeted = false;
+        if (target) {
+          type = actionFocusTargetType(action, target);
+          id = actionFocusId(target, type);
+          label = String(target.name || target.label || id || "");
+          targeted = type === "coin" || type === "enemy";
+        } else if (kind === "flee") {
+          const threat = Array.isArray(action.threats) ? action.threats[0] : null;
+          type = "safety";
+          id = actionFocusId(threat, reason || kind);
+          label = String(threat?.name || threat?.label || id || reason || kind);
+        } else {
+          type = band || kind || "action";
+          id = reason || kind || type;
+          label = id;
+        }
+        const score = Number(action.score ?? action.opportunityChoice?.score);
+        const staminaCost = Number(action.staminaCost ?? action.opportunityChoice?.staminaCost);
+        const nowMs = Number(options.nowMs);
+        return {
+          key: String(type || "action") + ":" + String(id || ""),
+          type,
+          id,
+          label,
+          kind,
+          reason,
+          band,
+          targetKey: id,
+          targeted,
+          score: Number.isFinite(score) ? Math.round(score) : null,
+          staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
+          priorityTier: roundedNullable(action.opportunityChoice?.priorityTier),
+          distance: roundedNullable(target?.distance),
+          amount: roundedNullable(target?.amount),
+          drop: roundedNullable(target?.drop),
+          hp: roundedNullable(target?.hp),
+          combat: Boolean(action.combat),
+          shoot: Boolean(action.shoot),
+          opportunisticShot: Boolean(action.opportunisticShot),
+          dx: roundedNullable(action.dx),
+          dy: roundedNullable(action.dy),
+          at: Number.isFinite(nowMs) ? nowMs : Date.now()
+        };
+      }
+      function getActionTargetKey(action) {
+        return actionFocusSummary(action)?.key || null;
+      }
+      module.exports = {
+        ACTION_PRIORITY_BANDS,
+        actionPriorityBand,
+        actionFocusTargetType,
+        actionFocusId,
+        actionFocusSummary,
+        getActionPriorityBand: actionPriorityBand,
+        getActionTargetKey,
+        buildActionFocus: actionFocusSummary
+      };
+    }
+  });
+
+  // src/browser/runtime/action-priority.js
+  var require_action_priority2 = __commonJS({
+    "src/browser/runtime/action-priority.js"(exports, module) {
+      "use strict";
+      var {
+        ACTION_PRIORITY_BANDS,
+        actionPriorityBand,
+        actionFocusTargetType,
+        actionFocusId,
+        actionFocusSummary,
+        getActionPriorityBand,
+        getActionTargetKey,
+        buildActionFocus
+      } = require_action_priority();
+      module.exports = {
+        ACTION_PRIORITY_BANDS,
+        actionPriorityBand,
+        actionFocusTargetType,
+        actionFocusId,
+        actionFocusSummary,
+        getActionPriorityBand,
+        getActionTargetKey,
+        buildActionFocus
+      };
+    }
+  });
+
+  // src/strategy/action-switch-diagnostics.js
+  var require_action_switch_diagnostics = __commonJS({
+    "src/strategy/action-switch-diagnostics.js"(exports, module) {
+      "use strict";
+      var { actionFocusSummary } = require_action_priority();
+      function roundedNullable(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.round(number) : null;
+      }
+      function actionSwitchPairKey(a, b) {
+        return [String(a?.key || ""), String(b?.key || "")].sort().join("|");
+      }
+      function defaultClone(value) {
+        if (value === void 0 || value === null) return value;
+        try {
+          return JSON.parse(JSON.stringify(value));
+        } catch (_) {
+          return value;
+        }
+      }
+      function buildPreviousDecisionSummary(decision) {
+        return decision ? {
+          kind: decision.kind || "",
+          reason: decision.reason || "",
+          target: decision.target || null,
+          score: roundedNullable(decision.score ?? decision.opportunityChoice?.score),
+          staminaCost: roundedNullable(decision.staminaCost ?? decision.opportunityChoice?.staminaCost)
+        } : null;
+      }
+      function recordActionSwitchDiagnosticsCore(action, state2, options = {}) {
+        if (!state2 || typeof state2 !== "object") {
+          state2 = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
+        }
+        if (!Array.isArray(state2.events)) state2.events = [];
+        const clone = typeof options.clone === "function" ? options.clone : defaultClone;
+        const focusBuilder = typeof options.actionFocusSummary === "function" ? options.actionFocusSummary : actionFocusSummary;
+        const tOption = Number(options.nowMs);
+        const t = Number.isFinite(tOption) ? tOption : Date.now();
+        const historyLimit = Math.max(4, Math.round(Number(options.historyLimit ?? 24) || 24));
+        const windowMs = Math.max(1e3, Math.round(Number(options.oscillationWindowMs ?? 1e4) || 1e4));
+        const current = focusBuilder(action, { nowMs: t });
+        const previous = state2.lastFocus || null;
+        const previousTarget = state2.lastTargetFocus || null;
+        let nextAction = action;
+        let event = null;
+        if (previous && current && previous.key !== current.key && (previous.targeted || current.targeted)) {
+          const pairKey = actionSwitchPairKey(previous, current);
+          const recentPair = state2.events.filter((item) => item?.pairKey === pairKey && t - Number(item.at || 0) <= windowMs);
+          const reversed = recentPair.some((item) => item?.from?.key === current.key && item?.to?.key === previous.key);
+          const targetChanged = Boolean(current.targeted && previousTarget && previousTarget.key !== current.key);
+          const targetChange = targetChanged ? {
+            from: previousTarget,
+            to: current,
+            ageMs: previousTarget.at ? Math.max(0, Math.round(t - Number(previousTarget.at || t))) : null
+          } : null;
+          event = {
+            type: previous.targeted && current.targeted ? "target-switch" : "focus-switch",
+            at: t,
+            tickCount: options.tickCount,
+            source: String(options.source || ""),
+            from: previous,
+            to: current,
+            targetChange,
+            pairKey,
+            pairSwitchCount: recentPair.length + 1,
+            oscillating: Boolean(reversed || recentPair.length + 1 >= 3),
+            previousDecision: buildPreviousDecisionSummary(options.previousDecision || null)
+          };
+          const snapshot = clone(event) || event;
+          state2.events.push(snapshot);
+          while (state2.events.length > historyLimit) state2.events.shift();
+          state2.lastSwitch = snapshot;
+          nextAction = { ...action, targetSwitch: snapshot };
+          event = snapshot;
+        }
+        state2.lastFocus = current;
+        if (current?.targeted) state2.lastTargetFocus = current;
+        return {
+          action: nextAction,
+          event,
+          focus: current,
+          state: state2
+        };
+      }
+      module.exports = {
+        actionSwitchPairKey,
+        buildPreviousDecisionSummary,
+        recordActionSwitchDiagnosticsCore
+      };
+    }
+  });
+
+  // src/browser/runtime/action-switch-diagnostics.js
+  var require_action_switch_diagnostics2 = __commonJS({
+    "src/browser/runtime/action-switch-diagnostics.js"(exports, module) {
+      "use strict";
+      var {
+        actionSwitchPairKey,
+        buildPreviousDecisionSummary,
+        recordActionSwitchDiagnosticsCore
+      } = require_action_switch_diagnostics();
+      module.exports = {
+        actionSwitchPairKey,
+        buildPreviousDecisionSummary,
+        recordActionSwitchDiagnosticsCore
+      };
+    }
+  });
+
+  // src/strategy/action-arbitration.js
+  var require_action_arbitration = __commonJS({
+    "src/strategy/action-arbitration.js"(exports, module) {
+      "use strict";
+      var { actionPriorityBand, actionFocusSummary } = require_action_priority();
+      function finalActionBandRank(band) {
+        switch (String(band || "")) {
+          case "exit":
+            return 600;
+          case "safety":
+            return 500;
+          case "combat":
+            return 400;
+          case "profit":
+            return 300;
+          case "recover":
+            return 200;
+          case "wait":
+            return 100;
+          default:
+            return 0;
+        }
+      }
+      function finalActionReusable(action) {
+        if (!action || typeof action !== "object") return false;
+        if (action.kind === "leave") return false;
+        if (action.leave || action.pendingExitIntent) return false;
+        const band = actionPriorityBand(action);
+        return band === "safety" || band === "combat" || band === "profit";
+      }
+      function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
+        const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
+        if (!(holdMs > 0) || ageMs > holdMs) return false;
+        if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
+        if (previousFocus.key === currentFocus.key) return false;
+        const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
+        const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
+        if (currentBand === "exit") return false;
+        const previousRank = finalActionBandRank(previousBand);
+        const currentRank = finalActionBandRank(currentBand);
+        if (previousRank <= 0 || currentRank <= 0) return false;
+        if (currentRank > previousRank) return false;
+        if (previousBand === currentBand && previousBand !== "profit") return false;
+        if (previousBand === "profit" && currentBand !== "profit") return false;
+        if (previousBand === "safety" && currentBand === "combat") return false;
+        return true;
+      }
+      function defaultClone(value) {
+        if (value === void 0 || value === null) return value;
+        try {
+          return JSON.parse(JSON.stringify(value));
+        } catch (_) {
+          return value;
+        }
+      }
+      function applyFinalActionArbitrationCore(action, state2, options = {}) {
+        if (!state2 || typeof state2 !== "object") {
+          state2 = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+        }
+        if (!Array.isArray(state2.history)) state2.history = [];
+        const clone = typeof options.clone === "function" ? options.clone : defaultClone;
+        const tOption = Number(options.nowMs);
+        const t = Number.isFinite(tOption) ? tOption : Date.now();
+        const holdMs = Math.max(0, Math.round(Number(options.holdMs ?? options.finalActionArbitrationHoldMs ?? 0) || 0));
+        const historyLimit = Math.max(4, Math.round(Number(options.historyLimit ?? options.finalActionArbitrationHistoryLimit ?? 24) || 24));
+        const focusBuilder = typeof options.actionFocusSummary === "function" ? options.actionFocusSummary : actionFocusSummary;
+        const currentFocus = focusBuilder(action, { nowMs: t });
+        const previousAction = state2.lastAction || null;
+        const previousFocus = state2.lastFocus || null;
+        const ageMs = Math.max(0, t - Number(state2.lastSelectedAt || 0));
+        let selected = action;
+        let selectedFocus = currentFocus;
+        let override = null;
+        if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs, { holdMs })) {
+          override = {
+            type: "final-action-arbitration",
+            at: t,
+            source: String(options.source || ""),
+            mode: "hold-previous",
+            ageMs: Math.round(ageMs),
+            holdMs,
+            from: currentFocus,
+            to: previousFocus,
+            reason: "higher-priority-band-stick"
+          };
+          selected = {
+            ...previousAction,
+            finalActionArbitration: override
+          };
+          selectedFocus = previousFocus;
+        }
+        if (override) {
+          const snapshot = clone(override) || override;
+          state2.lastOverride = snapshot;
+          state2.history.push(snapshot);
+          while (state2.history.length > historyLimit) state2.history.shift();
+        }
+        state2.lastAction = clone(selected) || selected;
+        state2.lastFocus = clone(selectedFocus) || selectedFocus;
+        if (!override) state2.lastSelectedAt = t;
+        return {
+          action: selected,
+          focus: selectedFocus,
+          override,
+          held: Boolean(override),
+          state: state2
+        };
+      }
+      function buildArbitrationStatus(state2) {
+        if (!state2) return null;
+        return {
+          lastAction: state2.lastAction ? {
+            kind: state2.lastAction.kind,
+            reason: state2.lastAction.reason
+          } : null,
+          lastFocus: state2.lastFocus ? { ...state2.lastFocus } : null,
+          lastSelectedAt: state2.lastSelectedAt || 0,
+          lastOverride: state2.lastOverride ? { ...state2.lastOverride } : null,
+          history: (state2.history || []).slice(-10)
+        };
+      }
+      function applyFinalActionArbitration(currentAction, previousFinalAction, state2, config = {}) {
+        if (!state2 || typeof state2 !== "object") {
+          state2 = { lastAction: previousFinalAction || null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
+        }
+        if (previousFinalAction && !state2.lastAction) state2.lastAction = previousFinalAction;
+        const result = applyFinalActionArbitrationCore(currentAction, state2, {
+          holdMs: config.finalActionArbitrationHoldMs ?? config.holdMs,
+          historyLimit: config.finalActionArbitrationHistoryLimit ?? config.historyLimit,
+          source: config.source || ""
+        });
+        return {
+          action: result.action,
+          held: result.held,
+          arbitration: result.override
+        };
+      }
+      module.exports = {
+        finalActionBandRank,
+        finalActionReusable,
+        shouldHoldPreviousFinalAction,
+        applyFinalActionArbitrationCore,
+        applyFinalActionArbitration,
+        buildArbitrationStatus
+      };
+    }
+  });
+
+  // src/browser/runtime/action-arbitration.js
+  var require_action_arbitration2 = __commonJS({
+    "src/browser/runtime/action-arbitration.js"(exports, module) {
+      "use strict";
+      var {
+        finalActionBandRank,
+        finalActionReusable,
+        shouldHoldPreviousFinalAction,
+        applyFinalActionArbitrationCore,
+        applyFinalActionArbitration,
+        buildArbitrationStatus
+      } = require_action_arbitration();
+      module.exports = {
+        finalActionBandRank,
+        finalActionReusable,
+        shouldHoldPreviousFinalAction,
+        applyFinalActionArbitrationCore,
+        applyFinalActionArbitration,
+        buildArbitrationStatus
+      };
+    }
+  });
+
   // src/strategy/coin-target.js
   var require_coin_target = __commonJS({
     "src/strategy/coin-target.js"(exports, module) {
@@ -2892,7 +3313,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.407" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.408" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19013,6 +19434,23 @@
         "ignore-stale-coin-no-progress"
       );
     }
+    const {
+      actionPriorityBand,
+      actionFocusTargetType,
+      actionFocusId,
+      actionFocusSummary
+    } = require_action_priority2();
+    const {
+      actionSwitchPairKey,
+      buildPreviousDecisionSummary,
+      recordActionSwitchDiagnosticsCore
+    } = require_action_switch_diagnostics2();
+    const {
+      finalActionBandRank,
+      finalActionReusable,
+      shouldHoldPreviousFinalAction,
+      applyFinalActionArbitrationCore
+    } = require_action_arbitration2();
     function targetSwitchHistoryLimit() {
       return Math.max(4, Math.round(Number(cfg.targetSwitchDiagnosticsHistoryLimit || 24) || 24));
     }
@@ -19023,161 +19461,12 @@
       const number = Number(value);
       return Number.isFinite(number) ? Math.round(number) : null;
     }
-    function actionPriorityBand(action) {
-      const kind = String(action?.kind || "");
-      if (kind === "leave") return "exit";
-      if (kind === "flee") return "safety";
-      if (kind === "recover") return "recover";
-      if (action?.combat || kind === "wait" && action?.target && action?.combat) return "combat";
-      if (kind === "attack" || kind === "seek-enemy" || kind === "seek-drop" || kind === "coin" || kind === "seek-coin") return "profit";
-      if (kind === "patrol" && (action?.target || String(action?.reason || "").includes("coin"))) return "profit";
-      if (kind === "wait" || kind === "idle") return "wait";
-      return kind || "action";
-    }
-    function actionFocusTargetType(action, target) {
-      const kind = String(action?.kind || "");
-      const reason = String(action?.reason || "");
-      if (kind === "coin" || kind === "seek-coin") return "coin";
-      if (kind === "patrol" && (String(reason).includes("coin") || target?.amount !== void 0)) return "coin";
-      if (target?.coinRoute || target?.amount !== void 0 || target?.fieldAmount !== void 0) return "coin";
-      return "enemy";
-    }
-    function actionFocusId(target, fallback = "") {
-      const id = target?.id ?? target?.user_id ?? target?.drop_id ?? target?.coin_id ?? target?.targetId;
-      if (id !== void 0 && id !== null && id !== "") return String(id);
-      const name = target?.name || target?.label;
-      if (name) return "name:" + String(name);
-      const x = Number(target?.x);
-      const y = Number(target?.y);
-      if (Number.isFinite(x) && Number.isFinite(y)) return "xy:" + Math.round(x) + ":" + Math.round(y);
-      return String(fallback || "");
-    }
-    function actionFocusSummary(action, options = {}) {
-      if (!action || typeof action !== "object") return null;
-      const kind = String(action.kind || "");
-      const reason = String(action.reason || "");
-      const band = actionPriorityBand(action);
-      const target = action.target && typeof action.target === "object" ? action.target : null;
-      let type = "";
-      let id = "";
-      let label = "";
-      let targeted = false;
-      if (target) {
-        type = actionFocusTargetType(action, target);
-        id = actionFocusId(target, type);
-        label = String(target.name || target.label || id || "");
-        targeted = type === "coin" || type === "enemy";
-      } else if (kind === "flee") {
-        const threat = Array.isArray(action.threats) ? action.threats[0] : null;
-        type = "safety";
-        id = actionFocusId(threat, reason || kind);
-        label = String(threat?.name || threat?.label || id || reason || kind);
-      } else {
-        type = band || kind || "action";
-        id = reason || kind || type;
-        label = id;
-      }
-      const score = Number(action.score ?? action.opportunityChoice?.score);
-      const staminaCost = Number(action.staminaCost ?? action.opportunityChoice?.staminaCost);
-      const nowMs = Number(options.nowMs);
-      return {
-        key: String(type || "action") + ":" + String(id || ""),
-        type,
-        id,
-        label,
-        kind,
-        reason,
-        band,
-        targetKey: id,
-        targeted,
-        score: Number.isFinite(score) ? Math.round(score) : null,
-        staminaCost: Number.isFinite(staminaCost) ? Math.round(staminaCost) : null,
-        priorityTier: roundedNullable(action.opportunityChoice?.priorityTier),
-        distance: roundedNullable(target?.distance),
-        amount: roundedNullable(target?.amount),
-        drop: roundedNullable(target?.drop),
-        hp: roundedNullable(target?.hp),
-        combat: Boolean(action.combat),
-        shoot: Boolean(action.shoot),
-        opportunisticShot: Boolean(action.opportunisticShot),
-        dx: roundedNullable(action.dx),
-        dy: roundedNullable(action.dy),
-        at: Number.isFinite(nowMs) ? nowMs : Date.now()
-      };
-    }
     function ensureTargetSwitchDiagnostics() {
       if (!bot.targetSwitchDiagnostics || typeof bot.targetSwitchDiagnostics !== "object") {
         bot.targetSwitchDiagnostics = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
       }
       if (!Array.isArray(bot.targetSwitchDiagnostics.events)) bot.targetSwitchDiagnostics.events = [];
       return bot.targetSwitchDiagnostics;
-    }
-    function actionSwitchPairKey(a, b) {
-      return [String(a?.key || ""), String(b?.key || "")].sort().join("|");
-    }
-    function buildPreviousDecisionSummary(decision) {
-      return decision ? {
-        kind: decision.kind || "",
-        reason: decision.reason || "",
-        target: decision.target || null,
-        score: roundedNullable(decision.score ?? decision.opportunityChoice?.score),
-        staminaCost: roundedNullable(decision.staminaCost ?? decision.opportunityChoice?.staminaCost)
-      } : null;
-    }
-    function recordActionSwitchDiagnosticsCore(action, state2, options = {}) {
-      if (!state2 || typeof state2 !== "object") {
-        state2 = { lastFocus: null, lastTargetFocus: null, lastSwitch: null, events: [] };
-      }
-      if (!Array.isArray(state2.events)) state2.events = [];
-      const clone = typeof options.clone === "function" ? options.clone : defaultClone;
-      const focusBuilder = typeof options.actionFocusSummary === "function" ? options.actionFocusSummary : actionFocusSummary;
-      const tOption = Number(options.nowMs);
-      const t = Number.isFinite(tOption) ? tOption : Date.now();
-      const historyLimit = Math.max(4, Math.round(Number(options.historyLimit ?? 24) || 24));
-      const windowMs = Math.max(1e3, Math.round(Number(options.oscillationWindowMs ?? 1e4) || 1e4));
-      const current = focusBuilder(action, { nowMs: t });
-      const previous = state2.lastFocus || null;
-      const previousTarget = state2.lastTargetFocus || null;
-      let nextAction = action;
-      let event = null;
-      if (previous && current && previous.key !== current.key && (previous.targeted || current.targeted)) {
-        const pairKey = actionSwitchPairKey(previous, current);
-        const recentPair = state2.events.filter((item) => item?.pairKey === pairKey && t - Number(item.at || 0) <= windowMs);
-        const reversed = recentPair.some((item) => item?.from?.key === current.key && item?.to?.key === previous.key);
-        const targetChanged = Boolean(current.targeted && previousTarget && previousTarget.key !== current.key);
-        const targetChange = targetChanged ? {
-          from: previousTarget,
-          to: current,
-          ageMs: previousTarget.at ? Math.max(0, Math.round(t - Number(previousTarget.at || t))) : null
-        } : null;
-        event = {
-          type: previous.targeted && current.targeted ? "target-switch" : "focus-switch",
-          at: t,
-          tickCount: options.tickCount,
-          source: String(options.source || ""),
-          from: previous,
-          to: current,
-          targetChange,
-          pairKey,
-          pairSwitchCount: recentPair.length + 1,
-          oscillating: Boolean(reversed || recentPair.length + 1 >= 3),
-          previousDecision: buildPreviousDecisionSummary(options.previousDecision || null)
-        };
-        const snapshot = clone(event) || event;
-        state2.events.push(snapshot);
-        while (state2.events.length > historyLimit) state2.events.shift();
-        state2.lastSwitch = snapshot;
-        nextAction = { ...action, targetSwitch: snapshot };
-        event = snapshot;
-      }
-      state2.lastFocus = current;
-      if (current?.targeted) state2.lastTargetFocus = current;
-      return {
-        action: nextAction,
-        event,
-        focus: current,
-        state: state2
-      };
     }
     function recordActionSwitchDiagnostics(action, source = "") {
       const state2 = ensureTargetSwitchDiagnostics();
@@ -19202,101 +19491,6 @@
       }
       if (!Array.isArray(bot.finalActionArbitration.history)) bot.finalActionArbitration.history = [];
       return bot.finalActionArbitration;
-    }
-    function finalActionBandRank(band) {
-      switch (String(band || "")) {
-        case "exit":
-          return 600;
-        case "safety":
-          return 500;
-        case "combat":
-          return 400;
-        case "profit":
-          return 300;
-        case "recover":
-          return 200;
-        case "wait":
-          return 100;
-        default:
-          return 0;
-      }
-    }
-    function finalActionReusable(action) {
-      if (!action || typeof action !== "object") return false;
-      if (action.kind === "leave") return false;
-      if (action.leave || action.pendingExitIntent) return false;
-      const band = actionPriorityBand(action);
-      return band === "safety" || band === "combat" || band === "profit";
-    }
-    function shouldHoldPreviousFinalAction(previousAction, previousFocus, currentAction, currentFocus, ageMs, options = {}) {
-      const holdMs = Math.max(0, Math.round(Number(options.holdMs || 0) || 0));
-      if (!(holdMs > 0) || ageMs > holdMs) return false;
-      if (!finalActionReusable(previousAction) || !currentAction || !currentFocus || !previousFocus) return false;
-      if (previousFocus.key === currentFocus.key) return false;
-      const previousBand = String(previousFocus.band || actionPriorityBand(previousAction));
-      const currentBand = String(currentFocus.band || actionPriorityBand(currentAction));
-      if (currentBand === "exit") return false;
-      const previousRank = finalActionBandRank(previousBand);
-      const currentRank = finalActionBandRank(currentBand);
-      if (previousRank <= 0 || currentRank <= 0) return false;
-      if (currentRank > previousRank) return false;
-      if (previousBand === currentBand && previousBand !== "profit") return false;
-      if (previousBand === "profit" && currentBand !== "profit") return false;
-      if (previousBand === "safety" && currentBand === "combat") return false;
-      return true;
-    }
-    function applyFinalActionArbitrationCore(action, state2, options = {}) {
-      if (!state2 || typeof state2 !== "object") {
-        state2 = { lastAction: null, lastFocus: null, lastSelectedAt: 0, lastOverride: null, history: [] };
-      }
-      if (!Array.isArray(state2.history)) state2.history = [];
-      const clone = typeof options.clone === "function" ? options.clone : defaultClone;
-      const tOption = Number(options.nowMs);
-      const t = Number.isFinite(tOption) ? tOption : Date.now();
-      const holdMs = Math.max(0, Math.round(Number(options.holdMs ?? options.finalActionArbitrationHoldMs ?? 0) || 0));
-      const historyLimit = Math.max(4, Math.round(Number(options.historyLimit ?? options.finalActionArbitrationHistoryLimit ?? 24) || 24));
-      const focusBuilder = typeof options.actionFocusSummary === "function" ? options.actionFocusSummary : actionFocusSummary;
-      const currentFocus = focusBuilder(action, { nowMs: t });
-      const previousAction = state2.lastAction || null;
-      const previousFocus = state2.lastFocus || null;
-      const ageMs = Math.max(0, t - Number(state2.lastSelectedAt || 0));
-      let selected = action;
-      let selectedFocus = currentFocus;
-      let override = null;
-      if (shouldHoldPreviousFinalAction(previousAction, previousFocus, action, currentFocus, ageMs, { holdMs })) {
-        override = {
-          type: "final-action-arbitration",
-          at: t,
-          source: String(options.source || ""),
-          mode: "hold-previous",
-          ageMs: Math.round(ageMs),
-          holdMs,
-          from: currentFocus,
-          to: previousFocus,
-          reason: "higher-priority-band-stick"
-        };
-        selected = {
-          ...previousAction,
-          finalActionArbitration: override
-        };
-        selectedFocus = previousFocus;
-      }
-      if (override) {
-        const snapshot = clone(override) || override;
-        state2.lastOverride = snapshot;
-        state2.history.push(snapshot);
-        while (state2.history.length > historyLimit) state2.history.shift();
-      }
-      state2.lastAction = clone(selected) || selected;
-      state2.lastFocus = clone(selectedFocus) || selectedFocus;
-      if (!override) state2.lastSelectedAt = t;
-      return {
-        action: selected,
-        focus: selectedFocus,
-        override,
-        held: Boolean(override),
-        state: state2
-      };
     }
     function applyFinalActionArbitration(action, source = "") {
       const state2 = ensureFinalActionArbitration();
