@@ -496,6 +496,8 @@ function main() {
     assert(generatedRuntimeSource.includes('function waitWithTimeout'), 'generated runtime does not include wait-with-timeout helper');
     assert(generatedRuntimeSource.includes('function leaveCommandFailureMessage'), 'generated runtime does not include leave command failure helper');
     assert(generatedRuntimeSource.includes('function summarizeLeaveCommandResult'), 'generated runtime does not include leave command result summary helper');
+    assert(generatedRuntimeSource.includes('function clashLeaveRescueHook'), 'generated runtime does not include Clash rescue hook helper');
+    assert(generatedRuntimeSource.includes('function scheduleClashLeaveRescueRetry'), 'generated runtime does not include Clash rescue scheduler');
     assert(generatedRuntimeSource.includes('function summarizeOfflineThreat'), 'generated runtime does not include offline threat summary helper');
     assert(generatedRuntimeSource.includes('function assessOfflineSafety'), 'generated runtime does not include offline safety assessment helper');
     assert(generatedRuntimeSource.includes('function pickActiveCombatWaitThreat'), 'generated runtime does not include active combat wait picker');
@@ -642,6 +644,9 @@ function main() {
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function waitWithTimeout'), 'leave-command source factory does not include timeout helper');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function leaveCommandFailureMessage'), 'leave-command source factory does not include failure helper');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function summarizeLeaveCommandResult'), 'leave-command source factory does not include result summary helper');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function clashLeaveRescueHook'), 'leave-command source factory does not include Clash rescue hook helper');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function scheduleClashLeaveRescueRetry'), 'leave-command source factory does not include Clash rescue scheduler');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('async function runClashLeaveRescueRetry'), 'leave-command source factory does not include Clash rescue retry runner');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
