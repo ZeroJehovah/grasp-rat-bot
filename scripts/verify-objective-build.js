@@ -297,6 +297,7 @@ function main() {
   const returnBlockSourceModule = readText('src/browser/return-block-source.js');
   const entityActivitySourceModule = readText('src/browser/entity-activity-source.js');
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
+  const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -326,6 +327,7 @@ function main() {
     returnBlockSourceModule,
     entityActivitySourceModule,
     staminaRuntimeSourceModule,
+    exitReloginSourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -421,6 +423,7 @@ function main() {
     assert(botSourceModule.includes("require('./return-block-source')"), 'return-block source module import not found');
     assert(botSourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
     assert(botSourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
+    assert(botSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -454,6 +457,7 @@ function main() {
     assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
+    assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
@@ -474,6 +478,8 @@ function main() {
     assert(generatedRuntimeSource.includes('function summarizeStamina'), 'generated runtime does not include stamina summary helper');
     assert(generatedRuntimeSource.includes('function staminaResetHoldUntil'), 'generated runtime does not include stamina reset hold helper');
     assert(generatedRuntimeSource.includes('function staleOfflineStaminaHoldContradicted'), 'generated runtime does not include stale offline stamina contradiction helper');
+    assert(generatedRuntimeSource.includes('function setExitReloginSuppress'), 'generated runtime does not include exit relogin suppress helper');
+    assert(generatedRuntimeSource.includes('function clearOfflineReloginHold'), 'generated runtime does not include offline relogin hold cleanup helper');
     assert(!generatedRuntimeSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
@@ -599,6 +605,12 @@ function main() {
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staminaResetHoldUntil'), 'stamina-runtime source factory does not include reset hold helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function deferredStaminaExhaustionLeave'), 'stamina-runtime source factory does not include deferred leave helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staleOfflineStaminaHoldContradicted'), 'stamina-runtime source factory does not include stale offline contradiction helper');
+    assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
+    assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
+    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');
+    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function setExitReloginSuppress'), 'exit-relogin source factory does not include suppress helper');
+    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function clearEnemyReloginHold'), 'exit-relogin source factory does not include enemy hold cleanup helper');
+    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('function clearOfflineReloginHold'), 'exit-relogin source factory does not include offline hold cleanup helper');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');

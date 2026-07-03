@@ -570,9 +570,10 @@ This is a source-organization split only. It preserves HP summaries, stamina exh
 39. Return-block source factory: integrated in `bootstrap-0.4.311`
 40. Entity activity source factory: integrated in `bootstrap-0.4.312`
 41. Stamina runtime source factory: integrated in `bootstrap-0.4.313`
-42. Constants: partially integrated for high-value coin defaults
-43. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-44. Run live validation sessions after each behavior-touching replacement
+42. Exit/relogin hold source factory: integrated in `bootstrap-0.4.314`
+43. Constants: partially integrated for high-value coin defaults
+44. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+45. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
