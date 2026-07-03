@@ -305,6 +305,7 @@ function main() {
   const opportunityActionsSourceModule = readText('src/browser/opportunity-actions-source.js');
   const opportunityCandidateSourceModule = readText('src/browser/opportunity-candidate-source.js');
   const opportunityRouteSourceModule = readText('src/browser/opportunity-route-source.js');
+  const opportunityChoiceSourceModule = readText('src/browser/opportunity-choice-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -356,6 +357,7 @@ function main() {
     opportunityActionsSourceModule,
     opportunityCandidateSourceModule,
     opportunityRouteSourceModule,
+    opportunityChoiceSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -520,6 +522,7 @@ function main() {
     assert(botSourceModule.includes('${postAttackSource()}'), 'post-attack module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityCandidateSource()}'), 'opportunity-candidate module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityChoiceSource()}'), 'opportunity-choice module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -747,6 +750,14 @@ function main() {
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('buildOpportunityCandidatesCore.toString()'), 'opportunity-candidate source factory does not inline opportunity candidate core');
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function opportunityCandidateCoreOptions'), 'opportunity-candidate source factory does not include core options wrapper');
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function pickProfitableCombatTarget'), 'opportunity-candidate source factory does not include profitable combat comparison wrapper');
+    assert(opportunityChoiceSourceModule.includes('function opportunityChoiceSource() {'), 'opportunity-choice source factory not found');
+    assert(opportunityChoiceSourceModule.includes('module.exports = { opportunityChoiceSource }'), 'opportunity-choice source module export not found');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('String.raw`'), 'opportunity-choice source factory does not return raw browser source');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('chooseStableOpportunityCore.toString()'), 'opportunity-choice source factory does not inline stable picker core');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('rememberOpportunityChoiceCore.toString()'), 'opportunity-choice source factory does not inline persistence core');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('buildMissingHeldOpportunityCore.toString()'), 'opportunity-choice source factory does not inline missing-held core');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('function opportunityChoiceCoreOptions'), 'opportunity-choice source factory does not include core options wrapper');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('function buildMissingHeldOpportunity'), 'opportunity-choice source factory does not include missing-held wrapper');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource() {'), 'opportunity-route source factory not found');
     assert(opportunityRouteSourceModule.includes('module.exports = { opportunityRouteSource }'), 'opportunity-route source module export not found');
     assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('String.raw`'), 'opportunity-route source factory does not return raw browser source');
@@ -2584,7 +2595,7 @@ function main() {
     assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
     assert(strategyOpportunityChoiceSource.includes('function rememberOpportunityChoiceCore'), 'strategy opportunity choice persistence core not found');
     assert(strategyOpportunityChoiceSource.includes('function buildMissingHeldOpportunityCore'), 'strategy missing-held opportunity core not found');
-    assert(botSourceModule.includes("require('../strategy/opportunity-choice')"), 'source bot does not import opportunity choice strategy module');
+    assert(opportunityChoiceSourceModule.includes("require('../strategy/opportunity-choice')"), 'opportunity-choice source does not import opportunity choice strategy module');
     assert(sourceRuntimeText.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
     assert(sourceRuntimeText.includes('rememberOpportunityChoiceCore.toString()'), 'source bot does not inject opportunity choice persistence core');
     assert(sourceRuntimeText.includes('buildMissingHeldOpportunityCore.toString()'), 'source bot does not inject missing-held opportunity core');
