@@ -335,11 +335,12 @@ The first bundler spike is source-only and does not change the production remote
 - `src/bundler-spike/page-adapter.mjs` centralizes the spike's page-global access for `window` / `globalThis` resolution, config reads, global installation, and localStorage JSON reads, so the entrypoint no longer reaches for `window` or `globalThis` directly.
 - `scripts/build-bundler-spike.js` builds that entry as a readable browser IIFE with `format: 'iife'`, `platform: 'browser'`, and `globalName: '__graspRatBundlerSpikeBundle'`.
 - The spike self-test builds into a temp directory, rejects unresolved relative `require()` / `import` paths, checks that shared/runtime/display/target-whitelist/action-priority/page-adapter helpers are bundled, and executes the output in a VM through both `globalThis.__graspRatBundlerSpike.status()` and `window.__graspRatBundlerSpike.status()`.
-- `scripts/verify-objective-build.js` checks the spike source modules and self-test coverage instead of depending on exact generated bundle wrapping text. It verifies production build isolation, adapter ownership of page globals, and the absence of direct `window` / `globalThis` access in the spike entrypoint.
+- `scripts/build-remote-bot-bundled.js` is the next candidate step: it feeds the full generated remote runtime from `browserBotSource()` through esbuild as a non-production browser IIFE, writes a candidate manifest with both direct-source and bundled-output hashes, rejects unresolved relative `require()` / `import` paths and CommonJS exports, and parses the bundled result with `vm.Script`.
+- `scripts/verify-objective-build.js` checks the spike source modules, full generated-runtime candidate, and self-test coverage instead of depending on exact generated bundle wrapping text. It verifies production build isolation, adapter ownership of page globals, the absence of direct `window` / `globalThis` access in the spike entrypoint, and esbuild parsing of the complete current remote runtime.
 - esbuild can bundle the current CommonJS helper modules, but the output necessarily contains esbuild's internal CommonJS wrapper (`module.exports` / `__commonJS`). That is browser-safe for the spike, but a future production migration should prefer true browser ESM modules or accept that wrapper explicitly in verification.
 - `scripts/build-remote-bot.js` remains isolated from esbuild; production remote generation still uses `src/browser/bot-source.js`.
 
-This proves the bundler direction is technically viable for a controlled entrypoint and that the page-global adapter pattern can be verified without relying on exact bundle text. It does not yet prove that the full `browserBotSource()` runtime can be converted without extending the adapter to the real native/page functions and converting runtime slices in stages.
+This proves the bundler direction is technically viable for a controlled entrypoint, that the page-global adapter pattern can be verified without relying on exact bundle text, and that the current full generated remote runtime can be parsed and wrapped by esbuild. It does not yet switch the production remote build or prove true browser-module ownership of the large runtime slices; those should still be converted in stages.
 
 ## Next Steps (Not Implemented Yet)
 
@@ -366,9 +367,10 @@ This proves the bundler direction is technically viable for a controlled entrypo
 20. Coin route action metadata: integrated in `bootstrap-0.4.294`
 21. Browser source builder extraction/direct build path: integrated in `bootstrap-0.4.295`
 22. Source-only esbuild bundler spike plus spike page-global adapter: implemented after `bootstrap-0.4.295`
-23. Constants: partially integrated for high-value coin defaults
-24. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-25. Run live validation sessions after each behavior-touching replacement
+23. Full generated remote runtime esbuild candidate: implemented after `bootstrap-0.4.295`
+24. Constants: partially integrated for high-value coin defaults
+25. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+26. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules

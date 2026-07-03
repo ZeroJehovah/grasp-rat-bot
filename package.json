@@ -4,7 +4,9 @@
   "type": "commonjs",
   "scripts": {
     "build:bundler-spike": "node scripts/build-bundler-spike.js",
-    "test:bundler-spike": "node scripts/build-bundler-spike.js --self-test"
+    "test:bundler-spike": "node scripts/build-bundler-spike.js --self-test",
+    "build:remote-bundled": "node scripts/build-remote-bot-bundled.js",
+    "test:remote-bundled": "node scripts/build-remote-bot-bundled.js --self-test"
   },
   "devDependencies": {
     "esbuild": "0.25.11"
