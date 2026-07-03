@@ -288,6 +288,7 @@ function main() {
   const opportunityCandidatesRuntimeModule = readText('src/browser/runtime/opportunity-candidates.js');
   const postAttackDropRuntimeModule = readText('src/browser/runtime/post-attack-drop.js');
   const staminaBudgetRuntimeModule = readText('src/browser/runtime/stamina-budget.js');
+  const opportunityConstantsRuntimeModule = readText('src/browser/runtime/opportunity-constants.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -300,6 +301,7 @@ function main() {
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
   const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
+  const strategyOpportunityConstantsSource = readText('src/strategy/opportunity-constants.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
@@ -397,6 +399,7 @@ function main() {
     opportunityCandidatesRuntimeModule,
     postAttackDropRuntimeModule,
     staminaBudgetRuntimeModule,
+    opportunityConstantsRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1283,6 +1286,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import coinTarget from '../browser/runtime/coin-target.js'"), 'bundler spike does not import coin target through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import postAttackDrop from '../browser/runtime/post-attack-drop.js'"), 'bundler spike does not import post-attack drop through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import staminaBudget from '../browser/runtime/stamina-budget.js'"), 'bundler spike does not import stamina budget through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import opportunityConstants from '../browser/runtime/opportunity-constants.js'"), 'bundler spike does not import opportunity constants through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
@@ -1296,6 +1300,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("coinTarget.coinTargetKeyCore({ drop_id: 'target-spike'"), 'bundler spike does not execute the coin target helper module');
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute the post-attack drop helper module');
     assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute the stamina budget helper module');
+    assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute the opportunity constants helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -1325,6 +1330,7 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.nameCount === 2'), 'bundler spike self-test does not verify browser runtime helper execution');
     assert(bundlerSpikeBuildSource.includes("status.postAttackDropSelectedId === 'post-attack-coin'"), 'bundler spike self-test does not assert post-attack drop execution');
     assert(bundlerSpikeBuildSource.includes('status.staminaBudgetExitShortageMs === 50'), 'bundler spike self-test does not assert stamina budget execution');
+    assert(bundlerSpikeBuildSource.includes('status.opportunityConstantRoi === 5'), 'bundler spike self-test does not assert opportunity constants execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');
     assert(bundlerSpikeBuildSource.includes('context => context.window'), 'bundler spike self-test does not read installed window global');
     assert(bundlerSpikeBuildSource.includes("storageProbe?.scope === 'globalThis'"), 'bundler spike self-test does not cover globalThis localStorage');
@@ -3073,6 +3079,20 @@ function main() {
     assert(generatedRuntimeSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'generated runtime does not inline blocked stamina summary core');
     assert(generatedRuntimeSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'generated runtime does not inline nearest stamina exit core');
     assert(generatedRuntimeSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'generated runtime does not inline daily final coin picker core');
+  });
+
+  check('opportunity constants use browser runtime adapter', () => {
+    assert(strategyOpportunityConstantsSource.includes('const OPPORTUNITY_CONSTANTS = {'), 'strategy opportunity constants object not found');
+    assert(strategyOpportunityConstantsSource.includes('function calculateOpportunityROI'), 'strategy opportunity ROI helper not found');
+    assert(runtimeBootstrapSourceModule.includes("require('./runtime/opportunity-constants')"), 'runtime bootstrap source does not import opportunity constants through browser runtime adapter');
+    assert(!runtimeBootstrapSourceModule.includes("require('../strategy/opportunity-constants')"), 'runtime bootstrap source still imports opportunity constants directly from strategy');
+    assert(opportunityConstantsRuntimeModule.includes("require('../../strategy/opportunity-constants')"), 'opportunity-constants runtime adapter does not reuse strategy module core');
+    assert(opportunityConstantsRuntimeModule.includes('OPPORTUNITY_CONSTANTS') && opportunityConstantsRuntimeModule.includes('calculateOpportunityROI') && opportunityConstantsRuntimeModule.includes('validateOpportunityConstants'), 'opportunity-constants runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-constants.js'"), 'bundler spike does not import opportunity constants runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute opportunity constants helper');
+    assert(bundlerSpikeBuildSource.includes('status.opportunityConstantRoi === 5'), 'bundler spike self-test does not assert opportunity constants execution');
+    assert(sourceRuntimeText.includes('const OPPORTUNITY_CONSTANTS = ${JSON.stringify(OPPORTUNITY_CONSTANTS)}'), 'source modules do not inject opportunity constants object');
+    assert(generatedRuntimeSource.includes('const OPPORTUNITY_CONSTANTS = {'), 'generated runtime does not inline opportunity constants object');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
