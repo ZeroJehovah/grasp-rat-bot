@@ -977,6 +977,17 @@ This is a source-organization split only. It reduces `src/browser/runtime-assemb
 
 This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 253 lines and keeps the new runtime utility source factory to 29 lines.
 
+## 2026-07-03 Follow-up: Phase 2CK Status Panel Runtime Source Factory
+
+`bootstrap-0.4.364` extracts the helper-bound status panel runtime fragment into a dedicated browser source module:
+
+- `src/browser/status-panel-runtime-source.js` now owns display helper imports and calls `statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })`.
+- `src/browser/runtime-assembly-source.js` imports and lists `statusPanelRuntimeSource`, so the assembly layer no longer imports `../shared/display-format` directly.
+- Static verification checks the wrapper source-factory shape, display-helper import, status-panel source import, helper binding call, registry entry, and generated runtime helper presence.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.364` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 246 lines and keeps the new status panel runtime source factory to 16 lines.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1071,10 +1082,11 @@ This is a source-organization split only. It reduces `src/browser/runtime-assemb
 89. Runtime assembly fragment registry: integrated in `bootstrap-0.4.361`
 90. Restored runtime state source factory: integrated in `bootstrap-0.4.362`
 91. Runtime utility source factory: integrated in `bootstrap-0.4.363`
-92. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
-93. Constants: partially integrated for high-value coin defaults
-94. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-95. Run live validation sessions after each behavior-touching replacement
+92. Status panel runtime source factory: integrated in `bootstrap-0.4.364`
+93. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
+94. Constants: partially integrated for high-value coin defaults
+95. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+96. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the remaining `browserRuntimeAssemblySource()` generated-source assembly behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
