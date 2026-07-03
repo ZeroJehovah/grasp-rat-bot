@@ -966,6 +966,17 @@ This is a source-organization split only. It does not reduce line count; it make
 
 This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 263 lines and keeps the new restored runtime state source factory to 14 lines.
 
+## 2026-07-03 Follow-up: Phase 2CJ Runtime Utility Source Factory
+
+`bootstrap-0.4.363` extracts shared runtime utility source injection into a dedicated browser source module:
+
+- `src/browser/runtime-utils-source.js` now owns browser-source injection for `safeStringify()`, `safeJsonClone()`, and `sanitizeCombatLogIdPart()` from `src/shared/runtime-utils.js`.
+- `src/browser/runtime-assembly-source.js` imports `runtimeUtilityPreludeSource` and `runtimeUtilityCloneSource`, keeping the original generated order around `arrayCountSource()`.
+- Static verification checks the new source-factory shapes, module exports, shared helper injection anchors, registry entries, and generated runtime helper presence.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.363` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It reduces `src/browser/runtime-assembly-source.js` to 253 lines and keeps the new runtime utility source factory to 29 lines.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1059,10 +1070,11 @@ This is a source-organization split only. It reduces `src/browser/runtime-assemb
 88. Runtime assembly boundary rename: integrated in `bootstrap-0.4.360`
 89. Runtime assembly fragment registry: integrated in `bootstrap-0.4.361`
 90. Restored runtime state source factory: integrated in `bootstrap-0.4.362`
-91. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
-92. Constants: partially integrated for high-value coin defaults
-93. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-94. Run live validation sessions after each behavior-touching replacement
+91. Runtime utility source factory: integrated in `bootstrap-0.4.363`
+92. Remaining browser source assembly audit: identify any residual runtime logic still owned by `runtime-assembly-source.js`
+93. Constants: partially integrated for high-value coin defaults
+94. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+95. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the remaining `browserRuntimeAssemblySource()` generated-source assembly behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
