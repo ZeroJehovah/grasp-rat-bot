@@ -13,7 +13,7 @@ const {
   bestCoinOpportunityScoreCore
 } = require('./runtime/opportunity-candidates');
 
-function opportunityCandidateSource() {
+function opportunityCandidateSource(options = {}) {
   return String.raw`
   function opportunityPriorityTier(item) {
     return opportunityPriorityTierCore(item, {
@@ -32,7 +32,7 @@ function opportunityCandidateSource() {
 	  ${buildOpportunityCandidatesCore.toString()}
 	  ${bestCoinOpportunityScoreCore.toString()}
 
-${opportunityRouteSource()}	  function opportunityCandidateCoreOptions(self = null) {
+${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(self = null) {
 	    return {
 	      safeCoinCandidates,
 	      coinStaminaCost: opportunityCoinStaminaCost,

@@ -530,6 +530,7 @@ function main() {
     assert(distSource.includes('var require_coin_motion = __commonJS'), 'bundled production dist does not bundle the coin-motion runtime module through esbuild');
     assert(distSource.includes('var require_coin_target = __commonJS'), 'bundled production dist does not bundle the coin-target runtime module through esbuild');
     assert(distSource.includes('var require_coin_progress = __commonJS'), 'bundled production dist does not bundle the coin-progress runtime module through esbuild');
+    assert(distSource.includes('var require_coin_route = __commonJS'), 'bundled production dist does not bundle the coin-route runtime module through esbuild');
     assert(distSource.includes('var require_coin_diagnostics = __commonJS'), 'bundled production dist does not bundle the coin-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_stamina_budget = __commonJS'), 'bundled production dist does not bundle the stamina-budget runtime module through esbuild');
     assert(distSource.includes('var require_post_attack_drop = __commonJS'), 'bundled production dist does not bundle the post-attack-drop runtime module through esbuild');
@@ -608,6 +609,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-stamina', () => opportunityStaminaSource(config)]"), 'opportunity-stamina source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("['opportunity-candidate', () => opportunityCandidateSource(config)]"), 'opportunity-candidate source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['post-attack', () => postAttackSource(config)]"), 'post-attack source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
@@ -1007,10 +1009,10 @@ function main() {
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function enemyOpportunityCandidates'), 'opportunity-actions source factory does not include enemy candidate helper');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
-    assert(opportunityCandidateSourceModule.includes('function opportunityCandidateSource() {'), 'opportunity-candidate source factory not found');
+    assert(opportunityCandidateSourceModule.includes('function opportunityCandidateSource(options = {}) {'), 'opportunity-candidate source factory not found');
     assert(opportunityCandidateSourceModule.includes('module.exports = { opportunityCandidateSource }'), 'opportunity-candidate source module export not found');
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('String.raw`'), 'opportunity-candidate source factory does not return raw browser source');
-    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('${opportunityRouteSource()}'), 'opportunity-candidate source factory does not inject route source');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('${opportunityRouteSource(options)}'), 'opportunity-candidate source factory does not inject route source with runtime options');
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('buildOpportunityCandidatesCore.toString()'), 'opportunity-candidate source factory does not inline opportunity candidate core');
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function opportunityCandidateCoreOptions'), 'opportunity-candidate source factory does not include core options wrapper');
     assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function pickProfitableCombatTarget'), 'opportunity-candidate source factory does not include profitable combat comparison wrapper');
@@ -1040,13 +1042,16 @@ function main() {
     assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('function clearOpportunityChoiceFor'), 'opportunity-clear source factory does not include clearOpportunityChoiceFor');
     assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('bot.opportunityChoice = null'), 'opportunity-clear source factory does not clear opportunity choice');
     assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('resetOpportunitySwitchLock()'), 'opportunity-clear source factory does not reset switch lock');
-    assert(opportunityRouteSourceModule.includes('function opportunityRouteSource() {'), 'opportunity-route source factory not found');
-    assert(opportunityRouteSourceModule.includes('module.exports = { opportunityRouteSource }'), 'opportunity-route source module export not found');
-    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('String.raw`'), 'opportunity-route source factory does not return raw browser source');
-    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('pickCoinRouteOpportunityCore.toString()'), 'opportunity-route source factory does not inline coin route picker core');
-    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('coinRouteActionMetaCore.toString()'), 'opportunity-route source factory does not inline route action metadata core');
-    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('function coinRouteCoreOptions'), 'opportunity-route source factory does not include core options wrapper');
-    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('function currentHeldCoinRouteChoice'), 'opportunity-route source factory does not include held route helper');
+    assert(opportunityRouteSourceModule.includes('function opportunityRouteInlineSource(helpers = {}) {'), 'opportunity-route inline source factory not found');
+    assert(opportunityRouteSourceModule.includes('function bundledOpportunityRouteSource() {'), 'opportunity-route bundled source factory not found');
+    assert(opportunityRouteSourceModule.includes('function opportunityRouteSource(options = {}) {'), 'opportunity-route source selector not found');
+    assert(opportunityRouteSourceModule.includes('bundledOpportunityRouteSource') && opportunityRouteSourceModule.includes('opportunityRouteInlineSource') && opportunityRouteSourceModule.includes('opportunityRouteSource'), 'opportunity-route source module exports are incomplete');
+    const opportunityRouteInlineBody = functionBody(opportunityRouteSourceModule, 'opportunityRouteInlineSource');
+    assert(opportunityRouteInlineBody.includes('String.raw`'), 'opportunity-route inline source factory does not return raw browser source');
+    assert(opportunityRouteInlineBody.includes('coinRouteHelperSource'), 'opportunity-route inline source factory does not inject coin route helpers');
+    assert(opportunityRouteInlineBody.includes('function coinRouteCoreOptions'), 'opportunity-route inline source factory does not include core options wrapper');
+    assert(opportunityRouteInlineBody.includes('function currentHeldCoinRouteChoice'), 'opportunity-route inline source factory does not include held route helper');
+    assert(functionBody(opportunityRouteSourceModule, 'bundledOpportunityRouteSource').includes("require('./src/browser/runtime/coin-route')"), 'opportunity-route bundled source does not hand coin-route helpers to the bundler');
     assert(coinTargetRuntimeSourceModule.includes('function bundledCoinTargetRuntimeSource()'), 'bundled coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeInlineSource(helpers = {})'), 'inline coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource(options = {})'), 'coin-target runtime source factory not found');
@@ -1704,7 +1709,7 @@ function main() {
     });
     check(`${file} plans bounded native visible coin routes inside opportunity scoring`, () => {
       const routeBody = functionBody(text, 'pickCoinRouteOpportunity');
-      const routeCoreSource = file === 'grasp-rat-bot.js' ? strategyCoinRouteSource : text;
+      const routeCoreSource = file === 'grasp-rat-bot.js' ? strategyCoinRouteSource : finalRuntimeText;
       const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
       const bestBody = functionBody(text, 'bestCoinOpportunityScore');
       const pickBody = functionBody(text, 'pickBestOpportunity');
@@ -1723,7 +1728,7 @@ function main() {
       assert(routeCoreSource.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
       assert(text.includes('best-opportunity-coin-route'), 'coin route decision reason not found');
       assert(routeCoreSource.includes('points: coinRoutePoints(bestRoute)'), 'coin route action metadata does not expose route points');
-      assert(routeCoreBody.includes('.filter(coin => !isSnapshotOnlyCoin(coin))'), 'coin route planner can include snapshot-only coins');
+      assert(routeCoreBody.includes('.filter(coin => !isSnapshotOnlyCoin(coin))') || routeCoreBody.includes('.filter((coin) => !isSnapshotOnlyCoin(coin))'), 'coin route planner can include snapshot-only coins');
       assert(text.includes('poolLimit: cfg.coinRoutePoolLimit') || routeCoreBody.includes('options.poolLimit'), 'coin route planner is not pool bounded');
       assert(text.includes('anchorLimit: cfg.coinRouteAnchorLimit') || routeCoreBody.includes('options.anchorLimit'), 'coin route planner is not anchor bounded');
       assert(routeCoreBody.includes('coinRouteLegClearCore(self, anchor, activeThreats, options)'), 'coin route planner does not safety-check first leg');
@@ -3097,12 +3102,14 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/coin-route.js'"), 'bundler spike does not import coin route runtime adapter');
     assert(bundlerSpikeEntrySource.includes('coinRoute.coinRouteActionMetaCore('), 'bundler spike does not execute coin route metadata helper');
     assert(bundlerSpikeBuildSource.includes("status.coinRouteKey === 'route-spike'"), 'bundler spike self-test does not assert coin route execution');
-    assert(sourceRuntimeText.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
-    assert(sourceRuntimeText.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
+    assert(opportunityRouteSourceModule.includes('coinRouteHelperSource') && opportunityRouteSourceModule.includes('fn.toString()'), 'source modules do not wire local coin route helper injection');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
     assert(sourceRuntimeText.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
-    assert(generatedRuntimeSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
-    assert(generatedRuntimeSource.includes('function coinRouteActionMetaCore'), 'generated runtime does not inline coin route action metadata core');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-route')"), 'generated remote runtime does not hand coin route helpers to the bundler');
+    assert(!generatedRuntimeSource.includes('function pickCoinRouteOpportunityCore'), 'generated remote runtime still inlines coin route picker core before bundling');
+    assert(distSource.includes('function pickCoinRouteOpportunityCore'), 'bundled dist does not contain coin route picker core');
+    assert(distSource.includes('function coinRouteActionMetaCore'), 'bundled dist does not contain coin route action metadata core');
+    assert(distSource.includes('function buildCoinRouteFromAnchorCore'), 'bundled dist does not contain coin route builder core');
     assert(generatedRuntimeSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
   });
 
