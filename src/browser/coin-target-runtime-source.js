@@ -12,7 +12,29 @@ const {
   snapshotCoinNavigationReasonCore
 } = require('./runtime/coin-target');
 
-function coinTargetRuntimeSource() {
+function coinTargetRuntimeInlineSource(helpers = {}) {
+  const {
+    coinTargetKeyCore,
+    coinTargetDistance,
+    coinMatchesTrackedTargetCore,
+    trackedCoinTargetForCollectionCore,
+    buildNativeCoinSnapshotCore,
+    pointToSegmentDistanceCore,
+    pickIncidentalCoinPickupsCore,
+    snapshotCoinWorthLongTravelCore,
+    snapshotCoinNavigationReasonCore
+  } = helpers;
+  const coinTargetHelperSource = [
+    coinTargetKeyCore,
+    coinTargetDistance,
+    coinMatchesTrackedTargetCore,
+    trackedCoinTargetForCollectionCore,
+    buildNativeCoinSnapshotCore,
+    pointToSegmentDistanceCore,
+    pickIncidentalCoinPickupsCore,
+    snapshotCoinWorthLongTravelCore,
+    snapshotCoinNavigationReasonCore
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
   return String.raw`
   function setLastTarget(kind, id) {
     if (!id && id !== 0) return;
@@ -35,15 +57,7 @@ function coinTargetRuntimeSource() {
 	    bot.lastCoinClearReason = reason;
 	  }
 
-  ${coinTargetKeyCore.toString()}
-  ${coinTargetDistance.toString()}
-  ${coinMatchesTrackedTargetCore.toString()}
-  ${trackedCoinTargetForCollectionCore.toString()}
-  ${buildNativeCoinSnapshotCore.toString()}
-  ${pointToSegmentDistanceCore.toString()}
-  ${pickIncidentalCoinPickupsCore.toString()}
-  ${snapshotCoinWorthLongTravelCore.toString()}
-  ${snapshotCoinNavigationReasonCore.toString()}
+${coinTargetHelperSource}
 
   function coinTargetCoreOptions(extra = {}) {
     return {
@@ -226,6 +240,39 @@ function coinTargetRuntimeSource() {
 `;
 }
 
+function bundledCoinTargetRuntimeSource() {
+  return `const {
+  coinTargetKeyCore,
+  coinTargetDistance,
+  coinMatchesTrackedTargetCore,
+  trackedCoinTargetForCollectionCore,
+  buildNativeCoinSnapshotCore,
+  pointToSegmentDistanceCore,
+  pickIncidentalCoinPickupsCore,
+  snapshotCoinWorthLongTravelCore,
+  snapshotCoinNavigationReasonCore
+} = require('./src/browser/runtime/coin-target');
+
+${coinTargetRuntimeInlineSource()}`;
+}
+
+function coinTargetRuntimeSource(options = {}) {
+  if (options.bundledRuntime) return bundledCoinTargetRuntimeSource();
+  return coinTargetRuntimeInlineSource({
+    coinTargetKeyCore,
+    coinTargetDistance,
+    coinMatchesTrackedTargetCore,
+    trackedCoinTargetForCollectionCore,
+    buildNativeCoinSnapshotCore,
+    pointToSegmentDistanceCore,
+    pickIncidentalCoinPickupsCore,
+    snapshotCoinWorthLongTravelCore,
+    snapshotCoinNavigationReasonCore
+  });
+}
+
 module.exports = {
+  bundledCoinTargetRuntimeSource,
+  coinTargetRuntimeInlineSource,
   coinTargetRuntimeSource
 };
