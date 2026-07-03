@@ -1,6 +1,6 @@
 'use strict';
 
-const { combatLogExitSummaryFromDecision } = require('../shared/exit-summary');
+const { combatLogExitSummaryFromDecision } = require('./runtime/exit-summary');
 const { combatLogSource } = require('./combat-log-source');
 
 function combatLogRuntimeSource() {

@@ -1080,6 +1080,18 @@ This is a source-organization split only. It keeps status-panel rendering behavi
 
 This is a source-organization split only. It keeps whitelist parsing, URL derivation, and generated runtime behavior unchanged while moving target-whitelist helper ownership to executable browser runtime modules.
 
+## 2026-07-04 Follow-up: Phase 2CT Exit Summary Helper Module
+
+`bootstrap-0.4.373` continues the true browser runtime-module migration for exit-summary helpers:
+
+- `src/browser/runtime/exit-summary.js` now owns the executable browser runtime helper exports for stamina exhaustion labels/evidence, offline leave summary text, and combat-log exit summary construction by reusing `src/shared/exit-summary.js`.
+- `src/browser/runtime-bootstrap-source.js`, `src/browser/combat-log-runtime-source.js`, and `src/browser/control-login-runtime-source.js` import that browser runtime helper module while keeping the same generated helper text and binding calls.
+- `src/bundler-spike/runtime-entry.mjs` imports exit-summary helpers through the browser runtime module path and now verifies `offlineLeaveSummaryText()` execution through the spike status payload.
+- Static verification checks the runtime helper module, all three source-factory import paths, the shared-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.373` hash stayed `5e1be70c84c0ad9c6f9b3012b91572ff28c92ec2101cc9c46aaa91132d101da8` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps exit text, stamina hold contradiction checks, combat-log summaries, and generated runtime behavior unchanged while moving exit-summary helper ownership to executable browser runtime modules.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1183,9 +1195,10 @@ This is a source-organization split only. It keeps whitelist parsing, URL deriva
 98. Runtime-utils true runtime helper module: integrated in `bootstrap-0.4.370`
 99. Display-format true runtime helper module: integrated in `bootstrap-0.4.371`
 100. Target-whitelist true runtime helper module: integrated in `bootstrap-0.4.372`
-101. Constants: partially integrated for high-value coin defaults
-102. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-103. Run live validation sessions after each behavior-touching replacement
+101. Exit-summary true runtime helper module: integrated in `bootstrap-0.4.373`
+102. Constants: partially integrated for high-value coin defaults
+103. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+104. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
