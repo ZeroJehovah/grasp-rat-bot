@@ -1,6 +1,6 @@
 'use strict';
 
-function exitMotionSource() {
+function exitMotionInlineSource() {
   return String.raw`
   function exitMotionStopLockRemainingMs(t = Date.now()) {
     const stoppedAt = Number(bot.lastExitMotionStopAt || 0);
@@ -51,4 +51,51 @@ function exitMotionSource() {
   }`;
 }
 
-module.exports = { exitMotionSource };
+function bundledExitMotionSource() {
+  return `const {
+    exitMotionStopLockRemainingMsCore,
+    postExitDecisionWithoutTargetCore
+  } = require('./src/browser/runtime/exit-motion');
+
+  function exitMotionStopLockRemainingMs(t = Date.now()) {
+    return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
+  }
+
+  function exitMotionStopActive(t = Date.now()) {
+    return exitMotionStopLockRemainingMs(t) > 0;
+  }
+
+  function postExitDecisionWithoutTarget(decision, reason = '') {
+    return postExitDecisionWithoutTargetCore(decision, reason, {
+      lastExitMotionStopReason: bot.lastExitMotionStopReason,
+      exitMotionLockRemainingMs
+    });
+  }
+
+  function clearPostExitTargetState(reason = 'exit-confirmed') {
+    bot.lastTarget = null;
+    bot.lastTargetAt = 0;
+    bot.opportunityChoice = null;
+    resetOpportunitySwitchLock();
+    bot.staleCoinEscape = null;
+    bot.coinApproachLock = null;
+    removeTargetOverlay();
+    if (bot.lastDecision && typeof bot.lastDecision === 'object') {
+      bot.lastDecision = postExitDecisionWithoutTarget(bot.lastDecision, reason);
+      try {
+        updateBotPanel(bot.lastDecision);
+      } catch (_) {}
+    }
+  }`;
+}
+
+function exitMotionSource(options = {}) {
+  if (options.bundledRuntime) return bundledExitMotionSource();
+  return exitMotionInlineSource();
+}
+
+module.exports = {
+  exitMotionInlineSource,
+  bundledExitMotionSource,
+  exitMotionSource
+};

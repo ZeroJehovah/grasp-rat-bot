@@ -797,6 +797,59 @@
     }
   });
 
+  // src/strategy/exit-motion.js
+  var require_exit_motion = __commonJS({
+    "src/strategy/exit-motion.js"(exports, module) {
+      "use strict";
+      function exitMotionStopLockRemainingMsCore(stoppedAtValue, lockMsValue, t = Date.now()) {
+        const stoppedAt = Number(stoppedAtValue || 0);
+        if (!stoppedAt) return 0;
+        const lockMs = Math.max(0, Number(lockMsValue || 0) || 0);
+        return Math.max(0, Math.round(stoppedAt + lockMs - t));
+      }
+      function postExitDecisionWithoutTargetCore(decision, reason = "", options = {}) {
+        const previous = decision && typeof decision === "object" ? decision : {};
+        const lockRemaining = typeof options.exitMotionLockRemainingMs === "function" ? options.exitMotionLockRemainingMs() : Number(options.exitMotionLockRemainingMs || 0);
+        return {
+          ...previous,
+          kind: "wait",
+          reason: reason || previous.reason || "exit-motion-stopped",
+          dx: 0,
+          dy: 0,
+          target: null,
+          aimTarget: null,
+          opportunisticShot: null,
+          combat: false,
+          shoot: false,
+          forceShoot: false,
+          combatCover: null,
+          exitMotionStopped: true,
+          exitMotionStopReason: reason || options.lastExitMotionStopReason || "",
+          exitMotionLockRemainingMs: lockRemaining
+        };
+      }
+      module.exports = {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
+  // src/browser/runtime/exit-motion.js
+  var require_exit_motion2 = __commonJS({
+    "src/browser/runtime/exit-motion.js"(exports, module) {
+      "use strict";
+      var {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      } = require_exit_motion();
+      module.exports = {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
   // src/shared/display-format.js
   var require_display_format = __commonJS({
     "src/shared/display-format.js"(exports, module) {
@@ -3543,7 +3596,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.412" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.413" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4194,8 +4247,8 @@
         const todaySession = summarizeTodaySessionStats(session, displaySelf);
         const enemyLeaveDetail = activeEnemyLeaveDetail();
         const offlineLeaveDetail = activeOfflineLeaveDetail();
-        const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
-        const displayLastDecision = exitMotionLockRemainingMs > 0 ? postExitDecisionWithoutTarget(this.lastDecision, this.lastExitMotionStopReason || "exit-motion-stopped") : this.lastDecision;
+        const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs();
+        const displayLastDecision = exitMotionLockRemainingMs2 > 0 ? postExitDecisionWithoutTarget(this.lastDecision, this.lastExitMotionStopReason || "exit-motion-stopped") : this.lastDecision;
         return {
           version: cfg.version,
           sourceHash: cfg.sourceHash,
@@ -4256,7 +4309,7 @@
           exitMotionStop: {
             at: this.lastExitMotionStopAt || 0,
             reason: this.lastExitMotionStopReason || "",
-            lockRemainingMs: exitMotionLockRemainingMs
+            lockRemainingMs: exitMotionLockRemainingMs2
           },
           self: displaySelf,
           lastSelf: displaySelf,
@@ -4675,34 +4728,21 @@
       attackMinDrop: cfg.attackMinDrop,
       attackMinRewardRatio: cfg.attackMinRewardRatio
     });
+    const {
+      exitMotionStopLockRemainingMsCore,
+      postExitDecisionWithoutTargetCore
+    } = require_exit_motion2();
     function exitMotionStopLockRemainingMs(t = Date.now()) {
-      const stoppedAt = Number(bot.lastExitMotionStopAt || 0);
-      if (!stoppedAt) return 0;
-      const lockMs = Math.max(0, Number(cfg.exitMotionStopLockMs || 0) || 0);
-      return Math.max(0, Math.round(stoppedAt + lockMs - t));
+      return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
     }
     function exitMotionStopActive(t = Date.now()) {
       return exitMotionStopLockRemainingMs(t) > 0;
     }
     function postExitDecisionWithoutTarget(decision, reason = "") {
-      const previous = decision && typeof decision === "object" ? decision : {};
-      return {
-        ...previous,
-        kind: "wait",
-        reason: reason || previous.reason || "exit-motion-stopped",
-        dx: 0,
-        dy: 0,
-        target: null,
-        aimTarget: null,
-        opportunisticShot: null,
-        combat: false,
-        shoot: false,
-        forceShoot: false,
-        combatCover: null,
-        exitMotionStopped: true,
-        exitMotionStopReason: reason || bot.lastExitMotionStopReason || "",
-        exitMotionLockRemainingMs: exitMotionStopLockRemainingMs()
-      };
+      return postExitDecisionWithoutTargetCore(decision, reason, {
+        lastExitMotionStopReason: bot.lastExitMotionStopReason,
+        exitMotionLockRemainingMs
+      });
     }
     function clearPostExitTargetState(reason = "exit-confirmed") {
       bot.lastTarget = null;
@@ -7608,7 +7648,7 @@
         suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
       } catch (_) {
       }
-      const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs(t);
+      const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs(t);
       const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
       const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
       const gate = snapshotLoginGateStatus(t);
@@ -7639,7 +7679,7 @@
       if (reconnectChurn) blockedBy.push("native-reconnect-churn");
       if (wsOfflineish) blockedBy.push("ws-offlineish");
       if (bot.pendingExit) blockedBy.push("pending-exit-active");
-      if (exitMotionLockRemainingMs > 0) blockedBy.push("exit-motion-lock");
+      if (exitMotionLockRemainingMs2 > 0) blockedBy.push("exit-motion-lock");
       if (enemyHoldRemainingMs > 0) blockedBy.push("enemy-relogin-hold");
       if (offlineHoldRemainingMs > 0) blockedBy.push("offline-relogin-hold");
       if (suppressRemainingMs > 0) blockedBy.push("login-suppress-active");
@@ -7663,7 +7703,7 @@
         suppressReason,
         enemyHoldRemainingMs,
         offlineHoldRemainingMs,
-        exitMotionLockRemainingMs,
+        exitMotionLockRemainingMs: exitMotionLockRemainingMs2,
         snapshotGate: {
           satisfied: Boolean(gate.satisfied),
           streak: Number(gate.streak || 0),
@@ -20345,8 +20385,8 @@
           if (cfg.once) bot.stop("once");
           return;
         }
-        const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
-        if (exitMotionLockRemainingMs > 0) {
+        const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs();
+        if (exitMotionLockRemainingMs2 > 0) {
           bot.pursuit = null;
           stopMotionSafely(bot.lastExitMotionStopReason || "exit-motion-stopped");
           refreshGlobalState(false).catch((err) => {
@@ -20360,7 +20400,7 @@
             self: self ? summarizeSelf(self) : bot.lastSelf,
             currentUserId: getCurrentUserId(),
             control: summarizeControl(),
-            holdRemainingMs: exitMotionLockRemainingMs
+            holdRemainingMs: exitMotionLockRemainingMs2
           }, bot.lastExitMotionStopReason || "exit-motion-stopped");
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop("once");
