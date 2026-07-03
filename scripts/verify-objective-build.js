@@ -315,6 +315,7 @@ function main() {
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const chooseActionSourceModule = readText('src/browser/choose-action-source.js');
   const tickSourceModule = readText('src/browser/tick-source.js');
+  const startupSourceModule = readText('src/browser/startup-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
@@ -385,6 +386,7 @@ function main() {
     coinTargetRuntimeSourceModule,
     chooseActionSourceModule,
     tickSourceModule,
+    startupSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
@@ -505,6 +507,7 @@ function main() {
     assert(botSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(botSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
     assert(botSourceModule.includes("require('./tick-source')"), 'tick source module import not found');
+    assert(botSourceModule.includes("require('./startup-source')"), 'startup source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
@@ -527,7 +530,7 @@ function main() {
     assert(botSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
     assert(botSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
     assert(botSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
-    assert(botSourceModule.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
+    assert(sourceRuntimeText.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
     assert(autoLoginSourceModule.includes("const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'login availability does not read startLinuxDoLogin through page-global adapter');
     assert(autoLoginSourceModule.includes("readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal)"), 'manual login does not read raw startLinuxDoLogin through page-global adapter');
     assert(autoLoginSourceModule.includes("const startLinuxDoLoginFn = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'manual login does not read guarded startLinuxDoLogin through page-global adapter');
@@ -591,6 +594,7 @@ function main() {
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${chooseActionSource()}'), 'choose-action module is not injected into browser runtime');
     assert(botSourceModule.includes('${tickSource()}'), 'tick module is not injected into browser runtime');
+    assert(botSourceModule.includes('${startupSource()}'), 'startup module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
@@ -872,6 +876,19 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('applyFinalActionArbitration(action, source)'), 'tick source factory does not preserve final action arbitration');
     assert(functionBody(tickSourceModule, 'tickSource').includes('recordImportantCombatTick(source, bot.lastDecision)'), 'tick source factory does not preserve important combat tick logging');
     assert(functionBody(tickSourceModule, 'tickSource').includes('recordCombatLogTick(source, bot.lastDecision)'), 'tick source factory does not preserve combat-log tick logging');
+    assert(startupSourceModule.includes('function startupSource() {'), 'startup source factory not found');
+    assert(startupSourceModule.includes('module.exports = { startupSource }'), 'startup source module export not found');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('String.raw`'), 'startup source factory does not return raw browser source');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('restorePersistedExitAuditLogs()'), 'startup source factory does not preserve exit audit restore');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('restorePersistedCombatLogPendingEntries()'), 'startup source factory does not preserve combat-log pending restore');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('restoreImportantLogsForRemote()'), 'startup source factory does not preserve important-log restore');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('installNativeLoginGateInterceptors()'), 'startup source factory does not preserve native login gate install');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('installPageGlobal(BOT_KEY, bot, pageGlobal)'), 'startup source factory does not preserve bot page-global install');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('previousBot.stop'), 'startup source factory does not preserve previous bot shutdown');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('installPageNativeSnapshotObserver()'), 'startup source factory does not preserve page-native observer install');
+    assert(functionBody(startupSourceModule, 'startupSource').includes('startTargetWhitelistPolling()'), 'startup source factory does not preserve target whitelist polling');
+    assert(functionBody(startupSourceModule, 'startupSource').includes("tick('startup')"), 'startup source factory does not preserve startup tick');
+    assert(functionBody(startupSourceModule, 'startupSource').includes("runTickSafely('timer')"), 'startup source factory does not preserve timer tick safety');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
