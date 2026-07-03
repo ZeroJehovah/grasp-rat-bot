@@ -4,17 +4,10 @@ const {
   staminaExhaustedWindowLabel,
   combatLogExitSummaryFromDecision
 } = require('../shared/exit-summary');
-const {
-  escapeHtml,
-  formatDistance,
-  formatDurationMs,
-  actorLabel,
-  hpDisplay
-} = require('../shared/display-format');
 const { runtimeBootstrapSource } = require('./runtime-bootstrap-source');
 const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
-const { statusPanelSource } = require('./status-panel-source');
+const { statusPanelRuntimeSource } = require('./status-panel-runtime-source');
 const { arrayCountSource } = require('./array-count-source');
 const {
   runtimeUtilityPreludeSource,
@@ -136,7 +129,7 @@ function browserRuntimeAssemblySource(config) {
     `
 
 `,
-    () => statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay }),
+    statusPanelRuntimeSource,
     runtimeUtilityPreludeSource,
     arrayCountSource,
     runtimeUtilityCloneSource,

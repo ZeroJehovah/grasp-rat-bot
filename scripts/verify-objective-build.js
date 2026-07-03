@@ -287,6 +287,7 @@ function main() {
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
+  const statusPanelRuntimeSourceModule = readText('src/browser/status-panel-runtime-source.js');
   const arrayCountSourceModule = readText('src/browser/array-count-source.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
@@ -362,6 +363,7 @@ function main() {
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
+    statusPanelRuntimeSourceModule,
     arrayCountSourceModule,
     runtimeUtilsSourceModule,
     combatLogSourceModule,
@@ -496,14 +498,15 @@ function main() {
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
     assert(runtimeAssemblySourceModule.includes("require('../shared/exit-summary')"), 'exit-summary module import not found');
     assert(runtimeUtilsSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('../shared/display-format')"), 'display-format module import not found');
+    assert(statusPanelRuntimeSourceModule.includes("require('../shared/display-format')"), 'status-panel runtime source display-format import not found');
+    assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
+    assert(runtimeAssemblySourceModule.includes("require('./status-panel-runtime-source')"), 'status-panel runtime source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
@@ -551,6 +554,9 @@ function main() {
     assert(restoredRuntimeStateSourceModule.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state source does not restore coin failures');
     assert(restoredRuntimeStateSourceModule.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not restore pending exit state');
     assert(restoredRuntimeStateSourceModule.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not choose initial pending exit state');
+    assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel runtime source factory not found');
+    assert(statusPanelRuntimeSourceModule.includes('module.exports = { statusPanelRuntimeSource }'), 'status-panel runtime source export not found');
+    assert(statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime source does not bind display helpers');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
     assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
@@ -579,6 +585,7 @@ function main() {
     [
       'targetOverlaySource',
       'targetWhitelistSource',
+      'statusPanelRuntimeSource',
       'arrayCountSource',
       'runtimeUtilityPreludeSource',
       'runtimeUtilityCloneSource',
@@ -641,7 +648,6 @@ function main() {
     ].forEach(name => {
       assert(assemblyBody.includes(name), `${name} is not listed in the runtime assembly fragment registry`);
     });
-    assert(assemblyBody.includes('() => statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })'), 'status-panel module is not injected into browser runtime with display helpers');
     assert(assemblyBody.includes('() => combatLogSource({ combatLogExitSummaryFromDecision })'), 'combat-log module is not injected into browser runtime with exit-summary helper');
     assert(assemblyBody.includes('() => controlLoginSource({ staminaExhaustedWindowLabel })'), 'control-login module is not injected into browser runtime with stamina helper');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
