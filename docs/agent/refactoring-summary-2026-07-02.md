@@ -1056,6 +1056,18 @@ This is a source-organization split only. It does not change runtime behavior, b
 
 This is a source-organization split only. It keeps the raw generated runtime equivalent while moving the runtime-utils helper ownership one step closer to executable browser modules.
 
+## 2026-07-04 Follow-up: Phase 2CR Display Format Helper Module
+
+`bootstrap-0.4.371` continues the true browser runtime-module migration for display helpers:
+
+- `src/browser/runtime/display-format.js` now owns the executable browser runtime helper exports for `escapeHtml()`, `formatDistance()`, `formatDurationMs()`, `actorLabel()`, and `hpDisplay()` by reusing `src/shared/display-format.js`.
+- `src/browser/status-panel-runtime-source.js` imports that browser runtime helper module and still passes the same helper functions into `statusPanelSource(...)`, so generated browser source keeps the previous helper output.
+- `src/bundler-spike/runtime-entry.mjs` imports display helpers through the browser runtime module path and still verifies `formatDistance()` execution through the spike status payload.
+- Static verification checks the runtime helper module, the source-factory import path, the shared-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.371` hash stayed `9cfa1d3035cbc44e6ecd4c9dccb005e541aa8a5932b7e74c39871d7617a3f182` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps status-panel rendering behavior unchanged while moving display-format helper ownership to executable browser runtime modules.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1157,9 +1169,10 @@ This is a source-organization split only. It keeps the raw generated runtime equ
 96. Remaining browser source assembly audit / adapter removal: integrated in `bootstrap-0.4.368`
 97. Array-count true runtime helper module: integrated in `bootstrap-0.4.369`
 98. Runtime-utils true runtime helper module: integrated in `bootstrap-0.4.370`
-99. Constants: partially integrated for high-value coin defaults
-100. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-101. Run live validation sessions after each behavior-touching replacement
+99. Display-format true runtime helper module: integrated in `bootstrap-0.4.371`
+100. Constants: partially integrated for high-value coin defaults
+101. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+102. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

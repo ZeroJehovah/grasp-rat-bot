@@ -6,7 +6,7 @@ const {
   formatDurationMs,
   actorLabel,
   hpDisplay
-} = require('../shared/display-format');
+} = require('./runtime/display-format');
 const { statusPanelSource } = require('./status-panel-source');
 
 function statusPanelRuntimeSource() {
