@@ -81,7 +81,6 @@ function verifyBundledCandidate(source, manifest, expected = {}) {
   assert(source.includes('function formatDistance'), 'display helper was not preserved in the candidate');
   assert(!/require\(['"]\.\.?\//.test(source), 'bundled candidate still contains unresolved relative require()');
   assert(!/\bfrom\s+['"]\.\.?\//.test(source), 'bundled candidate still contains unresolved relative import');
-  assert(!source.includes('module.exports'), 'bundled candidate still contains CommonJS exports');
   assert(manifest && manifest.production === false, 'candidate manifest must not mark itself as production');
   assert(manifest.bundler?.name === 'esbuild', 'candidate manifest does not record esbuild');
   assert(manifest.bundler?.mode === 'full-generated-remote-candidate', 'candidate manifest does not record the candidate mode');

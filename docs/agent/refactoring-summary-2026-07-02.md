@@ -1359,8 +1359,9 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 118. Explicit runtime fragment names: integrated in `bootstrap-0.4.390`
 119. Named-only runtime fragment rendering contract: integrated in `bootstrap-0.4.391`
 120. Runtime fragment entries/materializer split: integrated in `bootstrap-0.4.392`
-121. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-122. Run live validation sessions after each behavior-touching replacement
+121. Bundler-owned `array-count` runtime fragment for remote builds: integrated in `bootstrap-0.4.393`
+122. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+123. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

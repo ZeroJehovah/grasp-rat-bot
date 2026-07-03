@@ -1,4 +1,22 @@
 (() => {
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __commonJS = (cb, mod) => function __require() {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  };
+
+  // src/browser/runtime/array-count.js
+  var require_array_count = __commonJS({
+    "src/browser/runtime/array-count.js"(exports, module) {
+      "use strict";
+      function arrayCount(value) {
+        return Array.isArray(value) ? value.length : 0;
+      }
+      module.exports = {
+        arrayCount
+      };
+    }
+  });
+
   // grasp-rat-remote-bot.generated.js
   (() => {
     function pageGlobalObject(value) {
@@ -41,7 +59,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.392" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.393" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -2637,9 +2655,7 @@
         }
       }
     }
-    function arrayCount(value) {
-      return Array.isArray(value) ? value.length : 0;
-    }
+    const { arrayCount } = require_array_count();
     function safeJsonClone(value) {
       try {
         return JSON.parse(safeStringify(value));

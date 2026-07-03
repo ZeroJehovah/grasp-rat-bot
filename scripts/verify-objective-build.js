@@ -515,7 +515,8 @@ function main() {
     assert(distSource.includes('installPageGlobal(BOT_KEY, bot, pageGlobal)'), 'bundled production dist does not install the bot through the page-global adapter');
     assert(!/require\(['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative require()');
     assert(!/\bfrom\s+['"]\.\.?\//.test(distSource), 'bundled production dist still contains unresolved relative import');
-    assert(!distSource.includes('module.exports'), 'bundled production dist still contains CommonJS exports');
+    assert(distSource.includes('var require_array_count = __commonJS'), 'bundled production dist does not bundle the array-count runtime module through esbuild');
+    assert(distSource.includes('const { arrayCount } = require_array_count();'), 'bundled production dist does not use the bundled array-count runtime module');
     new vm.Script(distSource, { filename: 'dist/grasp-rat-remote-bot.js' });
     assert(buildRemoteSource.includes("require('./remote-bot-bundle')"), 'production build does not use the shared remote bundler');
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
@@ -539,8 +540,10 @@ function main() {
     assert(runtimeSourceModule.includes("const { browserRuntimeFragments } = require('./runtime-fragments-source')"), 'runtime source boundary does not own the runtime fragment registry dependency');
     assert(runtimeSourceModule.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime source boundary does not render the runtime fragment registry');
     assert(runtimeSourceModule.includes('function browserRuntimeConfig(options = {})'), 'browser runtime config adapter not found');
+    assert(runtimeSourceModule.includes('if (options.bundledRuntime) config.bundledRuntime = true;'), 'browser runtime config does not gate bundled-runtime mode');
     assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
+    assert(functionBody(runtimeSourceModule, 'remoteBrowserRuntimeSource').includes('bundledRuntime: true'), 'remote browser runtime source does not enable bundled-runtime fragments');
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
     assert(runtimeSourceModule.includes('function renderRuntimeFragment(fragment)'), 'single-fragment renderer not found');
     assert(runtimeSourceModule.includes("typeof fragment.name !== 'string'"), 'runtime source renderer does not require named fragment objects');
@@ -629,6 +632,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes('source === undefined || source === null'), 'runtime fragment helper does not validate sources');
     assert(!runtimeFragmentsSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
     assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
+    assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -1116,9 +1120,12 @@ function main() {
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function postExitDecisionWithoutTarget'), 'exit-motion source factory does not include post-exit decision helper');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function clearPostExitTargetState'), 'exit-motion source factory does not include post-exit target cleanup helper');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('removeTargetOverlay()'), 'exit-motion source factory does not clear target overlay');
-    assert(arrayCountSourceModule.includes('function arrayCountSource() {'), 'array-count source factory not found');
+    assert(arrayCountSourceModule.includes('function arrayCountSource(options = {}) {'), 'array-count source factory not found');
+    assert(arrayCountSourceModule.includes('function bundledArrayCountSource()'), 'bundled array-count source factory not found');
     assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
     assert(arrayCountSourceModule.includes("require('./runtime/array-count')"), 'array-count source factory does not import the runtime helper module');
+    assert(arrayCountSourceModule.includes("require('./src/browser/runtime/array-count')"), 'array-count source factory does not expose a bundler-owned runtime helper require');
+    assert(arrayCountSourceModule.includes('if (options.bundledRuntime) return bundledArrayCountSource();'), 'array-count source factory does not switch to bundler-owned source in remote builds');
     assert(arrayCountSourceModule.includes('function indentSource(source, spaces)'), 'array-count source factory does not preserve generated indentation');
     assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('arrayCount.toString()'), 'array-count source factory does not inline the runtime helper module');
     assert(arrayCountRuntimeModule.includes('function arrayCount(value)'), 'array-count runtime helper not found');
@@ -1372,7 +1379,6 @@ function main() {
     assert(remoteBundledBuildSource.includes("source.includes('function buildRuntimeDefaults')"), 'remote bundled candidate self-test does not check runtime defaults preservation');
     assert(remoteBundledBuildSource.includes("source.includes('function updateBotPanel')"), 'remote bundled candidate self-test does not check status panel preservation');
     assert(remoteBundledBuildSource.includes("source.includes('function getNativeState')"), 'remote bundled candidate self-test does not check native state preservation');
-    assert(remoteBundledBuildSource.includes("!source.includes('module.exports')"), 'remote bundled candidate self-test does not reject CommonJS exports');
     assert(remoteBundledBuildSource.includes("/require\\(['\"]\\.\\.?\\//"), 'remote bundled candidate does not reject unresolved relative require calls');
     assert(remoteBundledBuildSource.includes("/\\bfrom\\s+['\"]\\.\\.?\\//"), 'remote bundled candidate does not reject unresolved relative import calls');
   });

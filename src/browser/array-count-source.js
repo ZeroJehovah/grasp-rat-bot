@@ -7,7 +7,12 @@ function indentSource(source, spaces) {
   return String(source).split('\n').map(line => (line ? prefix + line : line)).join('\n');
 }
 
-function arrayCountSource() {
+function bundledArrayCountSource() {
+  return "\n      const { arrayCount } = require('./src/browser/runtime/array-count');";
+}
+
+function arrayCountSource(options = {}) {
+  if (options.bundledRuntime) return bundledArrayCountSource();
   return `\n${indentSource(arrayCount.toString(), 6)}`;
 }
 
