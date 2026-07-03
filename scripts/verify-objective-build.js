@@ -521,6 +521,8 @@ function main() {
     assert(distSource.includes('const { arrayCount } = require_array_count();'), 'bundled production dist does not use the bundled array-count runtime module');
     assert(distSource.includes('var require_runtime_utils = __commonJS'), 'bundled production dist does not bundle the runtime-utils module through esbuild');
     assert(distSource.includes('safeStringify, safeJsonClone, sanitizeCombatLogIdPart'), 'bundled production dist does not use the bundled runtime-utils helpers');
+    assert(distSource.includes('var require_display_format = __commonJS'), 'bundled production dist does not bundle the display-format runtime module through esbuild');
+    assert(distSource.includes('escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay'), 'bundled production dist does not use the bundled display-format helpers');
     assert(distSource.includes('var require_browser_preserved_state = __commonJS'), 'bundled production dist does not bundle the preserved-state runtime module through esbuild');
     assert(distSource.includes('var require_runtime_defaults = __commonJS'), 'bundled production dist does not bundle the runtime-defaults module through esbuild');
     assert(distSource.includes('var require_target_whitelist = __commonJS'), 'bundled production dist does not bundle the target-whitelist runtime module through esbuild');
@@ -641,6 +643,7 @@ function main() {
     assert(!runtimeFragmentsSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
     assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)]"), 'runtime-utility-prelude fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelRuntimeSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-utility-clone', () => runtimeUtilityCloneSource(config)]"), 'runtime-utility-clone fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
@@ -651,8 +654,11 @@ function main() {
     assert(restoredRuntimeStateSourceModule.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state source does not restore coin failures');
     assert(restoredRuntimeStateSourceModule.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not restore pending exit state');
     assert(restoredRuntimeStateSourceModule.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state source does not choose initial pending exit state');
-    assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel runtime source factory not found');
-    assert(statusPanelRuntimeSourceModule.includes('module.exports = { statusPanelRuntimeSource }'), 'status-panel runtime source export not found');
+    assert(statusPanelRuntimeSourceModule.includes('function bundledStatusPanelRuntimeSource()'), 'bundled status-panel runtime source factory not found');
+    assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource(options = {})'), 'status-panel runtime source factory not found');
+    assert(statusPanelRuntimeSourceModule.includes('module.exports = {\n  bundledStatusPanelRuntimeSource,\n  statusPanelRuntimeSource\n}'), 'status-panel runtime source export not found');
+    assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
+    assert(statusPanelRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledStatusPanelRuntimeSource();'), 'status-panel runtime source factory does not switch to bundler-owned source in remote builds');
     assert(statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime source does not bind display helpers');
     assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
     assert(combatLogRuntimeSourceModule.includes('module.exports = { combatLogRuntimeSource }'), 'combat-log runtime source export not found');
@@ -769,7 +775,7 @@ function main() {
       && generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-defaults')")
       && generatedRuntimeSource.includes("require('./src/browser/runtime/target-whitelist')")
       && generatedRuntimeSource.includes("require('./src/browser/runtime/exit-summary')");
-    assert((generatedRuntimeSource.includes('function safeStringify') || generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-utils')")) && generatedRuntimeSource.includes('function formatDistance') && (generatedRuntimeSource.includes('function buildRuntimeDefaults') || generatedRuntimeHasBundledBootstrapHelpers), 'generated runtime does not expose shared helper functions');
+    assert((generatedRuntimeSource.includes('function safeStringify') || generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-utils')")) && (generatedRuntimeSource.includes('function formatDistance') || generatedRuntimeSource.includes("require('./src/browser/runtime/display-format')")) && (generatedRuntimeSource.includes('function buildRuntimeDefaults') || generatedRuntimeHasBundledBootstrapHelpers), 'generated runtime does not expose shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
     assert((generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl')) || generatedRuntimeHasBundledBootstrapHelpers, 'generated runtime does not expose target whitelist helpers');
     assert(generatedRuntimeSource.includes('const now = () => performance.now();'), 'generated runtime does not include entity clock helper');
@@ -1455,10 +1461,16 @@ function main() {
       assert(text.includes('if (cfg.statusEvery > 0 && Date.now() - bot.lastStatusAt >= cfg.statusEvery)'), 'status log cannot be disabled with statusEvery=0');
     });
     check(`${file} formats display distances in meters`, () => {
-      const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : text;
-      const distanceBody = functionBody(displayFormatSource, 'formatDistance');
-      assert(distanceBody.includes('const meters = n / 100'), 'formatDistance does not convert cm to meters');
-      assert(distanceBody.includes("+ '米'"), 'formatDistance does not append meter unit');
+      const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : finalRuntimeText;
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(displayFormatSource.includes('function formatDistance'), 'bundled formatDistance helper not found');
+        assert(displayFormatSource.includes('const meters = n / 100'), 'formatDistance does not convert cm to meters');
+        assert(displayFormatSource.includes('+ "\\u7C73"'), 'formatDistance does not append meter unit');
+      } else {
+        const distanceBody = functionBody(displayFormatSource, 'formatDistance');
+        assert(distanceBody.includes('const meters = n / 100'), 'formatDistance does not convert cm to meters');
+        assert(distanceBody.includes("+ '米'"), 'formatDistance does not append meter unit');
+      }
       const staminaSummaryBody = functionBody(text, 'staminaBudgetCoinLeaveSummary');
       assert(staminaSummaryBody.includes("最近金币距离' + formatDistance(detail.distance)"), 'stamina budget leave summary does not use meter distance formatting');
       const pursuitSummaryBody = functionBody(text, 'pursuitLeaveSummary');
@@ -1482,11 +1494,19 @@ function main() {
       }
     });
     check(`${file} keeps shared display formatting helpers available`, () => {
-      const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : text;
-      assert(functionBody(displayFormatSource, 'escapeHtml').includes('&amp;'), 'escapeHtml entity map not found');
-      assert(functionBody(displayFormatSource, 'formatDurationMs').includes("+ '小时'"), 'duration formatter does not handle hours');
-      assert(functionBody(displayFormatSource, 'actorLabel').includes('actor.targetId'), 'actorLabel does not include targetId fallback');
-      assert(functionBody(displayFormatSource, 'hpDisplay').includes('Math.round(n)'), 'hpDisplay does not round numeric HP');
+      const displayFormatSource = file === 'grasp-rat-bot.js' ? sharedDisplayFormatSource : finalRuntimeText;
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(distSource.includes('var require_display_format = __commonJS'), 'bundled display-format module wrapper not found');
+        assert(distSource.includes('escapeHtml') && distSource.includes('&amp;'), 'bundled escapeHtml helper not found');
+        assert(distSource.includes('formatDurationMs') && distSource.includes('+ "\\u5C0F\\u65F6"'), 'bundled duration formatter does not handle hours');
+        assert(distSource.includes('actorLabel') && distSource.includes('actor.targetId'), 'bundled actorLabel does not include targetId fallback');
+        assert(distSource.includes('hpDisplay') && distSource.includes('Math.round(n)'), 'bundled hpDisplay does not round numeric HP');
+      } else {
+        assert(functionBody(displayFormatSource, 'escapeHtml').includes('&amp;'), 'escapeHtml entity map not found');
+        assert(functionBody(displayFormatSource, 'formatDurationMs').includes("+ '小时'"), 'duration formatter does not handle hours');
+        assert(functionBody(displayFormatSource, 'actorLabel').includes('actor.targetId'), 'actorLabel does not include targetId fallback');
+        assert(functionBody(displayFormatSource, 'hpDisplay').includes('Math.round(n)'), 'hpDisplay does not round numeric HP');
+      }
     });
     check(`${file} keeps shared browser initialization helpers available`, () => {
       const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : finalRuntimeText;

@@ -764,6 +764,77 @@
     }
   });
 
+  // src/shared/display-format.js
+  var require_display_format = __commonJS({
+    "src/shared/display-format.js"(exports, module) {
+      "use strict";
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        })[ch]);
+      }
+      function formatDistance(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "-";
+        const meters = n / 100;
+        if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + "\u7C73";
+        return Math.round(meters) + "\u7C73";
+      }
+      function formatDurationMs(ms) {
+        const value = Math.max(0, Math.round(Number(ms) || 0));
+        if (value >= 36e5) {
+          const minutes = Math.round(value / 6e4);
+          if (minutes % 60 === 0) return Math.round(minutes / 60) + "\u5C0F\u65F6";
+          return minutes + "\u5206\u949F";
+        }
+        if (value >= 6e4) return Math.round(value / 6e4) + "\u5206\u949F";
+        if (value >= 1e3) return Math.round(value / 1e3) + "\u79D2";
+        return value + "ms";
+      }
+      function actorLabel(actor) {
+        if (!actor) return "\u672A\u77E5\u76EE\u6807";
+        const id = actor.user_id ?? actor.id ?? actor.targetId;
+        return actor.name || actor.label || (id !== void 0 && id !== null && id !== "" ? "#" + id : "\u672A\u77E5\u76EE\u6807");
+      }
+      function hpDisplay(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? String(Math.round(n)) : "-";
+      }
+      module.exports = {
+        escapeHtml,
+        formatDistance,
+        formatDurationMs,
+        actorLabel,
+        hpDisplay
+      };
+    }
+  });
+
+  // src/browser/runtime/display-format.js
+  var require_display_format2 = __commonJS({
+    "src/browser/runtime/display-format.js"(exports, module) {
+      "use strict";
+      var {
+        escapeHtml,
+        formatDistance,
+        formatDurationMs,
+        actorLabel,
+        hpDisplay
+      } = require_display_format();
+      module.exports = {
+        escapeHtml,
+        formatDistance,
+        formatDurationMs,
+        actorLabel,
+        hpDisplay
+      };
+    }
+  });
+
   // src/shared/runtime-utils.js
   var require_runtime_utils = __commonJS({
     "src/shared/runtime-utils.js"(exports, module) {
@@ -879,7 +950,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.395" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.396" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -2548,6 +2619,7 @@
       } catch (_) {
       }
     }
+    const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require_display_format2();
     function ensureBotPanel() {
       return null;
       if (!document.body) return null;
@@ -2582,42 +2654,6 @@
       return;
       const panel = document.getElementById(PANEL_ID);
       if (panel) panel.remove();
-    }
-    function escapeHtml(value) {
-      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;"
-      })[ch]);
-    }
-    function formatDistance(value) {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return "-";
-      const meters = n / 100;
-      if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + "\u7C73";
-      return Math.round(meters) + "\u7C73";
-    }
-    function formatDurationMs(ms) {
-      const value = Math.max(0, Math.round(Number(ms) || 0));
-      if (value >= 36e5) {
-        const minutes = Math.round(value / 6e4);
-        if (minutes % 60 === 0) return Math.round(minutes / 60) + "\u5C0F\u65F6";
-        return minutes + "\u5206\u949F";
-      }
-      if (value >= 6e4) return Math.round(value / 6e4) + "\u5206\u949F";
-      if (value >= 1e3) return Math.round(value / 1e3) + "\u79D2";
-      return value + "ms";
-    }
-    function actorLabel(actor) {
-      if (!actor) return "\u672A\u77E5\u76EE\u6807";
-      const id = actor.user_id ?? actor.id ?? actor.targetId;
-      return actor.name || actor.label || (id !== void 0 && id !== null && id !== "" ? "#" + id : "\u672A\u77E5\u76EE\u6807");
-    }
-    function hpDisplay(value) {
-      const n = Number(value);
-      return Number.isFinite(n) ? String(Math.round(n)) : "-";
     }
     function formatStaminaDisplay(self) {
       if (!self) return "-";
