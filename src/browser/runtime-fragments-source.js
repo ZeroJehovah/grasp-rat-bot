@@ -69,6 +69,12 @@ const { networkQualitySummarySource } = require('./network-quality-summary-sourc
 const { runtimeSummarySource } = require('./runtime-summary-source');
 
 function runtimeFragment(name, source) {
+  if (typeof name !== 'string' || !name) {
+    throw new TypeError('runtime fragment name must be a non-empty string');
+  }
+  if (source === undefined || source === null) {
+    throw new TypeError(`runtime fragment ${name} source is required`);
+  }
   return { name, source };
 }
 

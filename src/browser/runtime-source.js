@@ -37,12 +37,16 @@ module.exports = {
 };
 
 function renderRuntimeFragment(fragment) {
-  const source = fragment && typeof fragment === 'object' && Object.prototype.hasOwnProperty.call(fragment, 'source')
-    ? fragment.source
-    : fragment;
+  if (!fragment || typeof fragment !== 'object' || typeof fragment.name !== 'string' || !fragment.name || !Object.prototype.hasOwnProperty.call(fragment, 'source')) {
+    throw new TypeError('runtime fragment must be a named object with source');
+  }
+  const source = fragment.source;
   return typeof source === 'function' ? source() : source;
 }
 
 function renderRuntimeFragments(fragments) {
+  if (!Array.isArray(fragments)) {
+    throw new TypeError('runtime fragments must be an array');
+  }
   return fragments.map(renderRuntimeFragment).join('');
 }
