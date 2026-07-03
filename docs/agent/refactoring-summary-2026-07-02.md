@@ -429,6 +429,16 @@ This is another structural source split only. It preserves the existing shared t
 
 This is a diagnostic/status source split only. It preserves network quality sampling, action acknowledgement tracking, panel display data, combat-log network diagnostics, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AG Network Quality Source Factory
+
+`bootstrap-0.4.305` extracts the network quality sampler and action ACK helper functions into their own browser source module:
+
+- `src/browser/network-quality-source.js` now owns network quality rounding/EMA helpers, state initialization, frame-gap/loss sampling, movement command/ACK tracking, attack shot tracking, and attack damage ACK tracking source generation.
+- `src/browser/bot-source.js` imports and injects `${networkQualitySource()}` immediately before `${networkQualitySummarySource()}`.
+- Static verification checks the new source-factory shape plus the native frame observer, movement command tracking, shot tracking, and attack damage ACK tracking helpers.
+
+This completes the current network-quality diagnostic source split. It preserves status output, combat-log network diagnostics, movement/shooting ACK tracking, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -464,9 +474,10 @@ This is a diagnostic/status source split only. It preserves network quality samp
 30. Page-native snapshot source factory: integrated in `bootstrap-0.4.302`
 31. Target whitelist source factory: integrated in `bootstrap-0.4.303`
 32. Network quality summary source factory: integrated in `bootstrap-0.4.304`
-33. Constants: partially integrated for high-value coin defaults
-34. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-35. Run live validation sessions after each behavior-touching replacement
+33. Network quality sampler/ACK source factory: integrated in `bootstrap-0.4.305`
+34. Constants: partially integrated for high-value coin defaults
+35. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+36. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
