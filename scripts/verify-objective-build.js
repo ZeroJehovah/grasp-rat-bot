@@ -532,6 +532,7 @@ function main() {
     assert(distSource.includes('var require_coin_progress = __commonJS'), 'bundled production dist does not bundle the coin-progress runtime module through esbuild');
     assert(distSource.includes('var require_coin_diagnostics = __commonJS'), 'bundled production dist does not bundle the coin-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_stamina_budget = __commonJS'), 'bundled production dist does not bundle the stamina-budget runtime module through esbuild');
+    assert(distSource.includes('var require_post_attack_drop = __commonJS'), 'bundled production dist does not bundle the post-attack-drop runtime module through esbuild');
     new vm.Script(distSource, { filename: 'dist/grasp-rat-remote-bot.js' });
     assert(buildRemoteSource.includes("require('./remote-bot-bundle')"), 'production build does not use the shared remote bundler');
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
@@ -607,6 +608,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-stamina', () => opportunityStaminaSource(config)]"), 'opportunity-stamina source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("['post-attack', () => postAttackSource(config)]"), 'post-attack source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./tick-source')"), 'tick source module import not found');
@@ -988,14 +990,17 @@ function main() {
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function updateOpportunityAfkStaminaObservations'), 'opportunity-snapshot source factory does not include AFK stamina observation updater');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function afkOpportunityBlockedByStaminaCooldown'), 'opportunity-snapshot source factory does not include AFK cooldown gate');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreEnemyOpportunity'), 'opportunity-snapshot source factory does not include enemy opportunity scorer');
-    assert(postAttackSourceModule.includes('function postAttackSource() {'), 'post-attack source factory not found');
-    assert(postAttackSourceModule.includes('module.exports = { postAttackSource }'), 'post-attack source module export not found');
-    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('String.raw`'), 'post-attack source factory does not return raw browser source');
-    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function pickPostAttackDropCoin'), 'post-attack source factory does not include drop coin picker');
-    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function pickPostAttackDropWaitTarget'), 'post-attack source factory does not include wait target picker');
-    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function buildPostAttackDropWaitAction'), 'post-attack source factory does not include wait action builder');
-    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('pickPostAttackDropCoinCore.toString()'), 'post-attack source factory does not inline drop coin core');
-    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('pickPostAttackDropWaitTargetCore.toString()'), 'post-attack source factory does not inline wait target core');
+    assert(postAttackSourceModule.includes('function postAttackInlineSource(helpers = {}) {'), 'post-attack inline source factory not found');
+    assert(postAttackSourceModule.includes('function bundledPostAttackSource() {'), 'post-attack bundled source factory not found');
+    assert(postAttackSourceModule.includes('function postAttackSource(options = {}) {'), 'post-attack source selector not found');
+    assert(postAttackSourceModule.includes('bundledPostAttackSource') && postAttackSourceModule.includes('postAttackInlineSource') && postAttackSourceModule.includes('postAttackSource'), 'post-attack source module exports are incomplete');
+    const postAttackInlineBody = functionBody(postAttackSourceModule, 'postAttackInlineSource');
+    assert(postAttackInlineBody.includes('String.raw`'), 'post-attack inline source factory does not return raw browser source');
+    assert(postAttackInlineBody.includes('function pickPostAttackDropCoin'), 'post-attack inline source factory does not include drop coin picker');
+    assert(postAttackInlineBody.includes('function pickPostAttackDropWaitTarget'), 'post-attack inline source factory does not include wait target picker');
+    assert(postAttackInlineBody.includes('function buildPostAttackDropWaitAction'), 'post-attack inline source factory does not include wait action builder');
+    assert(postAttackInlineBody.includes('postAttackDropHelperSource'), 'post-attack inline source factory does not inject drop helpers');
+    assert(functionBody(postAttackSourceModule, 'bundledPostAttackSource').includes("require('./src/browser/runtime/post-attack-drop')"), 'post-attack bundled source does not hand post-attack-drop helpers to the bundler');
     assert(opportunityActionsSourceModule.includes('function opportunityActionsSource() {'), 'opportunity-actions source factory not found');
     assert(opportunityActionsSourceModule.includes('module.exports = { opportunityActionsSource }'), 'opportunity-actions source module export not found');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('String.raw`'), 'opportunity-actions source factory does not return raw browser source');
@@ -1734,7 +1739,7 @@ function main() {
     });
     check(`${file} lets high-value combat drops interrupt recovery`, () => {
       const body = functionBody(text, 'pickPostAttackDropCoin');
-      const coinCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : text;
+      const coinCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : finalRuntimeText;
       assert(body.includes('options.maxDistance ?? cfg.postAttackDropCoinMaxDistance'), 'post-attack drop picker does not accept maxDistance override');
       assert(body.includes('options.minScore ?? 0'), 'post-attack drop picker does not accept minScore override');
       assert(body.includes('if (score < minScore) continue') || coinCoreSource.includes('if (score < minScore) continue'), 'post-attack drop picker does not filter by recovery ROI score');
@@ -1752,14 +1757,16 @@ function main() {
     });
     check(`${file} waits at killed high-drop target position before drop refresh`, () => {
       const body = functionBody(text, 'pickPostAttackDropWaitTarget');
-      const waitCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : text;
+      const waitCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : finalRuntimeText;
       assert(body.includes('cfg.postAttackDropWaitMs'), 'post-attack wait window not used');
       assert(body.includes('cfg.postAttackDropResolveMaxMs'), 'post-attack wait resolve window not used');
       assert(body.includes('cfg.postAttackDropWaitMinDrop'), 'post-attack wait minimum drop not used');
       assert(body.includes('postAttackDropResolvedAt'), 'post-attack wait is not anchored to target resolution');
       assert(body.includes('postAttackVisibleCoinExists') || waitCoreSource.includes('postAttackVisibleCoinExistsCore'), 'post-attack wait does not skip already-visible drops');
+      const waitCoreHasAttackAction = (waitCoreSource.includes("item.action === 'attack'") || waitCoreSource.includes('item.action === "attack"'))
+        && (waitCoreSource.includes("item.action === 'opportunistic-shot'") || waitCoreSource.includes('item.action === "opportunistic-shot"'));
       assert((body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"))
-        || (waitCoreSource.includes("item.action === 'attack'") && waitCoreSource.includes("item.action === 'opportunistic-shot'")),
+        || waitCoreHasAttackAction,
       'post-attack wait can trigger without a recent shot/attack');
       assert(body.includes('postAttackDropResolvedAt') || body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target resolution');
       assert(text.includes("reason: 'post-attack-drop-wait-position'"), 'post-attack wait action reason not found');
@@ -3156,16 +3163,16 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/post-attack-drop.js'"), 'bundler spike does not import post-attack drop runtime adapter');
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute post-attack drop picker helper');
     assert(bundlerSpikeBuildSource.includes("status.postAttackDropSelectedId === 'post-attack-coin'"), 'bundler spike self-test does not assert post-attack drop execution');
-    assert(sourceRuntimeText.includes('postAttackVisibleCoinExistsCore.toString()'), 'source bot does not inject post-attack visible coin core');
-    assert(sourceRuntimeText.includes('resolvedRecentPostAttackDropsCore.toString()'), 'source bot does not inject post-attack resolved attack core');
-    assert(sourceRuntimeText.includes('buildPostAttackDropCoinCandidateCore.toString()'), 'source bot does not inject post-attack drop coin metadata core');
-    assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore.toString()'), 'source bot does not inject post-attack drop coin picker core');
-    assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore.toString()'), 'source bot does not inject post-attack wait picker core');
+    assert(postAttackSourceModule.includes('postAttackDropHelperSource') && postAttackSourceModule.includes('fn.toString()'), 'source modules do not wire local post-attack drop helper injection');
     assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
-    assert(generatedRuntimeSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
-    assert(generatedRuntimeSource.includes('function pickPostAttackDropCoinCore'), 'generated runtime does not inline post-attack drop coin picker core');
-    assert(generatedRuntimeSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/post-attack-drop')"), 'generated remote runtime does not hand post-attack drop helpers to the bundler');
+    assert(!generatedRuntimeSource.includes('function pickPostAttackDropCoinCore'), 'generated remote runtime still inlines post-attack drop coin core before bundling');
+    assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'bundled dist does not contain post-attack visible coin core');
+    assert(distSource.includes('function resolvedRecentPostAttackDropsCore'), 'bundled dist does not contain post-attack resolved attack core');
+    assert(distSource.includes('function buildPostAttackDropCoinCandidateCore'), 'bundled dist does not contain post-attack drop coin metadata core');
+    assert(distSource.includes('function pickPostAttackDropCoinCore'), 'bundled dist does not contain post-attack drop coin picker core');
+    assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'bundled dist does not contain post-attack wait picker core');
   });
 
   check('stamina budget helpers use strategy module core', () => {

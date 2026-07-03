@@ -1370,8 +1370,9 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 129. Bundler-owned `coin-progress-runtime` helper bindings for remote builds: integrated in `bootstrap-0.4.401`
 130. Bundler-owned `coin-safety` diagnostics helper bindings for remote builds: integrated in `bootstrap-0.4.402`
 131. Bundler-owned `opportunity-stamina` stamina-budget helper bindings for remote builds: integrated in `bootstrap-0.4.403`
-132. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-133. Run live validation sessions after each behavior-touching replacement
+132. Bundler-owned `post-attack` drop helper bindings for remote builds: integrated in `bootstrap-0.4.404`
+133. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+134. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
