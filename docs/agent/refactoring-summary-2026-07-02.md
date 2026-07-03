@@ -548,6 +548,17 @@ This is a source-organization split only. It preserves automatic relogin gating,
 
 This is a source-organization split only. It preserves offline/injury/pursuit/combat leave cooldown handling, pending-exit duplicate suppression, exit audit starts, unsafe/stamina relogin suppression, pending-exit recording, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AX Entity Refresh Source Factory
+
+`bootstrap-0.4.322` extracts entity refresh and activity-memory source generation into a dedicated browser source module:
+
+- `src/browser/entity-refresh-source.js` now owns the raw browser source for `markRecentMovement()` and `refreshGlobalState()`.
+- `src/browser/bot-source.js` imports and injects `${entityRefreshSource()}` immediately after `${combatHistorySource()}`, preserving the generated runtime order before native control helpers.
+- Static verification checks the new source-factory shape, injection point, recent movement marker, global refresh helper, passive active-API-disabled diagnostic text, and generated runtime behavior anchors for passive refresh diagnostics.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves recent movement/activity bookkeeping, seen-entity TTL cleanup, passive-only global refresh behavior, active game API disabled diagnostics, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -600,9 +611,10 @@ This is a source-organization split only. It preserves offline/injury/pursuit/co
 47. Leave command completion/issue source factory: integrated in `bootstrap-0.4.319`
 48. Auto/manual login source factory: integrated in `bootstrap-0.4.320`
 49. Leave flow source factory: integrated in `bootstrap-0.4.321`
-50. Constants: partially integrated for high-value coin defaults
-51. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-52. Run live validation sessions after each behavior-touching replacement
+50. Entity refresh source factory: integrated in `bootstrap-0.4.322`
+51. Constants: partially integrated for high-value coin defaults
+52. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+53. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
