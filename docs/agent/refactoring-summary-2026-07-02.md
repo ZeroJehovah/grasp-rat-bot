@@ -1092,6 +1092,18 @@ This is a source-organization split only. It keeps whitelist parsing, URL deriva
 
 This is a source-organization split only. It keeps exit text, stamina hold contradiction checks, combat-log summaries, and generated runtime behavior unchanged while moving exit-summary helper ownership to executable browser runtime modules.
 
+## 2026-07-04 Follow-up: Phase 2CU Browser Preserved-State Helper Module
+
+`bootstrap-0.4.374` continues the true browser runtime-module migration for preserved runtime state:
+
+- `src/browser/runtime/browser-preserved-state.js` now owns the executable browser runtime helper export for `buildBrowserPreservedState()` by reusing `src/shared/browser-preserved-state.js`.
+- `src/browser/runtime-bootstrap-source.js` imports that browser runtime helper module and still inlines the same preserved-state function text into the generated runtime bootstrap.
+- `src/bundler-spike/runtime-entry.mjs` imports preserved-state helpers through the browser runtime module path and now verifies `buildBrowserPreservedState()` execution through the spike status payload.
+- Static verification checks the runtime helper module, the bootstrap import path, the shared-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.374` hash stayed `3b99f3758c730f660131a5a69f07a731208c739afc0abfcd0d5d4244fdbcc86a` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps hot-update state preservation and generated runtime behavior unchanged while moving preserved-state helper ownership to executable browser runtime modules.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1196,9 +1208,10 @@ This is a source-organization split only. It keeps exit text, stamina hold contr
 99. Display-format true runtime helper module: integrated in `bootstrap-0.4.371`
 100. Target-whitelist true runtime helper module: integrated in `bootstrap-0.4.372`
 101. Exit-summary true runtime helper module: integrated in `bootstrap-0.4.373`
-102. Constants: partially integrated for high-value coin defaults
-103. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-104. Run live validation sessions after each behavior-touching replacement
+102. Browser preserved-state true runtime helper module: integrated in `bootstrap-0.4.374`
+103. Constants: partially integrated for high-value coin defaults
+104. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+105. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

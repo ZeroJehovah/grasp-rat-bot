@@ -4,6 +4,7 @@ import runtimeUtils from '../browser/runtime/runtime-utils.js';
 import displayFormat from '../browser/runtime/display-format.js';
 import targetWhitelist from '../browser/runtime/target-whitelist.js';
 import exitSummary from '../browser/runtime/exit-summary.js';
+import preservedState from '../browser/runtime/browser-preserved-state.js';
 import * as actionPriority from '../strategy/action-priority.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
@@ -32,6 +33,9 @@ function helperStatus(config = {}) {
     nameCount: arrayCountRuntime.arrayCount(names),
     actionFocus: actionPriority.actionFocusSummary(sampleAction),
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
+    preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
+      killHistory: ['a', 'b', 'c']
+    }).killHistory),
     storageProbe: pageAdapter.readPageLocalStorageJson('graspRatBundlerSpikeProbe', { ok: false }),
     json: runtimeUtils.safeStringify({
       ok: true,
