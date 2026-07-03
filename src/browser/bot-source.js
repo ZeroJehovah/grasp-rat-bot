@@ -71,6 +71,7 @@ const { staminaRuntimeSource } = require('./stamina-runtime-source');
 const { exitMotionSource } = require('./exit-motion-source');
 const { persistentLastSelfSource } = require('./persistent-last-self-source');
 const { persistentExitSource } = require('./persistent-exit-source');
+const { persistentClearSource } = require('./persistent-clear-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -162,18 +163,7 @@ function browserBotSource(config) {
 	  };
 ${persistentLastSelfSource()}
 ${persistentExitSource()}
-
-		  function clearPersistentExitState(key) {
-		    try {
-		      localStorage.removeItem(key);
-		    } catch (_) {}
-		  }
-
-		  function clearPersistentPendingExitState() {
-		    try {
-		      localStorage.removeItem(PENDING_EXIT_STATE_KEY);
-		    } catch (_) {}
-		  }
+${persistentClearSource()}
 
 		  function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
 		    const raw = value && typeof value === 'object'
