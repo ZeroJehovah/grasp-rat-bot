@@ -7,7 +7,21 @@ const {
   buildCoinDiagnostics
 } = require('./runtime/coin-diagnostics');
 
-function coinSafetySource() {
+function coinSafetyInlineSource(helpers = {}) {
+  const {
+    coinDiagnosticsSummary,
+    summarizeCoinDiagnosticsList,
+    addCoinFilterDiagnostic,
+    buildCoinDiagnostics
+  } = helpers;
+  const coinDiagnosticsSummarySource = typeof coinDiagnosticsSummary === 'function'
+    ? `\t  ${coinDiagnosticsSummary.toString()}`
+    : '';
+  const coinDiagnosticsHelperSource = [
+    summarizeCoinDiagnosticsList,
+    addCoinFilterDiagnostic,
+    buildCoinDiagnostics
+  ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n\n');
   return String.raw`  function coinThreatDangerRadius(threat) {
 	    const base = Number(threat?.coinDangerRadius ?? cfg.coinDangerRadius);
 	    if (isInvulnerableActive(threat)) return Math.max(base, Number(cfg.invulnerableActiveCoinDangerRadius || 0));
@@ -62,7 +76,7 @@ function coinSafetySource() {
 	    return Math.max(1, Math.round(Number(cfg.coinDiagnosticsMaxEntries || 8) || 8));
 	  }
 
-	  ${coinDiagnosticsSummary.toString()}
+${coinDiagnosticsSummarySource}
 
 	  function coinThreatDiagnostics(threat) {
 	    if (!threat) return null;
@@ -76,11 +90,7 @@ function coinSafetySource() {
 	    };
 	  }
 
-	  ${summarizeCoinDiagnosticsList.toString()}
-
-	  ${addCoinFilterDiagnostic.toString()}
-
-	  ${buildCoinDiagnostics.toString()}
+${coinDiagnosticsHelperSource}
 
 	  function recordCoinFilterDiagnostic(coin, reason, detail = {}) {
 	    addCoinFilterDiagnostic(bot.coinDiagnostics, coin, reason, {
@@ -224,6 +234,29 @@ function coinSafetySource() {
 `;
 }
 
+function bundledCoinSafetySource() {
+  return `const {
+  coinDiagnosticsSummary,
+  summarizeCoinDiagnosticsList,
+  addCoinFilterDiagnostic,
+  buildCoinDiagnostics
+} = require('./src/browser/runtime/coin-diagnostics');
+
+${coinSafetyInlineSource()}`;
+}
+
+function coinSafetySource(options = {}) {
+  if (options.bundledRuntime) return bundledCoinSafetySource();
+  return coinSafetyInlineSource({
+    coinDiagnosticsSummary,
+    summarizeCoinDiagnosticsList,
+    addCoinFilterDiagnostic,
+    buildCoinDiagnostics
+  });
+}
+
 module.exports = {
+  bundledCoinSafetySource,
+  coinSafetyInlineSource,
   coinSafetySource
 };

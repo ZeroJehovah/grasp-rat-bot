@@ -233,7 +233,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-offline-safety',
     `
 	`],
-    ['coin-safety', coinSafetySource],
+    ['coin-safety', () => coinSafetySource(config)],
     ['target-selection', targetSelectionSource],
     ['combat-movement', combatMovementSource],
     ['combat-aim', combatAimSource],
