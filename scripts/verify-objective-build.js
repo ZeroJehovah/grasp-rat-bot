@@ -306,6 +306,7 @@ function main() {
   const opportunityCandidateSourceModule = readText('src/browser/opportunity-candidate-source.js');
   const opportunityRouteSourceModule = readText('src/browser/opportunity-route-source.js');
   const opportunityChoiceSourceModule = readText('src/browser/opportunity-choice-source.js');
+  const opportunityPickSourceModule = readText('src/browser/opportunity-pick-source.js');
   const coinProgressRuntimeSourceModule = readText('src/browser/coin-progress-runtime-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
@@ -359,6 +360,7 @@ function main() {
     opportunityCandidateSourceModule,
     opportunityRouteSourceModule,
     opportunityChoiceSourceModule,
+    opportunityPickSourceModule,
     coinProgressRuntimeSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
@@ -525,6 +527,7 @@ function main() {
     assert(botSourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityCandidateSource()}'), 'opportunity-candidate module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityChoiceSource()}'), 'opportunity-choice module is not injected into browser runtime');
+    assert(botSourceModule.includes('${opportunityPickSource()}'), 'opportunity-pick module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinProgressRuntimeSource()}'), 'coin-progress runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
@@ -761,6 +764,12 @@ function main() {
     assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('buildMissingHeldOpportunityCore.toString()'), 'opportunity-choice source factory does not inline missing-held core');
     assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('function opportunityChoiceCoreOptions'), 'opportunity-choice source factory does not include core options wrapper');
     assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('function buildMissingHeldOpportunity'), 'opportunity-choice source factory does not include missing-held wrapper');
+    assert(opportunityPickSourceModule.includes('function opportunityPickSource() {'), 'opportunity-pick source factory not found');
+    assert(opportunityPickSourceModule.includes('module.exports = { opportunityPickSource }'), 'opportunity-pick source module export not found');
+    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('String.raw`'), 'opportunity-pick source factory does not return raw browser source');
+    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('function pickBestOpportunity'), 'opportunity-pick source factory does not include pickBestOpportunity');
+    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('pickCoinRouteOpportunity'), 'opportunity-pick source factory does not include route opportunity selection');
+    assert(functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('buildOpportunityCandidatesCore'), 'opportunity-pick source factory does not include candidate core call');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource() {'), 'opportunity-route source factory not found');
     assert(opportunityRouteSourceModule.includes('module.exports = { opportunityRouteSource }'), 'opportunity-route source module export not found');
     assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('String.raw`'), 'opportunity-route source factory does not return raw browser source');
