@@ -7,7 +7,7 @@ const {
 } = require('./runtime/exit-summary');
 const {
   buildBrowserPreservedState
-} = require('../shared/browser-preserved-state');
+} = require('./runtime/browser-preserved-state');
 const {
   buildRuntimeDefaults
 } = require('../shared/runtime-defaults');

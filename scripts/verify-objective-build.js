@@ -274,6 +274,7 @@ function main() {
   const browserPageGlobalCoreSource = readText('src/browser/page-global-core.js');
   const targetWhitelistRuntimeModule = readText('src/browser/runtime/target-whitelist.js');
   const exitSummaryRuntimeModule = readText('src/browser/runtime/exit-summary.js');
+  const browserPreservedStateRuntimeModule = readText('src/browser/runtime/browser-preserved-state.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -369,6 +370,7 @@ function main() {
     browserPageGlobalCoreSource,
     targetWhitelistRuntimeModule,
     exitSummaryRuntimeModule,
+    browserPreservedStateRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -527,7 +529,9 @@ function main() {
     assert(controlLoginRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'control-login runtime source does not import the browser exit-summary helper module');
     assert(controlLoginRuntimeSourceModule.includes("require('./control-login-source')"), 'control-login runtime source module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./runtime/exit-summary')"), 'runtime bootstrap source does not import the browser exit-summary helper module');
-    assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
+    assert(runtimeBootstrapSourceModule.includes("require('./runtime/browser-preserved-state')"), 'runtime bootstrap source does not import the browser preserved-state helper module');
+    assert(browserPreservedStateRuntimeModule.includes("require('../../shared/browser-preserved-state')"), 'browser preserved-state helper module does not reuse shared preserved-state helper');
+    assert(browserPreservedStateRuntimeModule.includes('buildBrowserPreservedState'), 'browser preserved-state helper module export is incomplete');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./runtime/target-whitelist')"), 'runtime bootstrap source does not import the browser target-whitelist helper module');
@@ -1230,11 +1234,13 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import displayFormat from '../browser/runtime/display-format.js'"), 'bundler spike does not import display helpers through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import targetWhitelist from '../browser/runtime/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import exitSummary from '../browser/runtime/exit-summary.js'"), 'bundler spike does not import exit-summary helpers through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import preservedState from '../browser/runtime/browser-preserved-state.js'"), 'bundler spike does not import preserved-state helper through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true })"), 'bundler spike does not execute the exit-summary helper module');
+    assert(bundlerSpikeEntrySource.includes('preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({'), 'bundler spike does not execute the preserved-state helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
