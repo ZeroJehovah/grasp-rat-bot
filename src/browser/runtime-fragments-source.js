@@ -250,7 +250,7 @@ function browserRuntimeFragmentEntries(config) {
     ['post-attack', () => postAttackSource(config)],
     ['opportunity-actions', opportunityActionsSource],
     ['opportunity-choice', () => opportunityChoiceSource(config)],
-    ['opportunity-pick', opportunityPickSource],
+    ['opportunity-pick', () => opportunityPickSource(config)],
     ['patrol', patrolSource],
     ['opportunity-clear', () => opportunityClearSource(config)],
     ['separator-after-opportunity-clear',

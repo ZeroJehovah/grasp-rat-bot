@@ -57,6 +57,7 @@ const {
   buildOpportunityCandidatesCore,
   bestCoinOpportunityScoreCore
 } = require('./opportunity-candidates');
+const { pickBestOpportunityCore } = require('./opportunity-pick');
 const {
   postAttackVisibleCoinExistsCore,
   pickPostAttackDropCoinCore,
@@ -1180,6 +1181,69 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'opportunity-candidates-best-coin-score-includes-route',
     passed: bestCoinRouteScore === 9
+  });
+
+  let flattenedEnemyCount = 0;
+  const pickCoreBaseOptions = {
+    enemyOpportunityCandidates: (origin, targets) => {
+      flattenedEnemyCount = targets.length;
+      return targets;
+    },
+    uniqueVisibleRouteCoins: groups => (groups || []).flatMap(group => group.coins || []),
+    pickCoinRouteOpportunity: () => null,
+    opportunityCandidateCoreOptions: () => candidateOptions,
+    buildCoinAction: (origin, coin, reason, kind) => ({
+      kind,
+      reason,
+      target: { id: coin.drop_id, amount: coin.amount }
+    }),
+    buildEnemyAction: (origin, target, reason) => ({
+      kind: 'attack',
+      reason,
+      target: { id: target.user_id }
+    }),
+    buildMissingHeldOpportunity: () => null,
+    chooseStableOpportunity: opportunities => opportunities.slice().sort((a, b) => b.score - a.score)[0] || null,
+    rememberOpportunityChoice: (item, action) => ({
+      ...action,
+      pickedType: item.type,
+      pickedId: item.id
+    })
+  };
+  const pickedOpportunity = pickBestOpportunityCore({ x: 0, y: 0 }, [], [{
+    maxDistance: 5000,
+    coins: [{ drop_id: 'pick-coin', amount: 5, distance: 500, score: 15 }]
+  }], [[{ user_id: 'pick-enemy', distance: 900, score: 8, staminaCost: 100, afk: true }]], {
+    ...pickCoreBaseOptions,
+    disableMissingHold: true
+  });
+  results.push({
+    name: 'opportunity-pick-core-builds-and-remembers-best-action',
+    passed: flattenedEnemyCount === 1
+      && pickedOpportunity?.kind === 'coin'
+      && pickedOpportunity?.pickedType === 'coin'
+      && pickedOpportunity?.pickedId === 'pick-coin'
+  });
+
+  const pickedMissingHeldOpportunity = pickBestOpportunityCore({ x: 0, y: 0 }, [], [{
+    maxDistance: 5000,
+    coins: [{ drop_id: 'pick-coin', amount: 5, distance: 500, score: 15 }]
+  }], [[]], {
+    ...pickCoreBaseOptions,
+    buildMissingHeldOpportunity: () => ({
+      type: 'coin',
+      id: 'missing-pick',
+      amount: 9,
+      distance: 400,
+      score: 99,
+      priorityTier: 1,
+      action: () => ({ kind: 'coin', reason: 'missing-held', target: { id: 'missing-pick' } })
+    })
+  });
+  results.push({
+    name: 'opportunity-pick-core-includes-missing-held-opportunity',
+    passed: pickedMissingHeldOpportunity?.pickedId === 'missing-pick'
+      && pickedMissingHeldOpportunity?.reason === 'missing-held'
   });
 
   const postAttackDist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));

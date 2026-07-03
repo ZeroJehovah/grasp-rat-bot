@@ -17,6 +17,7 @@ import coinRoute from '../browser/runtime/coin-route.js';
 import opportunityChoice from '../browser/runtime/opportunity-choice.js';
 import opportunityClear from '../browser/runtime/opportunity-clear.js';
 import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
+import opportunityPick from '../browser/runtime/opportunity-pick.js';
 import postAttackDrop from '../browser/runtime/post-attack-drop.js';
 import staminaBudget from '../browser/runtime/stamina-budget.js';
 import opportunityConstants from '../browser/runtime/opportunity-constants.js';
@@ -197,6 +198,41 @@ function helperStatus(config = {}) {
       scoreCoinOpportunity: coin => Number(coin.amount || 0)
     }
   );
+  const opportunityPickResult = opportunityPick.pickBestOpportunityCore(
+    { x: 0, y: 0 },
+    [],
+    [{
+      coins: [{ drop_id: 'pick-coin', amount: 5, distance: 200, x: 200, y: 0 }],
+      maxDistance: 500
+    }],
+    [[{ user_id: 'pick-enemy', distance: 100, opportunityScore: 3, staminaCost: 100 }]],
+    {
+      enemyOpportunityCandidates: (origin, targets) => targets,
+      uniqueVisibleRouteCoins: groups => (groups || []).flatMap(group => group.coins || []),
+      pickCoinRouteOpportunity: () => null,
+      opportunityCandidateCoreOptions: () => ({
+        safeCoinCandidates: coins => coins,
+        coinStaminaCost: coin => Number(coin.distance || 0),
+        coinStaminaAffordable: () => true,
+        scoreCoinOpportunity: coin => Number(coin.amount || 0),
+        snapshotCoinNavigationReason: () => 'pick-coin',
+        maxCoinDistance: 500,
+        scoreEnemyOpportunity: target => Number(target.opportunityScore || 0),
+        enemyStaminaCost: target => Number(target.staminaCost || 0),
+        opportunityStaminaAffordable: () => true,
+        isAfkProfitTarget: () => true,
+        attackRange: 150,
+        attackEngageRange: 200,
+        priorityTier: item => opportunityCandidates.opportunityPriorityTierCore(item, { visibleDistance: 500 })
+      }),
+      buildCoinAction: (origin, coin, reason, kind) => ({ kind, reason, target: { id: coin.drop_id } }),
+      buildEnemyAction: (origin, target, reason) => ({ kind: 'attack', reason, target: { id: target.user_id } }),
+      buildMissingHeldOpportunity: () => null,
+      chooseStableOpportunity: opportunities => opportunities.slice().sort((a, b) => b.score - a.score)[0] || null,
+      rememberOpportunityChoice: (item, action) => ({ ...action, pickedId: item.id, pickedType: item.type }),
+      disableMissingHold: true
+    }
+  );
   const postAttackVisibleCoinExists = postAttackDrop.postAttackVisibleCoinExistsCore(
     [{ drop_id: 'post-attack-visible', amount: 3, x: 10, y: 0 }],
     { id: 'post-attack-target', x: 0, y: 0 },
@@ -264,6 +300,8 @@ function helperStatus(config = {}) {
     opportunityCandidateCount: arrayCountRuntime.arrayCount(opportunityCandidateList),
     opportunityCandidateCoinReason: opportunityCandidateList.find(item => item.type === 'coin')?.reason,
     opportunityBestCoinScore,
+    opportunityPickId: opportunityPickResult?.pickedId,
+    opportunityPickKind: opportunityPickResult?.kind,
     postAttackVisibleCoinExists,
     postAttackDropSelectedId: postAttackDropResult.selected?.drop_id,
     staminaBudgetDailyLimited,
