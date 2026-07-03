@@ -75,6 +75,7 @@ const { persistentClearSource } = require('./persistent-clear-source');
 const { pendingExitPersistenceSource } = require('./pending-exit-persistence-source');
 const { refreshExitDetailSource } = require('./refresh-exit-detail-source');
 const { restoredCoinFailuresSource } = require('./restored-coin-failures-source');
+const { loginSnapshotGateSource } = require('./login-snapshot-gate-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -176,25 +177,7 @@ ${restoredCoinFailuresSource()}
 			  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
 			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
 			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
-
-			  function loginSnapshotSuccessRequired() {
-			    return 0;
-			  }
-
-		  function normalizeLoginSnapshotGateState(state = null) {
-		    const required = loginSnapshotSuccessRequired();
-		    return {
-		      streak: Math.max(0, Math.round(Number(state?.streak || 0) || 0)),
-		      required,
-		      lastOkAt: Number(state?.lastOkAt || 0) || 0,
-		      lastErrorAt: Number(state?.lastErrorAt || 0) || 0,
-		      lastSampleAt: Number(state?.lastSampleAt || state?.lastOkAt || state?.lastErrorAt || 0) || 0,
-		      lastError: String(state?.lastError || ''),
-		      lastTick: Number(state?.lastTick || 0) || 0,
-		      resetAt: Number(state?.resetAt || 0) || 0,
-		      resetReason: String(state?.resetReason || '')
-		    };
-		  }
+${loginSnapshotGateSource()}
 
   function recordRuntimeDiagnostics(values = {}) {
     try {
