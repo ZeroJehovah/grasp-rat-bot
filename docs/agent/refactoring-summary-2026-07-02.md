@@ -471,6 +471,17 @@ This is a source-organization split only. It preserves combat engagement bookkee
 
 This is a source-organization split only. It preserves coin target identity, native snapshot memory, incidental pickup session accounting, tracked pickup confirmation, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AK Native Control Source Factory
+
+`bootstrap-0.4.309` extracts native movement/shot dispatch source generation into a dedicated browser source module:
+
+- `src/browser/native-control-source.js` now owns the raw browser source for `wsSend()`, native key synchronization, local/native motion clearing, direct WebSocket velocity messages/repeats, action velocity pulses, pointer aiming, direct/fallback native shooting, and combat shot attempt recording.
+- `src/browser/bot-source.js` imports and injects `${nativeControlSource()}` after the network-quality/combat-history runtime fragments.
+- Static verification checks the new source-factory shape plus direct velocity sending, repeat scheduling, safe stop, native shoot, and shoot cadence wrapper presence.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves movement transport, stop semantics, shot cadence, shot logging, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -510,9 +521,10 @@ This is a source-organization split only. It preserves coin target identity, nat
 34. Action arbitration source factory: integrated in `bootstrap-0.4.306`
 35. Combat history source factory: integrated in `bootstrap-0.4.307`
 36. Coin target runtime source factory: integrated in `bootstrap-0.4.308`
-37. Constants: partially integrated for high-value coin defaults
-38. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-39. Run live validation sessions after each behavior-touching replacement
+37. Native control source factory: integrated in `bootstrap-0.4.309`
+38. Constants: partially integrated for high-value coin defaults
+39. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+40. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
