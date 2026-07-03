@@ -102,6 +102,8 @@ async function selfTest() {
   assert(source.includes('function safeStringify'), 'shared runtime helper was not bundled');
   assert(source.includes('function formatDistance'), 'display helper was not bundled');
   assert(source.includes('function offlineLeaveSummaryText'), 'exit-summary helper was not bundled');
+  assert(source.includes('function readPersistentLastSelfStateCore'), 'persistent-last-self read helper was not bundled');
+  assert(source.includes('function writePersistentLastSelfStateCore'), 'persistent-last-self write helper was not bundled');
   assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
@@ -179,6 +181,9 @@ async function selfTest() {
   assert(status.opportunityConstantHighValue === 10, 'spike did not read opportunity constants');
   assert(status.opportunityConstantRoi === 5, 'spike did not execute opportunity constants helper');
   assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
+  assert(status.persistentLastSelfId === 'last-self-spike', 'spike did not execute persistent-last-self read helper');
+  assert(status.persistentLastSelfWrite === true, 'spike did not execute persistent-last-self write helper');
+  assert(status.persistentLastSelfWrittenAt === 2000, 'spike did not write persistent-last-self timestamp');
   assert(status.persistentClearRemoved === true, 'spike did not execute persistent-clear helper');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');

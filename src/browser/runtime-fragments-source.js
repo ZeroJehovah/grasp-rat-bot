@@ -91,7 +91,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 (() => {`],
     ['runtime-bootstrap', () => runtimeBootstrapSource(config)],
-    ['persistent-last-self', persistentLastSelfSource],
+    ['persistent-last-self', () => persistentLastSelfSource(config)],
     ['separator-after-persistent-last-self',
     `
 `],

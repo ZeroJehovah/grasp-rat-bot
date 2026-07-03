@@ -5,6 +5,7 @@ import displayFormat from '../browser/runtime/display-format.js';
 import targetWhitelist from '../browser/runtime/target-whitelist.js';
 import exitSummary from '../browser/runtime/exit-summary.js';
 import preservedState from '../browser/runtime/browser-preserved-state.js';
+import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
@@ -301,6 +302,28 @@ function helperStatus(config = {}) {
   );
   const opportunityConstantHighValue = opportunityConstants.OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT;
   const opportunityConstantRoi = opportunityConstants.calculateOpportunityROI(10, 2);
+  const persistentLastSelfStorage = {
+    value: JSON.stringify({ at: 1000, self: { id: 'last-self-spike', hp: 88 } }),
+    getItem() {
+      return this.value;
+    },
+    setItem(key, value) {
+      this.writtenKey = key;
+      this.writtenValue = JSON.parse(value);
+    }
+  };
+  const persistentLastSelfRead = persistentLastSelf.readPersistentLastSelfStateCore(
+    persistentLastSelfStorage,
+    'last-self-key',
+    10000,
+    1500
+  );
+  const persistentLastSelfWrite = persistentLastSelf.writePersistentLastSelfStateCore(
+    persistentLastSelfStorage,
+    'last-self-key',
+    { id: 'last-self-written', hp: 77 },
+    2000
+  );
   const persistentClearRemoved = persistentClear.clearPersistentStorageKey('persistent-clear-spike');
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
@@ -349,6 +372,9 @@ function helperStatus(config = {}) {
     opportunityConstantHighValue,
     opportunityConstantRoi,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
+    persistentLastSelfId: persistentLastSelfRead?.id,
+    persistentLastSelfWrite,
+    persistentLastSelfWrittenAt: persistentLastSelfStorage.writtenValue?.at,
     persistentClearRemoved,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

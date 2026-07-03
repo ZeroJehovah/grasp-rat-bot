@@ -764,6 +764,43 @@
     }
   });
 
+  // src/browser/runtime/persistent-last-self.js
+  var require_persistent_last_self = __commonJS({
+    "src/browser/runtime/persistent-last-self.js"(exports, module) {
+      "use strict";
+      function readPersistentLastSelfStateCore(storage, key, maxAgeMsValue, t = Date.now()) {
+        let state2 = null;
+        try {
+          state2 = JSON.parse(storage.getItem(key) || "null");
+        } catch (_) {
+          state2 = null;
+        }
+        if (!state2 || typeof state2 !== "object") return null;
+        const at = Number(state2.at || state2.updatedAt || 0) || 0;
+        const maxAgeMs = Math.max(36e5, Number(maxAgeMsValue || 1728e5) || 1728e5);
+        if (at && t - at > maxAgeMs) return null;
+        const self = state2.self && typeof state2.self === "object" ? state2.self : state2;
+        return self && typeof self === "object" ? { ...self } : null;
+      }
+      function writePersistentLastSelfStateCore(storage, key, selfSummary, t = Date.now()) {
+        if (!selfSummary || typeof selfSummary !== "object") return false;
+        try {
+          storage.setItem(key, JSON.stringify({
+            at: t,
+            self: selfSummary
+          }));
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+      module.exports = {
+        readPersistentLastSelfStateCore,
+        writePersistentLastSelfStateCore
+      };
+    }
+  });
+
   // src/browser/runtime/persistent-clear.js
   var require_persistent_clear = __commonJS({
     "src/browser/runtime/persistent-clear.js"(exports, module) {
@@ -3614,7 +3651,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.414" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.415" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -3667,29 +3704,15 @@
       lastError: "",
       lastReason: preservedTargetWhitelistNames.length ? "preserved" : "empty"
     };
+    const {
+      readPersistentLastSelfStateCore,
+      writePersistentLastSelfStateCore
+    } = require_persistent_last_self();
     function readPersistentLastSelfState(t = Date.now()) {
-      let state2 = null;
-      try {
-        state2 = JSON.parse(localStorage.getItem(LAST_SELF_STATE_KEY) || "null");
-      } catch (_) {
-        state2 = null;
-      }
-      if (!state2 || typeof state2 !== "object") return null;
-      const at = Number(state2.at || state2.updatedAt || 0) || 0;
-      const maxAgeMs = Math.max(36e5, Number(cfg.lastSelfPersistMaxMs || 1728e5) || 1728e5);
-      if (at && t - at > maxAgeMs) return null;
-      const self = state2.self && typeof state2.self === "object" ? state2.self : state2;
-      return self && typeof self === "object" ? { ...self } : null;
+      return readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t);
     }
     function writePersistentLastSelfState(selfSummary, t = Date.now()) {
-      if (!selfSummary || typeof selfSummary !== "object") return;
-      try {
-        localStorage.setItem(LAST_SELF_STATE_KEY, JSON.stringify({
-          at: t,
-          self: selfSummary
-        }));
-      } catch (_) {
-      }
+      writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t);
     }
     function readPersistentExitState(key, t = Date.now()) {
       let state2 = null;

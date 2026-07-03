@@ -277,6 +277,7 @@ function main() {
   const targetWhitelistRuntimeModule = readText('src/browser/runtime/target-whitelist.js');
   const exitSummaryRuntimeModule = readText('src/browser/runtime/exit-summary.js');
   const browserPreservedStateRuntimeModule = readText('src/browser/runtime/browser-preserved-state.js');
+  const persistentLastSelfRuntimeModule = readText('src/browser/runtime/persistent-last-self.js');
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
@@ -399,6 +400,7 @@ function main() {
     targetWhitelistRuntimeModule,
     exitSummaryRuntimeModule,
     browserPreservedStateRuntimeModule,
+    persistentLastSelfRuntimeModule,
     persistentClearRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
@@ -542,6 +544,7 @@ function main() {
     assert(distSource.includes('var require_runtime_defaults = __commonJS'), 'bundled production dist does not bundle the runtime-defaults module through esbuild');
     assert(distSource.includes('var require_target_whitelist = __commonJS'), 'bundled production dist does not bundle the target-whitelist runtime module through esbuild');
     assert(distSource.includes('var require_exit_summary = __commonJS'), 'bundled production dist does not bundle the exit-summary runtime module through esbuild');
+    assert(distSource.includes('var require_persistent_last_self = __commonJS'), 'bundled production dist does not bundle the persistent-last-self runtime module through esbuild');
     assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
@@ -632,6 +635,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("['persistent-last-self', () => persistentLastSelfSource(config)]"), 'persistent-last-self source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['exit-motion', () => exitMotionSource(config)]"), 'exit-motion source is not invoked with runtime config');
@@ -1279,12 +1283,19 @@ function main() {
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('recordRuntimeDiagnostics'), 'tick-safety source factory does not preserve runtime diagnostics recording');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('function runCallbackSafely'), 'tick-safety source factory does not include callback safety wrapper');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes("result.catch(err => recordUnhandledTickError(label, err))"), 'tick-safety source factory does not preserve async callback error capture');
-    assert(persistentLastSelfSourceModule.includes('function persistentLastSelfSource() {'), 'persistent-last-self source factory not found');
-    assert(persistentLastSelfSourceModule.includes('module.exports = { persistentLastSelfSource }'), 'persistent-last-self source module export not found');
-    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('String.raw`'), 'persistent-last-self source factory does not return raw browser source');
-    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('function readPersistentLastSelfState'), 'persistent-last-self source factory does not include read helper');
-    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('function writePersistentLastSelfState'), 'persistent-last-self source factory does not include write helper');
-    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('LAST_SELF_STATE_KEY'), 'persistent-last-self source factory does not use last-self storage key');
+    assert(persistentLastSelfSourceModule.includes('function persistentLastSelfInlineSource() {'), 'persistent-last-self inline source factory not found');
+    assert(persistentLastSelfSourceModule.includes('function bundledPersistentLastSelfSource() {'), 'persistent-last-self bundled source factory not found');
+    assert(persistentLastSelfSourceModule.includes('function persistentLastSelfSource(options = {}) {'), 'persistent-last-self source selector not found');
+    assert(persistentLastSelfSourceModule.includes('persistentLastSelfInlineSource') && persistentLastSelfSourceModule.includes('bundledPersistentLastSelfSource') && persistentLastSelfSourceModule.includes('persistentLastSelfSource'), 'persistent-last-self source module exports are incomplete');
+    const persistentLastSelfInlineBody = functionBody(persistentLastSelfSourceModule, 'persistentLastSelfInlineSource');
+    assert(persistentLastSelfInlineBody.includes('String.raw`'), 'persistent-last-self inline source factory does not return raw browser source');
+    assert(persistentLastSelfInlineBody.includes('function readPersistentLastSelfState'), 'persistent-last-self inline source factory does not include read helper');
+    assert(persistentLastSelfInlineBody.includes('function writePersistentLastSelfState'), 'persistent-last-self inline source factory does not include write helper');
+    assert(persistentLastSelfInlineBody.includes('LAST_SELF_STATE_KEY'), 'persistent-last-self inline source factory does not use last-self storage key');
+    const persistentLastSelfBundledBody = functionBody(persistentLastSelfSourceModule, 'bundledPersistentLastSelfSource');
+    assert(persistentLastSelfBundledBody.includes("require('./src/browser/runtime/persistent-last-self')"), 'persistent-last-self bundled source does not hand helpers to the bundler');
+    assert(persistentLastSelfBundledBody.includes('readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t)'), 'persistent-last-self bundled source does not call read core with runtime config');
+    assert(persistentLastSelfBundledBody.includes('writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t)'), 'persistent-last-self bundled source does not call write core with runtime key');
     assert(persistentExitSourceModule.includes('function persistentExitSource() {'), 'persistent-exit source factory not found');
     assert(persistentExitSourceModule.includes('module.exports = { persistentExitSource }'), 'persistent-exit source module export not found');
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('String.raw`'), 'persistent-exit source factory does not return raw browser source');
@@ -3299,6 +3310,27 @@ function main() {
     assert(distSource.includes('function postExitDecisionWithoutTargetCore'), 'bundled dist does not contain exit-motion decision core');
     assert(distSource.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'bundled dist exit-motion lock wrapper does not call strategy core');
     assert(distSource.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'bundled dist exit-motion decision wrapper does not call strategy core');
+  });
+
+  check('persistent last self uses browser runtime adapter', () => {
+    assert(persistentLastSelfRuntimeModule.includes('function readPersistentLastSelfStateCore'), 'persistent-last-self read runtime helper not found');
+    assert(persistentLastSelfRuntimeModule.includes('function writePersistentLastSelfStateCore'), 'persistent-last-self write runtime helper not found');
+    assert(persistentLastSelfRuntimeModule.includes('JSON.parse(storage.getItem(key)'), 'persistent-last-self read helper does not read storage JSON');
+    assert(persistentLastSelfRuntimeModule.includes('storage.setItem(key, JSON.stringify({'), 'persistent-last-self write helper does not write storage JSON');
+    assert(persistentLastSelfRuntimeModule.includes('module.exports = {\n  readPersistentLastSelfStateCore,\n  writePersistentLastSelfStateCore\n}'), 'persistent-last-self runtime helper export not found');
+    assert(persistentLastSelfSourceModule.includes("require('./src/browser/runtime/persistent-last-self')"), 'persistent-last-self bundled source does not require the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/persistent-last-self.js'"), 'bundler spike does not import persistent-last-self runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('persistentLastSelf.readPersistentLastSelfStateCore('), 'bundler spike does not execute persistent-last-self read helper');
+    assert(bundlerSpikeEntrySource.includes('persistentLastSelf.writePersistentLastSelfStateCore('), 'bundler spike does not execute persistent-last-self write helper');
+    assert(bundlerSpikeBuildSource.includes("status.persistentLastSelfId === 'last-self-spike'"), 'bundler spike self-test does not assert persistent-last-self read execution');
+    assert(bundlerSpikeBuildSource.includes('status.persistentLastSelfWrite === true'), 'bundler spike self-test does not assert persistent-last-self write execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/persistent-last-self')"), 'generated remote runtime does not hand persistent-last-self helpers to the bundler');
+    assert(!generatedRuntimeSource.includes('function readPersistentLastSelfStateCore'), 'generated remote runtime still inlines persistent-last-self read helper before bundling');
+    assert(!generatedRuntimeSource.includes('function writePersistentLastSelfStateCore'), 'generated remote runtime still inlines persistent-last-self write helper before bundling');
+    assert(distSource.includes('function readPersistentLastSelfStateCore'), 'bundled dist does not contain persistent-last-self read helper');
+    assert(distSource.includes('function writePersistentLastSelfStateCore'), 'bundled dist does not contain persistent-last-self write helper');
+    assert(distSource.includes('readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t)'), 'bundled dist persistent-last-self read wrapper does not call runtime core');
+    assert(distSource.includes('writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t)'), 'bundled dist persistent-last-self write wrapper does not call runtime core');
   });
 
   check('persistent clear uses browser runtime adapter', () => {
