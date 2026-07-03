@@ -153,7 +153,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['status-panel-runtime', statusPanelRuntimeSource],
+    ['status-panel-runtime', () => statusPanelRuntimeSource(config)],
     ['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)],
     ['array-count', () => arrayCountSource(config)],
     ['runtime-utility-clone', () => runtimeUtilityCloneSource(config)],
