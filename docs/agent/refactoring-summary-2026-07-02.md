@@ -570,6 +570,17 @@ This is a source-organization split only. It preserves recent movement/activity 
 
 This is a source-organization split only. It preserves realtime/native entity merging, global snapshot fallback filtering, coin bucket construction, active/inactive target classification, combat target lists, snapshot coin filtering, bullet collection, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AZ Coin Safety Source Factory
+
+`bootstrap-0.4.324` extracts coin safety, coin diagnostics, and coin picker source generation into a dedicated browser source module:
+
+- `src/browser/coin-safety-source.js` now owns the raw browser source for coin threat radii, invulnerable heading blocks, safe coin candidate filtering, coin diagnostic helper inlining, stamina-affordability diagnostics, realtime local coin picking, field migration blocking, field coin picking, and distant coin picking.
+- `src/browser/bot-source.js` imports and injects `${coinSafetySource()}` immediately after `${offlineSafetySource()}`, preserving the generated runtime order before high-value coin priority helpers.
+- Static verification checks the new source-factory shape, injection point, coin diagnostics strategy helper inlining, threat radius helper, safe coin candidate filter, realtime local coin picker, field coin picker, and distant coin picker anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves active threat coin blocking, invulnerable coin heading avoidance, ignored-coin cleanup, near-coin diagnostic collection, coin stamina diagnostics, realtime-only local coin fallback, field migration nearby-coin suppression, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -624,6 +635,7 @@ This is a source-organization split only. It preserves realtime/native entity me
 49. Leave flow source factory: integrated in `bootstrap-0.4.321`
 50. Entity refresh source factory: integrated in `bootstrap-0.4.322`
 51. Classify source factory: integrated in `bootstrap-0.4.323`
+52. Coin safety source factory: integrated in `bootstrap-0.4.324`
 51. Constants: partially integrated for high-value coin defaults
 52. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 53. Run live validation sessions after each behavior-touching replacement
