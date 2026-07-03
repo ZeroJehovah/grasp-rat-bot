@@ -78,7 +78,7 @@ const { actionArbitrationSource } = require('./action-arbitration-source');
 const { networkQualitySource } = require('./network-quality-source');
 const { networkQualitySummarySource } = require('./network-quality-summary-source');
 const { runtimeSummarySource } = require('./runtime-summary-source');
-function browserBotSource(config) {
+function browserRuntimeAssemblySource(config) {
   return `
 (() => {${runtimeBootstrapSource(config)}${persistentLastSelfSource()}
 ${persistentExitSource()}
@@ -155,5 +155,5 @@ ${startupSource()}
 }
 
 module.exports = {
-  browserBotSource
+  browserRuntimeAssemblySource
 };
