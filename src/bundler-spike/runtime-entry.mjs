@@ -16,6 +16,7 @@ import coinProgress from '../browser/runtime/coin-progress.js';
 import coinRoute from '../browser/runtime/coin-route.js';
 import opportunityChoice from '../browser/runtime/opportunity-choice.js';
 import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
+import postAttackDrop from '../browser/runtime/post-attack-drop.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -183,6 +184,29 @@ function helperStatus(config = {}) {
       scoreCoinOpportunity: coin => Number(coin.amount || 0)
     }
   );
+  const postAttackVisibleCoinExists = postAttackDrop.postAttackVisibleCoinExistsCore(
+    [{ drop_id: 'post-attack-visible', amount: 3, x: 10, y: 0 }],
+    { id: 'post-attack-target', x: 0, y: 0 },
+    { dropCoinRadius: 20 }
+  );
+  const postAttackDropResult = postAttackDrop.pickPostAttackDropCoinCore(
+    [{
+      id: 'post-attack-target',
+      at: 900,
+      x: 10,
+      y: 0,
+      drop: 6,
+      action: 'attack',
+      postAttackDropResolvedAt: 950
+    }],
+    [{ drop_id: 'post-attack-coin', amount: 6, distance: 10, x: 12, y: 0 }],
+    {
+      nowMs: 1000,
+      priorityMs: 500,
+      dropCoinRadius: 20,
+      scoreCoin: coin => Number(coin.amount || 0) * 10
+    }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -213,6 +237,8 @@ function helperStatus(config = {}) {
     opportunityCandidateCount: arrayCountRuntime.arrayCount(opportunityCandidateList),
     opportunityCandidateCoinReason: opportunityCandidateList.find(item => item.type === 'coin')?.reason,
     opportunityBestCoinScore,
+    postAttackVisibleCoinExists,
+    postAttackDropSelectedId: postAttackDropResult.selected?.drop_id,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

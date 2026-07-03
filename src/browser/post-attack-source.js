@@ -6,7 +6,7 @@ const {
   buildPostAttackDropCoinCandidateCore,
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
-} = require('../strategy/post-attack-drop');
+} = require('./runtime/post-attack-drop');
 
 function postAttackSource() {
   return String.raw`  function attackEntityMatches(entity, attack) {
