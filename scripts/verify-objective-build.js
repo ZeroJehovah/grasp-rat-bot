@@ -281,6 +281,7 @@ function main() {
   const persistentLastSelfRuntimeModule = readText('src/browser/runtime/persistent-last-self.js');
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
+  const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
@@ -406,6 +407,7 @@ function main() {
     persistentLastSelfRuntimeModule,
     persistentClearRuntimeModule,
     restoredCoinFailuresRuntimeModule,
+    loginSnapshotGateRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
@@ -552,6 +554,7 @@ function main() {
     assert(distSource.includes('var require_persistent_last_self = __commonJS'), 'bundled production dist does not bundle the persistent-last-self runtime module through esbuild');
     assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
     assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
+    assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
@@ -645,6 +648,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("['persistent-exit', () => persistentExitSource(config)]"), 'persistent-exit source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['restored-coin-failures', () => restoredCoinFailuresSource(config)]"), 'restored-coin-failures source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['login-snapshot-gate', () => loginSnapshotGateSource(config)]"), 'login-snapshot-gate source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['exit-motion', () => exitMotionSource(config)]"), 'exit-motion source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
@@ -1366,13 +1370,26 @@ function main() {
     assert(restoredCoinFailuresRuntimeModule.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures runtime core does not restore severe ignore windows');
     assert(restoredCoinFailuresRuntimeModule.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures runtime core does not restore hard ignore windows');
     assert(restoredCoinFailuresRuntimeModule.includes('module.exports = { restoredCoinFailuresCore }'), 'restored-coin-failures runtime core export not found');
-    assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateSource() {'), 'login-snapshot-gate source factory not found');
-    assert(loginSnapshotGateSourceModule.includes('module.exports = { loginSnapshotGateSource }'), 'login-snapshot-gate source module export not found');
-    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('String.raw`'), 'login-snapshot-gate source factory does not return raw browser source');
-    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('function loginSnapshotSuccessRequired'), 'login-snapshot-gate source factory does not include required-count helper');
-    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('function normalizeLoginSnapshotGateState'), 'login-snapshot-gate source factory does not include state normalizer');
-    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('lastSampleAt'), 'login-snapshot-gate source factory does not preserve last sample timestamp');
-    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('resetReason'), 'login-snapshot-gate source factory does not preserve reset reason');
+    assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateInlineSource() {'), 'login-snapshot-gate inline source factory not found');
+    assert(loginSnapshotGateSourceModule.includes('function bundledLoginSnapshotGateSource() {'), 'login-snapshot-gate bundled source factory not found');
+    assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateSource(options = {})'), 'login-snapshot-gate source selector not found');
+    assert(loginSnapshotGateSourceModule.includes('loginSnapshotGateInlineSource,\n  bundledLoginSnapshotGateSource,\n  loginSnapshotGateSource'), 'login-snapshot-gate source module exports not found');
+    const loginSnapshotGateInlineBody = functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateInlineSource');
+    assert(loginSnapshotGateInlineBody.includes('String.raw`'), 'login-snapshot-gate inline source factory does not return raw browser source');
+    assert(loginSnapshotGateInlineBody.includes('function loginSnapshotSuccessRequired'), 'login-snapshot-gate inline source factory does not include required-count helper');
+    assert(loginSnapshotGateInlineBody.includes('function normalizeLoginSnapshotGateState'), 'login-snapshot-gate inline source factory does not include state normalizer');
+    assert(loginSnapshotGateInlineBody.includes('lastSampleAt'), 'login-snapshot-gate inline source factory does not preserve last sample timestamp');
+    assert(loginSnapshotGateInlineBody.includes('resetReason'), 'login-snapshot-gate inline source factory does not preserve reset reason');
+    const loginSnapshotGateBundledBody = functionBody(loginSnapshotGateSourceModule, 'bundledLoginSnapshotGateSource');
+    assert(loginSnapshotGateBundledBody.includes("require('./src/browser/runtime/login-snapshot-gate')"), 'login-snapshot-gate bundled source does not hand gate helpers to the bundler');
+    assert(loginSnapshotGateBundledBody.includes('loginSnapshotSuccessRequiredCore()'), 'login-snapshot-gate bundled source does not bind required-count helper');
+    assert(loginSnapshotGateBundledBody.includes('normalizeLoginSnapshotGateStateCore(state, loginSnapshotSuccessRequired())'), 'login-snapshot-gate bundled source does not bind state normalizer helper');
+    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('options.bundledRuntime'), 'login-snapshot-gate source selector does not switch on bundled runtime mode');
+    assert(loginSnapshotGateRuntimeModule.includes('function loginSnapshotSuccessRequiredCore()'), 'login-snapshot-gate runtime required-count core not found');
+    assert(loginSnapshotGateRuntimeModule.includes('function normalizeLoginSnapshotGateStateCore(state = null'), 'login-snapshot-gate runtime state normalizer core not found');
+    assert(loginSnapshotGateRuntimeModule.includes('lastSampleAt: Number(state?.lastSampleAt || state?.lastOkAt || state?.lastErrorAt || 0) || 0'), 'login-snapshot-gate runtime core does not preserve last sample fallback');
+    assert(loginSnapshotGateRuntimeModule.includes("resetReason: String(state?.resetReason || '')"), 'login-snapshot-gate runtime core does not preserve reset reason');
+    assert(loginSnapshotGateRuntimeModule.includes('loginSnapshotSuccessRequiredCore,\n  normalizeLoginSnapshotGateStateCore'), 'login-snapshot-gate runtime core exports not found');
     assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsSource() {'), 'runtime-diagnostics source factory not found');
     assert(runtimeDiagnosticsSourceModule.includes('module.exports = { runtimeDiagnosticsSource }'), 'runtime-diagnostics source module export not found');
     assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('String.raw`'), 'runtime-diagnostics source factory does not return raw browser source');

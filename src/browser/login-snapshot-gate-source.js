@@ -1,6 +1,6 @@
 'use strict';
 
-function loginSnapshotGateSource() {
+function loginSnapshotGateInlineSource() {
   return String.raw`
 			  function loginSnapshotSuccessRequired() {
 			    return 0;
@@ -22,4 +22,28 @@ function loginSnapshotGateSource() {
 		  }`;
 }
 
-module.exports = { loginSnapshotGateSource };
+function bundledLoginSnapshotGateSource() {
+  return `const {
+			    loginSnapshotSuccessRequiredCore,
+			    normalizeLoginSnapshotGateStateCore
+			  } = require('./src/browser/runtime/login-snapshot-gate');
+
+			  function loginSnapshotSuccessRequired() {
+			    return loginSnapshotSuccessRequiredCore();
+			  }
+
+		  function normalizeLoginSnapshotGateState(state = null) {
+		    return normalizeLoginSnapshotGateStateCore(state, loginSnapshotSuccessRequired());
+		  }`;
+}
+
+function loginSnapshotGateSource(options = {}) {
+  if (options.bundledRuntime) return bundledLoginSnapshotGateSource();
+  return loginSnapshotGateInlineSource();
+}
+
+module.exports = {
+  loginSnapshotGateInlineSource,
+  bundledLoginSnapshotGateSource,
+  loginSnapshotGateSource
+};

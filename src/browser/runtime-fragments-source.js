@@ -113,7 +113,7 @@ function browserRuntimeFragmentEntries(config) {
 `],
     ['restored-coin-failures', () => restoredCoinFailuresSource(config)],
     ['restored-runtime-state', restoredRuntimeStateSource],
-    ['login-snapshot-gate', loginSnapshotGateSource],
+    ['login-snapshot-gate', () => loginSnapshotGateSource(config)],
     ['separator-after-login-snapshot-gate',
     `
 `],
