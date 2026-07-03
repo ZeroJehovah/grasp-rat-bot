@@ -78,80 +78,190 @@ const { actionArbitrationSource } = require('./action-arbitration-source');
 const { networkQualitySource } = require('./network-quality-source');
 const { networkQualitySummarySource } = require('./network-quality-summary-source');
 const { runtimeSummarySource } = require('./runtime-summary-source');
+
+function renderRuntimeFragments(fragments) {
+  return fragments.map(fragment => (typeof fragment === 'function' ? fragment() : fragment)).join('');
+}
+
 function browserRuntimeAssemblySource(config) {
-  return `
-(() => {${runtimeBootstrapSource(config)}${persistentLastSelfSource()}
-${persistentExitSource()}
-${persistentClearSource()}
-${pendingExitPersistenceSource()}
-${refreshExitDetailSource()}
-${restoredCoinFailuresSource()}
+  const fragments = [
+    `
+(() => {`,
+    () => runtimeBootstrapSource(config),
+    persistentLastSelfSource,
+    `
+`,
+    persistentExitSource,
+    `
+`,
+    persistentClearSource,
+    `
+`,
+    pendingExitPersistenceSource,
+    `
+`,
+    refreshExitDetailSource,
+    `
+`,
+    restoredCoinFailuresSource,
+    `
 
 			  const restoredFailures = restoredCoinFailures();
 			  const restoredEnemyLeaveState = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
 			  const restoredOfflineLeaveState = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
 			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
 			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
-${loginSnapshotGateSource()}
-${runtimeDiagnosticsSource()}
+`,
+    loginSnapshotGateSource,
+    `
+`,
+    runtimeDiagnosticsSource,
+    `
 
-${botObjectSource()}
+`,
+    botObjectSource,
+    `
 
-${entityActivitySource()}
-${targetWhitelistSource()}
-${staminaRuntimeSource()}
-${attackWorthSource()}
-${exitMotionSource()}
+`,
+    entityActivitySource,
+    `
+`,
+    targetWhitelistSource,
+    `
+`,
+    staminaRuntimeSource,
+    `
+`,
+    attackWorthSource,
+    `
+`,
+    exitMotionSource,
+    `
 
-${targetOverlaySource()}
+`,
+    targetOverlaySource,
+    `
 
-${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}
+`,
+    () => statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay }),
+    `
 
       ${safeStringify.toString()}
-${arrayCountSource()}
+`,
+    arrayCountSource,
+    `
 
       ${safeJsonClone.toString()}
 
       ${sanitizeCombatLogIdPart.toString()}
 
-${combatLogSource({ combatLogExitSummaryFromDecision })}
-${tickSafetySource()}
+`,
+    () => combatLogSource({ combatLogExitSummaryFromDecision }),
+    `
+`,
+    tickSafetySource,
+    `
 
-			${controlLoginSource({ staminaExhaustedWindowLabel })}
+			`,
+    () => controlLoginSource({ staminaExhaustedWindowLabel }),
+    `
 
-${pageNativeSnapshotSource()}
+`,
+    pageNativeSnapshotSource,
+    `
 
-${exitReloginSource()}
-${pendingExitSource()}${leaveCommandSource()}${autoLoginSource()}${leaveFlowSource()}${nativeStateSource()}
+`,
+    exitReloginSource,
+    `
+`,
+    pendingExitSource,
+    leaveCommandSource,
+    autoLoginSource,
+    leaveFlowSource,
+    nativeStateSource,
+    `
 
-${runtimeSummarySource()}
+`,
+    runtimeSummarySource,
+    `
 
-${networkQualitySource()}
+`,
+    networkQualitySource,
+    `
 
-${networkQualitySummarySource()}
+`,
+    networkQualitySummarySource,
+    `
 
-${importantLogSource()}
-${combatHistorySource()}
-${entityRefreshSource()}${nativeControlSource()}
+`,
+    importantLogSource,
+    `
+`,
+    combatHistorySource,
+    `
+`,
+    entityRefreshSource,
+    nativeControlSource,
+    `
 
-${coinMotionRuntimeSource()}
+`,
+    coinMotionRuntimeSource,
+    `
 
-${returnBlockSource()}
+`,
+    returnBlockSource,
+    `
 
-${classifySource()}${offlineSafetySource()}
-	${coinSafetySource()}${targetSelectionSource()}${combatMovementSource()}${combatAimSource()}${opportunityStaminaSource()}
-${combatStateSource()}${combatFireSource()}${combatLeaveCoverSource()}${combatActionSource()}${opportunitySnapshotSource()}${opportunityCandidateSource()}${postAttackSource()}${opportunityActionsSource()}${opportunityChoiceSource()}${opportunityPickSource()}${patrolSource()}${opportunityClearSource()}
+`,
+    classifySource,
+    offlineSafetySource,
+    `
+	`,
+    coinSafetySource,
+    targetSelectionSource,
+    combatMovementSource,
+    combatAimSource,
+    opportunityStaminaSource,
+    `
+`,
+    combatStateSource,
+    combatFireSource,
+    combatLeaveCoverSource,
+    combatActionSource,
+    opportunitySnapshotSource,
+    opportunityCandidateSource,
+    postAttackSource,
+    opportunityActionsSource,
+    opportunityChoiceSource,
+    opportunityPickSource,
+    patrolSource,
+    opportunityClearSource,
+    `
 
-${coinProgressRuntimeSource()}
-${actionArbitrationSource()}
-${coinTargetRuntimeSource()}
-${chooseActionSource()}
+`,
+    coinProgressRuntimeSource,
+    `
+`,
+    actionArbitrationSource,
+    `
+`,
+    coinTargetRuntimeSource,
+    `
+`,
+    chooseActionSource,
+    `
 
-${tickSource()}
+`,
+    tickSource,
+    `
 
-${startupSource()}
+`,
+    startupSource,
+    `
 	})()
-`;
+`
+  ];
+  return renderRuntimeFragments(fragments);
 }
 
 module.exports = {
