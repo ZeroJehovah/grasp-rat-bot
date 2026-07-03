@@ -111,6 +111,7 @@ async function selfTest() {
   assert(source.includes('function coinDirectionToCore'), 'coin motion helper was not bundled');
   assert(source.includes('function coinTargetKeyCore'), 'coin target helper was not bundled');
   assert(source.includes('function coinFailureIgnoreCore'), 'coin progress helper was not bundled');
+  assert(source.includes('function coinRouteKey'), 'coin route helper was not bundled');
   assert(source.includes('function arrayCount'), 'browser runtime helper was not bundled');
   new vm.Script(source, { filename: outFile });
   const status = runSpikeOutput(source, {
@@ -138,6 +139,9 @@ async function selfTest() {
   assert(status.coinProgressIgnoreMs === 800, 'spike did not execute coin progress failure helper');
   assert(status.coinProgressAttemptId === 'progress-spike', 'spike did not execute coin progress attempt helper');
   assert(status.coinProgressIntent === true, 'spike did not execute coin progress intent helper');
+  assert(status.coinRouteKey === 'route-spike', 'spike did not execute coin route key helper');
+  assert(status.coinRouteLegCount === 2, 'spike did not execute coin route action metadata helper');
+  assert(status.coinRouteFirstDistance === 123, 'spike did not execute coin route distance rounding helper');
   assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');

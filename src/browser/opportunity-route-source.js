@@ -16,7 +16,7 @@ const {
   coinRouteMatchesHeldChoiceCore,
   heldCoinRouteBeatsSwitchCore,
   pickCoinRouteOpportunityCore
-} = require('../strategy/coin-route');
+} = require('./runtime/coin-route');
 
 function opportunityRouteSource() {
   return String.raw`	  ${defaultDist.toString()}

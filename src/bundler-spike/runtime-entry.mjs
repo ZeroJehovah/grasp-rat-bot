@@ -13,6 +13,7 @@ import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
 import coinMotion from '../browser/runtime/coin-motion.js';
 import coinTarget from '../browser/runtime/coin-target.js';
 import coinProgress from '../browser/runtime/coin-progress.js';
+import coinRoute from '../browser/runtime/coin-route.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -103,6 +104,20 @@ function helperStatus(config = {}) {
     closeCoinStuckMs: 500,
     nearCoinStuckMs: 700
   });
+  const coinRouteKey = coinRoute.coinRouteKey({ drop_id: 'route-spike', amount: 7, x: 100, y: 200 });
+  const coinRouteMeta = coinRoute.coinRouteActionMetaCore({
+    ids: ['route-spike', 'route-next'],
+    points: [
+      { id: 'route-spike', x: 100, y: 200, amount: 7, order: 1 },
+      { id: 'route-next', x: 150, y: 250, amount: 5, order: 2 }
+    ],
+    value: 12,
+    staminaCost: 345.6,
+    legCount: 2,
+    totalDistance: 789.4,
+    firstDistance: 123.2,
+    kind: 'short'
+  });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -124,6 +139,9 @@ function helperStatus(config = {}) {
     coinProgressIgnoreMs: coinProgressFailure.ignoreMs,
     coinProgressAttemptId: coinProgressAttempt.id,
     coinProgressIntent: coinProgress.coinProgressIntentCore(sampleAction),
+    coinRouteKey,
+    coinRouteLegCount: coinRouteMeta.legCount,
+    coinRouteFirstDistance: coinRouteMeta.firstDistance,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
