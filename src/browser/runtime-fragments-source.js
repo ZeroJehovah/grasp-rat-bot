@@ -72,179 +72,211 @@ function runtimeFragment(name, source) {
   return { name, source };
 }
 
-function runtimeFragmentName(source, index) {
-  if (typeof source === 'function' && source.name) return source.name;
-  if (index === 0) return 'runtime-iife-open';
-  return `inline-${index}`;
-}
-
 function browserRuntimeFragments(config) {
   const fragments = [
+    ['runtime-iife-open',
     `
-(() => {`,
-    () => runtimeBootstrapSource(config),
-    persistentLastSelfSource,
+(() => {`],
+    ['runtime-bootstrap', () => runtimeBootstrapSource(config)],
+    ['persistent-last-self', persistentLastSelfSource],
+    ['separator-after-persistent-last-self',
     `
-`,
-    persistentExitSource,
+`],
+    ['persistent-exit', persistentExitSource],
+    ['separator-after-persistent-exit',
     `
-`,
-    persistentClearSource,
+`],
+    ['persistent-clear', persistentClearSource],
+    ['separator-after-persistent-clear',
     `
-`,
-    pendingExitPersistenceSource,
+`],
+    ['pending-exit-persistence', pendingExitPersistenceSource],
+    ['separator-after-pending-exit-persistence',
     `
-`,
-    refreshExitDetailSource,
+`],
+    ['refresh-exit-detail', refreshExitDetailSource],
+    ['separator-after-refresh-exit-detail',
     `
-`,
-    restoredCoinFailuresSource,
-    restoredRuntimeStateSource,
-    loginSnapshotGateSource,
+`],
+    ['restored-coin-failures', restoredCoinFailuresSource],
+    ['restored-runtime-state', restoredRuntimeStateSource],
+    ['login-snapshot-gate', loginSnapshotGateSource],
+    ['separator-after-login-snapshot-gate',
     `
-`,
-    runtimeDiagnosticsSource,
-    `
-
-`,
-    botObjectSource,
-    `
-
-`,
-    entityActivitySource,
-    `
-`,
-    targetWhitelistSource,
-    `
-`,
-    staminaRuntimeSource,
-    `
-`,
-    attackWorthSource,
-    `
-`,
-    exitMotionSource,
+`],
+    ['runtime-diagnostics', runtimeDiagnosticsSource],
+    ['separator-after-runtime-diagnostics',
     `
 
-`,
-    targetOverlaySource,
+`],
+    ['bot-object', botObjectSource],
+    ['separator-after-bot-object',
     `
 
-`,
-    statusPanelRuntimeSource,
-    runtimeUtilityPreludeSource,
-    arrayCountSource,
-    runtimeUtilityCloneSource,
-    combatLogRuntimeSource,
+`],
+    ['entity-activity', entityActivitySource],
+    ['separator-after-entity-activity',
     `
-`,
-    tickSafetySource,
+`],
+    ['target-whitelist', targetWhitelistSource],
+    ['separator-after-target-whitelist',
     `
-
-			`,
-    controlLoginRuntimeSource,
+`],
+    ['stamina-runtime', staminaRuntimeSource],
+    ['separator-after-stamina-runtime',
     `
-
-`,
-    pageNativeSnapshotSource,
+`],
+    ['attack-worth', attackWorthSource],
+    ['separator-after-attack-worth',
     `
-
-`,
-    exitReloginSource,
-    `
-`,
-    pendingExitSource,
-    leaveCommandSource,
-    autoLoginSource,
-    leaveFlowSource,
-    nativeStateSource,
+`],
+    ['exit-motion', exitMotionSource],
+    ['separator-after-exit-motion',
     `
 
-`,
-    runtimeSummarySource,
+`],
+    ['target-overlay', targetOverlaySource],
+    ['separator-after-target-overlay',
     `
 
-`,
-    networkQualitySource,
+`],
+    ['status-panel-runtime', statusPanelRuntimeSource],
+    ['runtime-utility-prelude', runtimeUtilityPreludeSource],
+    ['array-count', arrayCountSource],
+    ['runtime-utility-clone', runtimeUtilityCloneSource],
+    ['combat-log-runtime', combatLogRuntimeSource],
+    ['separator-after-combat-log-runtime',
+    `
+`],
+    ['tick-safety', tickSafetySource],
+    ['separator-before-control-login-runtime',
     `
 
-`,
-    networkQualitySummarySource,
+			`],
+    ['control-login-runtime', controlLoginRuntimeSource],
+    ['separator-after-control-login-runtime',
     `
 
-`,
-    importantLogSource,
-    `
-`,
-    combatHistorySource,
-    `
-`,
-    entityRefreshSource,
-    nativeControlSource,
+`],
+    ['page-native-snapshot', pageNativeSnapshotSource],
+    ['separator-after-page-native-snapshot',
     `
 
-`,
-    coinMotionRuntimeSource,
+`],
+    ['exit-relogin', exitReloginSource],
+    ['separator-after-exit-relogin',
+    `
+`],
+    ['pending-exit', pendingExitSource],
+    ['leave-command', leaveCommandSource],
+    ['auto-login', autoLoginSource],
+    ['leave-flow', leaveFlowSource],
+    ['native-state', nativeStateSource],
+    ['separator-after-native-state',
     `
 
-`,
-    returnBlockSource,
+`],
+    ['runtime-summary', runtimeSummarySource],
+    ['separator-after-runtime-summary',
     `
 
-`,
-    classifySource,
-    offlineSafetySource,
-    `
-	`,
-    coinSafetySource,
-    targetSelectionSource,
-    combatMovementSource,
-    combatAimSource,
-    opportunityStaminaSource,
-    `
-`,
-    combatStateSource,
-    combatFireSource,
-    combatLeaveCoverSource,
-    combatActionSource,
-    opportunitySnapshotSource,
-    opportunityCandidateSource,
-    postAttackSource,
-    opportunityActionsSource,
-    opportunityChoiceSource,
-    opportunityPickSource,
-    patrolSource,
-    opportunityClearSource,
+`],
+    ['network-quality', networkQualitySource],
+    ['separator-after-network-quality',
     `
 
-`,
-    coinProgressRuntimeSource,
-    `
-`,
-    actionArbitrationSource,
-    `
-`,
-    coinTargetRuntimeSource,
-    `
-`,
-    chooseActionSource,
+`],
+    ['network-quality-summary', networkQualitySummarySource],
+    ['separator-after-network-quality-summary',
     `
 
-`,
-    tickSource,
+`],
+    ['important-log', importantLogSource],
+    ['separator-after-important-log',
+    `
+`],
+    ['combat-history', combatHistorySource],
+    ['separator-after-combat-history',
+    `
+`],
+    ['entity-refresh', entityRefreshSource],
+    ['native-control', nativeControlSource],
+    ['separator-after-native-control',
     `
 
-`,
-    startupSource,
+`],
+    ['coin-motion-runtime', coinMotionRuntimeSource],
+    ['separator-after-coin-motion-runtime',
+    `
+
+`],
+    ['return-block', returnBlockSource],
+    ['separator-after-return-block',
+    `
+
+`],
+    ['classify', classifySource],
+    ['offline-safety', offlineSafetySource],
+    ['separator-after-offline-safety',
+    `
+	`],
+    ['coin-safety', coinSafetySource],
+    ['target-selection', targetSelectionSource],
+    ['combat-movement', combatMovementSource],
+    ['combat-aim', combatAimSource],
+    ['opportunity-stamina', opportunityStaminaSource],
+    ['separator-after-opportunity-stamina',
+    `
+`],
+    ['combat-state', combatStateSource],
+    ['combat-fire', combatFireSource],
+    ['combat-leave-cover', combatLeaveCoverSource],
+    ['combat-action', combatActionSource],
+    ['opportunity-snapshot', opportunitySnapshotSource],
+    ['opportunity-candidate', opportunityCandidateSource],
+    ['post-attack', postAttackSource],
+    ['opportunity-actions', opportunityActionsSource],
+    ['opportunity-choice', opportunityChoiceSource],
+    ['opportunity-pick', opportunityPickSource],
+    ['patrol', patrolSource],
+    ['opportunity-clear', opportunityClearSource],
+    ['separator-after-opportunity-clear',
+    `
+
+`],
+    ['coin-progress-runtime', coinProgressRuntimeSource],
+    ['separator-after-coin-progress-runtime',
+    `
+`],
+    ['action-arbitration', actionArbitrationSource],
+    ['separator-after-action-arbitration',
+    `
+`],
+    ['coin-target-runtime', coinTargetRuntimeSource],
+    ['separator-after-coin-target-runtime',
+    `
+`],
+    ['choose-action', chooseActionSource],
+    ['separator-after-choose-action',
+    `
+
+`],
+    ['tick', tickSource],
+    ['separator-after-tick',
+    `
+
+`],
+    ['startup', startupSource],
+    ['runtime-iife-close',
     `
 	})()
 `
-  ].map((source, index) => runtimeFragment(runtimeFragmentName(source, index), source));
+    ]
+  ].map(([name, source]) => runtimeFragment(name, source));
   return fragments;
 }
 
 module.exports = {
   runtimeFragment,
-  runtimeFragmentName,
   browserRuntimeFragments
 };
