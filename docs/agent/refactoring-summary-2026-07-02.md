@@ -326,6 +326,21 @@ This is intended as an equivalent extraction of route metadata object constructi
 
 This is intended as an equivalent structural split only; the generated remote bot remains a single browser script and strategy behavior is unchanged apart from the release version string.
 
+## 2026-07-03 Follow-up: Phase 2X Bundler Spike
+
+The first bundler spike is source-only and does not change the production remote script:
+
+- Root `package.json` now pins `esbuild` and exposes `npm run build:bundler-spike` / `npm run test:bundler-spike`.
+- `src/bundler-spike/runtime-entry.mjs` is a small ordinary browser module that imports existing shared/strategy CommonJS modules through ESM syntax.
+- `src/bundler-spike/page-adapter.mjs` centralizes the spike's page-global access for `window` / `globalThis` resolution, config reads, global installation, and localStorage JSON reads, so the entrypoint no longer reaches for `window` or `globalThis` directly.
+- `scripts/build-bundler-spike.js` builds that entry as a readable browser IIFE with `format: 'iife'`, `platform: 'browser'`, and `globalName: '__graspRatBundlerSpikeBundle'`.
+- The spike self-test builds into a temp directory, rejects unresolved relative `require()` / `import` paths, checks that shared/runtime/display/target-whitelist/action-priority/page-adapter helpers are bundled, and executes the output in a VM through both `globalThis.__graspRatBundlerSpike.status()` and `window.__graspRatBundlerSpike.status()`.
+- `scripts/verify-objective-build.js` checks the spike source modules and self-test coverage instead of depending on exact generated bundle wrapping text. It verifies production build isolation, adapter ownership of page globals, and the absence of direct `window` / `globalThis` access in the spike entrypoint.
+- esbuild can bundle the current CommonJS helper modules, but the output necessarily contains esbuild's internal CommonJS wrapper (`module.exports` / `__commonJS`). That is browser-safe for the spike, but a future production migration should prefer true browser ESM modules or accept that wrapper explicitly in verification.
+- `scripts/build-remote-bot.js` remains isolated from esbuild; production remote generation still uses `src/browser/bot-source.js`.
+
+This proves the bundler direction is technically viable for a controlled entrypoint and that the page-global adapter pattern can be verified without relying on exact bundle text. It does not yet prove that the full `browserBotSource()` runtime can be converted without extending the adapter to the real native/page functions and converting runtime slices in stages.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -350,15 +365,18 @@ This is intended as an equivalent structural split only; the generated remote bo
 19. Ignored coin cleanup intent: integrated in `bootstrap-0.4.293`
 20. Coin route action metadata: integrated in `bootstrap-0.4.294`
 21. Browser source builder extraction/direct build path: integrated in `bootstrap-0.4.295`
-22. Constants: partially integrated for high-value coin defaults
-23. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-24. Run live validation sessions after each behavior-touching replacement
+22. Source-only esbuild bundler spike plus spike page-global adapter: implemented after `bootstrap-0.4.295`
+23. Constants: partially integrated for high-value coin defaults
+24. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+25. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
-1. Profit/opportunity selection module
-2. Safety/avoidance module
-3. Movement execution module
-4. State management utilities
+1. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
+2. Extend the spike page-global adapter to the real native page functions before bundling live runtime slices
+3. Profit/opportunity selection module
+4. Safety/avoidance module
+5. Movement execution module
+6. State management utilities
 
 ### Phase 4: Optimization
 1. Performance profiling

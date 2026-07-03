@@ -1,0 +1,12 @@
+{
+  "name": "grasp-rat-bot",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build:bundler-spike": "node scripts/build-bundler-spike.js",
+    "test:bundler-spike": "node scripts/build-bundler-spike.js --self-test"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.11"
+  }
+}
