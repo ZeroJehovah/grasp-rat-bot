@@ -2426,6 +2426,39 @@
     }
   });
 
+  // src/strategy/opportunity-clear.js
+  var require_opportunity_clear = __commonJS({
+    "src/strategy/opportunity-clear.js"(exports, module) {
+      "use strict";
+      var {
+        opportunityChoiceType,
+        opportunityChoiceId
+      } = require_opportunity_choice();
+      function shouldClearOpportunityChoiceCore(choice, type, id = null) {
+        if (!choice || opportunityChoiceType(choice) !== String(type || "")) return false;
+        if (id === null || id === void 0 || id === "") return true;
+        const choiceId = opportunityChoiceId(choice);
+        return String(choiceId) === String(id);
+      }
+      module.exports = {
+        shouldClearOpportunityChoiceCore
+      };
+    }
+  });
+
+  // src/browser/runtime/opportunity-clear.js
+  var require_opportunity_clear2 = __commonJS({
+    "src/browser/runtime/opportunity-clear.js"(exports, module) {
+      "use strict";
+      var {
+        shouldClearOpportunityChoiceCore
+      } = require_opportunity_clear();
+      module.exports = {
+        shouldClearOpportunityChoiceCore
+      };
+    }
+  });
+
   // src/strategy/coin-progress.js
   var require_coin_progress = __commonJS({
     "src/strategy/coin-progress.js"(exports, module) {
@@ -3313,7 +3346,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.408" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.409" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19303,19 +19336,11 @@
       bot.patrolHeading = null;
       return { dx: 0, dy: 0, distance: 0, reason: "wait-for-visible-coin-refresh" };
     }
+    const { shouldClearOpportunityChoiceCore } = require_opportunity_clear2();
     function clearOpportunityChoiceFor(type, id = null) {
-      const choice = bot.opportunityChoice;
-      if (!choice || opportunityChoiceType(choice) !== String(type || "")) return;
-      if (id === null || id === void 0 || id === "") {
-        bot.opportunityChoice = null;
-        resetOpportunitySwitchLock();
-        return;
-      }
-      const choiceId = opportunityChoiceId(choice);
-      if (String(choiceId) === String(id)) {
-        bot.opportunityChoice = null;
-        resetOpportunitySwitchLock();
-      }
+      if (!shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)) return;
+      bot.opportunityChoice = null;
+      resetOpportunitySwitchLock();
     }
     const {
       coinFailureIgnoreCore,

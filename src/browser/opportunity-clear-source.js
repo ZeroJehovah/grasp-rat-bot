@@ -1,6 +1,6 @@
 'use strict';
 
-function opportunityClearSource() {
+function opportunityClearInlineSource() {
   return String.raw`
 
 		  function clearOpportunityChoiceFor(type, id = null) {
@@ -19,4 +19,23 @@ function opportunityClearSource() {
 		  }`;
 }
 
-module.exports = { opportunityClearSource };
+function bundledOpportunityClearSource() {
+  return `const { shouldClearOpportunityChoiceCore } = require('./src/browser/runtime/opportunity-clear');
+
+		  function clearOpportunityChoiceFor(type, id = null) {
+		    if (!shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)) return;
+		    bot.opportunityChoice = null;
+		    resetOpportunitySwitchLock();
+		  }`;
+}
+
+function opportunityClearSource(options = {}) {
+  if (options.bundledRuntime) return bundledOpportunityClearSource(options);
+  return opportunityClearInlineSource();
+}
+
+module.exports = {
+  bundledOpportunityClearSource,
+  opportunityClearInlineSource,
+  opportunityClearSource
+};

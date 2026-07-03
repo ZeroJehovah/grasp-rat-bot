@@ -150,6 +150,8 @@ async function selfTest() {
   assert(status.opportunityChoiceKey === 'coin:choice-held', 'spike did not execute opportunity choice key helper');
   assert(status.opportunityChoiceHeld === true, 'spike did not execute stable opportunity hold helper');
   assert(status.opportunityChoiceHoldRemainingMs === 500, 'spike did not execute opportunity choice persistence helper');
+  assert(status.opportunityClearExact === true, 'spike did not execute opportunity clear positive helper');
+  assert(status.opportunityClearMismatch === false, 'spike did not execute opportunity clear mismatch helper');
   assert(status.opportunityCandidateCount === 2, 'spike did not execute opportunity candidate combiner helper');
   assert(status.opportunityCandidateCoinReason === 'candidate-coin', 'spike did not execute coin opportunity candidate helper');
   assert(status.opportunityBestCoinScore === 4, 'spike did not execute best coin opportunity score helper');

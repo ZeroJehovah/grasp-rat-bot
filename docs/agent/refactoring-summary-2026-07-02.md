@@ -1375,8 +1375,9 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 134. Bundler-owned `opportunity-candidate` helper bindings for remote builds: integrated in `bootstrap-0.4.406`
 135. Bundler-owned `opportunity-choice` helper bindings for remote builds: integrated in `bootstrap-0.4.407`
 136. Bundler-owned `action-arbitration` priority/switch/final-action helper bindings for remote builds: integrated in `bootstrap-0.4.408`
-137. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-138. Run live validation sessions after each behavior-touching replacement
+137. Bundler-owned `opportunity-clear` helper binding for remote builds: integrated in `bootstrap-0.4.409`
+138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+139. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
