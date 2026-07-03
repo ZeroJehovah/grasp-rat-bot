@@ -192,8 +192,10 @@ function check(name, fn) {
 }
 
 function expectObjectNumber(text, key, value) {
-  const re = new RegExp(`\\b${escapeRegExp(key)}\\s*:\\s*${escapeRegExp(String(value))}(?![0-9.])`);
-  return re.test(text);
+  const re = new RegExp(`\\b${escapeRegExp(key)}\\s*:\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)`, 'i');
+  const match = re.exec(text);
+  if (!match) return false;
+  return Number(match[1]) === Number(value);
 }
 
 function stringFromCodes(codes) {
@@ -519,6 +521,10 @@ function main() {
     assert(distSource.includes('const { arrayCount } = require_array_count();'), 'bundled production dist does not use the bundled array-count runtime module');
     assert(distSource.includes('var require_runtime_utils = __commonJS'), 'bundled production dist does not bundle the runtime-utils module through esbuild');
     assert(distSource.includes('safeStringify, safeJsonClone, sanitizeCombatLogIdPart'), 'bundled production dist does not use the bundled runtime-utils helpers');
+    assert(distSource.includes('var require_browser_preserved_state = __commonJS'), 'bundled production dist does not bundle the preserved-state runtime module through esbuild');
+    assert(distSource.includes('var require_runtime_defaults = __commonJS'), 'bundled production dist does not bundle the runtime-defaults module through esbuild');
+    assert(distSource.includes('var require_target_whitelist = __commonJS'), 'bundled production dist does not bundle the target-whitelist runtime module through esbuild');
+    assert(distSource.includes('var require_exit_summary = __commonJS'), 'bundled production dist does not bundle the exit-summary runtime module through esbuild');
     new vm.Script(distSource, { filename: 'dist/grasp-rat-remote-bot.js' });
     assert(buildRemoteSource.includes("require('./remote-bot-bundle')"), 'production build does not use the shared remote bundler');
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
@@ -654,9 +660,16 @@ function main() {
     assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
     assert(controlLoginRuntimeSourceModule.includes('module.exports = { controlLoginRuntimeSource }'), 'control-login runtime source export not found');
     assert(controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime source does not bind stamina helper');
+    assert(runtimeBootstrapSourceModule.includes('function bundledRuntimeBootstrapHelperSource()'), 'bundled runtime-bootstrap helper source factory not found');
+    assert(runtimeBootstrapSourceModule.includes('function inlineRuntimeBootstrapHelperSource()'), 'inline runtime-bootstrap helper source factory not found');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
-    assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
+    assert(runtimeBootstrapSourceModule.includes('module.exports = {\n  bundledRuntimeBootstrapHelperSource,\n  inlineRuntimeBootstrapHelperSource,\n  runtimeBootstrapSource\n}'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
+    assert(runtimeBootstrapSourceModule.includes('config?.bundledRuntime'), 'runtime-bootstrap source factory does not switch on bundled runtime mode');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/browser-preserved-state')"), 'runtime-bootstrap bundled source does not require preserved-state runtime module');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-defaults')"), 'runtime-bootstrap bundled source does not require runtime-defaults runtime module');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/target-whitelist')"), 'runtime-bootstrap bundled source does not require target-whitelist runtime module');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'runtime-bootstrap bundled source does not require exit-summary runtime module');
     assert(runtimeBootstrapSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
     assert(runtimeBootstrapSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
     assert(sourceRuntimeText.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
@@ -679,10 +692,11 @@ function main() {
     assert(runtimeUtilsSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the runtime utility source module');
     assert(runtimeUtilsSourceModule.includes('${safeJsonClone.toString()}'), 'safeJsonClone is not injected from the runtime utility source module');
     assert(runtimeUtilsSourceModule.includes('${sanitizeCombatLogIdPart.toString()}'), 'sanitizeCombatLogIdPart is not injected from the runtime utility source module');
-    assert(runtimeBootstrapSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
-    assert(runtimeBootstrapSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
-    assert(runtimeBootstrapSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
-    assert(runtimeBootstrapSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
+    assert(runtimeBootstrapSourceModule.includes('${buildBrowserPreservedState.toString()}'), 'preserved-state helper is not injected from the inline runtime-bootstrap helper source');
+    assert(runtimeBootstrapSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the inline runtime-bootstrap helper source');
+    assert(runtimeBootstrapSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the inline runtime-bootstrap helper source');
+    assert(runtimeBootstrapSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the inline runtime-bootstrap helper source');
+    assert(runtimeBootstrapSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the inline runtime-bootstrap helper source');
     [
       'targetOverlaySource',
       'targetWhitelistSource',
@@ -751,9 +765,13 @@ function main() {
     ].forEach(name => {
       assert(fragmentEntriesBody.includes(name), `${name} is not listed in the runtime fragment entries registry`);
     });
-    assert((generatedRuntimeSource.includes('function safeStringify') || generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-utils')")) && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not expose shared helper functions');
+    const generatedRuntimeHasBundledBootstrapHelpers = generatedRuntimeSource.includes("require('./src/browser/runtime/browser-preserved-state')")
+      && generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-defaults')")
+      && generatedRuntimeSource.includes("require('./src/browser/runtime/target-whitelist')")
+      && generatedRuntimeSource.includes("require('./src/browser/runtime/exit-summary')");
+    assert((generatedRuntimeSource.includes('function safeStringify') || generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-utils')")) && generatedRuntimeSource.includes('function formatDistance') && (generatedRuntimeSource.includes('function buildRuntimeDefaults') || generatedRuntimeHasBundledBootstrapHelpers), 'generated runtime does not expose shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
-    assert(generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
+    assert((generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl')) || generatedRuntimeHasBundledBootstrapHelpers, 'generated runtime does not expose target whitelist helpers');
     assert(generatedRuntimeSource.includes('const now = () => performance.now();'), 'generated runtime does not include entity clock helper');
     assert(generatedRuntimeSource.includes('function recentlyActionedForAfk'), 'generated runtime does not include recent-activity helper');
     assert(generatedRuntimeSource.includes('const isAfkProfitTarget'), 'generated runtime does not include AFK profit target helper');
@@ -1393,18 +1411,19 @@ function main() {
 
   for (const file of REMOTE_BOT_FILES) {
     const text = file === 'grasp-rat-bot.js' ? sourceRuntimeText : generatedRuntimeSource;
-    const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
+    const finalRuntimeText = file === 'grasp-rat-bot.js' ? text : distSource;
+    const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : finalRuntimeText;
     for (const invariant of NUMERIC_INVARIANTS) {
       check(`${file} has ${invariant.key}=${invariant.value}`, () => {
         assert(expectObjectNumber(defaultConfigSource, invariant.key, invariant.value), `${invariant.key}: ${invariant.value} not found`);
       });
     }
     check(`${file} accepts injected sourceHash`, () => {
-      assert(defaultConfigSource.includes('sourceHash: String(config.sourceHash || \'\')'), 'sourceHash config field not found');
+      assert(/\bsourceHash\s*:\s*String\(config\w*\.sourceHash\s*\|\|\s*['"]['"]\)/.test(defaultConfigSource), 'sourceHash config field not found');
     });
     check(`${file} uses remote username-only target whitelist`, () => {
-      const whitelistSource = file === 'grasp-rat-bot.js' ? sharedTargetWhitelistSource : text;
-      assert(defaultConfigSource.includes('targetWhitelistUrl: String(config.targetWhitelistUrl || \'\')'), 'targetWhitelistUrl config field not found');
+      const whitelistSource = file === 'grasp-rat-bot.js' ? sharedTargetWhitelistSource : finalRuntimeText;
+      assert(/\btargetWhitelistUrl\s*:\s*String\(config\w*\.targetWhitelistUrl\s*\|\|\s*['"]['"]\)/.test(defaultConfigSource), 'targetWhitelistUrl config field not found');
       assert(!defaultConfigSource.includes('targetWhitelistNames:'), 'runtime defaults still include built-in target whitelist names');
       assert(!defaultConfigSource.includes('targetWhitelistIds:'), 'runtime defaults still include built-in target whitelist ids');
       assert(!text.includes('targetWhitelistIds'), 'runtime still references targetWhitelistIds');
@@ -1432,7 +1451,7 @@ function main() {
       assert(!functionBody(whitelistSource, 'parseTargetWhitelistNames').includes('ids'), 'target whitelist parser still includes id fields');
     });
     check(`${file} reduces routine browser status logging`, () => {
-      assert(defaultConfigSource.includes('statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1000, Number(config.statusEvery) || 30000)'), 'runtime statusEvery default/disable logic not found');
+      assert(/\bstatusEvery\s*:\s*Number\(config\w*\.statusEvery\)\s*===\s*0\s*\?\s*0\s*:\s*Math\.max\((?:1000|1e3),\s*Number\(config\w*\.statusEvery\)\s*\|\|\s*(?:30000|3e4)\)/.test(defaultConfigSource), 'runtime statusEvery default/disable logic not found');
       assert(text.includes('if (cfg.statusEvery > 0 && Date.now() - bot.lastStatusAt >= cfg.statusEvery)'), 'status log cannot be disabled with statusEvery=0');
     });
     check(`${file} formats display distances in meters`, () => {
@@ -1470,8 +1489,8 @@ function main() {
       assert(functionBody(displayFormatSource, 'hpDisplay').includes('Math.round(n)'), 'hpDisplay does not round numeric HP');
     });
     check(`${file} keeps shared browser initialization helpers available`, () => {
-      const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text;
-      const defaultsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : text;
+      const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : finalRuntimeText;
+      const defaultsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : finalRuntimeText;
       assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('combatRetreatIgnore instanceof Map'), 'preserved-state helper does not preserve combat retreat maps');
       assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('combatDisadvantageObservation'), 'preserved-state helper does not preserve combat disadvantage observation');
       assert(functionBody(preservedSource, 'buildBrowserPreservedState').includes('preBuffer: Array.isArray'), 'preserved-state helper does not bound combat prebuffer');
@@ -1587,7 +1606,7 @@ function main() {
       assert(incidentalBody.includes("'incidental-coin-disappeared'"), 'incidental pickup reason not recorded');
       assert(incidentalBody.includes('rememberNativeCoinSnapshot(currentSnapshot)'), 'incidental pickup recorder does not refresh native snapshot');
       assert(functionBody(text, 'markCoinCollected').includes('rememberNativeCoinSnapshot();'), 'tracked pickup path does not refresh native snapshot');
-      const preservedBody = functionBody(file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text, 'buildBrowserPreservedState');
+      const preservedBody = functionBody(file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : finalRuntimeText, 'buildBrowserPreservedState');
       assert(preservedBody.includes('lastNativeCoinSnapshot'), 'preserved-state helper does not preserve native coin snapshots');
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes('coinMarked = markCoinCollected(self, currentSummary, previousCoins)'), 'tick does not record tracked coin pickups first');
@@ -1697,7 +1716,7 @@ function main() {
       assert(actionBody.includes('postAttackTarget'), 'post-attack wait should keep metadata for the killed target position');
     });
     check(`${file} keeps post-login zoom-out scheduling flow`, () => {
-      const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : text;
+      const preservedSource = file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : finalRuntimeText;
       assert(preservedSource.includes('postLoginZoom: previousBot?.postLoginZoom'), 'post-login zoom state is not preserved across bot updates');
       assert(text.includes('armed: preserved.postLoginZoom ? Boolean(preserved.postLoginZoom.armed) : true'), 'post-login zoom armed state does not reuse preserved state');
       assert(text.includes("appliedKey: String(preserved.postLoginZoom?.appliedKey || '')"), 'post-login zoom applied key is not preserved');
@@ -1943,9 +1962,9 @@ function main() {
       assert(text.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot })'), 'pending exit state is not restored with reload marker on cold page load');
       assert(text.includes('pendingExit: initialPendingExitState'), 'bot startup does not use restored pending exit state');
       assert(text.includes('restorePersistedCombatLogPendingEntries();'), 'ordinary pending combat logs are not restored at startup');
-      assert(defaultConfigSource.includes('combatLogBatchMaxEntries: 12'), 'combat log default batch size is not bounded for low-latency flushes');
-      assert(defaultConfigSource.includes('combatLogMaxPersistedEntries: 160'), 'combat log persisted-entry cap is not configured');
-      assert(defaultConfigSource.includes('combatLogPendingPersistMinMs: 5000'), 'combat log failed-persist throttle is not configured');
+      assert(expectObjectNumber(defaultConfigSource, 'combatLogBatchMaxEntries', 12), 'combat log default batch size is not bounded for low-latency flushes');
+      assert(expectObjectNumber(defaultConfigSource, 'combatLogMaxPersistedEntries', 160), 'combat log persisted-entry cap is not configured');
+      assert(expectObjectNumber(defaultConfigSource, 'combatLogPendingPersistMinMs', 5000), 'combat log failed-persist throttle is not configured');
       assert(text.includes('function combatLogMaxPersistedEntries'), 'combat log persisted-entry cap helper not found');
       const queueBody = functionBody(text, 'queueCombatLogEntry');
       assert(queueBody.includes('shouldPersistCombatLogPendingEntry(queued)') && queueBody.includes('state.pendingPersistenceDirty = true'), 'ordinary combat log entries are not marked dirty when queued');
@@ -2038,7 +2057,7 @@ function main() {
 	      const tickBody = functionBody(text, 'tick');
 	      assert(tickBody.includes('const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs()'), 'main tick does not check post-exit motion lock before choosing actions');
 	      assert(tickBody.includes('postExitDecisionWithoutTarget({'), 'main tick does not publish a targetless post-exit wait decision');
-	      assert(defaultConfigSource.includes('exitMotionStopLockMs: 8000'), 'exit motion stop lock duration not configured');
+	      assert(expectObjectNumber(defaultConfigSource, 'exitMotionStopLockMs', 8000), 'exit motion stop lock duration not configured');
 	    });
     check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
       const localBody = functionBody(text, 'pendingExitLocalConfirmationState');

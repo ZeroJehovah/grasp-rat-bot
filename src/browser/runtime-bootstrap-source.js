@@ -21,7 +21,35 @@ const {
 } = require('./runtime/target-whitelist');
 const { OPPORTUNITY_CONSTANTS } = require('./runtime/opportunity-constants');
 
+function bundledRuntimeBootstrapHelperSource() {
+  return `		  const { buildBrowserPreservedState } = require('./src/browser/runtime/browser-preserved-state');
+		  const { buildRuntimeDefaults } = require('./src/browser/runtime/runtime-defaults');
+		  const { normalizeTargetWhitelistName, parseTargetWhitelistNames, deriveTargetWhitelistUrl } = require('./src/browser/runtime/target-whitelist');
+		  const { staminaExhaustedLongWindows, staminaEvidenceRemaining, staminaHoldContradictedByStaminaEvidence } = require('./src/browser/runtime/exit-summary');`;
+}
+
+function inlineRuntimeBootstrapHelperSource() {
+  return `		  ${buildBrowserPreservedState.toString()}
+
+		  ${buildRuntimeDefaults.toString()}
+
+		  ${normalizeTargetWhitelistName.toString()}
+
+		  ${parseTargetWhitelistNames.toString()}
+
+		  ${deriveTargetWhitelistUrl.toString()}
+
+		  ${staminaExhaustedLongWindows.toString()}
+
+		  ${staminaEvidenceRemaining.toString()}
+
+		  ${staminaHoldContradictedByStaminaEvidence.toString()}`;
+}
+
 function runtimeBootstrapSource(config) {
+  const helperSource = config?.bundledRuntime
+    ? bundledRuntimeBootstrapHelperSource()
+    : inlineRuntimeBootstrapHelperSource();
   return `
 		  ${browserPageGlobalSource()}
 
@@ -57,21 +85,7 @@ function runtimeBootstrapSource(config) {
 	      const OFFLINE_LEAVE_STATE_KEY = 'graspRatOfflineLeaveState';
 	      const LAST_SELF_STATE_KEY = 'graspRatLastSelfState';
 	      const CLOUDFLARE_RELOAD_KEY = 'graspRatCloudflareReloadAt';
-		  ${buildBrowserPreservedState.toString()}
-
-		  ${buildRuntimeDefaults.toString()}
-
-		  ${normalizeTargetWhitelistName.toString()}
-
-		  ${parseTargetWhitelistNames.toString()}
-
-		  ${deriveTargetWhitelistUrl.toString()}
-
-		  ${staminaExhaustedLongWindows.toString()}
-
-		  ${staminaEvidenceRemaining.toString()}
-
-		  ${staminaHoldContradictedByStaminaEvidence.toString()}
+${helperSource}
 
 		  const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);
 	  const preserved = buildBrowserPreservedState(previousBot);
@@ -98,4 +112,8 @@ function runtimeBootstrapSource(config) {
 `;
 }
 
-module.exports = { runtimeBootstrapSource };
+module.exports = {
+  bundledRuntimeBootstrapHelperSource,
+  inlineRuntimeBootstrapHelperSource,
+  runtimeBootstrapSource
+};

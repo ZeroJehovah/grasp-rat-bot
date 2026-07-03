@@ -4,6 +4,766 @@
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
   };
 
+  // src/shared/browser-preserved-state.js
+  var require_browser_preserved_state = __commonJS({
+    "src/shared/browser-preserved-state.js"(exports, module) {
+      "use strict";
+      function buildBrowserPreservedState(previousBot) {
+        return {
+          attackHistory: Array.isArray(previousBot?.attackHistory) ? previousBot.attackHistory.slice(-80) : [],
+          killHistory: Array.isArray(previousBot?.killHistory) ? previousBot.killHistory.slice(-40) : [],
+          seenKillKeys: Array.isArray(previousBot?.seenKillKeysList) ? previousBot.seenKillKeysList.slice(-120) : [],
+          session: previousBot?.session && typeof previousBot.session === "object" ? { ...previousBot.session } : null,
+          lastSelf: previousBot?.lastSelf && typeof previousBot.lastSelf === "object" ? { ...previousBot.lastSelf } : null,
+          lastNativeCoinSnapshot: Array.isArray(previousBot?.lastNativeCoinSnapshot) ? previousBot.lastNativeCoinSnapshot.slice(-160) : [],
+          combatTarget: previousBot?.combatTarget && typeof previousBot.combatTarget === "object" ? { ...previousBot.combatTarget } : null,
+          combatRetreatIgnore: previousBot?.combatRetreatIgnore instanceof Map ? new Map(previousBot.combatRetreatIgnore) : /* @__PURE__ */ new Map(),
+          combatAim: previousBot?.combatAim && typeof previousBot.combatAim === "object" ? { ...previousBot.combatAim } : null,
+          combatDisadvantageObservation: previousBot?.combatDisadvantageObservation && typeof previousBot.combatDisadvantageObservation === "object" ? { ...previousBot.combatDisadvantageObservation } : null,
+          lastCombatLogMetric: previousBot?.lastCombatLogMetric && typeof previousBot.lastCombatLogMetric === "object" ? { ...previousBot.lastCombatLogMetric } : null,
+          lastCombatShot: previousBot?.lastCombatShot && typeof previousBot.lastCombatShot === "object" ? { ...previousBot.lastCombatShot } : null,
+          opportunityChoice: previousBot?.opportunityChoice && typeof previousBot.opportunityChoice === "object" ? { ...previousBot.opportunityChoice } : null,
+          opportunitySwitchLock: previousBot?.opportunitySwitchLock && typeof previousBot.opportunitySwitchLock === "object" ? { ...previousBot.opportunitySwitchLock } : null,
+          opportunityAfkStamina: previousBot?.opportunityAfkStamina instanceof Map ? new Map(previousBot.opportunityAfkStamina) : /* @__PURE__ */ new Map(),
+          targetSwitchDiagnostics: previousBot?.targetSwitchDiagnostics && typeof previousBot.targetSwitchDiagnostics === "object" ? {
+            ...previousBot.targetSwitchDiagnostics,
+            events: Array.isArray(previousBot.targetSwitchDiagnostics.events) ? previousBot.targetSwitchDiagnostics.events.slice(-24) : []
+          } : null,
+          finalActionArbitration: previousBot?.finalActionArbitration && typeof previousBot.finalActionArbitration === "object" ? {
+            ...previousBot.finalActionArbitration,
+            history: Array.isArray(previousBot.finalActionArbitration.history) ? previousBot.finalActionArbitration.history.slice(-24) : []
+          } : null,
+          pendingExit: previousBot?.pendingExit && typeof previousBot.pendingExit === "object" ? { ...previousBot.pendingExit } : null,
+          lastLoginAt: Number(previousBot?.lastLoginAt || 0) || 0,
+          lastLoginResult: previousBot?.lastLoginResult && typeof previousBot.lastLoginResult === "object" ? { ...previousBot.lastLoginResult } : null,
+          lastManualLoginResult: previousBot?.lastManualLoginResult && typeof previousBot.lastManualLoginResult === "object" ? { ...previousBot.lastManualLoginResult } : null,
+          exitAudit: previousBot?.exitAudit && typeof previousBot.exitAudit === "object" ? { ...previousBot.exitAudit } : null,
+          importantLogging: previousBot?.importantLogging && typeof previousBot.importantLogging === "object" ? {
+            ...previousBot.importantLogging,
+            activeCombat: previousBot.importantLogging.activeCombat && typeof previousBot.importantLogging.activeCombat === "object" ? { ...previousBot.importantLogging.activeCombat } : null,
+            queuedRemoteIds: Array.isArray(previousBot.importantLogging.queuedRemoteIds) ? previousBot.importantLogging.queuedRemoteIds.slice(-500) : []
+          } : null,
+          loginSnapshotGate: previousBot?.loginSnapshotGate && typeof previousBot.loginSnapshotGate === "object" ? { ...previousBot.loginSnapshotGate } : null,
+          loginPointSafety: previousBot?.loginPointSafety && typeof previousBot.loginPointSafety === "object" ? { ...previousBot.loginPointSafety } : null,
+          leave403SnapshotRecovery: previousBot?.leave403SnapshotRecovery && typeof previousBot.leave403SnapshotRecovery === "object" ? { ...previousBot.leave403SnapshotRecovery } : null,
+          clashLeaveRescue: previousBot?.clashLeaveRescue && typeof previousBot.clashLeaveRescue === "object" ? {
+            ...previousBot.clashLeaveRescue,
+            attempts: Array.isArray(previousBot.clashLeaveRescue.attempts) ? previousBot.clashLeaveRescue.attempts.slice(-8) : []
+          } : null,
+          postLoginZoom: previousBot?.postLoginZoom && typeof previousBot.postLoginZoom === "object" ? { ...previousBot.postLoginZoom } : null,
+          targetWhitelist: previousBot?.targetWhitelist && typeof previousBot.targetWhitelist === "object" ? {
+            url: String(previousBot.targetWhitelist.url || ""),
+            names: Array.isArray(previousBot.targetWhitelist.names) ? previousBot.targetWhitelist.names.slice(-100) : [],
+            lastOkAt: Number(previousBot.targetWhitelist.lastOkAt || 0) || 0
+          } : null,
+          combatLogging: previousBot?.combatLogging && typeof previousBot.combatLogging === "object" ? {
+            ...previousBot.combatLogging,
+            preBuffer: Array.isArray(previousBot.combatLogging.preBuffer) ? previousBot.combatLogging.preBuffer.slice(-160) : [],
+            pending: Array.isArray(previousBot.combatLogging.pending) ? previousBot.combatLogging.pending.slice(-1e3) : []
+          } : null,
+          coinFailures: previousBot?.coinFailures instanceof Map ? Array.from(previousBot.coinFailures.entries()).slice(-120) : []
+        };
+      }
+      module.exports = {
+        buildBrowserPreservedState
+      };
+    }
+  });
+
+  // src/browser/runtime/browser-preserved-state.js
+  var require_browser_preserved_state2 = __commonJS({
+    "src/browser/runtime/browser-preserved-state.js"(exports, module) {
+      "use strict";
+      var {
+        buildBrowserPreservedState
+      } = require_browser_preserved_state();
+      module.exports = {
+        buildBrowserPreservedState
+      };
+    }
+  });
+
+  // src/shared/runtime-defaults.js
+  var require_runtime_defaults = __commonJS({
+    "src/shared/runtime-defaults.js"(exports, module) {
+      "use strict";
+      function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
+        return {
+          dryRun: Boolean(config.dryRun),
+          once: Boolean(config.once),
+          version: String(config.version || "dev"),
+          sourceHash: String(config.sourceHash || ""),
+          sourceUrl: String(config.sourceUrl || ""),
+          injectedBy: String(config.injectedBy || "cdp"),
+          tickMs: 120,
+          statusEvery: Number(config.statusEvery) === 0 ? 0 : Math.max(1e3, Number(config.statusEvery) || 3e4),
+          dangerRadius: 17e3,
+          activeCautionRadius: 23e3,
+          activeCautionExitMargin: 2e3,
+          activeAvoidMaxDistance: 25e3,
+          activeReturnBlockMargin: 0,
+          activeReturnBlockExitMargin: 0,
+          activeReturnBlockResumeMargin: 0,
+          activeReturnBlockClearMargin: 0,
+          returnBlockScanHeadingMs: 2600,
+          returnBlockScanStuckMs: 1400,
+          returnBlockScanStuckDistance: 350,
+          returnBlockCooldownMs: 8e3,
+          stationaryActiveDangerRadius: 18e3,
+          stationaryActiveCautionRadius: 22e3,
+          panicRadius: 14500,
+          passiveAvoidRadius: 11e3,
+          passivePanicRadius: 120,
+          recoveryAvoidRadius: 22e3,
+          activeSpeedMin: 5,
+          activeMoveMin: 120,
+          activeSeenMs: 1800,
+          attackRange: 14500,
+          attackPreferredRange: 14500,
+          attackEngageRange: 11e3,
+          attackApproachRange: 5e4,
+          attackDangerRadius: 25e3,
+          globalAttackMaxDistance: 5e4,
+          nativeEntityAuthoritativeRadius: 42e3,
+          nativeCoinAuthoritativeRadius: 5e4,
+          combatAttackRange: 14500,
+          combatDodgeRangeBuffer: 1e3,
+          combatDisengageRange: 17e3,
+          combatLowValueActiveDropMax: 4,
+          combatProactiveActiveKillStaminaBudgetMs: 1e5,
+          highValueCoinPriorityAmount: 10,
+          highValueCoinPriorityHealthyHp: 50,
+          combatCriticalHpLeaveThreshold: 20,
+          combatLowHpLeaveThreshold: 50,
+          combatLowHpCloseRiskMargin: 5,
+          combatHighHpDisadvantageGap: 20,
+          combatDisadvantageConfirmMs: 2500,
+          combatDisadvantageMinEngageMs: 3500,
+          combatDisadvantageMinSamples: 4,
+          combatLowHpNoDamageLeaveThreshold: 70,
+          combatLowHpNoDamageLeaveMs: 15e3,
+          combatLowHpNoDamageMinGap: 0,
+          combatShootEveryMs: 160,
+          combatShootReserveMs: 5600,
+          combatShootDodgeReserveMs: 3800,
+          combatShootHighHpDodgeReserveMs: 3e3,
+          combatShootHighHpMinHp: 90,
+          combatShootFinishLowThreatDodgeReserveMs: 1800,
+          combatShootFinishLowThreatMinHp: 90,
+          combatShootFinishLowThreatTargetHpMax: 55,
+          combatShootFinishLowThreatMaxHpGap: 0,
+          combatShootFinishLowThreatRange: 8500,
+          combatShootPassiveRunnerDodgeReserveMs: 1800,
+          combatShootWinningPressureDodgeReserveMs: 1800,
+          combatShootWinningPressureMinHp: 60,
+          combatShootWinningPressureTargetHpMax: 75,
+          combatShootWinningPressureLeadHp: 5,
+          combatShootWinningPressureRange: 11e3,
+          combatShootWinningPressureNoDamageMs: 6e3,
+          combatShootPressureDodgeReserveMs: 2600,
+          combatShootPressureMinHp: 60,
+          combatShootPressureRange: 14500,
+          combatShootPressureMaxHpGap: 10,
+          combatFarNoDamageCloseMs: 6e3,
+          combatFarNoDamageCloseStartRange: 1e4,
+          combatFarNoDamageCloseRange: 7500,
+          combatFarNoDamageCloseMinHp: 60,
+          combatFarNoDamageCloseMaxHpGap: 10,
+          combatRetreatingFighterCloseMinHp: 60,
+          combatRetreatingFighterCloseMaxHpGap: 10,
+          combatOutOfRangeFinishPressureRange: 16e3,
+          combatOutOfRangeFinishPressureSelfHpMin: 55,
+          combatOutOfRangeFinishPressureTargetHpMax: 55,
+          combatOutOfRangeFinishPressureMaxHpGap: 0,
+          combatOutOfRangeFinishPressureRecentDamageMs: 1e4,
+          combatOutOfRangeReengageRange: 15e3,
+          combatOutOfRangeReengageMinHp: 60,
+          combatOutOfRangeReengageMaxHpGap: 10,
+          combatOutOfRangePressureReengageMaxHpGap: 20,
+          combatOutOfRangeReengageRecentInRangeMs: 2500,
+          combatPassiveRunnerMinSelfHp: 80,
+          combatPassiveRunnerMinDrop: 1,
+          combatPassiveRunnerConfirmMs: 2500,
+          combatOpponentProbeMs: 6e3,
+          combatOpponentProbeReserveMs: 5600,
+          combatOpponentProbeEveryMs: 520,
+          combatPassiveRunnerCloseRange: 4500,
+          combatPassiveRunnerInterceptSpreadScale: 0,
+          combatShootHardReserveMs: 1800,
+          combatShootConserveEveryMs: 360,
+          combatShootRecoveryEveryMs: 700,
+          combatStationarySpeed: 5,
+          combatAimJitterRadians: 0.08,
+          combatAimJitterMinRadians: 0.025,
+          combatAimJitterMaxRadians: 0.14,
+          combatAimJitterCloseDistance: 2500,
+          combatAimJitterFarDistance: 14500,
+          combatAimLeadMinRadians: 0.035,
+          combatAimEvasionScale: 1,
+          combatAimMotionSampleMs: 50,
+          combatAimRecentMotionDecayMs: 900,
+          combatAimMovingScaleThreshold: 0.15,
+          combatAimMinMotionJitterScale: 0.2,
+          combatTargetDodgeSpeedPerTick: 50,
+          combatBulletSpeedPerTick: 500,
+          combatBulletHitRadiusCm: 90,
+          combatRenderDelayTicks: 2,
+          combatInterceptMaxTicks: 30,
+          combatInterceptSpreadScale: 0.18,
+          combatMotionHistoryWindowMs: 2e3,
+          combatMotionHistoryMaxSamples: 80,
+          combatAimLowConfidenceThreshold: 0.6,
+          combatAimLowConfidenceMinDistance: 9e3,
+          combatAimLowConfidenceMotionScale: 0.65,
+          combatAimLowConfidenceEveryMs: 520,
+          combatTradeEstimateWindowMs: 6e3,
+          combatTradeEstimateMinWindowMs: 1800,
+          combatTradeEstimateMinSelfDamage: 6,
+          combatTradeEstimateSafetyFactor: 1.15,
+          combatTradeEstimateMinEnemyDps: 1.5,
+          combatTradeEstimateNoDamageSafeSelfHp: 75,
+          combatTradeEstimateNoDamageUnsafeTDeathMs: 3e4,
+          combatAimNoDamageMs: 1e3,
+          combatAimNoDamageStepMs: 800,
+          combatAimNoDamageMaxRadians: 0.14,
+          combatAimFallbackPrecisionNoDamageMs: 25e3,
+          combatAimLiveDivergencePrecisionCm: 1200,
+          combatAimLiveDivergencePrecisionRatio: 0.08,
+          combatAimRadialPrecisionLateralRatio: 0.35,
+          combatAimSteadyNoDamageMs: 6e3,
+          combatAimSteadySpeedMax: 5,
+          combatAimLockMs: 450,
+          combatShootSteadyAimDodgeReserveMs: 3e3,
+          combatShootSteadyAimNoDamageMs: 6e3,
+          combatShootSteadyAimMinHp: 75,
+          combatShootSteadyAimMaxHpGap: 15,
+          combatShootNoDamageDuelDodgeReserveMs: 3e3,
+          combatShootNoDamageDuelNoDamageMs: 25e3,
+          combatShootNoDamageDuelMinHp: 75,
+          combatShootNoDamageDuelMaxHpGap: 10,
+          combatShootNoDamageDuelRange: 14500,
+          combatServerStallNoDamageLeaveMs: 25e3,
+          combatServerStallNoDamagePrecisionGraceMs: 1e4,
+          combatServerStallNoDamageHpGap: 5,
+          combatTargetSwitchIncomingDistance: 6500,
+          combatTargetSwitchIncomingTimeMs: 900,
+          combatRetreatEdgeRange: 13800,
+          combatRetreatRadialSpeedMin: 5,
+          combatRetreatDistanceDeltaMin: 600,
+          combatRetreatIgnoreMs: 15e3,
+          combatFinishPressureSelfHpMin: 90,
+          combatFinishPressureTargetHpMax: 55,
+          combatFinishPressureCloseRange: 6500,
+          combatFinishPressureShootEveryMs: 360,
+          combatBulletDetectRadius: 3e4,
+          combatBulletLaneRadius: 3e3,
+          combatBulletLookaheadDistance: 42e3,
+          snapshotBulletStaleMs: 1500,
+          snapshotSelfStaleMs: 6500,
+          combatStrafeLockMs: 700,
+          combatStrafeDirectionLockMs: 2200,
+          combatStrafeRandomJitterMs: 1100,
+          combatStrafePreciseLaneMin: 1,
+          combatStrafeCarryMs: 1600,
+          combatEngageStickMs: 3e4,
+          combatEngageGraceMs: 5e3,
+          combatEngageGraceRange: 17e3,
+          combatSpacingMinRange: 4500,
+          combatSpacingPreferredRange: 6500,
+          combatSpacingEmergencyRange: 3e3,
+          combatSpacingLowHpThreshold: 70,
+          combatPressureCloseNoDamageMs: 8e3,
+          combatPressureCloseRange: 6500,
+          combatPressureCloseMinHp: 60,
+          combatPressureExitHpThreshold: 60,
+          combatPressureExitHpGap: 5,
+          combatPressureNoDamageExitMs: 1e4,
+          combatPressureNoDamageExitHpThreshold: 80,
+          combatPressureNoDamageExitHpGap: 10,
+          combatPressureNoDamageExitTargetHpMin: 75,
+          combatPressureNoDamageExitRange: 14500,
+          combatLeaveRetryMs: 1e3,
+          enemyReloginMinDelayMs: 0,
+          enemyReloginMaxDelayMs: 0,
+          enemyReloginJitterMs: 0,
+          enemyReloginRepeatResetMs: 72e5,
+          enemyReloginRepeatSecondMaxMs: 0,
+          enemyReloginRepeatThirdMaxMs: 0,
+          unsafeExitReloginMinDelayMs: 0,
+          attackMinDrop: 8,
+          attackMinAfkDrop: 3,
+          attackApproachMinDrop: 12,
+          attackMinRewardRatio: 0.5,
+          targetWhitelistUrl: String(config.targetWhitelistUrl || ""),
+          targetWhitelistPollMs: 1e4,
+          targetWhitelistTimeoutMs: 7e3,
+          targetWhitelistMaxNames: 100,
+          coinOpportunityValue: 6e4,
+          dropOpportunityValue: 6e4,
+          opportunityDistanceFloor: 50,
+          opportunityDistanceScoreScale: 1e4,
+          opportunityMoveStaminaPerCm: 1,
+          opportunityShotStaminaCostMs: 500,
+          opportunityEstimatedDamagePerShot: 3,
+          opportunityCoinPickupStaminaMs: 0,
+          opportunityLongStaminaReserveMs: 1500,
+          opportunityStickBonus: 0,
+          opportunitySwitchMargin: 3e3,
+          opportunitySwitchRelativeMargin: 0.1,
+          opportunitySwitchHoldMs: 7e3,
+          opportunityMissingHoldMs: 7e3,
+          opportunityOscillationSwitchLimit: 5,
+          opportunitySameCoinRadius: 1200,
+          opportunityVisibleDistance: 5e4,
+          opportunityNearbyPriorityDistance: 5e4,
+          afkRecentActivityCooldownMs: 12e3,
+          opportunityAfkStaminaCooldownMs: 6e4,
+          opportunityAfkStaminaDropThresholdMs: 100,
+          coinMaxDistance: 18e3,
+          coinDangerRadius: 25e3,
+          invulnerableActiveCoinDangerRadius: 36e3,
+          invulnerableActiveCoinHeadingBlockRadius: 65e3,
+          invulnerableActiveCoinHeadingLaneRadius: 18e3,
+          invulnerableActiveCoinHeadingCosMin: 0.55,
+          invulnerableActiveCoinHeadingMinDistance: 1500,
+          stationaryActiveCoinDangerRadius: 12e3,
+          globalCoinMaxDistance: 5e4,
+          patrolCoinMaxDistance: 22e3,
+          scanCoinMaxDistance: 22e3,
+          distantCoinMaxDistance: 35e3,
+          distantCoinMinDistance: 22e3,
+          coinRouteMaxDistance: 5e4,
+          coinRouteClusterRadius: 13e3,
+          coinRouteLinkDistance: 15e3,
+          coinRouteMaxLinkDistance: 22e3,
+          coinRouteAnchorLimit: 22,
+          coinRoutePoolLimit: 72,
+          coinRouteMaxPointsDense: 6,
+          coinRouteMaxPointsMid: 4,
+          coinRouteMaxPointsSparse: 2,
+          coinRouteLegSampleDistance: 1e4,
+          coinRouteNearbyFirstCoinDistance: 22e3,
+          coinRouteFirstCoinDistanceRatio: 1.45,
+          coinRouteFirstCoinDistanceSlack: 6e3,
+          coinRouteSwitchMargin: 3e3,
+          coinRouteSwitchRelativeMargin: 0.1,
+          coinRouteHeldMinOverlap: 2,
+          fieldMigrationMaxDistance: 45e3,
+          fieldMigrationMinDistance: 22e3,
+          fieldMigrationClusterRadius: 18e3,
+          fieldMigrationMinCoins: 3,
+          fieldMigrationStaminaThreshold: 0,
+          fieldMigrationNearbyCoinBlockDistance: 3e4,
+          snapshotCoinMaxDistance: 12e5,
+          snapshotCoinClusterRadius: 22e3,
+          snapshotCoinClusterMinCoins: 2,
+          snapshotSingleCoinMaxDistance: 22e3,
+          snapshotSingleCoinDistancePerAmount: 3e4,
+          snapshotCoinIdleMaxMs: 6e4,
+          snapshotCoinStaleMs: 3e4,
+          patrolHeadingMs: 26e3,
+          patrolStaminaThreshold: 6500,
+          chaseCoinStaminaThreshold: 0,
+          patrolPrecisionTolerance: 1200,
+          footCoinPriorityDistance: 1200,
+          nearCoinPriorityDistance: 13500,
+          activeReturnBlockCoinPassDistance: 900,
+          postAttackDropCoinPriorityMs: 45e3,
+          postAttackDropCoinRadius: 3500,
+          postAttackDropCoinMaxDistance: 22e3,
+          postAttackRecoveryDropMaxDistance: 5e4,
+          postAttackRecoveryDropMinScore: 6e4,
+          postAttackDropWaitMs: 1e3,
+          postAttackDropResolveMaxMs: 5e3,
+          postAttackDropWaitMinDrop: 8,
+          postAttackDropWaitMaxDistance: 5e4,
+          postAttackDropWaitStopDistance: 900,
+          killChatAttackMatchMs: 12e4,
+          killAttributionMergeMs: 12e4,
+          conserveCoinMaxDistance: 6e3,
+          recoveryCoinMaxDistance: 600,
+          coinPrecisionTolerance: 60,
+          coinPickupExactTolerance: 0,
+          targetStickMs: 5e3,
+          coinStickMs: 2500,
+          coinDiagnosticsNearDistance: 5e4,
+          coinDiagnosticsMaxEntries: 8,
+          finalActionArbitrationHoldMs: 480,
+          finalActionArbitrationHistoryLimit: 24,
+          targetSwitchDiagnosticsHistoryLimit: 24,
+          targetSwitchOscillationWindowMs: 1e4,
+          targetSwitchLogMinIntervalMs: 1e3,
+          coinNoProgressMs: 18e3,
+          coinProgressMinGain: 250,
+          coinIgnoreMs: 2e4,
+          coinCollectedIgnoreMs: 6e4,
+          coinCollectedConfirmDistance: 1800,
+          coinCollectedPruneRadius: 900,
+          coinNoProgressIgnoreMs: 45e3,
+          coinNearFailureIgnoreMs: 3e4,
+          coinCloseFailureIgnoreMs: 2e4,
+          coinNearStuckResetGain: 120,
+          coinFailureMaxIgnoreMs: 18e5,
+          coinFailureHardIgnoreCount: 3,
+          coinFailureHardIgnoreMs: 9e5,
+          coinFailureSevereIgnoreCount: 5,
+          coinFailureSevereIgnoreMs: 18e5,
+          coinFailureDecayMs: 6e5,
+          closeCoinStuckDistance: 1200,
+          closeCoinStuckMs: 12e3,
+          nearCoinStuckDistance: 5e3,
+          nearCoinStuckMs: 16e3,
+          staleCoinEscapeMs: 1800,
+          coinApproachLockMs: 900,
+          coinAxisFlipTolerance: 650,
+          precisionPulseMaxMs: 260,
+          coinPickupStopDistance: 30,
+          coinPickupStopPulseMs: 45,
+          coinPickupMicroDistance: 120,
+          coinPickupMicroPulseMs: 60,
+          coinPickupFineDistance: 320,
+          coinPickupSweepDistance: 900,
+          coinPickupPulseMs: 240,
+          coinPickupSweepPulseMs: 150,
+          coinPickupFinePulseMs: 75,
+          coinAxisApproachMinDistance: 5e3,
+          coinAxisApproachRatio: 4,
+          coinAxisApproachLaneTolerance: 1800,
+          coinApproachBrakeDistance: 700,
+          coinPickupBrakeDistance: 650,
+          coinPickupBrakePulseMs: 90,
+          coinPickupFailureSlowStepMs: 10,
+          coinPickupFailureMinPulseMs: 35,
+          coinPickupAttemptSlowEveryMs: 2500,
+          coinPickupAttemptSlowMaxCount: 3,
+          shootEveryMs: 120,
+          opportunisticShootEveryMs: 120,
+          opportunisticShotMinScoreRatio: 1,
+          globalRefreshMs: 5e3,
+          globalSamplingOutageOfflineEnabled: true,
+          globalSamplingOutageMinErrors: 1,
+          globalSamplingOutageMinAgeMs: 0,
+          globalSamplingOutageCombatOnly: true,
+          combatTickGapOfflineEnabled: true,
+          combatTickGapOfflineMs: 5e3,
+          networkQualityEnabled: true,
+          networkQualityWindowMs: 3e4,
+          networkQualityExpectedFrameMs: 0,
+          networkQualityFrameLossGapRatio: 2.25,
+          networkQualityFrameLossGapMinExtraMs: 180,
+          networkQualityMovementAckMinDistance: 40,
+          networkQualityMovementCommandMinMs: 350,
+          networkQualityActionAckTimeoutMs: 5e3,
+          networkQualityDisplayActionFreshMs: 3e4,
+          networkQualityLogIntervalMs: 1e4,
+          networkQualityLogLatencyMs: 350,
+          networkQualityLogLossPercent: 5,
+          networkQualityLogStallMs: 1e3,
+          actionSettlementStallOfflineEnabled: true,
+          actionSettlementStallMs: 15e3,
+          actionSettlementStallAckStaleMs: 15e3,
+          actionSettlementStallMoveMinDistance: 80,
+          nativeTickMinMs: 120,
+          combatNativeTickMinMs: 80,
+          attackMinStamina: 0,
+          conserveStaminaThreshold: 6500,
+          lowHpThreshold: 60,
+          recoverHpThreshold: 95,
+          staminaFullRatio: 0.98,
+          staminaExhaustedThresholdMs: 1e3,
+          staminaExhaustionPostLoginGraceMs: 15e3,
+          staminaResetGraceMs: 1e4,
+          staminaBudgetReloginDelayMs: 18e5,
+          loginSnapshotProbeMinMs: 5e3,
+          loginPointSafetySuccessRequired: 3,
+          loginPointSafetyRadius: 3e4,
+          loginPointSafetyHealthyRadius: 17e3,
+          loginPointSafetyHealthyHpThreshold: 80,
+          autoLogin: true,
+          loginCooldownMs: 5e3,
+          postLoginGraceMs: 45e3,
+          fleeLockMs: 1400,
+          pursuitLeaveMs: 3e5,
+          pursuitLeaveNonFullHpMs: 9e4,
+          pursuitLeaveInvulnerableMs: 6e4,
+          pursuitLeaveNonFullHpInvulnerableMs: 45e3,
+          pursuitLostGraceMs: 1e4,
+          pursuitLeaveRetryMs: 1e3,
+          pursuitTrackRadius: 42e3,
+          pursuitTowardCosMin: 0.25,
+          pursuitClosingMinDistance: 250,
+          offlineLeaveMs: 3e3,
+          offlineUnsafeLeaveMs: 0,
+          offlineSafeLeaveMs: 3e3,
+          offlineReconnectChurnWindowMs: 1e4,
+          offlineReconnectChurnMinEvents: 3,
+          gameSessionNoSelfLeaveMs: 3e4,
+          offlinePassiveDangerRadius: 2500,
+          offlineLeaveRetryMs: 600,
+          leaveRetryMinMs: 1e4,
+          leaveCommandTimeoutMs: 3e3,
+          clashLeaveRescueEnabled: false,
+          clashLeaveRescueTimeoutMs: 9e3,
+          pendingExitPersistMaxMs: 36e5,
+          leaveSuccessReloadUnknownGraceMs: 12e3,
+          leave403ReloginDelayMs: 36e5,
+          leave403SnapshotSuccessRequired: 5,
+          exitMotionStopLockMs: 8e3,
+          offlineLeaveCooldownMs: 6e4,
+          serverPositionStallEnabled: true,
+          serverPositionStallOfflineEnabled: false,
+          serverPositionStallMs: 2500,
+          serverPositionNoMoveStallMs: 0,
+          serverPositionStallHoldMs: 6e3,
+          serverPositionCommandFreshMs: 900,
+          directWsControlEnabled: true,
+          directWsServerMarkerProbe: false,
+          directWsVelocityRepeatMs: 50,
+          directWsVelocityRepeatHoldMs: 220,
+          directWsStopRepeatCount: 3,
+          serverPositionSnapshotMaxAgeMs: 2500,
+          serverPositionClientMoveMin: 300,
+          serverPositionServerMoveMax: 80,
+          serverPositionGapMin: 400,
+          sessionResetMissingMs: 1e4,
+          sessionMismatchRecoveryReloadMaxAgeMs: 12e4,
+          reloadAfterNoSelfMs: 45e3,
+          reloadAfterOfflineMs: 2e4,
+          cloudflareErrorReloadMs: 5e3,
+          page403ErrorReloadMs: 6e5,
+          globalRefreshTimeoutMs: 3e3,
+          combatLoggingEnabled: Boolean(config.combatLoggingEnabled && combatLogEndpointConfigured),
+          combatLogEndpoint: combatLogEndpointConfigured ? String(config.combatLogEndpoint || "http://127.0.0.1:18765/combat-log") : "",
+          combatLogEndpointConfigured,
+          combatLogPreBufferMs: 1e4,
+          combatLogPostBufferMs: 1e4,
+          combatLogFlushMs: 1e3,
+          combatLogBatchMaxEntries: 12,
+          combatLogMaxPendingEntries: 1e3,
+          combatLogMaxPersistedEntries: 160,
+          combatLogPendingPersistMinMs: 5e3,
+          combatLogMaxBulletEntries: 24,
+          combatLogMaxEntityEntries: 12,
+          postLoginZoomOutClicks: 5,
+          postLoginZoomFitRadiusCm: 5e4,
+          postLoginZoomFitTargetRatio: 0.96,
+          postLoginZoomFitTolerance: 0.05,
+          postLoginZoomFitPaddingPx: 16,
+          postLoginZoomFitMaxSteps: 24,
+          postLoginZoomWheelDeltaY: 100,
+          postLoginZoomStartDelayMs: 350,
+          postLoginZoomOutIntervalMs: 80,
+          postLoginZoomArmMissingMs: 1e3,
+          status: "",
+          ...config,
+          // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
+          allowNativeReconnect: false,
+          allowBotWebSocketFallback: false
+        };
+      }
+      module.exports = {
+        buildRuntimeDefaults
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-defaults.js
+  var require_runtime_defaults2 = __commonJS({
+    "src/browser/runtime/runtime-defaults.js"(exports, module) {
+      "use strict";
+      var {
+        buildRuntimeDefaults
+      } = require_runtime_defaults();
+      module.exports = {
+        buildRuntimeDefaults
+      };
+    }
+  });
+
+  // src/shared/target-whitelist.js
+  var require_target_whitelist = __commonJS({
+    "src/shared/target-whitelist.js"(exports, module) {
+      "use strict";
+      function normalizeTargetWhitelistName(value) {
+        return String(value ?? "").replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, "").trim();
+      }
+      function parseTargetWhitelistNames(payload, maxNames = 100) {
+        const raw = Array.isArray(payload) ? payload : Array.isArray(payload?.names) ? payload.names : Array.isArray(payload?.usernames) ? payload.usernames : [];
+        const limit = Math.max(0, Math.round(Number(maxNames) || 0));
+        const names = [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const item of raw) {
+          const name = normalizeTargetWhitelistName(item);
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          names.push(name);
+          if (limit && names.length >= limit) break;
+        }
+        return names;
+      }
+      function deriveTargetWhitelistUrl(sourceUrl, configuredUrl = "") {
+        const explicit = String(configuredUrl || "").trim();
+        if (explicit) return explicit;
+        const source = String(sourceUrl || "").trim();
+        if (!source) return "";
+        try {
+          const url = new URL(source);
+          url.pathname = url.pathname.replace(/[^/]*$/, "target-whitelist.json");
+          url.search = "";
+          url.hash = "";
+          return url.toString();
+        } catch (_) {
+          return source.replace(/[^/?#]*([?#].*)?$/, "target-whitelist.json");
+        }
+      }
+      module.exports = {
+        normalizeTargetWhitelistName,
+        parseTargetWhitelistNames,
+        deriveTargetWhitelistUrl
+      };
+    }
+  });
+
+  // src/browser/runtime/target-whitelist.js
+  var require_target_whitelist2 = __commonJS({
+    "src/browser/runtime/target-whitelist.js"(exports, module) {
+      "use strict";
+      var {
+        normalizeTargetWhitelistName,
+        parseTargetWhitelistNames,
+        deriveTargetWhitelistUrl
+      } = require_target_whitelist();
+      module.exports = {
+        normalizeTargetWhitelistName,
+        parseTargetWhitelistNames,
+        deriveTargetWhitelistUrl
+      };
+    }
+  });
+
+  // src/shared/exit-summary.js
+  var require_exit_summary = __commonJS({
+    "src/shared/exit-summary.js"(exports, module) {
+      "use strict";
+      function staminaExhaustedWindowLabel(staminaState) {
+        return staminaExhaustedLongWindows(staminaState).join("/");
+      }
+      function staminaExhaustedLongWindows(staminaState) {
+        const raw = Array.isArray(staminaState?.longExhausted) ? staminaState.longExhausted : Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : [];
+        const windows = [];
+        for (const item of raw) {
+          const key = String(item || "").toLowerCase();
+          if ((key === "1h" || key === "1d") && !windows.includes(key)) windows.push(key);
+        }
+        return windows;
+      }
+      function staminaEvidenceRemaining(evidence, windowName) {
+        const key = String(windowName || "").toLowerCase();
+        if (key !== "1h" && key !== "1d") return null;
+        const suffix = key === "1h" ? "1h" : "1d";
+        const candidates = [
+          evidence?.stamina?.["stamina" + suffix],
+          evidence?.["stamina" + suffix],
+          evidence?.["stamina_" + suffix + "_remaining_milli"],
+          key === "1d" ? evidence?.stamina1dLastRemaining : void 0
+        ];
+        for (const value of candidates) {
+          const number = Number(value);
+          if (Number.isFinite(number)) return number;
+        }
+        return null;
+      }
+      function staminaHoldContradictedByStaminaEvidence(staminaState, evidence, thresholdMs = 1e3) {
+        const windows = staminaExhaustedLongWindows(staminaState);
+        if (!windows.length || !evidence || typeof evidence !== "object") return false;
+        const threshold = Math.max(0, Number(thresholdMs) || 0);
+        return windows.some((windowName) => {
+          const remaining = staminaEvidenceRemaining(evidence, windowName);
+          return remaining !== null && remaining >= threshold;
+        });
+      }
+      function offlineLeaveSummaryText(reason, offlineSafety) {
+        if (offlineSafety?.staminaBudgetExit) return "\u4E00\u5C0F\u65F6\u4F53\u529B\u4E0D\u8DB3\u4EE5\u62FE\u53D6\u6700\u8FD1\u91D1\u5E01\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
+        if (staminaLabel === "1h") return "\u4E00\u5C0F\u65F6\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (staminaLabel === "1d") return "\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (staminaLabel === "1h/1d") return "\u4E00\u5C0F\u65F6\u548C\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        const text = String(reason || "").toLowerCase();
+        if (text.includes("stamina")) return "\u957F\u5468\u671F\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (offlineSafety?.loginPointSafetyGate || text.includes("login point safety")) return "\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167\u672A\u6EE1\u8DB3\uFF0C\u9000\u51FA\u7B49\u5F85\u5B89\u5168\u91CD\u8FDE";
+        if (offlineSafety?.noSelfGameSession || text.includes("missing self")) return "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("combat tick gap") || offlineSafety?.combatTickGap) return "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u6CE2\u52A8\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("sampling outage") || offlineSafety?.samplingOutage) return "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u6CE2\u52A8\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("reconnect churn") || offlineSafety?.reconnectChurn) return "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("action settlement") || offlineSafety?.actionSettlementStall) return "\u79FB\u52A8/\u5F00\u706B\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("server position")) return "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (offlineSafety?.unsafe) return "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u4E14\u5468\u56F4\u5371\u9669\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        return "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      }
+      function combatLogExitSummaryFromDecision(decision) {
+        const leave2 = decision?.leave || null;
+        const detail = leave2 || decision || {};
+        const leaveReason = String(leave2?.reason || "");
+        const decisionReason = String(decision?.reason || "");
+        const pendingExit = decision?.pendingExit && typeof decision.pendingExit === "object" ? decision.pendingExit : null;
+        const canonicalCombatReason = /^combat-[a-z0-9-]+-leave$/.test(decisionReason) ? decisionReason : "";
+        const exitishDecisionReason = /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat|action)|stamina-exhausted/.test(decisionReason) ? decisionReason : "";
+        const reason = canonicalCombatReason || (leaveReason && leaveReason !== "cooldown" ? leaveReason : "") || (pendingExit ? "pending-exit-active" : "") || exitishDecisionReason || decisionReason || leaveReason;
+        const isExit = Boolean(leave2) || Boolean(pendingExit) || decision?.kind === "leave" || /(?:combat|injury|pursuit|offline|stamina).*leave|leave-(?:retry|wait)|control-(?:ws|global|combat|action)|stamina-exhausted/.test(reason);
+        if (!isExit) return null;
+        return {
+          reason,
+          summary: leave2?.summary || leave2?.exitSummary || pendingExit?.summary || decision?.exitSummary || decision?.displayReason || "",
+          displayReason: leave2?.displayReason || pendingExit?.displayReason || decision?.displayReason || "",
+          attempted: leave2 ? Boolean(leave2.attempted) : null,
+          error: leave2?.error || pendingExit?.lastError || "",
+          safeReloginAllowed: Boolean(detail.safeReloginAllowed || decision?.safeReloginAllowed),
+          offlineSafety: detail.offlineSafety || decision?.offlineSafety || null,
+          reloginUntil: detail.reloginUntil || 0,
+          holdRemainingMs: detail.holdRemainingMs || 0,
+          reloginDelayMs: detail.reloginDelayMs || 0,
+          pendingLoginSuppressUntil: detail.pendingLoginSuppressUntil || 0,
+          pendingLoginSuppressDelayMs: detail.pendingLoginSuppressDelayMs || 0,
+          pendingLoginSuppressReason: detail.pendingLoginSuppressReason || "",
+          pendingLoginSuppressMinimumDelayMs: detail.pendingLoginSuppressMinimumDelayMs || 0,
+          pendingLoginSuppressHpDelayMs: detail.pendingLoginSuppressHpDelayMs || 0,
+          pendingLoginSuppressHp: detail.pendingLoginSuppressHp || null
+        };
+      }
+      module.exports = {
+        staminaExhaustedLongWindows,
+        staminaExhaustedWindowLabel,
+        staminaEvidenceRemaining,
+        staminaHoldContradictedByStaminaEvidence,
+        offlineLeaveSummaryText,
+        combatLogExitSummaryFromDecision
+      };
+    }
+  });
+
+  // src/browser/runtime/exit-summary.js
+  var require_exit_summary2 = __commonJS({
+    "src/browser/runtime/exit-summary.js"(exports, module) {
+      "use strict";
+      var {
+        staminaExhaustedLongWindows,
+        staminaExhaustedWindowLabel,
+        staminaEvidenceRemaining,
+        staminaHoldContradictedByStaminaEvidence,
+        offlineLeaveSummaryText,
+        combatLogExitSummaryFromDecision
+      } = require_exit_summary();
+      module.exports = {
+        staminaExhaustedLongWindows,
+        staminaExhaustedWindowLabel,
+        staminaEvidenceRemaining,
+        staminaHoldContradictedByStaminaEvidence,
+        offlineLeaveSummaryText,
+        combatLogExitSummaryFromDecision
+      };
+    }
+  });
+
   // src/shared/runtime-utils.js
   var require_runtime_utils = __commonJS({
     "src/shared/runtime-utils.js"(exports, module) {
@@ -119,7 +879,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.394" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.395" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -148,602 +908,10 @@
     const OFFLINE_LEAVE_STATE_KEY = "graspRatOfflineLeaveState";
     const LAST_SELF_STATE_KEY = "graspRatLastSelfState";
     const CLOUDFLARE_RELOAD_KEY = "graspRatCloudflareReloadAt";
-    function buildBrowserPreservedState(previousBot2) {
-      return {
-        attackHistory: Array.isArray(previousBot2?.attackHistory) ? previousBot2.attackHistory.slice(-80) : [],
-        killHistory: Array.isArray(previousBot2?.killHistory) ? previousBot2.killHistory.slice(-40) : [],
-        seenKillKeys: Array.isArray(previousBot2?.seenKillKeysList) ? previousBot2.seenKillKeysList.slice(-120) : [],
-        session: previousBot2?.session && typeof previousBot2.session === "object" ? { ...previousBot2.session } : null,
-        lastSelf: previousBot2?.lastSelf && typeof previousBot2.lastSelf === "object" ? { ...previousBot2.lastSelf } : null,
-        lastNativeCoinSnapshot: Array.isArray(previousBot2?.lastNativeCoinSnapshot) ? previousBot2.lastNativeCoinSnapshot.slice(-160) : [],
-        combatTarget: previousBot2?.combatTarget && typeof previousBot2.combatTarget === "object" ? { ...previousBot2.combatTarget } : null,
-        combatRetreatIgnore: previousBot2?.combatRetreatIgnore instanceof Map ? new Map(previousBot2.combatRetreatIgnore) : /* @__PURE__ */ new Map(),
-        combatAim: previousBot2?.combatAim && typeof previousBot2.combatAim === "object" ? { ...previousBot2.combatAim } : null,
-        combatDisadvantageObservation: previousBot2?.combatDisadvantageObservation && typeof previousBot2.combatDisadvantageObservation === "object" ? { ...previousBot2.combatDisadvantageObservation } : null,
-        lastCombatLogMetric: previousBot2?.lastCombatLogMetric && typeof previousBot2.lastCombatLogMetric === "object" ? { ...previousBot2.lastCombatLogMetric } : null,
-        lastCombatShot: previousBot2?.lastCombatShot && typeof previousBot2.lastCombatShot === "object" ? { ...previousBot2.lastCombatShot } : null,
-        opportunityChoice: previousBot2?.opportunityChoice && typeof previousBot2.opportunityChoice === "object" ? { ...previousBot2.opportunityChoice } : null,
-        opportunitySwitchLock: previousBot2?.opportunitySwitchLock && typeof previousBot2.opportunitySwitchLock === "object" ? { ...previousBot2.opportunitySwitchLock } : null,
-        opportunityAfkStamina: previousBot2?.opportunityAfkStamina instanceof Map ? new Map(previousBot2.opportunityAfkStamina) : /* @__PURE__ */ new Map(),
-        targetSwitchDiagnostics: previousBot2?.targetSwitchDiagnostics && typeof previousBot2.targetSwitchDiagnostics === "object" ? {
-          ...previousBot2.targetSwitchDiagnostics,
-          events: Array.isArray(previousBot2.targetSwitchDiagnostics.events) ? previousBot2.targetSwitchDiagnostics.events.slice(-24) : []
-        } : null,
-        finalActionArbitration: previousBot2?.finalActionArbitration && typeof previousBot2.finalActionArbitration === "object" ? {
-          ...previousBot2.finalActionArbitration,
-          history: Array.isArray(previousBot2.finalActionArbitration.history) ? previousBot2.finalActionArbitration.history.slice(-24) : []
-        } : null,
-        pendingExit: previousBot2?.pendingExit && typeof previousBot2.pendingExit === "object" ? { ...previousBot2.pendingExit } : null,
-        lastLoginAt: Number(previousBot2?.lastLoginAt || 0) || 0,
-        lastLoginResult: previousBot2?.lastLoginResult && typeof previousBot2.lastLoginResult === "object" ? { ...previousBot2.lastLoginResult } : null,
-        lastManualLoginResult: previousBot2?.lastManualLoginResult && typeof previousBot2.lastManualLoginResult === "object" ? { ...previousBot2.lastManualLoginResult } : null,
-        exitAudit: previousBot2?.exitAudit && typeof previousBot2.exitAudit === "object" ? { ...previousBot2.exitAudit } : null,
-        importantLogging: previousBot2?.importantLogging && typeof previousBot2.importantLogging === "object" ? {
-          ...previousBot2.importantLogging,
-          activeCombat: previousBot2.importantLogging.activeCombat && typeof previousBot2.importantLogging.activeCombat === "object" ? { ...previousBot2.importantLogging.activeCombat } : null,
-          queuedRemoteIds: Array.isArray(previousBot2.importantLogging.queuedRemoteIds) ? previousBot2.importantLogging.queuedRemoteIds.slice(-500) : []
-        } : null,
-        loginSnapshotGate: previousBot2?.loginSnapshotGate && typeof previousBot2.loginSnapshotGate === "object" ? { ...previousBot2.loginSnapshotGate } : null,
-        loginPointSafety: previousBot2?.loginPointSafety && typeof previousBot2.loginPointSafety === "object" ? { ...previousBot2.loginPointSafety } : null,
-        leave403SnapshotRecovery: previousBot2?.leave403SnapshotRecovery && typeof previousBot2.leave403SnapshotRecovery === "object" ? { ...previousBot2.leave403SnapshotRecovery } : null,
-        clashLeaveRescue: previousBot2?.clashLeaveRescue && typeof previousBot2.clashLeaveRescue === "object" ? {
-          ...previousBot2.clashLeaveRescue,
-          attempts: Array.isArray(previousBot2.clashLeaveRescue.attempts) ? previousBot2.clashLeaveRescue.attempts.slice(-8) : []
-        } : null,
-        postLoginZoom: previousBot2?.postLoginZoom && typeof previousBot2.postLoginZoom === "object" ? { ...previousBot2.postLoginZoom } : null,
-        targetWhitelist: previousBot2?.targetWhitelist && typeof previousBot2.targetWhitelist === "object" ? {
-          url: String(previousBot2.targetWhitelist.url || ""),
-          names: Array.isArray(previousBot2.targetWhitelist.names) ? previousBot2.targetWhitelist.names.slice(-100) : [],
-          lastOkAt: Number(previousBot2.targetWhitelist.lastOkAt || 0) || 0
-        } : null,
-        combatLogging: previousBot2?.combatLogging && typeof previousBot2.combatLogging === "object" ? {
-          ...previousBot2.combatLogging,
-          preBuffer: Array.isArray(previousBot2.combatLogging.preBuffer) ? previousBot2.combatLogging.preBuffer.slice(-160) : [],
-          pending: Array.isArray(previousBot2.combatLogging.pending) ? previousBot2.combatLogging.pending.slice(-1e3) : []
-        } : null,
-        coinFailures: previousBot2?.coinFailures instanceof Map ? Array.from(previousBot2.coinFailures.entries()).slice(-120) : []
-      };
-    }
-    function buildRuntimeDefaults(config2, combatLogEndpointConfigured2) {
-      return {
-        dryRun: Boolean(config2.dryRun),
-        once: Boolean(config2.once),
-        version: String(config2.version || "dev"),
-        sourceHash: String(config2.sourceHash || ""),
-        sourceUrl: String(config2.sourceUrl || ""),
-        injectedBy: String(config2.injectedBy || "cdp"),
-        tickMs: 120,
-        statusEvery: Number(config2.statusEvery) === 0 ? 0 : Math.max(1e3, Number(config2.statusEvery) || 3e4),
-        dangerRadius: 17e3,
-        activeCautionRadius: 23e3,
-        activeCautionExitMargin: 2e3,
-        activeAvoidMaxDistance: 25e3,
-        activeReturnBlockMargin: 0,
-        activeReturnBlockExitMargin: 0,
-        activeReturnBlockResumeMargin: 0,
-        activeReturnBlockClearMargin: 0,
-        returnBlockScanHeadingMs: 2600,
-        returnBlockScanStuckMs: 1400,
-        returnBlockScanStuckDistance: 350,
-        returnBlockCooldownMs: 8e3,
-        stationaryActiveDangerRadius: 18e3,
-        stationaryActiveCautionRadius: 22e3,
-        panicRadius: 14500,
-        passiveAvoidRadius: 11e3,
-        passivePanicRadius: 120,
-        recoveryAvoidRadius: 22e3,
-        activeSpeedMin: 5,
-        activeMoveMin: 120,
-        activeSeenMs: 1800,
-        attackRange: 14500,
-        attackPreferredRange: 14500,
-        attackEngageRange: 11e3,
-        attackApproachRange: 5e4,
-        attackDangerRadius: 25e3,
-        globalAttackMaxDistance: 5e4,
-        nativeEntityAuthoritativeRadius: 42e3,
-        nativeCoinAuthoritativeRadius: 5e4,
-        combatAttackRange: 14500,
-        combatDodgeRangeBuffer: 1e3,
-        combatDisengageRange: 17e3,
-        combatLowValueActiveDropMax: 4,
-        combatProactiveActiveKillStaminaBudgetMs: 1e5,
-        highValueCoinPriorityAmount: 10,
-        highValueCoinPriorityHealthyHp: 50,
-        combatCriticalHpLeaveThreshold: 20,
-        combatLowHpLeaveThreshold: 50,
-        combatLowHpCloseRiskMargin: 5,
-        combatHighHpDisadvantageGap: 20,
-        combatDisadvantageConfirmMs: 2500,
-        combatDisadvantageMinEngageMs: 3500,
-        combatDisadvantageMinSamples: 4,
-        combatLowHpNoDamageLeaveThreshold: 70,
-        combatLowHpNoDamageLeaveMs: 15e3,
-        combatLowHpNoDamageMinGap: 0,
-        combatShootEveryMs: 160,
-        combatShootReserveMs: 5600,
-        combatShootDodgeReserveMs: 3800,
-        combatShootHighHpDodgeReserveMs: 3e3,
-        combatShootHighHpMinHp: 90,
-        combatShootFinishLowThreatDodgeReserveMs: 1800,
-        combatShootFinishLowThreatMinHp: 90,
-        combatShootFinishLowThreatTargetHpMax: 55,
-        combatShootFinishLowThreatMaxHpGap: 0,
-        combatShootFinishLowThreatRange: 8500,
-        combatShootPassiveRunnerDodgeReserveMs: 1800,
-        combatShootWinningPressureDodgeReserveMs: 1800,
-        combatShootWinningPressureMinHp: 60,
-        combatShootWinningPressureTargetHpMax: 75,
-        combatShootWinningPressureLeadHp: 5,
-        combatShootWinningPressureRange: 11e3,
-        combatShootWinningPressureNoDamageMs: 6e3,
-        combatShootPressureDodgeReserveMs: 2600,
-        combatShootPressureMinHp: 60,
-        combatShootPressureRange: 14500,
-        combatShootPressureMaxHpGap: 10,
-        combatFarNoDamageCloseMs: 6e3,
-        combatFarNoDamageCloseStartRange: 1e4,
-        combatFarNoDamageCloseRange: 7500,
-        combatFarNoDamageCloseMinHp: 60,
-        combatFarNoDamageCloseMaxHpGap: 10,
-        combatRetreatingFighterCloseMinHp: 60,
-        combatRetreatingFighterCloseMaxHpGap: 10,
-        combatOutOfRangeFinishPressureRange: 16e3,
-        combatOutOfRangeFinishPressureSelfHpMin: 55,
-        combatOutOfRangeFinishPressureTargetHpMax: 55,
-        combatOutOfRangeFinishPressureMaxHpGap: 0,
-        combatOutOfRangeFinishPressureRecentDamageMs: 1e4,
-        combatOutOfRangeReengageRange: 15e3,
-        combatOutOfRangeReengageMinHp: 60,
-        combatOutOfRangeReengageMaxHpGap: 10,
-        combatOutOfRangePressureReengageMaxHpGap: 20,
-        combatOutOfRangeReengageRecentInRangeMs: 2500,
-        combatPassiveRunnerMinSelfHp: 80,
-        combatPassiveRunnerMinDrop: 1,
-        combatPassiveRunnerConfirmMs: 2500,
-        combatOpponentProbeMs: 6e3,
-        combatOpponentProbeReserveMs: 5600,
-        combatOpponentProbeEveryMs: 520,
-        combatPassiveRunnerCloseRange: 4500,
-        combatPassiveRunnerInterceptSpreadScale: 0,
-        combatShootHardReserveMs: 1800,
-        combatShootConserveEveryMs: 360,
-        combatShootRecoveryEveryMs: 700,
-        combatStationarySpeed: 5,
-        combatAimJitterRadians: 0.08,
-        combatAimJitterMinRadians: 0.025,
-        combatAimJitterMaxRadians: 0.14,
-        combatAimJitterCloseDistance: 2500,
-        combatAimJitterFarDistance: 14500,
-        combatAimLeadMinRadians: 0.035,
-        combatAimEvasionScale: 1,
-        combatAimMotionSampleMs: 50,
-        combatAimRecentMotionDecayMs: 900,
-        combatAimMovingScaleThreshold: 0.15,
-        combatAimMinMotionJitterScale: 0.2,
-        combatTargetDodgeSpeedPerTick: 50,
-        combatBulletSpeedPerTick: 500,
-        combatBulletHitRadiusCm: 90,
-        combatRenderDelayTicks: 2,
-        combatInterceptMaxTicks: 30,
-        combatInterceptSpreadScale: 0.18,
-        combatMotionHistoryWindowMs: 2e3,
-        combatMotionHistoryMaxSamples: 80,
-        combatAimLowConfidenceThreshold: 0.6,
-        combatAimLowConfidenceMinDistance: 9e3,
-        combatAimLowConfidenceMotionScale: 0.65,
-        combatAimLowConfidenceEveryMs: 520,
-        combatTradeEstimateWindowMs: 6e3,
-        combatTradeEstimateMinWindowMs: 1800,
-        combatTradeEstimateMinSelfDamage: 6,
-        combatTradeEstimateSafetyFactor: 1.15,
-        combatTradeEstimateMinEnemyDps: 1.5,
-        combatTradeEstimateNoDamageSafeSelfHp: 75,
-        combatTradeEstimateNoDamageUnsafeTDeathMs: 3e4,
-        combatAimNoDamageMs: 1e3,
-        combatAimNoDamageStepMs: 800,
-        combatAimNoDamageMaxRadians: 0.14,
-        combatAimFallbackPrecisionNoDamageMs: 25e3,
-        combatAimLiveDivergencePrecisionCm: 1200,
-        combatAimLiveDivergencePrecisionRatio: 0.08,
-        combatAimRadialPrecisionLateralRatio: 0.35,
-        combatAimSteadyNoDamageMs: 6e3,
-        combatAimSteadySpeedMax: 5,
-        combatAimLockMs: 450,
-        combatShootSteadyAimDodgeReserveMs: 3e3,
-        combatShootSteadyAimNoDamageMs: 6e3,
-        combatShootSteadyAimMinHp: 75,
-        combatShootSteadyAimMaxHpGap: 15,
-        combatShootNoDamageDuelDodgeReserveMs: 3e3,
-        combatShootNoDamageDuelNoDamageMs: 25e3,
-        combatShootNoDamageDuelMinHp: 75,
-        combatShootNoDamageDuelMaxHpGap: 10,
-        combatShootNoDamageDuelRange: 14500,
-        combatServerStallNoDamageLeaveMs: 25e3,
-        combatServerStallNoDamagePrecisionGraceMs: 1e4,
-        combatServerStallNoDamageHpGap: 5,
-        combatTargetSwitchIncomingDistance: 6500,
-        combatTargetSwitchIncomingTimeMs: 900,
-        combatRetreatEdgeRange: 13800,
-        combatRetreatRadialSpeedMin: 5,
-        combatRetreatDistanceDeltaMin: 600,
-        combatRetreatIgnoreMs: 15e3,
-        combatFinishPressureSelfHpMin: 90,
-        combatFinishPressureTargetHpMax: 55,
-        combatFinishPressureCloseRange: 6500,
-        combatFinishPressureShootEveryMs: 360,
-        combatBulletDetectRadius: 3e4,
-        combatBulletLaneRadius: 3e3,
-        combatBulletLookaheadDistance: 42e3,
-        snapshotBulletStaleMs: 1500,
-        snapshotSelfStaleMs: 6500,
-        combatStrafeLockMs: 700,
-        combatStrafeDirectionLockMs: 2200,
-        combatStrafeRandomJitterMs: 1100,
-        combatStrafePreciseLaneMin: 1,
-        combatStrafeCarryMs: 1600,
-        combatEngageStickMs: 3e4,
-        combatEngageGraceMs: 5e3,
-        combatEngageGraceRange: 17e3,
-        combatSpacingMinRange: 4500,
-        combatSpacingPreferredRange: 6500,
-        combatSpacingEmergencyRange: 3e3,
-        combatSpacingLowHpThreshold: 70,
-        combatPressureCloseNoDamageMs: 8e3,
-        combatPressureCloseRange: 6500,
-        combatPressureCloseMinHp: 60,
-        combatPressureExitHpThreshold: 60,
-        combatPressureExitHpGap: 5,
-        combatPressureNoDamageExitMs: 1e4,
-        combatPressureNoDamageExitHpThreshold: 80,
-        combatPressureNoDamageExitHpGap: 10,
-        combatPressureNoDamageExitTargetHpMin: 75,
-        combatPressureNoDamageExitRange: 14500,
-        combatLeaveRetryMs: 1e3,
-        enemyReloginMinDelayMs: 0,
-        enemyReloginMaxDelayMs: 0,
-        enemyReloginJitterMs: 0,
-        enemyReloginRepeatResetMs: 72e5,
-        enemyReloginRepeatSecondMaxMs: 0,
-        enemyReloginRepeatThirdMaxMs: 0,
-        unsafeExitReloginMinDelayMs: 0,
-        attackMinDrop: 8,
-        attackMinAfkDrop: 3,
-        attackApproachMinDrop: 12,
-        attackMinRewardRatio: 0.5,
-        targetWhitelistUrl: String(config2.targetWhitelistUrl || ""),
-        targetWhitelistPollMs: 1e4,
-        targetWhitelistTimeoutMs: 7e3,
-        targetWhitelistMaxNames: 100,
-        coinOpportunityValue: 6e4,
-        dropOpportunityValue: 6e4,
-        opportunityDistanceFloor: 50,
-        opportunityDistanceScoreScale: 1e4,
-        opportunityMoveStaminaPerCm: 1,
-        opportunityShotStaminaCostMs: 500,
-        opportunityEstimatedDamagePerShot: 3,
-        opportunityCoinPickupStaminaMs: 0,
-        opportunityLongStaminaReserveMs: 1500,
-        opportunityStickBonus: 0,
-        opportunitySwitchMargin: 3e3,
-        opportunitySwitchRelativeMargin: 0.1,
-        opportunitySwitchHoldMs: 7e3,
-        opportunityMissingHoldMs: 7e3,
-        opportunityOscillationSwitchLimit: 5,
-        opportunitySameCoinRadius: 1200,
-        opportunityVisibleDistance: 5e4,
-        opportunityNearbyPriorityDistance: 5e4,
-        afkRecentActivityCooldownMs: 12e3,
-        opportunityAfkStaminaCooldownMs: 6e4,
-        opportunityAfkStaminaDropThresholdMs: 100,
-        coinMaxDistance: 18e3,
-        coinDangerRadius: 25e3,
-        invulnerableActiveCoinDangerRadius: 36e3,
-        invulnerableActiveCoinHeadingBlockRadius: 65e3,
-        invulnerableActiveCoinHeadingLaneRadius: 18e3,
-        invulnerableActiveCoinHeadingCosMin: 0.55,
-        invulnerableActiveCoinHeadingMinDistance: 1500,
-        stationaryActiveCoinDangerRadius: 12e3,
-        globalCoinMaxDistance: 5e4,
-        patrolCoinMaxDistance: 22e3,
-        scanCoinMaxDistance: 22e3,
-        distantCoinMaxDistance: 35e3,
-        distantCoinMinDistance: 22e3,
-        coinRouteMaxDistance: 5e4,
-        coinRouteClusterRadius: 13e3,
-        coinRouteLinkDistance: 15e3,
-        coinRouteMaxLinkDistance: 22e3,
-        coinRouteAnchorLimit: 22,
-        coinRoutePoolLimit: 72,
-        coinRouteMaxPointsDense: 6,
-        coinRouteMaxPointsMid: 4,
-        coinRouteMaxPointsSparse: 2,
-        coinRouteLegSampleDistance: 1e4,
-        coinRouteNearbyFirstCoinDistance: 22e3,
-        coinRouteFirstCoinDistanceRatio: 1.45,
-        coinRouteFirstCoinDistanceSlack: 6e3,
-        coinRouteSwitchMargin: 3e3,
-        coinRouteSwitchRelativeMargin: 0.1,
-        coinRouteHeldMinOverlap: 2,
-        fieldMigrationMaxDistance: 45e3,
-        fieldMigrationMinDistance: 22e3,
-        fieldMigrationClusterRadius: 18e3,
-        fieldMigrationMinCoins: 3,
-        fieldMigrationStaminaThreshold: 0,
-        fieldMigrationNearbyCoinBlockDistance: 3e4,
-        snapshotCoinMaxDistance: 12e5,
-        snapshotCoinClusterRadius: 22e3,
-        snapshotCoinClusterMinCoins: 2,
-        snapshotSingleCoinMaxDistance: 22e3,
-        snapshotSingleCoinDistancePerAmount: 3e4,
-        snapshotCoinIdleMaxMs: 6e4,
-        snapshotCoinStaleMs: 3e4,
-        patrolHeadingMs: 26e3,
-        patrolStaminaThreshold: 6500,
-        chaseCoinStaminaThreshold: 0,
-        patrolPrecisionTolerance: 1200,
-        footCoinPriorityDistance: 1200,
-        nearCoinPriorityDistance: 13500,
-        activeReturnBlockCoinPassDistance: 900,
-        postAttackDropCoinPriorityMs: 45e3,
-        postAttackDropCoinRadius: 3500,
-        postAttackDropCoinMaxDistance: 22e3,
-        postAttackRecoveryDropMaxDistance: 5e4,
-        postAttackRecoveryDropMinScore: 6e4,
-        postAttackDropWaitMs: 1e3,
-        postAttackDropResolveMaxMs: 5e3,
-        postAttackDropWaitMinDrop: 8,
-        postAttackDropWaitMaxDistance: 5e4,
-        postAttackDropWaitStopDistance: 900,
-        killChatAttackMatchMs: 12e4,
-        killAttributionMergeMs: 12e4,
-        conserveCoinMaxDistance: 6e3,
-        recoveryCoinMaxDistance: 600,
-        coinPrecisionTolerance: 60,
-        coinPickupExactTolerance: 0,
-        targetStickMs: 5e3,
-        coinStickMs: 2500,
-        coinDiagnosticsNearDistance: 5e4,
-        coinDiagnosticsMaxEntries: 8,
-        finalActionArbitrationHoldMs: 480,
-        finalActionArbitrationHistoryLimit: 24,
-        targetSwitchDiagnosticsHistoryLimit: 24,
-        targetSwitchOscillationWindowMs: 1e4,
-        targetSwitchLogMinIntervalMs: 1e3,
-        coinNoProgressMs: 18e3,
-        coinProgressMinGain: 250,
-        coinIgnoreMs: 2e4,
-        coinCollectedIgnoreMs: 6e4,
-        coinCollectedConfirmDistance: 1800,
-        coinCollectedPruneRadius: 900,
-        coinNoProgressIgnoreMs: 45e3,
-        coinNearFailureIgnoreMs: 3e4,
-        coinCloseFailureIgnoreMs: 2e4,
-        coinNearStuckResetGain: 120,
-        coinFailureMaxIgnoreMs: 18e5,
-        coinFailureHardIgnoreCount: 3,
-        coinFailureHardIgnoreMs: 9e5,
-        coinFailureSevereIgnoreCount: 5,
-        coinFailureSevereIgnoreMs: 18e5,
-        coinFailureDecayMs: 6e5,
-        closeCoinStuckDistance: 1200,
-        closeCoinStuckMs: 12e3,
-        nearCoinStuckDistance: 5e3,
-        nearCoinStuckMs: 16e3,
-        staleCoinEscapeMs: 1800,
-        coinApproachLockMs: 900,
-        coinAxisFlipTolerance: 650,
-        precisionPulseMaxMs: 260,
-        coinPickupStopDistance: 30,
-        coinPickupStopPulseMs: 45,
-        coinPickupMicroDistance: 120,
-        coinPickupMicroPulseMs: 60,
-        coinPickupFineDistance: 320,
-        coinPickupSweepDistance: 900,
-        coinPickupPulseMs: 240,
-        coinPickupSweepPulseMs: 150,
-        coinPickupFinePulseMs: 75,
-        coinAxisApproachMinDistance: 5e3,
-        coinAxisApproachRatio: 4,
-        coinAxisApproachLaneTolerance: 1800,
-        coinApproachBrakeDistance: 700,
-        coinPickupBrakeDistance: 650,
-        coinPickupBrakePulseMs: 90,
-        coinPickupFailureSlowStepMs: 10,
-        coinPickupFailureMinPulseMs: 35,
-        coinPickupAttemptSlowEveryMs: 2500,
-        coinPickupAttemptSlowMaxCount: 3,
-        shootEveryMs: 120,
-        opportunisticShootEveryMs: 120,
-        opportunisticShotMinScoreRatio: 1,
-        globalRefreshMs: 5e3,
-        globalSamplingOutageOfflineEnabled: true,
-        globalSamplingOutageMinErrors: 1,
-        globalSamplingOutageMinAgeMs: 0,
-        globalSamplingOutageCombatOnly: true,
-        combatTickGapOfflineEnabled: true,
-        combatTickGapOfflineMs: 5e3,
-        networkQualityEnabled: true,
-        networkQualityWindowMs: 3e4,
-        networkQualityExpectedFrameMs: 0,
-        networkQualityFrameLossGapRatio: 2.25,
-        networkQualityFrameLossGapMinExtraMs: 180,
-        networkQualityMovementAckMinDistance: 40,
-        networkQualityMovementCommandMinMs: 350,
-        networkQualityActionAckTimeoutMs: 5e3,
-        networkQualityDisplayActionFreshMs: 3e4,
-        networkQualityLogIntervalMs: 1e4,
-        networkQualityLogLatencyMs: 350,
-        networkQualityLogLossPercent: 5,
-        networkQualityLogStallMs: 1e3,
-        actionSettlementStallOfflineEnabled: true,
-        actionSettlementStallMs: 15e3,
-        actionSettlementStallAckStaleMs: 15e3,
-        actionSettlementStallMoveMinDistance: 80,
-        nativeTickMinMs: 120,
-        combatNativeTickMinMs: 80,
-        attackMinStamina: 0,
-        conserveStaminaThreshold: 6500,
-        lowHpThreshold: 60,
-        recoverHpThreshold: 95,
-        staminaFullRatio: 0.98,
-        staminaExhaustedThresholdMs: 1e3,
-        staminaExhaustionPostLoginGraceMs: 15e3,
-        staminaResetGraceMs: 1e4,
-        staminaBudgetReloginDelayMs: 18e5,
-        loginSnapshotProbeMinMs: 5e3,
-        loginPointSafetySuccessRequired: 3,
-        loginPointSafetyRadius: 3e4,
-        loginPointSafetyHealthyRadius: 17e3,
-        loginPointSafetyHealthyHpThreshold: 80,
-        autoLogin: true,
-        loginCooldownMs: 5e3,
-        postLoginGraceMs: 45e3,
-        fleeLockMs: 1400,
-        pursuitLeaveMs: 3e5,
-        pursuitLeaveNonFullHpMs: 9e4,
-        pursuitLeaveInvulnerableMs: 6e4,
-        pursuitLeaveNonFullHpInvulnerableMs: 45e3,
-        pursuitLostGraceMs: 1e4,
-        pursuitLeaveRetryMs: 1e3,
-        pursuitTrackRadius: 42e3,
-        pursuitTowardCosMin: 0.25,
-        pursuitClosingMinDistance: 250,
-        offlineLeaveMs: 3e3,
-        offlineUnsafeLeaveMs: 0,
-        offlineSafeLeaveMs: 3e3,
-        offlineReconnectChurnWindowMs: 1e4,
-        offlineReconnectChurnMinEvents: 3,
-        gameSessionNoSelfLeaveMs: 3e4,
-        offlinePassiveDangerRadius: 2500,
-        offlineLeaveRetryMs: 600,
-        leaveRetryMinMs: 1e4,
-        leaveCommandTimeoutMs: 3e3,
-        clashLeaveRescueEnabled: false,
-        clashLeaveRescueTimeoutMs: 9e3,
-        pendingExitPersistMaxMs: 36e5,
-        leaveSuccessReloadUnknownGraceMs: 12e3,
-        leave403ReloginDelayMs: 36e5,
-        leave403SnapshotSuccessRequired: 5,
-        exitMotionStopLockMs: 8e3,
-        offlineLeaveCooldownMs: 6e4,
-        serverPositionStallEnabled: true,
-        serverPositionStallOfflineEnabled: false,
-        serverPositionStallMs: 2500,
-        serverPositionNoMoveStallMs: 0,
-        serverPositionStallHoldMs: 6e3,
-        serverPositionCommandFreshMs: 900,
-        directWsControlEnabled: true,
-        directWsServerMarkerProbe: false,
-        directWsVelocityRepeatMs: 50,
-        directWsVelocityRepeatHoldMs: 220,
-        directWsStopRepeatCount: 3,
-        serverPositionSnapshotMaxAgeMs: 2500,
-        serverPositionClientMoveMin: 300,
-        serverPositionServerMoveMax: 80,
-        serverPositionGapMin: 400,
-        sessionResetMissingMs: 1e4,
-        sessionMismatchRecoveryReloadMaxAgeMs: 12e4,
-        reloadAfterNoSelfMs: 45e3,
-        reloadAfterOfflineMs: 2e4,
-        cloudflareErrorReloadMs: 5e3,
-        page403ErrorReloadMs: 6e5,
-        globalRefreshTimeoutMs: 3e3,
-        combatLoggingEnabled: Boolean(config2.combatLoggingEnabled && combatLogEndpointConfigured2),
-        combatLogEndpoint: combatLogEndpointConfigured2 ? String(config2.combatLogEndpoint || "http://127.0.0.1:18765/combat-log") : "",
-        combatLogEndpointConfigured: combatLogEndpointConfigured2,
-        combatLogPreBufferMs: 1e4,
-        combatLogPostBufferMs: 1e4,
-        combatLogFlushMs: 1e3,
-        combatLogBatchMaxEntries: 12,
-        combatLogMaxPendingEntries: 1e3,
-        combatLogMaxPersistedEntries: 160,
-        combatLogPendingPersistMinMs: 5e3,
-        combatLogMaxBulletEntries: 24,
-        combatLogMaxEntityEntries: 12,
-        postLoginZoomOutClicks: 5,
-        postLoginZoomFitRadiusCm: 5e4,
-        postLoginZoomFitTargetRatio: 0.96,
-        postLoginZoomFitTolerance: 0.05,
-        postLoginZoomFitPaddingPx: 16,
-        postLoginZoomFitMaxSteps: 24,
-        postLoginZoomWheelDeltaY: 100,
-        postLoginZoomStartDelayMs: 350,
-        postLoginZoomOutIntervalMs: 80,
-        postLoginZoomArmMissingMs: 1e3,
-        status: "",
-        ...config2,
-        // The page owns the game WebSocket lifecycle; the bot must not reconnect or create a second socket.
-        allowNativeReconnect: false,
-        allowBotWebSocketFallback: false
-      };
-    }
-    function normalizeTargetWhitelistName(value) {
-      return String(value ?? "").replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, "").trim();
-    }
-    function parseTargetWhitelistNames(payload, maxNames = 100) {
-      const raw = Array.isArray(payload) ? payload : Array.isArray(payload?.names) ? payload.names : Array.isArray(payload?.usernames) ? payload.usernames : [];
-      const limit = Math.max(0, Math.round(Number(maxNames) || 0));
-      const names = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const item of raw) {
-        const name = normalizeTargetWhitelistName(item);
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
-        names.push(name);
-        if (limit && names.length >= limit) break;
-      }
-      return names;
-    }
-    function deriveTargetWhitelistUrl(sourceUrl, configuredUrl = "") {
-      const explicit = String(configuredUrl || "").trim();
-      if (explicit) return explicit;
-      const source = String(sourceUrl || "").trim();
-      if (!source) return "";
-      try {
-        const url = new URL(source);
-        url.pathname = url.pathname.replace(/[^/]*$/, "target-whitelist.json");
-        url.search = "";
-        url.hash = "";
-        return url.toString();
-      } catch (_) {
-        return source.replace(/[^/?#]*([?#].*)?$/, "target-whitelist.json");
-      }
-    }
-    function staminaExhaustedLongWindows(staminaState) {
-      const raw = Array.isArray(staminaState?.longExhausted) ? staminaState.longExhausted : Array.isArray(staminaState?.exhausted) ? staminaState.exhausted : [];
-      const windows = [];
-      for (const item of raw) {
-        const key = String(item || "").toLowerCase();
-        if ((key === "1h" || key === "1d") && !windows.includes(key)) windows.push(key);
-      }
-      return windows;
-    }
-    function staminaEvidenceRemaining(evidence, windowName) {
-      const key = String(windowName || "").toLowerCase();
-      if (key !== "1h" && key !== "1d") return null;
-      const suffix = key === "1h" ? "1h" : "1d";
-      const candidates = [
-        evidence?.stamina?.["stamina" + suffix],
-        evidence?.["stamina" + suffix],
-        evidence?.["stamina_" + suffix + "_remaining_milli"],
-        key === "1d" ? evidence?.stamina1dLastRemaining : void 0
-      ];
-      for (const value of candidates) {
-        const number = Number(value);
-        if (Number.isFinite(number)) return number;
-      }
-      return null;
-    }
-    function staminaHoldContradictedByStaminaEvidence(staminaState, evidence, thresholdMs = 1e3) {
-      const windows = staminaExhaustedLongWindows(staminaState);
-      if (!windows.length || !evidence || typeof evidence !== "object") return false;
-      const threshold = Math.max(0, Number(thresholdMs) || 0);
-      return windows.some((windowName) => {
-        const remaining = staminaEvidenceRemaining(evidence, windowName);
-        return remaining !== null && remaining >= threshold;
-      });
-    }
+    const { buildBrowserPreservedState } = require_browser_preserved_state2();
+    const { buildRuntimeDefaults } = require_runtime_defaults2();
+    const { normalizeTargetWhitelistName, parseTargetWhitelistNames, deriveTargetWhitelistUrl } = require_target_whitelist2();
+    const { staminaExhaustedLongWindows, staminaEvidenceRemaining, staminaHoldContradictedByStaminaEvidence } = require_exit_summary2();
     const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);
     const preserved = buildBrowserPreservedState(previousBot);
     const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
