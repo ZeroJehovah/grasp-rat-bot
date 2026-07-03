@@ -11,6 +11,7 @@ import actionArbitration from '../browser/runtime/action-arbitration.js';
 import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
 import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
 import coinMotion from '../browser/runtime/coin-motion.js';
+import coinTarget from '../browser/runtime/coin-target.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -70,6 +71,16 @@ function helperStatus(config = {}) {
     coinPickupSweepDistance: 100
   });
   const coinMotionMeta = coinMotion.coinMotionMetaCore(coinMotionResult.direction);
+  const coinTargetKey = coinTarget.coinTargetKeyCore({ drop_id: 'target-spike', amount: 5, x: 10, y: 20 });
+  const coinTargetSnapshot = coinTarget.buildNativeCoinSnapshotCore([
+    { drop_id: 'target-spike', amount: 5, x: 10, y: 20 },
+    { drop_id: 'target-other', amount: 1, x: 30, y: 40 }
+  ], { nowMs: 1000 });
+  const coinTargetMatched = coinTarget.coinMatchesTrackedTargetCore(
+    { drop_id: 'target-spike', x: 10, y: 20 },
+    { id: 'target-spike', x: 10, y: 20 },
+    { coinCollectedPruneRadius: 5 }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -85,6 +96,9 @@ function helperStatus(config = {}) {
     coinDiagnosticsSnapshotOnly: arrayCountRuntime.arrayCount(coinDiagnosticResult.snapshotOnlyNearCoins),
     coinMotionDirection: coinMotionResult.direction,
     coinMotionRouteMode: coinMotionMeta.routeMode,
+    coinTargetKey,
+    coinTargetSnapshotCount: arrayCountRuntime.arrayCount(coinTargetSnapshot),
+    coinTargetMatched,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

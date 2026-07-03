@@ -1176,6 +1176,18 @@ This is a source-organization split only. It keeps coin diagnostics behavior unc
 
 This is a source-organization split only. It keeps coin approach and pickup movement behavior unchanged while moving the coin motion strategy helper behind an executable browser runtime adapter.
 
+## 2026-07-04 Follow-up: Phase 2DB Coin Target Helper Module
+
+`bootstrap-0.4.381` continues the strategy-helper-to-browser-runtime adapter pass with coin target helpers:
+
+- `src/browser/runtime/coin-target.js` now owns the executable browser runtime helper exports for coin target keys, tracked-target matching, tracked collection targets, native coin snapshots, point-to-segment distance, incidental pickup detection, snapshot long-travel worth, and snapshot navigation reason by reusing `src/strategy/coin-target.js`.
+- `src/browser/coin-target-runtime-source.js` imports coin target helpers through that browser runtime module while still inlining the same helper function text into the generated runtime.
+- `src/bundler-spike/runtime-entry.mjs` imports coin target helpers through the browser runtime module path and now verifies key construction, native snapshot construction, and tracked-target matching through the spike status payload.
+- Static verification checks the runtime helper module, the coin-target runtime source import path, the strategy-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.381` hash stayed `6b221b5b16c1205666d826400b3d6a3034e53fa35a20679d9d3b38ce09836c78` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps coin target tracking, collection confirmation, and snapshot navigation behavior unchanged while moving the coin target strategy helper behind an executable browser runtime adapter.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1287,9 +1299,10 @@ This is a source-organization split only. It keeps coin approach and pickup move
 106. Action-arbitration true runtime helper module: integrated in `bootstrap-0.4.378`
 107. Coin-diagnostics true runtime helper module: integrated in `bootstrap-0.4.379`
 108. Coin-motion true runtime helper module: integrated in `bootstrap-0.4.380`
-109. Constants: partially integrated for high-value coin defaults
-110. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-111. Run live validation sessions after each behavior-touching replacement
+109. Coin-target true runtime helper module: integrated in `bootstrap-0.4.381`
+110. Constants: partially integrated for high-value coin defaults
+111. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+112. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
