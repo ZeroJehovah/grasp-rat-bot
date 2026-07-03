@@ -6,7 +6,7 @@ import targetWhitelist from '../browser/runtime/target-whitelist.js';
 import exitSummary from '../browser/runtime/exit-summary.js';
 import preservedState from '../browser/runtime/browser-preserved-state.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
-import * as actionPriority from '../strategy/action-priority.js';
+import actionPriority from '../browser/runtime/action-priority.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 

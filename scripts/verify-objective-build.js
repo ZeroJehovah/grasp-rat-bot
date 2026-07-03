@@ -276,6 +276,7 @@ function main() {
   const exitSummaryRuntimeModule = readText('src/browser/runtime/exit-summary.js');
   const browserPreservedStateRuntimeModule = readText('src/browser/runtime/browser-preserved-state.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
+  const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -373,6 +374,7 @@ function main() {
     exitSummaryRuntimeModule,
     browserPreservedStateRuntimeModule,
     runtimeDefaultsRuntimeModule,
+    actionPriorityRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1195,6 +1197,9 @@ function main() {
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
     assert(actionArbitrationSourceModule.includes('function actionArbitrationSource() {'), 'action-arbitration source factory not found');
     assert(actionArbitrationSourceModule.includes('module.exports = {\n  actionArbitrationSource'), 'action-arbitration module export not found');
+    assert(actionArbitrationSourceModule.includes("require('./runtime/action-priority')"), 'action-arbitration source does not import action-priority through the browser runtime helper module');
+    assert(actionPriorityRuntimeModule.includes("require('../../strategy/action-priority')"), 'browser action-priority helper module does not reuse the strategy action-priority helpers');
+    assert(actionPriorityRuntimeModule.includes('actionPriorityBand') && actionPriorityRuntimeModule.includes('actionFocusSummary') && actionPriorityRuntimeModule.includes('getActionTargetKey'), 'browser action-priority helper module exports are incomplete');
     assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('String.raw`'), 'action-arbitration source factory does not return raw browser source');
     assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('function recordActionSwitchDiagnostics'), 'action-arbitration source factory does not include target switch diagnostics wrapper');
     assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('function applyFinalActionArbitration'), 'action-arbitration source factory does not include final action arbitration wrapper');
@@ -1240,7 +1245,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import exitSummary from '../browser/runtime/exit-summary.js'"), 'bundler spike does not import exit-summary helpers through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import preservedState from '../browser/runtime/browser-preserved-state.js'"), 'bundler spike does not import preserved-state helper through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import runtimeDefaults from '../browser/runtime/runtime-defaults.js'"), 'bundler spike does not import runtime-defaults helper through the browser runtime helper module');
-    assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
+    assert(bundlerSpikeEntrySource.includes("import actionPriority from '../browser/runtime/action-priority.js'"), 'bundler spike does not import action-priority through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
