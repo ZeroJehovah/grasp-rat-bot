@@ -12,16 +12,30 @@ const {
   coinIgnoreCleanupIntentCore
 } = require('./runtime/coin-progress');
 
-function coinProgressRuntimeSource() {
-  return String.raw`  ${coinFailureIgnoreCore.toString()}
-  ${staleCoinEscapeDirectionCore.toString()}
-  ${coinProgressIntentCore.toString()}
-  ${coinAttemptExpiredCore.toString()}
-  ${updateCoinAttemptCore.toString()}
-  ${updateCoinProgressRecordCore.toString()}
-  ${buildIgnoredCoinProgressCore.toString()}
-  ${buildIgnoredCoinPatrolActionCore.toString()}
-  ${coinIgnoreCleanupIntentCore.toString()}
+function coinProgressRuntimeInlineSource(helpers = {}) {
+  const {
+    coinFailureIgnoreCore,
+    staleCoinEscapeDirectionCore,
+    coinProgressIntentCore,
+    coinAttemptExpiredCore,
+    updateCoinAttemptCore,
+    updateCoinProgressRecordCore,
+    buildIgnoredCoinProgressCore,
+    buildIgnoredCoinPatrolActionCore,
+    coinIgnoreCleanupIntentCore
+  } = helpers;
+  const coinProgressHelperSource = [
+    coinFailureIgnoreCore,
+    staleCoinEscapeDirectionCore,
+    coinProgressIntentCore,
+    coinAttemptExpiredCore,
+    updateCoinAttemptCore,
+    updateCoinProgressRecordCore,
+    buildIgnoredCoinProgressCore,
+    buildIgnoredCoinPatrolActionCore,
+    coinIgnoreCleanupIntentCore
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
+  return String.raw`${coinProgressHelperSource}
 
   function coinProgressCoreOptions(extra = {}) {
     return {
@@ -141,4 +155,39 @@ function coinProgressRuntimeSource() {
 `;
 }
 
-module.exports = { coinProgressRuntimeSource };
+function bundledCoinProgressRuntimeSource() {
+  return `const {
+  coinFailureIgnoreCore,
+  staleCoinEscapeDirectionCore,
+  coinProgressIntentCore,
+  coinAttemptExpiredCore,
+  updateCoinAttemptCore,
+  updateCoinProgressRecordCore,
+  buildIgnoredCoinProgressCore,
+  buildIgnoredCoinPatrolActionCore,
+  coinIgnoreCleanupIntentCore
+} = require('./src/browser/runtime/coin-progress');
+
+${coinProgressRuntimeInlineSource()}`;
+}
+
+function coinProgressRuntimeSource(options = {}) {
+  if (options.bundledRuntime) return bundledCoinProgressRuntimeSource();
+  return coinProgressRuntimeInlineSource({
+    coinFailureIgnoreCore,
+    staleCoinEscapeDirectionCore,
+    coinProgressIntentCore,
+    coinAttemptExpiredCore,
+    updateCoinAttemptCore,
+    updateCoinProgressRecordCore,
+    buildIgnoredCoinProgressCore,
+    buildIgnoredCoinPatrolActionCore,
+    coinIgnoreCleanupIntentCore
+  });
+}
+
+module.exports = {
+  bundledCoinProgressRuntimeSource,
+  coinProgressRuntimeInlineSource,
+  coinProgressRuntimeSource
+};
