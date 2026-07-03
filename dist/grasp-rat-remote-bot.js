@@ -1,7 +1,7 @@
 (() => {
   // grasp-rat-remote-bot.generated.js
   (() => {
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.296" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.297" };
     const runtimeConfig = (() => {
       try {
         return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === "object" ? window.__graspRatBotRuntimeConfig : {};

@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const esbuild = require('esbuild');
-const { browserBotSource } = require('../src/browser/bot-source');
+const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source');
 
 const ROOT = path.resolve(__dirname, '..');
 const BUNDLER_INFO = Object.freeze({
@@ -32,12 +32,7 @@ function sha256Hex(text) {
 }
 
 function remoteSourceFor(options) {
-  return browserBotSource({
-    dryRun: false,
-    once: false,
-    statusEvery: options.statusEvery,
-    version: options.version
-  });
+  return remoteBrowserRuntimeSource(options);
 }
 
 function bundleRemoteSource(directSource) {

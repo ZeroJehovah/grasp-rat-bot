@@ -342,6 +342,18 @@ The first bundler spike proved the module/global-adapter path, then `bootstrap-0
 
 This switches the production build path without converting the large runtime slices into true browser ESM modules yet. Future extraction can still move selected browser/shared helpers toward real ESM ownership, but the release artifact is now produced by esbuild instead of the old raw source write.
 
+## 2026-07-03 Follow-up: Phase 2Y Browser Runtime Source Boundary
+
+`bootstrap-0.4.297` adds a small browser runtime source boundary ahead of the old source generator:
+
+- `src/browser/runtime-source.js` now owns runtime config normalization plus `browserRuntimeSource()` and `remoteBrowserRuntimeSource()` entrypoints.
+- `grasp-rat-bot.js` uses `browserRuntimeSource()` for both CDP injection and `--print-source`, so the CLI no longer imports `src/browser/bot-source.js` directly.
+- `scripts/remote-bot-bundle.js` uses `remoteBrowserRuntimeSource()` for the direct source fed to esbuild, so the production bundler no longer imports `src/browser/bot-source.js` directly.
+- `src/browser/bot-source.js` remains the internal legacy source generator for now; it is isolated behind the new boundary until later slices can replace generated source with true browser module ownership.
+- Static verification checks this boundary, the absence of direct `bot-source.js` imports from the CLI and production bundler, and the regenerated bundled dist.
+
+This is an equivalent build/source-boundary migration only. It does not change strategy behavior, but it creates a stable interface for replacing the current full-source generator with a real browser runtime entry in later steps.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -369,17 +381,19 @@ This switches the production build path without converting the large runtime sli
 22. Esbuild bundler spike plus spike page-global adapter: implemented after `bootstrap-0.4.295`
 23. Full generated remote runtime esbuild candidate: implemented after `bootstrap-0.4.295`
 24. Production esbuild remote build: integrated in `bootstrap-0.4.296`
-25. Constants: partially integrated for high-value coin defaults
-26. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-27. Run live validation sessions after each behavior-touching replacement
+25. Browser runtime source boundary: integrated in `bootstrap-0.4.297`
+26. Constants: partially integrated for high-value coin defaults
+27. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+28. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
-1. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
-2. Extend the spike page-global adapter to real native page functions before converting live runtime slices to true ESM ownership
-3. Profit/opportunity selection module
-4. Safety/avoidance module
-5. Movement execution module
-6. State management utilities
+1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
+2. Convert selected shared/browser helpers from CommonJS-source injection to true browser ESM modules
+3. Extend the spike page-global adapter to real native page functions before converting live runtime slices to true ESM ownership
+4. Profit/opportunity selection module
+5. Safety/avoidance module
+6. Movement execution module
+7. State management utilities
 
 ### Phase 4: Optimization
 1. Performance profiling
