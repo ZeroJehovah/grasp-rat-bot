@@ -5,11 +5,6 @@ const {
   combatLogExitSummaryFromDecision
 } = require('../shared/exit-summary');
 const {
-  safeStringify,
-  safeJsonClone,
-  sanitizeCombatLogIdPart
-} = require('../shared/runtime-utils');
-const {
   escapeHtml,
   formatDistance,
   formatDurationMs,
@@ -21,6 +16,10 @@ const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
 const { statusPanelSource } = require('./status-panel-source');
 const { arrayCountSource } = require('./array-count-source');
+const {
+  runtimeUtilityPreludeSource,
+  runtimeUtilityCloneSource
+} = require('./runtime-utils-source');
 const { combatLogSource } = require('./combat-log-source');
 const { tickSafetySource } = require('./tick-safety-source');
 const { importantLogSource } = require('./important-log-source');
@@ -138,18 +137,9 @@ function browserRuntimeAssemblySource(config) {
 
 `,
     () => statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay }),
-    `
-
-      ${safeStringify.toString()}
-`,
+    runtimeUtilityPreludeSource,
     arrayCountSource,
-    `
-
-      ${safeJsonClone.toString()}
-
-      ${sanitizeCombatLogIdPart.toString()}
-
-`,
+    runtimeUtilityCloneSource,
     () => combatLogSource({ combatLogExitSummaryFromDecision }),
     `
 `,
