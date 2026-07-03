@@ -265,7 +265,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-action-arbitration',
     `
 `],
-    ['coin-target-runtime', coinTargetRuntimeSource],
+    ['coin-target-runtime', () => coinTargetRuntimeSource(config)],
     ['separator-after-coin-target-runtime',
     `
 `],
