@@ -34,7 +34,8 @@ const {
   updateCoinAttemptCore,
   updateCoinProgressRecordCore,
   buildIgnoredCoinProgressCore,
-  buildIgnoredCoinPatrolActionCore
+  buildIgnoredCoinPatrolActionCore,
+  coinIgnoreCleanupIntentCore
 } = require('./coin-progress');
 const {
   buildCoinRouteFromAnchorCore,
@@ -757,6 +758,14 @@ function runStrategyModuleSelfTests() {
       && ignoredProgressAction.ignoredCoin.ignoreMs === 400
       && ignoredProgressAction.ignoredCoin.failureCount === 3
       && !Object.prototype.hasOwnProperty.call(ignoredProgressAction.ignoredCoin, 'ageMs')
+  });
+
+  results.push({
+    name: 'coin-progress-ignore-cleanup-intent',
+    passed: coinIgnoreCleanupIntentCore({ kind: 'coin', id: 12 }, { id: '12' }, '12').clearLastTarget
+      && coinIgnoreCleanupIntentCore({ kind: 'enemy', id: '12' }, { id: '12' }, '12').clearLastTarget === false
+      && coinIgnoreCleanupIntentCore({ kind: 'coin', id: '12' }, { id: '12' }, '12').clearCoinApproachLock
+      && coinIgnoreCleanupIntentCore({ kind: 'coin', id: '12' }, { id: 12 }, '12').clearCoinApproachLock === false
   });
 
   // Test coin route planning

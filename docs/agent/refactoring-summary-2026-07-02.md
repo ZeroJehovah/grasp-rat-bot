@@ -292,6 +292,17 @@ This is intended as an equivalent extraction of record construction and stale-st
 
 This is intended as an equivalent extraction of ignore-result object construction only; stale target cleanup and runtime state writes remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2U Ignored Coin Cleanup Intent
+
+`bootstrap-0.4.293` extracts ignored-coin cleanup decisions:
+
+- `src/strategy/coin-progress.js` now also owns ignored-coin cleanup intent for `lastTarget` and `coinApproachLock`.
+- The browser runtime uses a small `clearIgnoredCoinRuntimeState()` wrapper for the actual `bot` writes and still owns `clearOpportunityChoiceFor()`.
+- `src/strategy/self-test.js` now has 77 tests, including an ignored-cleanup case covering last-target string ID matching and the existing strict approach-lock ID comparison.
+- Static verification checks both the strategy source module and generated remote runtime for the cleanup intent core and runtime wrapper wiring.
+
+This is intended as an equivalent extraction of cleanup decisions only; all runtime writes remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -313,9 +324,10 @@ This is intended as an equivalent extraction of ignore-result object constructio
 16. Coin progress failure/escape helpers: integrated in `bootstrap-0.4.290`
 17. Coin progress state-transition helpers: integrated in `bootstrap-0.4.291`
 18. Coin progress ignored action helpers: integrated in `bootstrap-0.4.292`
-19. Constants: partially integrated for high-value coin defaults
-20. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-21. Run live validation sessions after each behavior-touching replacement
+19. Ignored coin cleanup intent: integrated in `bootstrap-0.4.293`
+20. Constants: partially integrated for high-value coin defaults
+21. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+22. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

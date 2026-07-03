@@ -207,6 +207,13 @@ function buildIgnoredCoinPatrolActionCore(action, id, distance, source, failure,
   };
 }
 
+function coinIgnoreCleanupIntentCore(lastTarget, coinApproachLock, id) {
+  return {
+    clearLastTarget: Boolean(lastTarget?.kind === 'coin' && String(lastTarget.id) === id),
+    clearCoinApproachLock: Boolean(coinApproachLock?.id === id)
+  };
+}
+
 module.exports = {
   coinFailureIgnoreCore,
   staleCoinEscapeDirectionCore,
@@ -215,5 +222,6 @@ module.exports = {
   updateCoinAttemptCore,
   updateCoinProgressRecordCore,
   buildIgnoredCoinProgressCore,
-  buildIgnoredCoinPatrolActionCore
+  buildIgnoredCoinPatrolActionCore,
+  coinIgnoreCleanupIntentCore
 };
