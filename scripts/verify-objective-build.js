@@ -288,6 +288,7 @@ function main() {
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
+  const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
@@ -310,6 +311,7 @@ function main() {
     statusPanelSourceModule,
     combatLogSourceModule,
     importantLogSourceModule,
+    combatHistorySourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
     pageNativeSnapshotSourceModule,
@@ -398,6 +400,7 @@ function main() {
     assert(botSourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
     assert(botSourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
     assert(botSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
+    assert(botSourceModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
@@ -430,6 +433,7 @@ function main() {
     assert(botSourceModule.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
     assert(botSourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
     assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
+    assert(botSourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
@@ -483,6 +487,14 @@ function main() {
     assert(importantLogSourceModule.includes('function importantLogSource() {'), 'important-log source factory not found');
     assert(importantLogSourceModule.includes('module.exports = {\n  importantLogSource'), 'important-log module export not found');
     assert(functionBody(importantLogSourceModule, 'importantLogSource').includes('String.raw`'), 'important-log source factory does not return raw browser source');
+    assert(combatHistorySourceModule.includes('function combatHistorySource() {'), 'combat-history source factory not found');
+    assert(combatHistorySourceModule.includes('module.exports = {\n  combatHistorySource'), 'combat-history module export not found');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('String.raw`'), 'combat-history source factory does not return raw browser source');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function rememberAttack'), 'combat-history source factory does not include attack history tracking');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function rememberCombatEngagement'), 'combat-history source factory does not include combat engagement tracking');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordKillHistoryItem'), 'combat-history source factory does not include kill history storage');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordDropMatchedKill'), 'combat-history source factory does not include drop matched kill attribution');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function updateKillHistory'), 'combat-history source factory does not include kill history update');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');

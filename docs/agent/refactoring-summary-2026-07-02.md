@@ -449,6 +449,17 @@ This completes the current network-quality diagnostic source split. It preserves
 
 This is a source-organization split only. It preserves the existing strategy module cores, target-switch diagnostic events, final action hold behavior, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AI Combat History Source Factory
+
+`bootstrap-0.4.307` extracts attack history, combat engagement state updates, kill history, and drop-matched kill attribution source generation into a dedicated browser source module:
+
+- `src/browser/combat-history-source.js` now owns the raw browser source for `rememberAttack()`, `rememberCombatEngagement()`, kill identity matching, chat kill parsing, live-victim checks, drop-matched kill attribution, and `updateKillHistory()`.
+- `src/browser/bot-source.js` imports and injects `${combatHistorySource()}` immediately after `${importantLogSource()}`.
+- Static verification checks the new source-factory shape plus attack history, combat engagement, kill history storage, drop-matched kill attribution, and kill-history update helpers.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves combat engagement bookkeeping, important kill logging, chat-confirmed kill safety checks, post-attack drop reward attribution, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -486,9 +497,10 @@ This is a source-organization split only. It preserves the existing strategy mod
 32. Network quality summary source factory: integrated in `bootstrap-0.4.304`
 33. Network quality sampler/ACK source factory: integrated in `bootstrap-0.4.305`
 34. Action arbitration source factory: integrated in `bootstrap-0.4.306`
-35. Constants: partially integrated for high-value coin defaults
-36. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-37. Run live validation sessions after each behavior-touching replacement
+35. Combat history source factory: integrated in `bootstrap-0.4.307`
+36. Constants: partially integrated for high-value coin defaults
+37. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+38. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
