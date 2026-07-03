@@ -270,6 +270,17 @@ This is intended as an equivalent extraction of small snapshot helpers only; sna
 
 This is intended as an equivalent extraction of small coin-progress helpers only; the coin-progress state machine and session/accounting side effects remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2S Coin Progress State Transitions
+
+`bootstrap-0.4.291` extends the coin progress extraction with pure state-transition helpers:
+
+- `src/strategy/coin-progress.js` now also owns coin-progress intent checks, attempt expiry checks, attempt record updates, stuck detection, and progress record initialization/improvement/stale checks.
+- The browser runtime still owns `bot.coinAttempts`, `bot.coinProgress`, stale target cleanup, failure-ignore state writes, escape action construction, and the larger `trackCoinProgress()` control flow.
+- `src/strategy/self-test.js` now has 74 tests, including four additional coin-progress state cases covering intent/expiry checks, attempt improvement metadata, close-stale detection, and progress initialization/improvement/stale transitions.
+- Static verification checks both the strategy source module and generated remote runtime for the additional coin-progress state cores and wrapper wiring.
+
+This is intended as an equivalent extraction of record construction and stale-state decisions only; Map writes, target cleanup, and patrol action construction remain in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -289,9 +300,10 @@ This is intended as an equivalent extraction of small coin-progress helpers only
 14. Incidental coin pickup detection: integrated in `bootstrap-0.4.288`
 15. Snapshot coin worth/reason helpers: integrated in `bootstrap-0.4.289`
 16. Coin progress failure/escape helpers: integrated in `bootstrap-0.4.290`
-17. Constants: partially integrated for high-value coin defaults
-18. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-19. Run live validation sessions after each behavior-touching replacement
+17. Coin progress state-transition helpers: integrated in `bootstrap-0.4.291`
+18. Constants: partially integrated for high-value coin defaults
+19. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+20. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

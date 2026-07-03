@@ -91,7 +91,11 @@ const {
 } = require('./src/strategy/coin-target');
 const {
   coinFailureIgnoreCore,
-  staleCoinEscapeDirectionCore
+  staleCoinEscapeDirectionCore,
+  coinProgressIntentCore,
+  coinAttemptExpiredCore,
+  updateCoinAttemptCore,
+  updateCoinProgressRecordCore
 } = require('./src/strategy/coin-progress');
 const {
   defaultDist,
@@ -11145,9 +11149,21 @@ ${importantLogSource()}
 
   ${coinFailureIgnoreCore.toString()}
   ${staleCoinEscapeDirectionCore.toString()}
+  ${coinProgressIntentCore.toString()}
+  ${coinAttemptExpiredCore.toString()}
+  ${updateCoinAttemptCore.toString()}
+  ${updateCoinProgressRecordCore.toString()}
 
   function coinProgressCoreOptions(extra = {}) {
     return {
+      coinIgnoreMs: cfg.coinIgnoreMs,
+      coinProgressMinGain: cfg.coinProgressMinGain,
+      coinNearStuckResetGain: cfg.coinNearStuckResetGain,
+      closeCoinStuckDistance: cfg.closeCoinStuckDistance,
+      nearCoinStuckDistance: cfg.nearCoinStuckDistance,
+      closeCoinStuckMs: cfg.closeCoinStuckMs,
+      nearCoinStuckMs: cfg.nearCoinStuckMs,
+      coinNoProgressMs: cfg.coinNoProgressMs,
       coinFailureDecayMs: cfg.coinFailureDecayMs,
       coinCloseFailureIgnoreMs: cfg.coinCloseFailureIgnoreMs,
       coinNearFailureIgnoreMs: cfg.coinNearFailureIgnoreMs,
@@ -11178,67 +11194,27 @@ ${importantLogSource()}
 
   function trackCoinProgress(action, self) {
     const t = now();
+    const options = coinProgressCoreOptions();
     for (const [id, attempt] of bot.coinAttempts.entries()) {
-      if (t - Number(attempt.lastSeenAt || attempt.startedAt || t) > cfg.coinIgnoreMs * 3) {
+      if (coinAttemptExpiredCore(attempt, t, options)) {
         bot.coinAttempts.delete(id);
       }
     }
 
-    const isCoinIntent = action
-      && (action.kind === 'coin' || action.kind === 'seek-coin' || (action.kind === 'patrol' && action.target?.id && String(action.reason || '').includes('coin')))
-      && action.target;
-    if (!isCoinIntent) {
+    if (!coinProgressIntentCore(action)) {
       bot.coinProgress = null;
       if (!bot.staleCoinEscape || t >= Number(bot.staleCoinEscape.until || 0)) bot.coinApproachLock = null;
       return action;
     }
 
-    const id = String(action.target.id);
-    const distance = Number(action.target.distance ?? Infinity);
-    const amount = Math.max(0, Number(action.target.amount || 0) || 0);
-    const targetX = Number(action.target.x);
-    const targetY = Number(action.target.y);
-    const attempt = bot.coinAttempts.get(id) || {
-      id,
-      startedAt: t,
-      lastImprovedAt: t,
-      bestDistance: distance,
-      lastDistance: distance,
-      amount,
-      x: Number.isFinite(targetX) ? targetX : null,
-      y: Number.isFinite(targetY) ? targetY : null,
-      closeStartedAt: distance <= cfg.closeCoinStuckDistance ? t : 0,
-      nearStartedAt: distance <= cfg.nearCoinStuckDistance ? t : 0
-    };
-    attempt.amount = amount || Number(attempt.amount || 0) || 0;
-    if (action.postAttackTarget || action.target?.postAttackTarget) {
-      attempt.postAttackTarget = action.postAttackTarget || action.target.postAttackTarget;
-    }
-    if (Number.isFinite(targetX)) attempt.x = targetX;
-    if (Number.isFinite(targetY)) attempt.y = targetY;
-    attempt.lastSeenAt = t;
-    const previousDistance = Number(attempt.lastDistance ?? distance);
-    const attemptImproved = distance + cfg.coinProgressMinGain < Number(attempt.bestDistance);
-    if (attemptImproved) {
-      attempt.bestDistance = distance;
-      attempt.lastImprovedAt = t;
-    }
-    const stillApproaching = distance + cfg.coinNearStuckResetGain < previousDistance;
-    attempt.lastDistance = distance;
-    if (distance <= cfg.closeCoinStuckDistance && !stillApproaching) {
-      if (!attempt.closeStartedAt) attempt.closeStartedAt = t;
-    } else {
-      attempt.closeStartedAt = 0;
-    }
-    if (distance <= cfg.nearCoinStuckDistance && !stillApproaching) {
-      if (!attempt.nearStartedAt) attempt.nearStartedAt = t;
-    } else {
-      attempt.nearStartedAt = 0;
-    }
+    const attemptResult = updateCoinAttemptCore(bot.coinAttempts.get(String(action.target.id)), action, t, options);
+    const id = attemptResult.id;
+    const distance = attemptResult.distance;
+    const attempt = attemptResult.attempt;
     bot.coinAttempts.set(id, attempt);
 
-    const closeStuck = attempt.closeStartedAt && t - attempt.closeStartedAt >= cfg.closeCoinStuckMs;
-    const nearStuck = attempt.nearStartedAt && t - attempt.nearStartedAt >= cfg.nearCoinStuckMs;
+    const closeStuck = attemptResult.closeStuck;
+    const nearStuck = attemptResult.nearStuck;
     if (closeStuck || nearStuck) {
       const failure = coinFailureIgnore(id, closeStuck ? 'close' : 'near', t);
       const ignoreUntil = failure.ignoreUntil;
@@ -11279,43 +11255,9 @@ ${importantLogSource()}
     }
 
     const previous = bot.coinProgress;
-    if (!previous || String(previous.id) !== id) {
-      bot.coinProgress = {
-        id,
-        startedAt: t,
-        lastImprovedAt: t,
-        bestDistance: distance,
-        lastDistance: distance,
-        amount: attempt.amount,
-        x: attempt.x,
-        y: attempt.y,
-        postAttackTarget: attempt.postAttackTarget || null
-      };
-      return action;
-    }
-    const improved = distance + cfg.coinProgressMinGain < Number(previous.bestDistance);
-    if (improved) {
-      bot.coinProgress = {
-        ...previous,
-        lastImprovedAt: t,
-        bestDistance: distance,
-        lastDistance: distance,
-        amount: attempt.amount,
-        x: attempt.x,
-        y: attempt.y,
-        postAttackTarget: attempt.postAttackTarget || previous.postAttackTarget || null
-      };
-      return action;
-    }
-    bot.coinProgress = {
-      ...previous,
-      lastDistance: distance,
-      amount: attempt.amount,
-      x: attempt.x,
-      y: attempt.y,
-      postAttackTarget: attempt.postAttackTarget || previous.postAttackTarget || null
-    };
-    if (t - Number(previous.lastImprovedAt || previous.startedAt || t) < cfg.coinNoProgressMs) {
+    const progressResult = updateCoinProgressRecordCore(previous, attempt, distance, t, options);
+    bot.coinProgress = progressResult.progress;
+    if (!progressResult.stale) {
       return action;
     }
 
