@@ -702,6 +702,17 @@ This is a source-organization split only. It preserves visible coin de-duplicati
 
 This is a source-organization split only. It preserves choice hold windows, oscillation locks, visible-missing cleanup, missing-held route metadata, stable opportunity selection, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BL Coin Progress Runtime Source Factory
+
+`bootstrap-0.4.339` extracts coin progress runtime source generation into a dedicated browser source module:
+
+- `src/browser/coin-progress-runtime-source.js` now owns the raw browser source for coin-progress strategy core inlining, runtime options, failure ignore state writes, stale-coin escape state writes, ignored-coin cleanup, and `trackCoinProgress()`.
+- `src/browser/bot-source.js` imports and injects `${coinProgressRuntimeSource()}` at the original boundary before action arbitration source generation, preserving generated runtime order before final action arbitration and coin target runtime helpers.
+- Static verification checks the new source-factory shape, injection point, coin-progress strategy import, core inlining, `trackCoinProgress()` wrapper, and retained runtime state-write anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves stale coin ignore/backoff, no-progress cleanup, approach-lock clearing, opportunity-choice clearing, stale-coin escape patrol actions, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -771,9 +782,10 @@ This is a source-organization split only. It preserves choice hold windows, osci
 64. Opportunity route source factory: integrated in `bootstrap-0.4.336`
 65. Opportunity candidate source factory: integrated in `bootstrap-0.4.337`
 66. Opportunity choice source factory: integrated in `bootstrap-0.4.338`
-67. Constants: partially integrated for high-value coin defaults
-68. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-69. Run live validation sessions after each behavior-touching replacement
+67. Coin progress runtime source factory: integrated in `bootstrap-0.4.339`
+68. Constants: partially integrated for high-value coin defaults
+69. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+70. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
