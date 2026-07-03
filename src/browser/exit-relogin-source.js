@@ -35,7 +35,7 @@ function bundledExitReloginDisplaySource() {
 `;
 }
 
-function exitReloginRemainderSource() {
+function exitReloginActorInlineSource() {
   return String.raw`
   function normalizeEnemyActor(actor) {
     if (!actor) return null;
@@ -70,7 +70,32 @@ function exitReloginRemainderSource() {
     if (n >= 2) return secondMs;
     return 0;
   }
+`;
+}
 
+function bundledExitReloginActorSource() {
+  return `	  const {
+	    normalizeEnemyActorCore,
+	    enemyActorFromLeaveDetailCore,
+	    enemyRepeatDelayMsForCountCore
+	  } = require('./src/browser/runtime/exit-relogin');
+
+	  function normalizeEnemyActor(actor) {
+	    return normalizeEnemyActorCore(actor);
+	  }
+
+	  function enemyActorFromLeaveDetail(detail) {
+	    return enemyActorFromLeaveDetailCore(detail, normalizeEnemyActor);
+	  }
+
+	  function enemyRepeatDelayMsForCount(count) {
+	    return enemyRepeatDelayMsForCountCore(count, cfg);
+	  }
+`;
+}
+
+function exitReloginRemainderSource() {
+  return String.raw`
   function readEnemyLeaveStreak(t = Date.now()) {
     let streak = null;
     try {
@@ -671,12 +696,17 @@ function exitReloginSource(options = {}) {
   const displaySource = options.bundledRuntime
     ? bundledExitReloginDisplaySource()
     : exitReloginDisplayInlineSource();
-  return displaySource + exitReloginRemainderSource();
+  const actorSource = options.bundledRuntime
+    ? bundledExitReloginActorSource()
+    : exitReloginActorInlineSource();
+  return displaySource + actorSource + exitReloginRemainderSource();
 }
 
 module.exports = {
   exitReloginDisplayInlineSource,
   bundledExitReloginDisplaySource,
+  exitReloginActorInlineSource,
+  bundledExitReloginActorSource,
   exitReloginRemainderSource,
   exitReloginSource
 };
