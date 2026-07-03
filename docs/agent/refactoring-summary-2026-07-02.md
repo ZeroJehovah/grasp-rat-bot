@@ -1352,9 +1352,10 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 111. Coin-route true runtime helper module: integrated in `bootstrap-0.4.383`
 112. Opportunity-choice true runtime helper module: integrated in `bootstrap-0.4.384`
 113. Opportunity-candidates true runtime helper module: integrated in `bootstrap-0.4.385`
-114. Constants: partially integrated for high-value coin defaults
-115. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-116. Run live validation sessions after each behavior-touching replacement
+114. Post-attack-drop true runtime helper module: integrated in `bootstrap-0.4.386`
+115. Constants: partially integrated for high-value coin defaults
+116. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+117. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

@@ -114,6 +114,7 @@ async function selfTest() {
   assert(source.includes('function coinRouteKey'), 'coin route helper was not bundled');
   assert(source.includes('function chooseStableOpportunityCore'), 'opportunity choice helper was not bundled');
   assert(source.includes('function buildOpportunityCandidatesCore'), 'opportunity candidate helper was not bundled');
+  assert(source.includes('function pickPostAttackDropCoinCore'), 'post-attack drop helper was not bundled');
   assert(source.includes('function arrayCount'), 'browser runtime helper was not bundled');
   new vm.Script(source, { filename: outFile });
   const status = runSpikeOutput(source, {
@@ -150,6 +151,8 @@ async function selfTest() {
   assert(status.opportunityCandidateCount === 2, 'spike did not execute opportunity candidate combiner helper');
   assert(status.opportunityCandidateCoinReason === 'candidate-coin', 'spike did not execute coin opportunity candidate helper');
   assert(status.opportunityBestCoinScore === 4, 'spike did not execute best coin opportunity score helper');
+  assert(status.postAttackVisibleCoinExists === true, 'spike did not execute post-attack visible coin helper');
+  assert(status.postAttackDropSelectedId === 'post-attack-coin', 'spike did not execute post-attack drop picker helper');
   assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
