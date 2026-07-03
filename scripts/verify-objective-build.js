@@ -318,6 +318,7 @@ function main() {
   const returnBlockSourceModule = readText('src/browser/return-block-source.js');
   const entityActivitySourceModule = readText('src/browser/entity-activity-source.js');
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
+  const exitMotionSourceModule = readText('src/browser/exit-motion-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
@@ -374,6 +375,7 @@ function main() {
     returnBlockSourceModule,
     entityActivitySourceModule,
     staminaRuntimeSourceModule,
+    exitMotionSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
@@ -482,6 +484,7 @@ function main() {
     assert(botSourceModule.includes("require('./return-block-source')"), 'return-block source module import not found');
     assert(botSourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
     assert(botSourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
+    assert(botSourceModule.includes("require('./exit-motion-source')"), 'exit-motion source module import not found');
     assert(botSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(botSourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
@@ -537,6 +540,7 @@ function main() {
     assert(botSourceModule.includes('${coinProgressRuntimeSource()}'), 'coin-progress runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
+    assert(botSourceModule.includes('${exitMotionSource()}'), 'exit-motion module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
@@ -869,6 +873,13 @@ function main() {
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staminaResetHoldUntil'), 'stamina-runtime source factory does not include reset hold helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function deferredStaminaExhaustionLeave'), 'stamina-runtime source factory does not include deferred leave helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staleOfflineStaminaHoldContradicted'), 'stamina-runtime source factory does not include stale offline contradiction helper');
+    assert(exitMotionSourceModule.includes('function exitMotionSource() {'), 'exit-motion source factory not found');
+    assert(exitMotionSourceModule.includes('module.exports = { exitMotionSource }'), 'exit-motion source module export not found');
+    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('String.raw`'), 'exit-motion source factory does not return raw browser source');
+    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function exitMotionStopLockRemainingMs'), 'exit-motion source factory does not include motion stop lock helper');
+    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function postExitDecisionWithoutTarget'), 'exit-motion source factory does not include post-exit decision helper');
+    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function clearPostExitTargetState'), 'exit-motion source factory does not include post-exit target cleanup helper');
+    assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('removeTargetOverlay()'), 'exit-motion source factory does not clear target overlay');
     assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
     assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');
