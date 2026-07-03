@@ -14,6 +14,7 @@ import coinMotion from '../browser/runtime/coin-motion.js';
 import coinTarget from '../browser/runtime/coin-target.js';
 import coinProgress from '../browser/runtime/coin-progress.js';
 import coinRoute from '../browser/runtime/coin-route.js';
+import opportunityChoice from '../browser/runtime/opportunity-choice.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -118,6 +119,30 @@ function helperStatus(config = {}) {
     firstDistance: 123.2,
     kind: 'short'
   });
+  const opportunityChoiceResult = opportunityChoice.chooseStableOpportunityCore([
+    { type: 'coin', id: 'choice-held', score: 100, priorityTier: 1, distance: 100, amount: 10, x: 10, y: 20 },
+    { type: 'enemy', id: 'choice-enemy', score: 120, priorityTier: 1, distance: 80 }
+  ], {
+    key: 'coin:choice-held',
+    type: 'coin',
+    id: 'choice-held',
+    amount: 10,
+    x: 10,
+    y: 20,
+    until: 2000
+  }, null, {
+    nowMs: 1000,
+    switchMargin: 50,
+    switchRelativeMargin: 0,
+    highValueCoinPriorityAmount: 10,
+    sameCoinRadius: 50
+  });
+  const opportunityRemembered = opportunityChoice.rememberOpportunityChoiceCore(
+    opportunityChoiceResult.chosen,
+    { kind: 'coin', reason: 'choice-spike' },
+    null,
+    { nowMs: 1000, switchHoldMs: 500 }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -142,6 +167,9 @@ function helperStatus(config = {}) {
     coinRouteKey,
     coinRouteLegCount: coinRouteMeta.legCount,
     coinRouteFirstDistance: coinRouteMeta.firstDistance,
+    opportunityChoiceKey: opportunityChoice.opportunityKey(opportunityChoiceResult.chosen),
+    opportunityChoiceHeld: opportunityChoiceResult.chosen?.held === true,
+    opportunityChoiceHoldRemainingMs: opportunityRemembered.action?.opportunityChoice?.holdRemainingMs,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

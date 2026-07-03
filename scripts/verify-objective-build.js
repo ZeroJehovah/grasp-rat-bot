@@ -284,6 +284,7 @@ function main() {
   const coinTargetRuntimeModule = readText('src/browser/runtime/coin-target.js');
   const coinProgressRuntimeModule = readText('src/browser/runtime/coin-progress.js');
   const coinRouteRuntimeModule = readText('src/browser/runtime/coin-route.js');
+  const opportunityChoiceRuntimeModule = readText('src/browser/runtime/opportunity-choice.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -389,6 +390,7 @@ function main() {
     coinTargetRuntimeModule,
     coinProgressRuntimeModule,
     coinRouteRuntimeModule,
+    opportunityChoiceRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -2973,7 +2975,13 @@ function main() {
     assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
     assert(strategyOpportunityChoiceSource.includes('function rememberOpportunityChoiceCore'), 'strategy opportunity choice persistence core not found');
     assert(strategyOpportunityChoiceSource.includes('function buildMissingHeldOpportunityCore'), 'strategy missing-held opportunity core not found');
-    assert(opportunityChoiceSourceModule.includes("require('../strategy/opportunity-choice')"), 'opportunity-choice source does not import opportunity choice strategy module');
+    assert(opportunityChoiceSourceModule.includes("require('./runtime/opportunity-choice')"), 'opportunity-choice source does not import opportunity choice through browser runtime adapter');
+    assert(!opportunityChoiceSourceModule.includes("require('../strategy/opportunity-choice')"), 'opportunity-choice source still imports opportunity choice directly from strategy');
+    assert(opportunityChoiceRuntimeModule.includes("require('../../strategy/opportunity-choice')"), 'opportunity-choice runtime adapter does not reuse strategy module core');
+    assert(opportunityChoiceRuntimeModule.includes('chooseStableOpportunityCore') && opportunityChoiceRuntimeModule.includes('rememberOpportunityChoiceCore'), 'opportunity-choice runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-choice.js'"), 'bundler spike does not import opportunity choice runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('opportunityChoice.chooseStableOpportunityCore('), 'bundler spike does not execute opportunity choice stable helper');
+    assert(bundlerSpikeBuildSource.includes("status.opportunityChoiceKey === 'coin:choice-held'"), 'bundler spike self-test does not assert opportunity choice execution');
     assert(sourceRuntimeText.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
     assert(sourceRuntimeText.includes('rememberOpportunityChoiceCore.toString()'), 'source bot does not inject opportunity choice persistence core');
     assert(sourceRuntimeText.includes('buildMissingHeldOpportunityCore.toString()'), 'source bot does not inject missing-held opportunity core');
