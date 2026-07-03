@@ -286,11 +286,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.293` extends `coin-progress.js`, making ignored-coin cleanup intent authoritative in the strategy module while preserving the browser wrapper's ownership of `bot` writes and `clearOpportunityChoiceFor()`.
 
+`bootstrap-0.4.294` extends `coin-route.js`, making coin route action metadata construction authoritative in the strategy module while preserving the browser wrapper's ownership of coin action construction, movement direction, stamina cost, score, and config-dependent action kind.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner/action metadata, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 

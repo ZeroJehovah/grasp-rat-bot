@@ -114,13 +114,14 @@ This module is authoritative for coin failure ignore/backoff calculation and sta
 #### `coin-route.js`
 Builds native visible coin routes and route-switch guards:
 - Route key and route metadata helpers
+- Route action metadata construction
 - Route leg stamina and safety core functions
 - Anchor-based route construction
 - Closer-first and held-single-coin guards
 - Held route switch hysteresis
 - Bounded route candidate selection
 
-This module is authoritative for route planning core logic as of `bootstrap-0.4.278`; the browser runtime wrapper still owns config/state access, visible coin filtering, stamina affordability, threat blocking, and held opportunity choice lookup.
+This module is authoritative for route planning core logic as of `bootstrap-0.4.278` and route action metadata construction as of `bootstrap-0.4.294`; the browser runtime wrapper still owns config/state access, visible coin filtering, stamina affordability, threat blocking, held opportunity choice lookup, and action construction.
 
 ### Combat System
 
@@ -226,14 +227,14 @@ Automated test suite:
 - Coin motion direction/pulse/metadata (9 tests)
 - Coin target identity/matching/incidental pickup/snapshot helpers (12 tests)
 - Coin progress failure/escape/state-transition/ignored-action/cleanup helpers (11 tests)
-- Coin route planning (3 tests)
+- Coin route planning/action metadata (4 tests)
 - Opportunity choice stability/persistence/missing-held (10 tests)
 - Opportunity candidate construction (5 tests)
 - Post-attack drop coin/wait selection (6 tests)
 - Stamina budget summaries/selectors (4 tests)
 - Constants validation (2 tests)
 - ROI calculations (2 tests)
-- **Total: 77 tests, all passing**
+- **Total: 78 tests, all passing**
 
 ## Usage Example
 

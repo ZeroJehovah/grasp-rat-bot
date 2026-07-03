@@ -303,6 +303,17 @@ This is intended as an equivalent extraction of ignore-result object constructio
 
 This is intended as an equivalent extraction of cleanup decisions only; all runtime writes remain in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2V Coin Route Action Metadata
+
+`bootstrap-0.4.294` extracts route metadata construction used by coin actions:
+
+- `src/strategy/coin-route.js` now owns the pure `coinRouteActionMetaCore()` helper for route metadata rounding/defaulting.
+- `buildCoinAction()` still owns action construction, movement direction, stamina cost, score, and config-dependent action kind.
+- `src/strategy/self-test.js` now has 78 tests, including a route action metadata case covering rounding, point preservation, fallback first distance, and null-route behavior.
+- Static verification checks both the strategy source module and generated remote runtime for route action metadata helper wiring.
+
+This is intended as an equivalent extraction of route metadata object construction only; the coin action surface remains in `grasp-rat-bot.js`.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -325,9 +336,10 @@ This is intended as an equivalent extraction of cleanup decisions only; all runt
 17. Coin progress state-transition helpers: integrated in `bootstrap-0.4.291`
 18. Coin progress ignored action helpers: integrated in `bootstrap-0.4.292`
 19. Ignored coin cleanup intent: integrated in `bootstrap-0.4.293`
-20. Constants: partially integrated for high-value coin defaults
-21. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-22. Run live validation sessions after each behavior-touching replacement
+20. Coin route action metadata: integrated in `bootstrap-0.4.294`
+21. Constants: partially integrated for high-value coin defaults
+22. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+23. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module

@@ -109,6 +109,7 @@ const {
   coinRoutePointLimitCore,
   coinRouteSummaryCore,
   coinRoutePoints,
+  coinRouteActionMetaCore,
   buildCoinRouteFromAnchorCore,
   coinRouteSkipsCloserFirstCoinCore,
   coinRouteSkipsHeldSingleCoinCore,
@@ -10513,10 +10514,11 @@ ${importantLogSource()}
 	  ${coinRouteIdsFrom.toString()}
 	  ${coinRouteLegStaminaCostCore.toString()}
 	  ${coinRouteLegClearCore.toString()}
-	  ${coinRoutePointLimitCore.toString()}
-	  ${coinRouteSummaryCore.toString()}
-	  ${coinRoutePoints.toString()}
-	  ${buildCoinRouteFromAnchorCore.toString()}
+			  ${coinRoutePointLimitCore.toString()}
+			  ${coinRouteSummaryCore.toString()}
+			  ${coinRoutePoints.toString()}
+			  ${coinRouteActionMetaCore.toString()}
+			  ${buildCoinRouteFromAnchorCore.toString()}
 	  ${coinRouteSkipsCloserFirstCoinCore.toString()}
 	  ${coinRouteSkipsHeldSingleCoinCore.toString()}
 	  ${coinRouteMatchesHeldChoiceCore.toString()}
@@ -10813,17 +10815,7 @@ ${importantLogSource()}
   function buildCoinAction(self, coin, reason, kind = null) {
     const dir = coinDirectionTo(self, coin);
     const staminaCost = opportunityCoinStaminaCost(coin);
-    const route = coin?.coinRoute || null;
-    const routeMeta = route ? {
-      ids: route.ids,
-      points: Array.isArray(route.points) ? route.points : null,
-      value: Number(route.value || 0),
-      staminaCost: Math.round(Number(route.staminaCost || 0)),
-      legCount: Number(route.legCount || 0),
-      totalDistance: Math.round(Number(route.totalDistance || 0)),
-      firstDistance: Math.round(Number(route.firstDistance || dir.distance || 0)),
-      kind: route.kind || ''
-    } : null;
+    const routeMeta = coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance);
     return {
       kind: kind || (coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'),
       reason,

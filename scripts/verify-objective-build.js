@@ -1985,10 +1985,14 @@ function main() {
     assert(strategyCoinRouteSource.includes('function coinRouteLegClearCore'), 'strategy coin route safety core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsCloserFirstCoinCore'), 'strategy coin route closer-first core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsHeldSingleCoinCore'), 'strategy coin route held single-coin core not found');
+    assert(strategyCoinRouteSource.includes('function coinRouteActionMetaCore'), 'strategy coin route action metadata core not found');
     assert(sourceBot.includes("require('./src/strategy/coin-route')"), 'source bot does not import coin route strategy module');
     assert(sourceBot.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
+    assert(sourceBot.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
+    assert(sourceBot.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
     assert(sourceBot.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
     assert(distSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
+    assert(distSource.includes('function coinRouteActionMetaCore'), 'generated runtime does not inline coin route action metadata core');
     assert(distSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
   });
 

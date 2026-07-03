@@ -1,6 +1,6 @@
 
 (() => {
-		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.293"};
+		  const baseConfig = {"dryRun":false,"once":false,"statusEvery":30000,"version":"bootstrap-0.4.294"};
 		  const runtimeConfig = (() => {
 		    try {
 		      return window.__graspRatBotRuntimeConfig && typeof window.__graspRatBotRuntimeConfig === 'object'
@@ -18276,7 +18276,7 @@ function hpDisplay(value) {
   }
   return true;
 }
-	  function coinRoutePointLimitCore(anchor, candidates, options = {}) {
+			  function coinRoutePointLimitCore(anchor, candidates, options = {}) {
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
   const radius = Math.max(0, Number(options.clusterRadius || 0));
   const clusterCount = (candidates || []).filter(coin => dist(anchor, coin) <= radius).length;
@@ -18284,7 +18284,7 @@ function hpDisplay(value) {
   if (clusterCount >= 3) return Math.max(2, Number(options.maxPointsMid || 4));
   return Math.max(3, Number(options.maxPointsSparse || 2));
 }
-	  function coinRouteSummaryCore(route, self, options = {}) {
+			  function coinRouteSummaryCore(route, self, options = {}) {
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
   const moveStaminaCost = typeof options.moveStaminaCost === 'function' ? options.moveStaminaCost : distance => Math.max(0, Number(distance || 0));
   let totalValue = 0;
@@ -18301,7 +18301,7 @@ function hpDisplay(value) {
   }
   return { totalValue, totalStaminaCost, totalDistance };
 }
-	  function coinRoutePoints(route) {
+			  function coinRoutePoints(route) {
   return (route || [])
     .map((coin, index) => ({
       id: coinRouteKey(coin),
@@ -18312,7 +18312,19 @@ function hpDisplay(value) {
     }))
     .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
 }
-	  function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, options = {}) {
+			  function coinRouteActionMetaCore(route, fallbackFirstDistance = 0) {
+  return route ? {
+    ids: route.ids,
+    points: Array.isArray(route.points) ? route.points : null,
+    value: Number(route.value || 0),
+    staminaCost: Math.round(Number(route.staminaCost || 0)),
+    legCount: Number(route.legCount || 0),
+    totalDistance: Math.round(Number(route.totalDistance || 0)),
+    firstDistance: Math.round(Number(route.firstDistance || fallbackFirstDistance || 0)),
+    kind: route.kind || ''
+  } : null;
+}
+			  function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, options = {}) {
   if (!self || !anchor) return null;
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
   const valueScore = typeof options.valueScore === 'function' ? options.valueScore : (value, cost) => cost > 0 ? value / cost : Infinity;
@@ -18932,17 +18944,7 @@ function hpDisplay(value) {
   function buildCoinAction(self, coin, reason, kind = null) {
     const dir = coinDirectionTo(self, coin);
     const staminaCost = opportunityCoinStaminaCost(coin);
-    const route = coin?.coinRoute || null;
-    const routeMeta = route ? {
-      ids: route.ids,
-      points: Array.isArray(route.points) ? route.points : null,
-      value: Number(route.value || 0),
-      staminaCost: Math.round(Number(route.staminaCost || 0)),
-      legCount: Number(route.legCount || 0),
-      totalDistance: Math.round(Number(route.totalDistance || 0)),
-      firstDistance: Math.round(Number(route.firstDistance || dir.distance || 0)),
-      kind: route.kind || ''
-    } : null;
+    const routeMeta = coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance);
     return {
       kind: kind || (coin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'),
       reason,
