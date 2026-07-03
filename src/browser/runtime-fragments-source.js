@@ -78,8 +78,15 @@ function runtimeFragment(name, source) {
   return { name, source };
 }
 
-function browserRuntimeFragments(config) {
-  const fragments = [
+function materializeRuntimeFragments(entries) {
+  if (!Array.isArray(entries)) {
+    throw new TypeError('runtime fragment entries must be an array');
+  }
+  return entries.map(([name, source]) => runtimeFragment(name, source));
+}
+
+function browserRuntimeFragmentEntries(config) {
+  return [
     ['runtime-iife-open',
     `
 (() => {`],
@@ -278,11 +285,16 @@ function browserRuntimeFragments(config) {
 	})()
 `
     ]
-  ].map(([name, source]) => runtimeFragment(name, source));
-  return fragments;
+  ];
+}
+
+function browserRuntimeFragments(config) {
+  return materializeRuntimeFragments(browserRuntimeFragmentEntries(config));
 }
 
 module.exports = {
   runtimeFragment,
+  materializeRuntimeFragments,
+  browserRuntimeFragmentEntries,
   browserRuntimeFragments
 };
