@@ -316,6 +316,7 @@ function main() {
   const chooseActionSourceModule = readText('src/browser/choose-action-source.js');
   const tickSourceModule = readText('src/browser/tick-source.js');
   const startupSourceModule = readText('src/browser/startup-source.js');
+  const botObjectSourceModule = readText('src/browser/bot-object-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
@@ -387,6 +388,7 @@ function main() {
     chooseActionSourceModule,
     tickSourceModule,
     startupSourceModule,
+    botObjectSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
@@ -508,6 +510,7 @@ function main() {
     assert(botSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
     assert(botSourceModule.includes("require('./tick-source')"), 'tick source module import not found');
     assert(botSourceModule.includes("require('./startup-source')"), 'startup source module import not found');
+    assert(botSourceModule.includes("require('./bot-object-source')"), 'bot-object source module import not found');
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
@@ -595,6 +598,7 @@ function main() {
     assert(botSourceModule.includes('${chooseActionSource()}'), 'choose-action module is not injected into browser runtime');
     assert(botSourceModule.includes('${tickSource()}'), 'tick module is not injected into browser runtime');
     assert(botSourceModule.includes('${startupSource()}'), 'startup module is not injected into browser runtime');
+    assert(botSourceModule.includes('${botObjectSource()}'), 'bot-object module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
@@ -889,6 +893,19 @@ function main() {
     assert(functionBody(startupSourceModule, 'startupSource').includes('startTargetWhitelistPolling()'), 'startup source factory does not preserve target whitelist polling');
     assert(functionBody(startupSourceModule, 'startupSource').includes("tick('startup')"), 'startup source factory does not preserve startup tick');
     assert(functionBody(startupSourceModule, 'startupSource').includes("runTickSafely('timer')"), 'startup source factory does not preserve timer tick safety');
+    assert(botObjectSourceModule.includes('function botObjectSource() {'), 'bot-object source factory not found');
+    assert(botObjectSourceModule.includes('module.exports = { botObjectSource }'), 'bot-object source module export not found');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('String.raw`'), 'bot-object source factory does not return raw browser source');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('const bot = {'), 'bot-object source factory does not include bot object');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('pendingExit: initialPendingExitState'), 'bot-object source factory does not preserve pending exit initialization');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('combatLogging: {'), 'bot-object source factory does not preserve combat logging state');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('importantLogging: {'), 'bot-object source factory does not preserve important logging state');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('postLoginZoom: {'), 'bot-object source factory does not preserve post-login zoom state');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("stop(reason = 'manual')"), 'bot-object source factory does not preserve stop method');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("setPaused(paused, reason = 'external')"), 'bot-object source factory does not preserve pause method');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('status()'), 'bot-object source factory does not preserve status method');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('summarizeNetworkQuality()'), 'bot-object source factory does not preserve network quality status');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('summarizePendingExit(this.pendingExit)'), 'bot-object source factory does not preserve pending exit status');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
