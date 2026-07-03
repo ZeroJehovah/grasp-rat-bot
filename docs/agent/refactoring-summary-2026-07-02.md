@@ -592,6 +592,17 @@ This is a source-organization split only. It preserves active threat coin blocki
 
 This is a source-organization split only. It preserves high-value coin priority behavior, low-value active combat threat evidence rules, proactive active-combat stamina gating, incoming-bullet defensive target selection, engaged target grace handling, retreat-ignore cleanup, and opportunistic AFK shot metadata.
 
+## 2026-07-03 Follow-up: Phase 2BB Combat Movement Source Factory
+
+`bootstrap-0.4.326` extracts combat movement, bullet-pressure, spacing, and dodge action source generation into a dedicated browser source module:
+
+- `src/browser/combat-movement-source.js` now owns the raw browser source for combat movement velocity conversion, incoming bullet threat classification, threat-field scoring, strafe locking, tangent bullet dodge movement, spacing vectors, low-HP/pressure disadvantage states, close/reengage/finish-pressure movement states, passive-runner handling, move merging, pressure threat construction, and out-of-range dodge action construction.
+- `src/browser/bot-source.js` imports and injects `${combatMovementSource()}` immediately after `${targetSelectionSource()}`, preserving the generated runtime order before combat aim helpers.
+- Static verification checks the new source-factory shape, injection point, movement velocity helper, bullet threat classifier, threat-field scorer, tangent dodge helper, spacing vector helper, pressure disadvantage helper, out-of-range reengage helper, passive runner helper, and out-of-range dodge action anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves incoming-bullet dodge scoring, combat strafe lock/carry behavior, safe-close override checks, HP/pressure stop-loss state construction, passive-runner close behavior, out-of-range dodge action metadata, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -648,6 +659,7 @@ This is a source-organization split only. It preserves high-value coin priority 
 51. Classify source factory: integrated in `bootstrap-0.4.323`
 52. Coin safety source factory: integrated in `bootstrap-0.4.324`
 53. Target selection source factory: integrated in `bootstrap-0.4.325`
+54. Combat movement source factory: integrated in `bootstrap-0.4.326`
 51. Constants: partially integrated for high-value coin defaults
 52. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 53. Run live validation sessions after each behavior-touching replacement
