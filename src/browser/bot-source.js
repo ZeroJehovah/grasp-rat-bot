@@ -69,6 +69,7 @@ const { coinMotionRuntimeSource } = require('./coin-motion-runtime-source');
 const { returnBlockSource } = require('./return-block-source');
 const { entityActivitySource } = require('./entity-activity-source');
 const { staminaRuntimeSource } = require('./stamina-runtime-source');
+const { attackWorthSource } = require('./attack-worth-source');
 const { exitMotionSource } = require('./exit-motion-source');
 const { persistentLastSelfSource } = require('./persistent-last-self-source');
 const { persistentExitSource } = require('./persistent-exit-source');
@@ -709,14 +710,7 @@ ${runtimeDiagnosticsSource()}
 ${entityActivitySource()}
 ${targetWhitelistSource()}
 ${staminaRuntimeSource()}
-  const attackWorthTaking = (self, target) => {
-    if (isWhitelistedTarget(target)) return false;
-    const targetDrop = dropValue(target);
-    if (isAfkProfitTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
-    const ownDrop = dropValue(self);
-    return targetDrop >= cfg.attackMinDrop
-      && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
-  };
+${attackWorthSource()}
 ${exitMotionSource()}
 
 ${targetOverlaySource()}

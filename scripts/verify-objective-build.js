@@ -319,6 +319,7 @@ function main() {
   const returnBlockSourceModule = readText('src/browser/return-block-source.js');
   const entityActivitySourceModule = readText('src/browser/entity-activity-source.js');
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
+  const attackWorthSourceModule = readText('src/browser/attack-worth-source.js');
   const exitMotionSourceModule = readText('src/browser/exit-motion-source.js');
   const persistentLastSelfSourceModule = readText('src/browser/persistent-last-self-source.js');
   const persistentExitSourceModule = readText('src/browser/persistent-exit-source.js');
@@ -385,6 +386,7 @@ function main() {
     returnBlockSourceModule,
     entityActivitySourceModule,
     staminaRuntimeSourceModule,
+    attackWorthSourceModule,
     exitMotionSourceModule,
     persistentLastSelfSourceModule,
     persistentExitSourceModule,
@@ -561,6 +563,7 @@ function main() {
     assert(botSourceModule.includes('${coinProgressRuntimeSource()}'), 'coin-progress runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
+    assert(botSourceModule.includes('${attackWorthSource()}'), 'attack-worth module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitMotionSource()}'), 'exit-motion module is not injected into browser runtime');
     assert(botSourceModule.includes('${persistentLastSelfSource()}'), 'persistent-last-self module is not injected into browser runtime');
     assert(botSourceModule.includes('${persistentExitSource()}'), 'persistent-exit module is not injected into browser runtime');
@@ -902,6 +905,13 @@ function main() {
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staminaResetHoldUntil'), 'stamina-runtime source factory does not include reset hold helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function deferredStaminaExhaustionLeave'), 'stamina-runtime source factory does not include deferred leave helper');
     assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staleOfflineStaminaHoldContradicted'), 'stamina-runtime source factory does not include stale offline contradiction helper');
+    assert(attackWorthSourceModule.includes('function attackWorthSource() {'), 'attack-worth source factory not found');
+    assert(attackWorthSourceModule.includes('module.exports = { attackWorthSource }'), 'attack-worth source module export not found');
+    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('String.raw`'), 'attack-worth source factory does not return raw browser source');
+    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('const attackWorthTaking = (self, target) =>'), 'attack-worth source factory does not include attack worth wrapper');
+    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('isWhitelistedTarget(target)'), 'attack-worth source factory does not preserve whitelist guard');
+    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('isAfkProfitTarget(target)'), 'attack-worth source factory does not preserve AFK profit target handling');
+    assert(functionBody(attackWorthSourceModule, 'attackWorthSource').includes('cfg.attackMinRewardRatio'), 'attack-worth source factory does not preserve reward ratio guard');
     assert(exitMotionSourceModule.includes('function exitMotionSource() {'), 'exit-motion source factory not found');
     assert(exitMotionSourceModule.includes('module.exports = { exitMotionSource }'), 'exit-motion source module export not found');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('String.raw`'), 'exit-motion source factory does not return raw browser source');
