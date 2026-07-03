@@ -1390,6 +1390,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 149. Bundler-owned `restored-runtime-state` helper binding for remote builds: integrated in `bootstrap-0.4.421`
 150. Bundler-owned `runtime-diagnostics` helper binding for remote builds: integrated in `bootstrap-0.4.422`
 151. Bundler-owned `exit-relogin` display helper binding for remote builds: integrated in `bootstrap-0.4.423`
+152. Bundler-owned `exit-relogin` actor/repeat-delay helper binding for remote builds: integrated in `bootstrap-0.4.424`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

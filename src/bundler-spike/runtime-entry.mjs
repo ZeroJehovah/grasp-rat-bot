@@ -509,6 +509,16 @@ function helperStatus(config = {}) {
     summary: '离线退出',
     reloginDelayMs: 1500
   }, (base, detail) => exitRelogin.leaveWaitDisplayCore(base, detail, displayFormat.formatDurationMs));
+  const exitReloginActor = exitRelogin.normalizeEnemyActorCore({ targetId: 42, targetName: '追击者' });
+  const exitReloginFallbackActor = exitRelogin.enemyActorFromLeaveDetailCore({
+    injury: {
+      nearestHuman: { name: 'fallback-enemy' }
+    }
+  }, exitRelogin.normalizeEnemyActorCore);
+  const exitReloginRepeatDelay = exitRelogin.enemyRepeatDelayMsForCountCore(3, {
+    enemyReloginRepeatSecondMaxMs: 2000,
+    enemyReloginRepeatThirdMaxMs: 5000
+  });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -594,6 +604,10 @@ function helperStatus(config = {}) {
     exitReloginDisplay,
     exitReloginSummary: exitReloginDetail.summary,
     exitReloginDisplayReason: exitReloginDetail.displayReason,
+    exitReloginActorKey: exitReloginActor?.key,
+    exitReloginActorLabel: exitReloginActor?.label,
+    exitReloginFallbackActorKey: exitReloginFallbackActor?.key,
+    exitReloginRepeatDelay,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
