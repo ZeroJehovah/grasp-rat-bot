@@ -319,6 +319,7 @@ function main() {
   const entityActivitySourceModule = readText('src/browser/entity-activity-source.js');
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
   const exitMotionSourceModule = readText('src/browser/exit-motion-source.js');
+  const persistentLastSelfSourceModule = readText('src/browser/persistent-last-self-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
@@ -376,6 +377,7 @@ function main() {
     entityActivitySourceModule,
     staminaRuntimeSourceModule,
     exitMotionSourceModule,
+    persistentLastSelfSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
@@ -485,6 +487,7 @@ function main() {
     assert(botSourceModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
     assert(botSourceModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
     assert(botSourceModule.includes("require('./exit-motion-source')"), 'exit-motion source module import not found');
+    assert(botSourceModule.includes("require('./persistent-last-self-source')"), 'persistent-last-self source module import not found');
     assert(botSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(botSourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
@@ -541,6 +544,7 @@ function main() {
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitMotionSource()}'), 'exit-motion module is not injected into browser runtime');
+    assert(botSourceModule.includes('${persistentLastSelfSource()}'), 'persistent-last-self module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
@@ -880,6 +884,12 @@ function main() {
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function postExitDecisionWithoutTarget'), 'exit-motion source factory does not include post-exit decision helper');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('function clearPostExitTargetState'), 'exit-motion source factory does not include post-exit target cleanup helper');
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('removeTargetOverlay()'), 'exit-motion source factory does not clear target overlay');
+    assert(persistentLastSelfSourceModule.includes('function persistentLastSelfSource() {'), 'persistent-last-self source factory not found');
+    assert(persistentLastSelfSourceModule.includes('module.exports = { persistentLastSelfSource }'), 'persistent-last-self source module export not found');
+    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('String.raw`'), 'persistent-last-self source factory does not return raw browser source');
+    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('function readPersistentLastSelfState'), 'persistent-last-self source factory does not include read helper');
+    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('function writePersistentLastSelfState'), 'persistent-last-self source factory does not include write helper');
+    assert(functionBody(persistentLastSelfSourceModule, 'persistentLastSelfSource').includes('LAST_SELF_STATE_KEY'), 'persistent-last-self source factory does not use last-self storage key');
     assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
     assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');
