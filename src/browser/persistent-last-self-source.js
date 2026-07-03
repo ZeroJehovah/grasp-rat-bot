@@ -1,6 +1,6 @@
 'use strict';
 
-function persistentLastSelfSource() {
+function persistentLastSelfInlineSource() {
   return String.raw`
 	  function readPersistentLastSelfState(t = Date.now()) {
 	    let state = null;
@@ -28,4 +28,28 @@ function persistentLastSelfSource() {
 	  }`;
 }
 
-module.exports = { persistentLastSelfSource };
+function bundledPersistentLastSelfSource() {
+  return `const {
+	    readPersistentLastSelfStateCore,
+	    writePersistentLastSelfStateCore
+	  } = require('./src/browser/runtime/persistent-last-self');
+
+	  function readPersistentLastSelfState(t = Date.now()) {
+	    return readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t);
+	  }
+
+	  function writePersistentLastSelfState(selfSummary, t = Date.now()) {
+	    writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t);
+	  }`;
+}
+
+function persistentLastSelfSource(options = {}) {
+  if (options.bundledRuntime) return bundledPersistentLastSelfSource();
+  return persistentLastSelfInlineSource();
+}
+
+module.exports = {
+  persistentLastSelfInlineSource,
+  bundledPersistentLastSelfSource,
+  persistentLastSelfSource
+};
