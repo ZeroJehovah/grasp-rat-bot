@@ -845,6 +845,17 @@ This is a source-organization split only. It preserves the disabled snapshot str
 
 This is a source-organization split only. It preserves guarded `bot.runtimeDiagnostics` initialization, diagnostic value merging, swallowed diagnostics write errors, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BY Tick Safety Source Factory
+
+`bootstrap-0.4.352` extracts tick/callback safety source generation into a dedicated browser source module:
+
+- `src/browser/tick-safety-source.js` now owns the raw browser source for `recordUnhandledTickError()`, `runTickSafely()`, and `runCallbackSafely()`.
+- `src/browser/bot-source.js` imports and injects `${tickSafetySource()}` immediately after `${combatLogSource({ combatLogExitSummaryFromDecision })}`, preserving generated runtime order before control-login helpers.
+- Static verification checks the new source-factory shape, injection point, unhandled tick recorder, console logging, tick safety wrapper, runtime diagnostics recording, callback safety wrapper, and async callback error capture.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves bounded `bot.errors` recording, console error logging, runtime tick diagnostics, tick promise error capture, async callback rejection capture, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -927,9 +938,10 @@ This is a source-organization split only. It preserves guarded `bot.runtimeDiagn
 77. Restored coin failures source factory: integrated in `bootstrap-0.4.349`
 78. Login snapshot gate source factory: integrated in `bootstrap-0.4.350`
 79. Runtime diagnostics source factory: integrated in `bootstrap-0.4.351`
-80. Constants: partially integrated for high-value coin defaults
-81. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-82. Run live validation sessions after each behavior-touching replacement
+80. Tick safety source factory: integrated in `bootstrap-0.4.352`
+81. Constants: partially integrated for high-value coin defaults
+82. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+83. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
