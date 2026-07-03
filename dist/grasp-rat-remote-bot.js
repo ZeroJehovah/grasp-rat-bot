@@ -764,6 +764,24 @@
     }
   });
 
+  // src/browser/runtime/persistent-clear.js
+  var require_persistent_clear = __commonJS({
+    "src/browser/runtime/persistent-clear.js"(exports, module) {
+      "use strict";
+      function clearPersistentStorageKey(key) {
+        try {
+          localStorage.removeItem(key);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+      module.exports = {
+        clearPersistentStorageKey
+      };
+    }
+  });
+
   // src/strategy/attack-worth.js
   var require_attack_worth = __commonJS({
     "src/strategy/attack-worth.js"(exports, module) {
@@ -3596,7 +3614,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.413" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.414" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -3730,17 +3748,12 @@
       } catch (_) {
       }
     }
+    const { clearPersistentStorageKey } = require_persistent_clear();
     function clearPersistentExitState(key) {
-      try {
-        localStorage.removeItem(key);
-      } catch (_) {
-      }
+      clearPersistentStorageKey(key);
     }
     function clearPersistentPendingExitState() {
-      try {
-        localStorage.removeItem(PENDING_EXIT_STATE_KEY);
-      } catch (_) {
-      }
+      clearPersistentStorageKey(PENDING_EXIT_STATE_KEY);
     }
     function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
       const raw = value && typeof value === "object" ? value : pending?.lastResult?.reloadConfirmation && typeof pending.lastResult.reloadConfirmation === "object" ? pending.lastResult.reloadConfirmation : null;

@@ -277,6 +277,7 @@ function main() {
   const targetWhitelistRuntimeModule = readText('src/browser/runtime/target-whitelist.js');
   const exitSummaryRuntimeModule = readText('src/browser/runtime/exit-summary.js');
   const browserPreservedStateRuntimeModule = readText('src/browser/runtime/browser-preserved-state.js');
+  const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
   const actionArbitrationRuntimeModule = readText('src/browser/runtime/action-arbitration.js');
@@ -398,6 +399,7 @@ function main() {
     targetWhitelistRuntimeModule,
     exitSummaryRuntimeModule,
     browserPreservedStateRuntimeModule,
+    persistentClearRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
     actionArbitrationRuntimeModule,
@@ -540,6 +542,7 @@ function main() {
     assert(distSource.includes('var require_runtime_defaults = __commonJS'), 'bundled production dist does not bundle the runtime-defaults module through esbuild');
     assert(distSource.includes('var require_target_whitelist = __commonJS'), 'bundled production dist does not bundle the target-whitelist runtime module through esbuild');
     assert(distSource.includes('var require_exit_summary = __commonJS'), 'bundled production dist does not bundle the exit-summary runtime module through esbuild');
+    assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
     assert(distSource.includes('var require_action_switch_diagnostics = __commonJS'), 'bundled production dist does not bundle the action-switch-diagnostics runtime module through esbuild');
@@ -629,6 +632,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['exit-motion', () => exitMotionSource(config)]"), 'exit-motion source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-stamina-source')"), 'opportunity-stamina source module import not found');
@@ -1287,12 +1291,19 @@ function main() {
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('function readPersistentExitState'), 'persistent-exit source factory does not include read helper');
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('function writePersistentExitState'), 'persistent-exit source factory does not include write helper');
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('refreshExitDetail'), 'persistent-exit source factory does not refresh exit detail');
-    assert(persistentClearSourceModule.includes('function persistentClearSource() {'), 'persistent-clear source factory not found');
-    assert(persistentClearSourceModule.includes('module.exports = { persistentClearSource }'), 'persistent-clear source module export not found');
-    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('String.raw`'), 'persistent-clear source factory does not return raw browser source');
-    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('function clearPersistentExitState'), 'persistent-clear source factory does not include exit clear helper');
-    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('function clearPersistentPendingExitState'), 'persistent-clear source factory does not include pending-exit clear helper');
-    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('PENDING_EXIT_STATE_KEY'), 'persistent-clear source factory does not clear pending-exit storage key');
+    assert(persistentClearSourceModule.includes('function persistentClearInlineSource() {'), 'persistent-clear inline source factory not found');
+    assert(persistentClearSourceModule.includes('function bundledPersistentClearSource() {'), 'persistent-clear bundled source factory not found');
+    assert(persistentClearSourceModule.includes('function persistentClearSource(options = {}) {'), 'persistent-clear source selector not found');
+    assert(persistentClearSourceModule.includes('persistentClearInlineSource') && persistentClearSourceModule.includes('bundledPersistentClearSource') && persistentClearSourceModule.includes('persistentClearSource'), 'persistent-clear source module exports are incomplete');
+    const persistentClearInlineBody = functionBody(persistentClearSourceModule, 'persistentClearInlineSource');
+    assert(persistentClearInlineBody.includes('String.raw`'), 'persistent-clear inline source factory does not return raw browser source');
+    assert(persistentClearInlineBody.includes('function clearPersistentExitState'), 'persistent-clear inline source factory does not include exit clear helper');
+    assert(persistentClearInlineBody.includes('function clearPersistentPendingExitState'), 'persistent-clear inline source factory does not include pending-exit clear helper');
+    assert(persistentClearInlineBody.includes('PENDING_EXIT_STATE_KEY'), 'persistent-clear inline source factory does not clear pending-exit storage key');
+    const persistentClearBundledBody = functionBody(persistentClearSourceModule, 'bundledPersistentClearSource');
+    assert(persistentClearBundledBody.includes("require('./src/browser/runtime/persistent-clear')"), 'persistent-clear bundled source does not hand clear helper to the bundler');
+    assert(persistentClearBundledBody.includes('clearPersistentStorageKey(key)'), 'persistent-clear bundled source does not clear provided exit key');
+    assert(persistentClearBundledBody.includes('clearPersistentStorageKey(PENDING_EXIT_STATE_KEY)'), 'persistent-clear bundled source does not clear pending-exit storage key');
     assert(pendingExitPersistenceSourceModule.includes('function pendingExitPersistenceSource() {'), 'pending-exit persistence source factory not found');
     assert(pendingExitPersistenceSourceModule.includes('module.exports = { pendingExitPersistenceSource }'), 'pending-exit persistence source module export not found');
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('String.raw`'), 'pending-exit persistence source factory does not return raw browser source');
@@ -3288,6 +3299,21 @@ function main() {
     assert(distSource.includes('function postExitDecisionWithoutTargetCore'), 'bundled dist does not contain exit-motion decision core');
     assert(distSource.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'bundled dist exit-motion lock wrapper does not call strategy core');
     assert(distSource.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'bundled dist exit-motion decision wrapper does not call strategy core');
+  });
+
+  check('persistent clear uses browser runtime adapter', () => {
+    assert(persistentClearRuntimeModule.includes('function clearPersistentStorageKey'), 'persistent-clear runtime helper not found');
+    assert(persistentClearRuntimeModule.includes('localStorage.removeItem(key)'), 'persistent-clear runtime helper does not remove storage keys');
+    assert(persistentClearRuntimeModule.includes('module.exports = {\n  clearPersistentStorageKey\n}'), 'persistent-clear runtime helper export not found');
+    assert(persistentClearSourceModule.includes("require('./src/browser/runtime/persistent-clear')"), 'persistent-clear bundled source does not require the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/persistent-clear.js'"), 'bundler spike does not import persistent-clear runtime adapter');
+    assert(bundlerSpikeEntrySource.includes("persistentClear.clearPersistentStorageKey('persistent-clear-spike')"), 'bundler spike does not execute persistent-clear helper');
+    assert(bundlerSpikeBuildSource.includes('status.persistentClearRemoved === true'), 'bundler spike self-test does not assert persistent-clear execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/persistent-clear')"), 'generated remote runtime does not hand persistent-clear helper to the bundler');
+    assert(!generatedRuntimeSource.includes('function clearPersistentStorageKey'), 'generated remote runtime still inlines persistent-clear helper before bundling');
+    assert(distSource.includes('function clearPersistentStorageKey'), 'bundled dist does not contain persistent-clear helper');
+    assert(distSource.includes('clearPersistentStorageKey(key)'), 'bundled dist persistent clear wrapper does not clear provided exit key');
+    assert(distSource.includes('clearPersistentStorageKey(PENDING_EXIT_STATE_KEY)'), 'bundled dist persistent clear wrapper does not clear pending-exit storage key');
   });
 
   check('opportunity clear uses strategy module core', () => {

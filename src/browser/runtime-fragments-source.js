@@ -99,7 +99,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-persistent-exit',
     `
 `],
-    ['persistent-clear', persistentClearSource],
+    ['persistent-clear', () => persistentClearSource(config)],
     ['separator-after-persistent-clear',
     `
 `],

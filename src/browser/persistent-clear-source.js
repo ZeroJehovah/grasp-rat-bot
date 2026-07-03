@@ -1,6 +1,6 @@
 'use strict';
 
-function persistentClearSource() {
+function persistentClearInlineSource() {
   return String.raw`
 		  function clearPersistentExitState(key) {
 		    try {
@@ -15,4 +15,25 @@ function persistentClearSource() {
 		  }`;
 }
 
-module.exports = { persistentClearSource };
+function bundledPersistentClearSource() {
+  return `const { clearPersistentStorageKey } = require('./src/browser/runtime/persistent-clear');
+
+		  function clearPersistentExitState(key) {
+		    clearPersistentStorageKey(key);
+		  }
+
+		  function clearPersistentPendingExitState() {
+		    clearPersistentStorageKey(PENDING_EXIT_STATE_KEY);
+		  }`;
+}
+
+function persistentClearSource(options = {}) {
+  if (options.bundledRuntime) return bundledPersistentClearSource();
+  return persistentClearInlineSource();
+}
+
+module.exports = {
+  persistentClearInlineSource,
+  bundledPersistentClearSource,
+  persistentClearSource
+};
