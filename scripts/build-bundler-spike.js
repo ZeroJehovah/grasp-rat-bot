@@ -102,6 +102,7 @@ async function selfTest() {
   assert(source.includes('function safeStringify'), 'shared runtime helper was not bundled');
   assert(source.includes('function formatDistance'), 'display helper was not bundled');
   assert(source.includes('function offlineLeaveSummaryText'), 'exit-summary helper was not bundled');
+  assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -129,6 +130,9 @@ async function selfTest() {
     localStorage: {
       getItem(key) {
         return key === 'graspRatBundlerSpikeProbe' ? '{"ok":true,"scope":"globalThis"}' : null;
+      },
+      removeItem(key) {
+        this.removedKey = key;
       }
     }
   });
@@ -175,6 +179,7 @@ async function selfTest() {
   assert(status.opportunityConstantHighValue === 10, 'spike did not read opportunity constants');
   assert(status.opportunityConstantRoi === 5, 'spike did not execute opportunity constants helper');
   assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
+  assert(status.persistentClearRemoved === true, 'spike did not execute persistent-clear helper');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');
@@ -184,6 +189,9 @@ async function selfTest() {
     localStorage: {
       getItem(key) {
         return key === 'graspRatBundlerSpikeProbe' ? '{"ok":true,"scope":"window"}' : null;
+      },
+      removeItem(key) {
+        this.removedKey = key;
       }
     }
   };

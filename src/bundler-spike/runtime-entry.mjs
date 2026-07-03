@@ -5,6 +5,7 @@ import displayFormat from '../browser/runtime/display-format.js';
 import targetWhitelist from '../browser/runtime/target-whitelist.js';
 import exitSummary from '../browser/runtime/exit-summary.js';
 import preservedState from '../browser/runtime/browser-preserved-state.js';
+import persistentClear from '../browser/runtime/persistent-clear.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
 import actionPriority from '../browser/runtime/action-priority.js';
 import actionArbitration from '../browser/runtime/action-arbitration.js';
@@ -300,6 +301,7 @@ function helperStatus(config = {}) {
   );
   const opportunityConstantHighValue = opportunityConstants.OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT;
   const opportunityConstantRoi = opportunityConstants.calculateOpportunityROI(10, 2);
+  const persistentClearRemoved = persistentClear.clearPersistentStorageKey('persistent-clear-spike');
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -347,6 +349,7 @@ function helperStatus(config = {}) {
     opportunityConstantHighValue,
     opportunityConstantRoi,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
+    persistentClearRemoved,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
