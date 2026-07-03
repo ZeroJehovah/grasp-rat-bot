@@ -130,7 +130,7 @@ Created **8 new modules** totaling **1,686 lines** of well-documented, tested co
 ✓ Test coverage  
 ✓ Performance characteristics  
 
-The main file (`grasp-rat-bot.js`) remains at **13,961 lines** with all original functionality intact.
+As of the later `bootstrap-0.4.295` source-builder extraction, the main file (`grasp-rat-bot.js`) is **320 lines** and keeps the Node/CDP CLI, status/diagnose flow, `--print-source` wrapper, and self-test delegation. The browser runtime source generator now lives in `src/browser/bot-source.js`, and the generated remote bot remains a single browser script.
 
 ---
 
@@ -139,6 +139,15 @@ The main file (`grasp-rat-bot.js`) remains at **13,961 lines** with all original
 ```
 grasp-rat-bot/
 ├── src/
+│   ├── browser/            # Browser source builder and runtime fragments
+│   │   ├── bot-source.js
+│   │   ├── target-overlay-source.js
+│   │   ├── status-panel-source.js
+│   │   ├── combat-log-source.js
+│   │   ├── important-log-source.js
+│   │   ├── control-login-source.js
+│   │   ├── native-state-source.js
+│   │   └── runtime-summary-source.js
 │   ├── strategy/           # NEW: Modular strategy components
 │   │   ├── action-priority.js
 │   │   ├── action-arbitration.js
@@ -151,10 +160,10 @@ grasp-rat-bot/
 │   │   ├── migration-examples.js
 │   │   ├── self-test.js
 │   │   └── README.md
-│   ├── shared/             # Existing shared utilities
-│   ├── browser/            # Existing browser code
+│   ├── shared/             # Shared utilities/defaults inlined into generated runtime
 │   └── node/               # Existing node code
-├── grasp-rat-bot.js        # Main file (unchanged behavior)
+├── grasp-rat-bot.js        # Node/CDP CLI entrypoint
+├── scripts/build-remote-bot.js # Direct browser source builder release path
 └── docs/
     ├── refactoring-notes-2026-07-02.md
     └── agent/
@@ -193,6 +202,14 @@ const value = Number(cfg.someValue ?? SOME_CONSTANTS.SOME_VALUE);
 - ✓ cfg override preserved
 - ✓ Easy to update defaults
 - ✓ Zero behavior change
+
+---
+
+## Later Source-Builder Extraction
+
+`bootstrap-0.4.295` moved `browserBotSource(config)` out of `grasp-rat-bot.js` into `src/browser/bot-source.js` and changed `scripts/build-remote-bot.js` to call that module directly. A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, and the direct build output matched the same baseline. Static verification now checks the extracted source builder plus the generated single-file dist output.
+
+This update changes source organization and build coupling only; remote runtime behavior remains equivalent apart from the release version string.
 
 ---
 
@@ -288,11 +305,13 @@ Further work has **diminishing returns** and **increasing risk**.
 
 `bootstrap-0.4.294` extends `coin-route.js`, making coin route action metadata construction authoritative in the strategy module while preserving the browser wrapper's ownership of coin action construction, movement direction, stamina cost, score, and config-dependent action kind.
 
+`bootstrap-0.4.295` moves the browser runtime source generator into `src/browser/bot-source.js` and changes the release build to call that module directly. `grasp-rat-bot.js` now serves as the Node/CDP CLI entrypoint while still supporting `--print-source` through the extracted builder.
+
 Treat the combat target selection, combat movement, and combat fire-discipline modules as staged reference modules until each live replacement is proven equivalent or better with focused tests/replay. They should not be assumed to have replaced the production combat logic yet.
 
 ## Conclusion
 
-This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner/action metadata, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
+This refactoring improved the codebase structure and maintainability while preserving backward compatibility. The browser source builder split, action arbitration, target-switch diagnostics, coin diagnostics, coin motion, coin target identity, incidental coin pickup detection, snapshot coin helpers, coin progress failure/escape/state-transition/ignored-action/cleanup helpers, coin route planner/action metadata, opportunity choice stability, opportunity candidate construction, opportunity choice persistence, missing-held opportunity, post-attack drop wait, post-attack drop coin, and stamina-budget slices are now integrated; broader combat/profit/safety migration should continue in small validated steps.
 
 The extracted modules provide a solid foundation for future enhancements, with clear patterns established for safe migration of additional code when needed.
 

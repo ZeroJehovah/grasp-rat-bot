@@ -4,10 +4,9 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { browserBotSource } = require('../src/browser/bot-source');
 
 const ROOT = path.resolve(__dirname, '..');
-const BOT_SCRIPT = path.join(ROOT, 'grasp-rat-bot.js');
 
 function parseArgs(args) {
   const out = {
@@ -69,15 +68,11 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   fs.mkdirSync(options.outDir, { recursive: true });
 
-  const source = execFileSync(process.execPath, [
-    BOT_SCRIPT,
-    '--print-source',
-    '--bot-version', options.version,
-    '--status-every', String(options.statusEvery),
-  ], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
+  const source = browserBotSource({
+    dryRun: false,
+    once: false,
+    statusEvery: options.statusEvery,
+    version: options.version,
   });
 
   const scriptPath = path.join(options.outDir, options.fileName);

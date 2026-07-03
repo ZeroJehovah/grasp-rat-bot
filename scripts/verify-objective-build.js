@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { browserBotSource } = require('../src/browser/bot-source');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -240,15 +240,14 @@ function countMatches(text, re) {
 }
 
 function generateRemoteSource(manifest) {
-  return execFileSync(process.execPath, [
-    path.join(ROOT, 'grasp-rat-bot.js'),
-    '--print-source',
-    '--bot-version', String(manifest.version || ''),
-    '--status-every', String(manifest.statusEvery || 1000)
-  ], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024
+  const statusEvery = Number(manifest.statusEvery) === 0
+    ? 0
+    : Number(manifest.statusEvery || 1000);
+  return browserBotSource({
+    dryRun: false,
+    once: false,
+    statusEvery,
+    version: String(manifest.version || ''),
   });
 }
 
@@ -263,6 +262,7 @@ function main() {
   const targetWhitelistConfig = readJson('dist/target-whitelist.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
+  const botSourceModule = readText('src/browser/bot-source.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
@@ -290,6 +290,7 @@ function main() {
   const sharedTargetWhitelistSource = readText('src/shared/target-whitelist.js');
   const sourceRuntimeText = [
     sourceBot,
+    botSourceModule,
     targetOverlaySourceModule,
     statusPanelSourceModule,
     combatLogSourceModule,
@@ -327,32 +328,35 @@ function main() {
     return generatedHash;
   });
 
-  check('source bot splits shared helpers while generated runtime stays single file', () => {
-    assert(sourceBot.includes("require('./src/shared/exit-summary')"), 'exit-summary module import not found');
-    assert(sourceBot.includes("require('./src/shared/runtime-utils')"), 'runtime-utils module import not found');
-    assert(sourceBot.includes("require('./src/shared/display-format')"), 'display-format module import not found');
-    assert(sourceBot.includes("require('./src/shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
-    assert(sourceBot.includes("require('./src/shared/runtime-defaults')"), 'runtime-defaults module import not found');
-    assert(sourceBot.includes("require('./src/shared/target-whitelist')"), 'target-whitelist module import not found');
-    assert(sourceBot.includes("require('./src/browser/target-overlay-source')"), 'target-overlay source module import not found');
-    assert(sourceBot.includes("require('./src/browser/status-panel-source')"), 'status-panel source module import not found');
-    assert(sourceBot.includes("require('./src/browser/combat-log-source')"), 'combat-log source module import not found');
-    assert(sourceBot.includes("require('./src/browser/important-log-source')"), 'important-log source module import not found');
-    assert(sourceBot.includes("require('./src/browser/control-login-source')"), 'control-login source module import not found');
-    assert(sourceBot.includes("require('./src/browser/native-state-source')"), 'native-state source module import not found');
-    assert(sourceBot.includes("require('./src/browser/runtime-summary-source')"), 'runtime-summary source module import not found');
-    assert(sourceBot.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
-    assert(sourceBot.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
-    assert(sourceBot.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
-    assert(sourceBot.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
-    assert(sourceBot.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
-    assert(sourceBot.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
-    assert(sourceBot.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
-    assert(sourceBot.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
-    assert(sourceBot.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
-    assert(sourceBot.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
-    assert(sourceBot.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
-    assert(sourceBot.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
+  check('source modules split browser source generation while generated runtime stays single file', () => {
+    assert(sourceBot.includes("require('./src/browser/bot-source')"), 'main bot source builder import not found');
+    assert(botSourceModule.includes("require('../shared/exit-summary')"), 'exit-summary module import not found');
+    assert(botSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils module import not found');
+    assert(botSourceModule.includes("require('../shared/display-format')"), 'display-format module import not found');
+    assert(botSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
+    assert(botSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
+    assert(botSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
+    assert(botSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
+    assert(botSourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
+    assert(botSourceModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
+    assert(botSourceModule.includes("require('./important-log-source')"), 'important-log source module import not found');
+    assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
+    assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
+    assert(botSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
+    assert(botSourceModule.includes('function browserBotSource(config)'), 'browserBotSource factory not found');
+    assert(botSourceModule.includes('module.exports = {\n  browserBotSource'), 'browserBotSource module export not found');
+    assert(botSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
+    assert(botSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
+    assert(botSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
+    assert(botSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
+    assert(botSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
+    assert(botSourceModule.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
+    assert(botSourceModule.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
+    assert(botSourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
+    assert(botSourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
+    assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
+    assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
+    assert(botSourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
     assert(distSource.includes('function safeStringify') && distSource.includes('function formatDistance') && distSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(distSource.includes('function normalizeTargetWhitelistName') && distSource.includes('function parseTargetWhitelistNames') && distSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
     assert(!distSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
@@ -1762,10 +1766,10 @@ function main() {
   });
 
   check('run-self-test module covers low-value active and high-value coin priority self-tests', () => {
-    assert(sourceBot.includes('function isLowValueActiveCombatTarget'), 'low-value Active combat gate not found');
-    assert(sourceBot.includes('function proactiveActiveCombatStaminaAffordable'), 'active combat long-stamina budget gate not found');
-    assert(sourceBot.includes('function highValueVisibleCoinPriorityNeeded'), 'high-value coin priority gate not found');
-    assert(sourceBot.includes("'high-value-visible-coin-priority'"), 'high-value visible coin action reason not found');
+    assert(sourceRuntimeText.includes('function isLowValueActiveCombatTarget'), 'low-value Active combat gate not found');
+    assert(sourceRuntimeText.includes('function proactiveActiveCombatStaminaAffordable'), 'active combat long-stamina budget gate not found');
+    assert(sourceRuntimeText.includes('function highValueVisibleCoinPriorityNeeded'), 'high-value coin priority gate not found');
+    assert(sourceRuntimeText.includes("'high-value-visible-coin-priority'"), 'high-value visible coin action reason not found');
     assert(nodeSelfTestSource.includes("name: 'low-drop active incoming bullet beats low-value coin inside attack range'"), 'low-drop incoming bullet combat self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low-drop active in range does not beat foot coin without incoming fire'"), 'low-drop no-incoming coin self-test not found');
     assert(nodeSelfTestSource.includes("name: 'active combat waits for long stamina budget before proactive fight'"), 'active combat long-stamina budget self-test not found');
@@ -1789,17 +1793,17 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low long stamina target-only budget block waits for visible coin refresh'"), 'target-only stamina budget wait reason self-test not found');
-    assert(sourceBot.includes('function dailyStaminaBudgetIsLimiting'), 'daily stamina final-run budget helper not found');
-    assert(sourceBot.includes('function pickNearestDailyStaminaFinalCoin'), 'daily stamina final-run coin picker not found');
-    assert(sourceBot.includes("'daily-stamina-final-visible-coin'"), 'daily stamina final-run action reason not found');
-    assert(sourceBot.includes('!isSnapshotOnlyCoin(coin)') || sourceBot.includes('filter(coin => !isSnapshotOnlyCoin(coin))'), 'daily stamina final-run does not exclude snapshot-only coins');
-    assert(sourceBot.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') > 0 && sourceBot.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') < sourceBot.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
+    assert(sourceRuntimeText.includes('function dailyStaminaBudgetIsLimiting'), 'daily stamina final-run budget helper not found');
+    assert(sourceRuntimeText.includes('function pickNearestDailyStaminaFinalCoin'), 'daily stamina final-run coin picker not found');
+    assert(sourceRuntimeText.includes("'daily-stamina-final-visible-coin'"), 'daily stamina final-run action reason not found');
+    assert(sourceRuntimeText.includes('!isSnapshotOnlyCoin(coin)') || sourceRuntimeText.includes('filter(coin => !isSnapshotOnlyCoin(coin))'), 'daily stamina final-run does not exclude snapshot-only coins');
+    assert(sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') > 0 && sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') < sourceRuntimeText.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
     assert(nodeSelfTestSource.includes("name: 'low daily stamina goes to nearest visible coin instead of waiting for roi'"), 'low daily stamina final-run visible coin self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low daily stamina does not use snapshot-only final coin'"), 'low daily stamina snapshot-only exclusion self-test not found');
 	    assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
-	    assert(sourceBot.includes('function visibleCoinSourcesConfirmTargetMissing'), 'visible missing coin confirmation helper not found');
-	    assert(sourceBot.includes('function clearMissingVisibleCoinTarget'), 'visible missing coin clear helper not found');
-	    assert(sourceBot.includes("'visible-coin-disappeared'"), 'visible missing coin clear reason not found');
+	    assert(sourceRuntimeText.includes('function visibleCoinSourcesConfirmTargetMissing'), 'visible missing coin confirmation helper not found');
+	    assert(sourceRuntimeText.includes('function clearMissingVisibleCoinTarget'), 'visible missing coin clear helper not found');
+	    assert(sourceRuntimeText.includes("'visible-coin-disappeared'"), 'visible missing coin clear reason not found');
 	    assert(nodeSelfTestSource.includes("name: 'visible missing held coin switches to current visible coin'"), 'visible missing held coin switch self-test not found');
 	    assert(nodeSelfTestSource.includes("name: 'high drop kill waits at last target position before coin refresh'"), 'post-kill drop wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'delayed high drop kill waits after target resolution'"), 'delayed post-kill drop wait self-test not found');
@@ -1863,13 +1867,13 @@ function main() {
     assert(distSource.includes('function buildCoinDiagnostics'), 'generated runtime does not inline coin diagnostics builder');
     assert(distSource.includes('function addCoinFilterDiagnostic'), 'generated runtime does not inline coin filter diagnostic recorder');
     assert(distSource.includes("reason: 'snapshot-only'"), 'generated runtime snapshot-only coin diagnostics not exposed');
-    assert(sourceBot.includes('buildCoinDiagnostics.toString()'), 'coin diagnostics builder is not injected from module');
-    assert(sourceBot.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
-    assert(sourceBot.includes("recordCoinFilterDiagnostic(c, 'ignored'"), 'ignored coin diagnostics not recorded');
-    assert(sourceBot.includes("recordCoinFilterDiagnostic(c, 'threat-blocked'"), 'threat-blocked coin diagnostics not recorded');
-    assert(sourceBot.includes("reason = 'stamina-unaffordable'") && sourceBot.includes('coinStaminaAffordableWithDiagnostic'), 'stamina-unaffordable coin diagnostics not recorded');
+    assert(sourceRuntimeText.includes('buildCoinDiagnostics.toString()'), 'coin diagnostics builder is not injected from module');
+    assert(sourceRuntimeText.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
+    assert(sourceRuntimeText.includes("recordCoinFilterDiagnostic(c, 'ignored'"), 'ignored coin diagnostics not recorded');
+    assert(sourceRuntimeText.includes("recordCoinFilterDiagnostic(c, 'threat-blocked'"), 'threat-blocked coin diagnostics not recorded');
+    assert(sourceRuntimeText.includes("reason = 'stamina-unaffordable'") && sourceRuntimeText.includes('coinStaminaAffordableWithDiagnostic'), 'stamina-unaffordable coin diagnostics not recorded');
     assert(strategyCoinDiagnosticsSource.includes("reason: 'snapshot-only'") && distSource.includes("reason: 'snapshot-only'"), 'snapshot-only coin diagnostics not exposed');
-    assert(sourceBot.includes('coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics)'), 'last decision does not carry coin diagnostics');
+    assert(sourceRuntimeText.includes('coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics)'), 'last decision does not carry coin diagnostics');
     assert(combatLogSourceModule.includes('coinDiagnostics: decision?.coinDiagnostics || bot.coinDiagnostics || null'), 'combat logs do not expose coin diagnostics');
     assert(combatLogSourceModule.includes("type: 'coin-diagnostics'"), 'standalone coin diagnostic log entry not found');
     assert(combatLogSourceModule.includes('recordCoinDiagnosticsLog(source, decision || {})'), 'coin diagnostics are not recorded on each log tick');
@@ -1881,14 +1885,14 @@ function main() {
     assert(strategyCoinMotionSource.includes('function coinPickupPrecisionPulseMsCore'), 'strategy coin pickup pulse core not found');
     assert(strategyCoinMotionSource.includes('function coinAxisLockShouldHoldCore'), 'strategy coin axis lock core not found');
     assert(strategyCoinMotionSource.includes('function coinMotionMetaCore'), 'strategy coin motion metadata core not found');
-    assert(sourceBot.includes("require('./src/strategy/coin-motion')"), 'source bot does not import coin motion strategy module');
-    assert(sourceBot.includes('coinDirectionToCore.toString()'), 'source bot does not inject coin direction core');
-    assert(sourceBot.includes('coinMotionMetaCore.toString()'), 'source bot does not inject coin motion metadata core');
-    assert(sourceBot.includes('function coinMotionCoreOptions'), 'source bot coin motion runtime wrapper options not found');
-    assert(sourceBot.includes('function applyCoinApproachLockUpdate'), 'source bot coin approach lock wrapper not found');
-    assert(sourceBot.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'source bot coin direction wrapper does not call strategy core');
-    assert(sourceBot.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'source bot coin direction wrapper does not apply lock updates');
-    assert(sourceBot.includes('return coinMotionMetaCore(dir);'), 'source bot coin motion metadata wrapper does not call strategy core');
+    assert(botSourceModule.includes("require('../strategy/coin-motion')"), 'source bot does not import coin motion strategy module');
+    assert(sourceRuntimeText.includes('coinDirectionToCore.toString()'), 'source bot does not inject coin direction core');
+    assert(sourceRuntimeText.includes('coinMotionMetaCore.toString()'), 'source bot does not inject coin motion metadata core');
+    assert(sourceRuntimeText.includes('function coinMotionCoreOptions'), 'source bot coin motion runtime wrapper options not found');
+    assert(sourceRuntimeText.includes('function applyCoinApproachLockUpdate'), 'source bot coin approach lock wrapper not found');
+    assert(sourceRuntimeText.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'source bot coin direction wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'source bot coin direction wrapper does not apply lock updates');
+    assert(sourceRuntimeText.includes('return coinMotionMetaCore(dir);'), 'source bot coin motion metadata wrapper does not call strategy core');
     assert(distSource.includes('function coinDirectionToCore'), 'generated runtime does not inline coin direction core');
     assert(distSource.includes('function coinPickupPrecisionPulseMsCore'), 'generated runtime does not inline coin pickup pulse core');
     assert(distSource.includes('function coinMotionCoreOptions'), 'generated runtime coin motion wrapper options not found');
@@ -1904,23 +1908,23 @@ function main() {
     assert(strategyCoinTargetSource.includes('function pickIncidentalCoinPickupsCore'), 'strategy incidental pickup core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinWorthLongTravelCore'), 'strategy snapshot coin worth core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinNavigationReasonCore'), 'strategy snapshot coin reason core not found');
-    assert(sourceBot.includes("require('./src/strategy/coin-target')"), 'source bot does not import coin target strategy module');
-    assert(sourceBot.includes('coinTargetKeyCore.toString()'), 'source bot does not inject coin target key core');
-    assert(sourceBot.includes('coinMatchesTrackedTargetCore.toString()'), 'source bot does not inject coin target matcher core');
-    assert(sourceBot.includes('trackedCoinTargetForCollectionCore.toString()'), 'source bot does not inject tracked coin target core');
-    assert(sourceBot.includes('buildNativeCoinSnapshotCore.toString()'), 'source bot does not inject native coin snapshot core');
-    assert(sourceBot.includes('pointToSegmentDistanceCore.toString()'), 'source bot does not inject point-to-segment distance core');
-    assert(sourceBot.includes('pickIncidentalCoinPickupsCore.toString()'), 'source bot does not inject incidental pickup core');
-    assert(sourceBot.includes('snapshotCoinWorthLongTravelCore.toString()'), 'source bot does not inject snapshot coin worth core');
-    assert(sourceBot.includes('snapshotCoinNavigationReasonCore.toString()'), 'source bot does not inject snapshot coin reason core');
-    assert(sourceBot.includes('function coinTargetCoreOptions'), 'source bot coin target runtime wrapper options not found');
-    assert(sourceBot.includes('trackedCoinTargetForCollectionCore({'), 'source bot tracked coin target wrapper does not call strategy core');
-    assert(sourceBot.includes('return coinTargetKeyCore(target);'), 'source bot coin target key wrapper does not call strategy core');
-    assert(sourceBot.includes('return coinMatchesTrackedTargetCore(coin, target'), 'source bot coin target matcher wrapper does not call strategy core');
-    assert(sourceBot.includes('return buildNativeCoinSnapshotCore(coins'), 'source bot native coin snapshot wrapper does not call strategy core');
-    assert(sourceBot.includes('pickIncidentalCoinPickupsCore('), 'source bot incidental pickup wrapper does not call strategy core');
-    assert(sourceBot.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
-    assert(sourceBot.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
+    assert(botSourceModule.includes("require('../strategy/coin-target')"), 'source bot does not import coin target strategy module');
+    assert(sourceRuntimeText.includes('coinTargetKeyCore.toString()'), 'source bot does not inject coin target key core');
+    assert(sourceRuntimeText.includes('coinMatchesTrackedTargetCore.toString()'), 'source bot does not inject coin target matcher core');
+    assert(sourceRuntimeText.includes('trackedCoinTargetForCollectionCore.toString()'), 'source bot does not inject tracked coin target core');
+    assert(sourceRuntimeText.includes('buildNativeCoinSnapshotCore.toString()'), 'source bot does not inject native coin snapshot core');
+    assert(sourceRuntimeText.includes('pointToSegmentDistanceCore.toString()'), 'source bot does not inject point-to-segment distance core');
+    assert(sourceRuntimeText.includes('pickIncidentalCoinPickupsCore.toString()'), 'source bot does not inject incidental pickup core');
+    assert(sourceRuntimeText.includes('snapshotCoinWorthLongTravelCore.toString()'), 'source bot does not inject snapshot coin worth core');
+    assert(sourceRuntimeText.includes('snapshotCoinNavigationReasonCore.toString()'), 'source bot does not inject snapshot coin reason core');
+    assert(sourceRuntimeText.includes('function coinTargetCoreOptions'), 'source bot coin target runtime wrapper options not found');
+    assert(sourceRuntimeText.includes('trackedCoinTargetForCollectionCore({'), 'source bot tracked coin target wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('return coinTargetKeyCore(target);'), 'source bot coin target key wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('return coinMatchesTrackedTargetCore(coin, target'), 'source bot coin target matcher wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('return buildNativeCoinSnapshotCore(coins'), 'source bot native coin snapshot wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('pickIncidentalCoinPickupsCore('), 'source bot incidental pickup wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
     assert(distSource.includes('function coinTargetKeyCore'), 'generated runtime does not inline coin target key core');
     assert(distSource.includes('function coinMatchesTrackedTargetCore'), 'generated runtime does not inline coin target matcher core');
     assert(distSource.includes('function trackedCoinTargetForCollectionCore'), 'generated runtime does not inline tracked coin target core');
@@ -1941,33 +1945,33 @@ function main() {
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinProgressCore'), 'strategy ignored coin progress core not found');
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinPatrolActionCore'), 'strategy ignored coin patrol action core not found');
     assert(strategyCoinProgressSource.includes('function coinIgnoreCleanupIntentCore'), 'strategy coin ignore cleanup intent core not found');
-    assert(sourceBot.includes("require('./src/strategy/coin-progress')"), 'source bot does not import coin progress strategy module');
-    assert(sourceBot.includes('coinFailureIgnoreCore.toString()'), 'source bot does not inject coin failure ignore core');
-    assert(sourceBot.includes('staleCoinEscapeDirectionCore.toString()'), 'source bot does not inject stale coin escape core');
-    assert(sourceBot.includes('coinProgressIntentCore.toString()'), 'source bot does not inject coin progress intent core');
-    assert(sourceBot.includes('coinAttemptExpiredCore.toString()'), 'source bot does not inject coin attempt expiry core');
-    assert(sourceBot.includes('updateCoinAttemptCore.toString()'), 'source bot does not inject coin attempt update core');
-    assert(sourceBot.includes('updateCoinProgressRecordCore.toString()'), 'source bot does not inject coin progress record core');
-    assert(sourceBot.includes('buildIgnoredCoinProgressCore.toString()'), 'source bot does not inject ignored coin progress core');
-    assert(sourceBot.includes('buildIgnoredCoinPatrolActionCore.toString()'), 'source bot does not inject ignored coin patrol action core');
-    assert(sourceBot.includes('coinIgnoreCleanupIntentCore.toString()'), 'source bot does not inject coin ignore cleanup intent core');
-    assert(sourceBot.includes('function coinProgressCoreOptions'), 'source bot coin progress runtime wrapper options not found');
-    assert(sourceBot.includes('coinFailureIgnoreCore(bot.coinFailures.get(id)'), 'source bot coin failure wrapper does not call strategy core');
-    assert(sourceBot.includes('staleCoinEscapeDirectionCore(action, self'), 'source bot stale coin escape wrapper does not call strategy core');
-    assert(sourceBot.includes('coinAttemptExpiredCore(attempt, t, options)'), 'source bot coin attempt cleanup does not call strategy core');
-    assert(sourceBot.includes('coinProgressIntentCore(action)'), 'source bot coin intent wrapper does not call strategy core');
-    assert(sourceBot.includes('updateCoinAttemptCore(bot.coinAttempts.get'), 'source bot coin attempt wrapper does not call strategy core');
-    assert(sourceBot.includes('updateCoinProgressRecordCore(previous, attempt, distance, t, options)'), 'source bot coin progress wrapper does not call strategy core');
-    assert(sourceBot.includes("buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck')"), 'source bot stuck ignored progress does not call strategy core');
-    assert(sourceBot.includes("buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress')"), 'source bot no-progress ignored progress does not call strategy core');
-    assert(sourceBot.includes('buildIgnoredCoinPatrolActionCore('), 'source bot ignored coin action does not call strategy core');
-    assert(sourceBot.includes('function clearIgnoredCoinRuntimeState'), 'source bot ignored coin cleanup wrapper not found');
-    assert(sourceBot.includes('coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, id)'), 'source bot ignored coin cleanup wrapper does not call strategy core');
-    assert(sourceBot.includes('clearIgnoredCoinRuntimeState(id)'), 'source bot ignored coin branches do not call cleanup wrapper');
-    assert(sourceBot.includes('bot.coinFailures.set(id') && sourceBot.includes('bot.ignoredCoins.set(id'), 'source bot coin failure wrapper does not retain runtime state writes');
-    assert(sourceBot.includes('bot.staleCoinEscape = result.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
-    assert(sourceBot.includes('bot.coinAttempts.set(id, attempt)'), 'source bot coin attempt wrapper does not retain runtime map write');
-    assert(sourceBot.includes('bot.coinProgress = progressResult.progress'), 'source bot coin progress wrapper does not retain runtime state write');
+    assert(botSourceModule.includes("require('../strategy/coin-progress')"), 'source bot does not import coin progress strategy module');
+    assert(sourceRuntimeText.includes('coinFailureIgnoreCore.toString()'), 'source bot does not inject coin failure ignore core');
+    assert(sourceRuntimeText.includes('staleCoinEscapeDirectionCore.toString()'), 'source bot does not inject stale coin escape core');
+    assert(sourceRuntimeText.includes('coinProgressIntentCore.toString()'), 'source bot does not inject coin progress intent core');
+    assert(sourceRuntimeText.includes('coinAttemptExpiredCore.toString()'), 'source bot does not inject coin attempt expiry core');
+    assert(sourceRuntimeText.includes('updateCoinAttemptCore.toString()'), 'source bot does not inject coin attempt update core');
+    assert(sourceRuntimeText.includes('updateCoinProgressRecordCore.toString()'), 'source bot does not inject coin progress record core');
+    assert(sourceRuntimeText.includes('buildIgnoredCoinProgressCore.toString()'), 'source bot does not inject ignored coin progress core');
+    assert(sourceRuntimeText.includes('buildIgnoredCoinPatrolActionCore.toString()'), 'source bot does not inject ignored coin patrol action core');
+    assert(sourceRuntimeText.includes('coinIgnoreCleanupIntentCore.toString()'), 'source bot does not inject coin ignore cleanup intent core');
+    assert(sourceRuntimeText.includes('function coinProgressCoreOptions'), 'source bot coin progress runtime wrapper options not found');
+    assert(sourceRuntimeText.includes('coinFailureIgnoreCore(bot.coinFailures.get(id)'), 'source bot coin failure wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('staleCoinEscapeDirectionCore(action, self'), 'source bot stale coin escape wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('coinAttemptExpiredCore(attempt, t, options)'), 'source bot coin attempt cleanup does not call strategy core');
+    assert(sourceRuntimeText.includes('coinProgressIntentCore(action)'), 'source bot coin intent wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('updateCoinAttemptCore(bot.coinAttempts.get'), 'source bot coin attempt wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('updateCoinProgressRecordCore(previous, attempt, distance, t, options)'), 'source bot coin progress wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes("buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck')"), 'source bot stuck ignored progress does not call strategy core');
+    assert(sourceRuntimeText.includes("buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress')"), 'source bot no-progress ignored progress does not call strategy core');
+    assert(sourceRuntimeText.includes('buildIgnoredCoinPatrolActionCore('), 'source bot ignored coin action does not call strategy core');
+    assert(sourceRuntimeText.includes('function clearIgnoredCoinRuntimeState'), 'source bot ignored coin cleanup wrapper not found');
+    assert(sourceRuntimeText.includes('coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, id)'), 'source bot ignored coin cleanup wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('clearIgnoredCoinRuntimeState(id)'), 'source bot ignored coin branches do not call cleanup wrapper');
+    assert(sourceRuntimeText.includes('bot.coinFailures.set(id') && sourceRuntimeText.includes('bot.ignoredCoins.set(id'), 'source bot coin failure wrapper does not retain runtime state writes');
+    assert(sourceRuntimeText.includes('bot.staleCoinEscape = result.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
+    assert(sourceRuntimeText.includes('bot.coinAttempts.set(id, attempt)'), 'source bot coin attempt wrapper does not retain runtime map write');
+    assert(sourceRuntimeText.includes('bot.coinProgress = progressResult.progress'), 'source bot coin progress wrapper does not retain runtime state write');
     assert(distSource.includes('function coinFailureIgnoreCore'), 'generated runtime does not inline coin failure ignore core');
     assert(distSource.includes('function staleCoinEscapeDirectionCore'), 'generated runtime does not inline stale coin escape core');
     assert(distSource.includes('function coinProgressIntentCore'), 'generated runtime does not inline coin progress intent core');
@@ -1986,11 +1990,11 @@ function main() {
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsCloserFirstCoinCore'), 'strategy coin route closer-first core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsHeldSingleCoinCore'), 'strategy coin route held single-coin core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteActionMetaCore'), 'strategy coin route action metadata core not found');
-    assert(sourceBot.includes("require('./src/strategy/coin-route')"), 'source bot does not import coin route strategy module');
-    assert(sourceBot.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
-    assert(sourceBot.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
-    assert(sourceBot.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
-    assert(sourceBot.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
+    assert(botSourceModule.includes("require('../strategy/coin-route')"), 'source bot does not import coin route strategy module');
+    assert(sourceRuntimeText.includes('pickCoinRouteOpportunityCore.toString()'), 'source bot does not inject coin route picker core');
+    assert(sourceRuntimeText.includes('coinRouteActionMetaCore.toString()'), 'source bot does not inject coin route action metadata core');
+    assert(sourceRuntimeText.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
+    assert(sourceRuntimeText.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
     assert(distSource.includes('function pickCoinRouteOpportunityCore'), 'generated runtime does not inline coin route picker core');
     assert(distSource.includes('function coinRouteActionMetaCore'), 'generated runtime does not inline coin route action metadata core');
     assert(distSource.includes('function coinRouteCoreOptions'), 'generated runtime coin route wrapper options not found');
@@ -2003,13 +2007,13 @@ function main() {
     assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
     assert(strategyOpportunityChoiceSource.includes('function rememberOpportunityChoiceCore'), 'strategy opportunity choice persistence core not found');
     assert(strategyOpportunityChoiceSource.includes('function buildMissingHeldOpportunityCore'), 'strategy missing-held opportunity core not found');
-    assert(sourceBot.includes("require('./src/strategy/opportunity-choice')"), 'source bot does not import opportunity choice strategy module');
-    assert(sourceBot.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
-    assert(sourceBot.includes('rememberOpportunityChoiceCore.toString()'), 'source bot does not inject opportunity choice persistence core');
-    assert(sourceBot.includes('buildMissingHeldOpportunityCore.toString()'), 'source bot does not inject missing-held opportunity core');
-    assert(sourceBot.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice'), 'source bot missing-held wrapper does not call strategy core');
-    assert(sourceBot.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
-    assert(sourceBot.includes('switchHoldMs: cfg.opportunitySwitchHoldMs'), 'source bot opportunity choice persistence hold config not wired');
+    assert(botSourceModule.includes("require('../strategy/opportunity-choice')"), 'source bot does not import opportunity choice strategy module');
+    assert(sourceRuntimeText.includes('chooseStableOpportunityCore.toString()'), 'source bot does not inject opportunity choice stable picker core');
+    assert(sourceRuntimeText.includes('rememberOpportunityChoiceCore.toString()'), 'source bot does not inject opportunity choice persistence core');
+    assert(sourceRuntimeText.includes('buildMissingHeldOpportunityCore.toString()'), 'source bot does not inject missing-held opportunity core');
+    assert(sourceRuntimeText.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice'), 'source bot missing-held wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
+    assert(sourceRuntimeText.includes('switchHoldMs: cfg.opportunitySwitchHoldMs'), 'source bot opportunity choice persistence hold config not wired');
     assert(distSource.includes('function chooseStableOpportunityCore'), 'generated runtime does not inline opportunity choice stable picker core');
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'generated runtime does not inline opportunity choice persistence core');
     assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'generated runtime does not inline missing-held opportunity core');
@@ -2022,9 +2026,9 @@ function main() {
     assert(strategyOpportunityCandidatesSource.includes('function buildEnemyOpportunityCandidatesCore'), 'strategy enemy opportunity candidate core not found');
     assert(strategyOpportunityCandidatesSource.includes('function bestCoinOpportunityScoreCore'), 'strategy best coin opportunity score core not found');
     assert(strategyOpportunityCandidatesSource.includes('function opportunityValueScoreCore'), 'strategy opportunity value score core not found');
-    assert(sourceBot.includes("require('./src/strategy/opportunity-candidates')"), 'source bot does not import opportunity candidate strategy module');
-    assert(sourceBot.includes('buildOpportunityCandidatesCore.toString()'), 'source bot does not inject opportunity candidate core');
-    assert(sourceBot.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
+    assert(botSourceModule.includes("require('../strategy/opportunity-candidates')"), 'source bot does not import opportunity candidate strategy module');
+    assert(sourceRuntimeText.includes('buildOpportunityCandidatesCore.toString()'), 'source bot does not inject opportunity candidate core');
+    assert(sourceRuntimeText.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
     assert(distSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
     assert(distSource.includes('function opportunityCandidateCoreOptions'), 'generated runtime opportunity candidate wrapper options not found');
   });
@@ -2034,14 +2038,14 @@ function main() {
     assert(strategyPostAttackDropSource.includes('function resolvedRecentPostAttackDropsCore'), 'strategy post-attack resolved attack core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropCoinCore'), 'strategy post-attack drop coin picker core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropWaitTargetCore'), 'strategy post-attack wait picker core not found');
-    assert(sourceBot.includes("require('./src/strategy/post-attack-drop')"), 'source bot does not import post-attack drop strategy module');
-    assert(sourceBot.includes('postAttackVisibleCoinExistsCore.toString()'), 'source bot does not inject post-attack visible coin core');
-    assert(sourceBot.includes('resolvedRecentPostAttackDropsCore.toString()'), 'source bot does not inject post-attack resolved attack core');
-    assert(sourceBot.includes('buildPostAttackDropCoinCandidateCore.toString()'), 'source bot does not inject post-attack drop coin metadata core');
-    assert(sourceBot.includes('pickPostAttackDropCoinCore.toString()'), 'source bot does not inject post-attack drop coin picker core');
-    assert(sourceBot.includes('pickPostAttackDropWaitTargetCore.toString()'), 'source bot does not inject post-attack wait picker core');
-    assert(sourceBot.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
-    assert(sourceBot.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
+    assert(botSourceModule.includes("require('../strategy/post-attack-drop')"), 'source bot does not import post-attack drop strategy module');
+    assert(sourceRuntimeText.includes('postAttackVisibleCoinExistsCore.toString()'), 'source bot does not inject post-attack visible coin core');
+    assert(sourceRuntimeText.includes('resolvedRecentPostAttackDropsCore.toString()'), 'source bot does not inject post-attack resolved attack core');
+    assert(sourceRuntimeText.includes('buildPostAttackDropCoinCandidateCore.toString()'), 'source bot does not inject post-attack drop coin metadata core');
+    assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore.toString()'), 'source bot does not inject post-attack drop coin picker core');
+    assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore.toString()'), 'source bot does not inject post-attack wait picker core');
+    assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
     assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'generated runtime does not inline post-attack visible coin core');
     assert(distSource.includes('function pickPostAttackDropCoinCore'), 'generated runtime does not inline post-attack drop coin picker core');
     assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'generated runtime does not inline post-attack wait picker core');
@@ -2052,15 +2056,15 @@ function main() {
     assert(strategyStaminaBudgetSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'strategy blocked stamina summary core not found');
     assert(strategyStaminaBudgetSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'strategy nearest coin stamina exit core not found');
     assert(strategyStaminaBudgetSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'strategy daily final coin picker core not found');
-    assert(sourceBot.includes("require('./src/strategy/stamina-budget')"), 'source bot does not import stamina budget strategy module');
-    assert(sourceBot.includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'source bot does not inject daily stamina budget core');
-    assert(sourceBot.includes('summarizeBlockedStaminaOpportunityCore.toString()'), 'source bot does not inject blocked stamina summary core');
-    assert(sourceBot.includes('summarizeNearestCoinStaminaBudgetExitCore.toString()'), 'source bot does not inject nearest stamina exit core');
-    assert(sourceBot.includes('pickNearestDailyStaminaFinalCoinCore.toString()'), 'source bot does not inject daily final coin picker core');
-    assert(sourceBot.includes('dailyStaminaBudgetIsLimitingCore('), 'source bot daily stamina wrapper does not call strategy core');
-    assert(sourceBot.includes('summarizeBlockedStaminaOpportunityCore(coins, targets'), 'source bot blocked stamina wrapper does not call strategy core');
-    assert(sourceBot.includes('summarizeNearestCoinStaminaBudgetExitCore(self, coins'), 'source bot nearest stamina exit wrapper does not call strategy core');
-    assert(sourceBot.includes('pickNearestDailyStaminaFinalCoinCore('), 'source bot daily final coin wrapper does not call strategy core');
+    assert(botSourceModule.includes("require('../strategy/stamina-budget')"), 'source bot does not import stamina budget strategy module');
+    assert(sourceRuntimeText.includes('dailyStaminaBudgetIsLimitingCore.toString()'), 'source bot does not inject daily stamina budget core');
+    assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore.toString()'), 'source bot does not inject blocked stamina summary core');
+    assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore.toString()'), 'source bot does not inject nearest stamina exit core');
+    assert(sourceRuntimeText.includes('pickNearestDailyStaminaFinalCoinCore.toString()'), 'source bot does not inject daily final coin picker core');
+    assert(sourceRuntimeText.includes('dailyStaminaBudgetIsLimitingCore('), 'source bot daily stamina wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore(coins, targets'), 'source bot blocked stamina wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore(self, coins'), 'source bot nearest stamina exit wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('pickNearestDailyStaminaFinalCoinCore('), 'source bot daily final coin wrapper does not call strategy core');
     assert(distSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'generated runtime does not inline daily stamina budget core');
     assert(distSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'generated runtime does not inline blocked stamina summary core');
     assert(distSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'generated runtime does not inline nearest stamina exit core');
@@ -2068,34 +2072,34 @@ function main() {
   });
 
   check('target switch diagnostics expose final action focus changes', () => {
-    assert(sourceBot.includes('function recordActionSwitchDiagnostics'), 'target switch diagnostic wrapper not found');
+    assert(sourceRuntimeText.includes('function recordActionSwitchDiagnostics'), 'target switch diagnostic wrapper not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('function recordActionSwitchDiagnosticsCore'), 'strategy target switch diagnostic core not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('function actionSwitchPairKey'), 'strategy target switch pair key helper not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('targetSwitch: snapshot'), 'strategy target switch event is not attached to decisions');
     assert(distSource.includes('function recordActionSwitchDiagnosticsCore'), 'generated runtime does not inline target switch diagnostic core');
     assert(distSource.includes('targetSwitch: snapshot'), 'generated runtime target switch event is not attached to decisions');
-    assert(sourceBot.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
-    assert(sourceBot.includes('action = recordActionSwitchDiagnostics(action, source);'), 'final action path does not record target switch diagnostics');
+    assert(sourceRuntimeText.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
+    assert(sourceRuntimeText.includes('action = recordActionSwitchDiagnostics(action, source);'), 'final action path does not record target switch diagnostics');
     assert(combatLogSourceModule.includes("type: 'target-switch'"), 'standalone target-switch log entry not found');
     assert(combatLogSourceModule.includes('recordTargetSwitchLog(source, decision || {})'), 'target switch diagnostics are not recorded on each log tick');
     assert(combatLogSourceModule.includes('targetSwitchDiagnosticSignature'), 'target switch log throttle signature not found');
   });
 
   check('final action arbitration gates cross-band focus steals', () => {
-    assert(sourceBot.includes('function applyFinalActionArbitration'), 'final action arbitration wrapper not found');
+    assert(sourceRuntimeText.includes('function applyFinalActionArbitration'), 'final action arbitration wrapper not found');
     assert(strategyActionArbitrationSource.includes('function finalActionBandRank'), 'strategy final action priority band rank helper not found');
     assert(strategyActionArbitrationSource.includes('function applyFinalActionArbitrationCore'), 'strategy final action arbitration core not found');
     assert(strategyActionPrioritySource.includes('function actionFocusSummary'), 'strategy action focus summary helper not found');
     assert(distSource.includes('function finalActionBandRank'), 'generated runtime does not inline final action priority band rank helper');
     assert(distSource.includes('function applyFinalActionArbitrationCore'), 'generated runtime does not inline final action arbitration core');
     assert(distSource.includes('higher-priority-band-stick'), 'final action hysteresis reason not found in generated runtime');
-    assert(sourceBot.includes('action = applyFinalActionArbitration(action, source);'), 'final action path does not run arbitration before diagnostics');
-    assert(sourceBot.indexOf('action = applyFinalActionArbitration(action, source);') < sourceBot.indexOf('action = recordActionSwitchDiagnostics(action, source);'), 'final action arbitration must run before target-switch diagnostics');
-    assert(sourceBot.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');
-    assert(sourceBot.includes('preserved.finalActionArbitration?.lastAction'), 'runtime does not restore final action arbitration state');
+    assert(sourceRuntimeText.includes('action = applyFinalActionArbitration(action, source);'), 'final action path does not run arbitration before diagnostics');
+    assert(sourceRuntimeText.indexOf('action = applyFinalActionArbitration(action, source);') < sourceRuntimeText.indexOf('action = recordActionSwitchDiagnostics(action, source);'), 'final action arbitration must run before target-switch diagnostics');
+    assert(sourceRuntimeText.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');
+    assert(sourceRuntimeText.includes('preserved.finalActionArbitration?.lastAction'), 'runtime does not restore final action arbitration state');
     assert(sharedPreservedStateSource.includes('finalActionArbitration: previousBot?.finalActionArbitration'), 'hot-update preserved state omits final action arbitration');
     assert(sharedRuntimeDefaultsSource.includes('finalActionArbitrationHoldMs: 480'), 'final action arbitration hold default not found');
-    assert(sourceBot.includes('action.ignoreReturnBlock = true;') && sourceBot.includes("'high-value-visible-coin-priority'"), 'high-value coin priority does not bypass return-block rewrite');
+    assert(sourceRuntimeText.includes('action.ignoreReturnBlock = true;') && sourceRuntimeText.includes("'high-value-visible-coin-priority'"), 'high-value coin priority does not bypass return-block rewrite');
     assert(nodeSelfTestSource.includes("name: 'final arbitration keeps recent safety action over profit'"), 'final arbitration safety/profit self-test not found');
     assert(nodeSelfTestSource.includes("name: 'final arbitration keeps recent combat action over recovery'"), 'final arbitration combat/recover self-test not found');
     assert(nodeSelfTestSource.includes("name: 'final arbitration does not keep profit over new combat'"), 'final arbitration combat override self-test not found');

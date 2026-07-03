@@ -314,6 +314,18 @@ This is intended as an equivalent extraction of cleanup decisions only; all runt
 
 This is intended as an equivalent extraction of route metadata object construction only; the coin action surface remains in `grasp-rat-bot.js`.
 
+## 2026-07-03 Follow-up: Phase 2W Browser Source Builder Extraction
+
+`bootstrap-0.4.295` changes the build/source organization rather than strategy behavior:
+
+- `src/browser/bot-source.js` now owns the large `browserBotSource(config)` generator and the browser-runtime source-generation imports.
+- `grasp-rat-bot.js` now keeps only the Node/CDP CLI, status/diagnose flow, `--print-source` wrapper, and self-test delegation. Its line count drops from `13081` to `320`.
+- `scripts/build-remote-bot.js` now calls `browserBotSource()` directly instead of running `grasp-rat-bot.js --print-source`, reducing build coupling to the CLI entrypoint.
+- A fixed-version `--print-source` baseline was byte-for-byte identical before and after the extraction, and the direct build output matched that same baseline.
+- `scripts/verify-objective-build.js` now treats `src/browser/bot-source.js` as the canonical browser source builder and regenerates the remote script through the direct module path.
+
+This is intended as an equivalent structural split only; the generated remote bot remains a single browser script and strategy behavior is unchanged apart from the release version string.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -337,9 +349,10 @@ This is intended as an equivalent extraction of route metadata object constructi
 18. Coin progress ignored action helpers: integrated in `bootstrap-0.4.292`
 19. Ignored coin cleanup intent: integrated in `bootstrap-0.4.293`
 20. Coin route action metadata: integrated in `bootstrap-0.4.294`
-21. Constants: partially integrated for high-value coin defaults
-22. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-23. Run live validation sessions after each behavior-touching replacement
+21. Browser source builder extraction/direct build path: integrated in `bootstrap-0.4.295`
+22. Constants: partially integrated for high-value coin defaults
+23. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+24. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Profit/opportunity selection module
