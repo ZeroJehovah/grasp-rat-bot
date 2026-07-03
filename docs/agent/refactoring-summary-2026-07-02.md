@@ -867,6 +867,17 @@ This is a source-organization split only. It preserves bounded `bot.errors` reco
 
 This is a source-organization split only. It preserves target whitelist blocking, AFK profit target drop threshold handling, own-drop reward ratio comparison, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2CA Array-Count Source Factory
+
+`bootstrap-0.4.354` extracts array-count source generation into a dedicated browser source module:
+
+- `src/browser/array-count-source.js` now owns the raw browser source for `arrayCount()`.
+- `src/browser/bot-source.js` imports and injects `${arrayCountSource()}` immediately after shared `safeStringify()` injection, preserving generated runtime order before shared clone/log-id helpers and combat-log helpers.
+- Static verification checks the new source-factory shape, injection point, array-count helper, and array-length fallback.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves the `Array.isArray(value) ? value.length : 0` fallback used by status, diagnostics, and runtime summaries, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -951,9 +962,10 @@ This is a source-organization split only. It preserves target whitelist blocking
 79. Runtime diagnostics source factory: integrated in `bootstrap-0.4.351`
 80. Tick safety source factory: integrated in `bootstrap-0.4.352`
 81. Attack-worth source factory: integrated in `bootstrap-0.4.353`
-82. Constants: partially integrated for high-value coin defaults
-83. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-84. Run live validation sessions after each behavior-touching replacement
+82. Array-count source factory: integrated in `bootstrap-0.4.354`
+83. Constants: partially integrated for high-value coin defaults
+84. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+85. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
