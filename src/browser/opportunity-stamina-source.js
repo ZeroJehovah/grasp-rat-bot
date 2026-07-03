@@ -5,7 +5,7 @@ const {
   summarizeBlockedStaminaOpportunityCore,
   summarizeNearestCoinStaminaBudgetExitCore,
   pickNearestDailyStaminaFinalCoinCore
-} = require('../strategy/stamina-budget');
+} = require('./runtime/stamina-budget');
 
 function opportunityStaminaSource() {
   return String.raw`  function opportunityEffectiveStaminaCost(staminaCost) {

@@ -17,6 +17,7 @@ import coinRoute from '../browser/runtime/coin-route.js';
 import opportunityChoice from '../browser/runtime/opportunity-choice.js';
 import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
 import postAttackDrop from '../browser/runtime/post-attack-drop.js';
+import staminaBudget from '../browser/runtime/stamina-budget.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -207,6 +208,16 @@ function helperStatus(config = {}) {
       scoreCoin: coin => Number(coin.amount || 0) * 10
     }
   );
+  const staminaBudgetDailyLimited = staminaBudget.dailyStaminaBudgetIsLimitingCore(1200, 2000, 1000);
+  const staminaBudgetExit = staminaBudget.summarizeNearestCoinStaminaBudgetExitCore(
+    { x: 0, y: 0 },
+    [{ drop_id: 'stamina-coin', amount: 2, distance: 150, x: 150, y: 0 }],
+    {
+      budget: 100,
+      coinStaminaCost: coin => Number(coin.distance || 0),
+      reloginDelayMs: 1800000
+    }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -239,6 +250,8 @@ function helperStatus(config = {}) {
     opportunityBestCoinScore,
     postAttackVisibleCoinExists,
     postAttackDropSelectedId: postAttackDropResult.selected?.drop_id,
+    staminaBudgetDailyLimited,
+    staminaBudgetExitShortageMs: staminaBudgetExit?.shortageMs,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
