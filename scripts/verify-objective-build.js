@@ -299,6 +299,7 @@ function main() {
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
+  const offlineSafetySourceModule = readText('src/browser/offline-safety-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -330,6 +331,7 @@ function main() {
     staminaRuntimeSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
+    offlineSafetySourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -462,6 +464,7 @@ function main() {
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
+    assert(botSourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
@@ -487,6 +490,9 @@ function main() {
     assert(generatedRuntimeSource.includes('function summarizePendingExit'), 'generated runtime does not include pending-exit summary helper');
     assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
     assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
+    assert(generatedRuntimeSource.includes('function summarizeOfflineThreat'), 'generated runtime does not include offline threat summary helper');
+    assert(generatedRuntimeSource.includes('function assessOfflineSafety'), 'generated runtime does not include offline safety assessment helper');
+    assert(generatedRuntimeSource.includes('function pickActiveCombatWaitThreat'), 'generated runtime does not include active combat wait picker');
     assert(!generatedRuntimeSource.includes("require('./src/shared/"), 'generated runtime still contains CommonJS shared-module imports');
   });
 
@@ -624,6 +630,12 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function summarizePendingExit'), 'pending-exit source factory does not include summary helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
+    assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
+    assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
+    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
+    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function summarizeOfflineThreat'), 'offline-safety source factory does not include offline threat summary helper');
+    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function assessOfflineSafety'), 'offline-safety source factory does not include offline safety assessment helper');
+    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function pickActiveCombatWaitThreat'), 'offline-safety source factory does not include active combat wait picker');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
