@@ -535,7 +535,11 @@ function main() {
     assert(runtimeAssemblySourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
     assert(runtimeAssemblySourceModule.includes('function browserRuntimeAssemblySource(config)'), 'runtime assembly source factory not found');
     assert(runtimeAssemblySourceModule.includes('module.exports = {\n  browserRuntimeAssemblySource'), 'runtime assembly source module export not found');
-    assert(runtimeAssemblySourceModule.includes('${runtimeBootstrapSource(config)}'), 'runtime-bootstrap module is not injected into browser runtime');
+    assert(runtimeAssemblySourceModule.includes('function renderRuntimeFragments(fragments)'), 'runtime assembly fragment renderer not found');
+    const assemblyBody = functionBody(runtimeAssemblySourceModule, 'browserRuntimeAssemblySource');
+    assert(assemblyBody.includes('const fragments = ['), 'runtime assembly source does not use an explicit fragment registry');
+    assert(assemblyBody.includes('return renderRuntimeFragments(fragments);'), 'runtime assembly source does not render the fragment registry');
+    assert(assemblyBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
     assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
@@ -551,72 +555,76 @@ function main() {
     assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
     assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
     assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
-    assert(runtimeAssemblySourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
+    assert(assemblyBody.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
     assert(runtimeBootstrapSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
     assert(runtimeBootstrapSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
     assert(runtimeBootstrapSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
     assert(runtimeBootstrapSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
-    assert(runtimeAssemblySourceModule.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${targetWhitelistSource()}'), 'target-whitelist module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${arrayCountSource()}'), 'array-count module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${tickSafetySource()}'), 'tick-safety module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatLogSource({ combatLogExitSummaryFromDecision })}'), 'combat-log module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${importantLogSource()}'), 'important-log module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatHistorySource()}'), 'combat-history module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${entityRefreshSource()}'), 'entity-refresh module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${classifySource()}'), 'classify module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${coinSafetySource()}'), 'coin-safety module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${targetSelectionSource()}'), 'target-selection module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatMovementSource()}'), 'combat-movement module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatAimSource()}'), 'combat-aim module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatStateSource()}'), 'combat-state module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatFireSource()}'), 'combat-fire module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatLeaveCoverSource()}'), 'combat-leave-cover module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${combatActionSource()}'), 'combat-action module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunityStaminaSource()}'), 'opportunity-stamina module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunitySnapshotSource()}'), 'opportunity-snapshot module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${postAttackSource()}'), 'post-attack module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunityActionsSource()}'), 'opportunity-actions module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunityCandidateSource()}'), 'opportunity-candidate module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunityChoiceSource()}'), 'opportunity-choice module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunityPickSource()}'), 'opportunity-pick module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${patrolSource()}'), 'patrol module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${opportunityClearSource()}'), 'opportunity-clear module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${coinProgressRuntimeSource()}'), 'coin-progress runtime module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${attackWorthSource()}'), 'attack-worth module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${exitMotionSource()}'), 'exit-motion module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${persistentLastSelfSource()}'), 'persistent-last-self module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${persistentExitSource()}'), 'persistent-exit module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${persistentClearSource()}'), 'persistent-clear module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${pendingExitPersistenceSource()}'), 'pending-exit persistence module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${refreshExitDetailSource()}'), 'refresh-exit-detail module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${restoredCoinFailuresSource()}'), 'restored-coin-failures module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${loginSnapshotGateSource()}'), 'login-snapshot-gate module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${runtimeDiagnosticsSource()}'), 'runtime-diagnostics module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${autoLoginSource()}'), 'auto-login module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${leaveFlowSource()}'), 'leave-flow module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${chooseActionSource()}'), 'choose-action module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${tickSource()}'), 'tick module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${startupSource()}'), 'startup module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${botObjectSource()}'), 'bot-object module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${coinMotionRuntimeSource()}'), 'coin-motion runtime module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${returnBlockSource()}'), 'return-block module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${actionArbitrationSource()}'), 'action-arbitration module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${networkQualitySource()}'), 'network-quality module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${networkQualitySummarySource()}'), 'network-quality summary module is not injected into browser runtime');
-    assert(runtimeAssemblySourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
+    [
+      'targetOverlaySource',
+      'targetWhitelistSource',
+      'arrayCountSource',
+      'tickSafetySource',
+      'importantLogSource',
+      'combatHistorySource',
+      'entityRefreshSource',
+      'classifySource',
+      'coinSafetySource',
+      'targetSelectionSource',
+      'combatMovementSource',
+      'combatAimSource',
+      'combatStateSource',
+      'combatFireSource',
+      'combatLeaveCoverSource',
+      'combatActionSource',
+      'opportunityStaminaSource',
+      'opportunitySnapshotSource',
+      'postAttackSource',
+      'opportunityActionsSource',
+      'opportunityCandidateSource',
+      'opportunityChoiceSource',
+      'opportunityPickSource',
+      'patrolSource',
+      'opportunityClearSource',
+      'coinProgressRuntimeSource',
+      'entityActivitySource',
+      'staminaRuntimeSource',
+      'attackWorthSource',
+      'exitMotionSource',
+      'persistentLastSelfSource',
+      'persistentExitSource',
+      'persistentClearSource',
+      'pendingExitPersistenceSource',
+      'refreshExitDetailSource',
+      'restoredCoinFailuresSource',
+      'loginSnapshotGateSource',
+      'runtimeDiagnosticsSource',
+      'exitReloginSource',
+      'pendingExitSource',
+      'leaveCommandSource',
+      'autoLoginSource',
+      'leaveFlowSource',
+      'offlineSafetySource',
+      'coinTargetRuntimeSource',
+      'chooseActionSource',
+      'tickSource',
+      'startupSource',
+      'botObjectSource',
+      'nativeStateSource',
+      'nativeControlSource',
+      'coinMotionRuntimeSource',
+      'returnBlockSource',
+      'pageNativeSnapshotSource',
+      'actionArbitrationSource',
+      'networkQualitySource',
+      'networkQualitySummarySource',
+      'runtimeSummarySource'
+    ].forEach(name => {
+      assert(assemblyBody.includes(name), `${name} is not listed in the runtime assembly fragment registry`);
+    });
+    assert(assemblyBody.includes('() => statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })'), 'status-panel module is not injected into browser runtime with display helpers');
+    assert(assemblyBody.includes('() => combatLogSource({ combatLogExitSummaryFromDecision })'), 'combat-log module is not injected into browser runtime with exit-summary helper');
+    assert(assemblyBody.includes('() => controlLoginSource({ staminaExhaustedWindowLabel })'), 'control-login module is not injected into browser runtime with stamina helper');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
     assert(generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
