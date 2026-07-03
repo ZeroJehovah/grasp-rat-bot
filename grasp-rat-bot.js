@@ -97,7 +97,8 @@ const {
   updateCoinAttemptCore,
   updateCoinProgressRecordCore,
   buildIgnoredCoinProgressCore,
-  buildIgnoredCoinPatrolActionCore
+  buildIgnoredCoinPatrolActionCore,
+  coinIgnoreCleanupIntentCore
 } = require('./src/strategy/coin-progress');
 const {
   defaultDist,
@@ -11157,6 +11158,7 @@ ${importantLogSource()}
   ${updateCoinProgressRecordCore.toString()}
   ${buildIgnoredCoinProgressCore.toString()}
   ${buildIgnoredCoinPatrolActionCore.toString()}
+  ${coinIgnoreCleanupIntentCore.toString()}
 
   function coinProgressCoreOptions(extra = {}) {
     return {
@@ -11196,6 +11198,16 @@ ${importantLogSource()}
     return { dx: result.dx, dy: result.dy };
   }
 
+  function clearIgnoredCoinRuntimeState(id) {
+    const cleanup = coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, id);
+    if (cleanup.clearLastTarget) {
+      bot.lastTarget = null;
+      bot.lastTargetAt = 0;
+    }
+    clearOpportunityChoiceFor('coin', id);
+    if (cleanup.clearCoinApproachLock) bot.coinApproachLock = null;
+  }
+
   function trackCoinProgress(action, self) {
     const t = now();
     const options = coinProgressCoreOptions();
@@ -11224,12 +11236,7 @@ ${importantLogSource()}
       const ignoreUntil = failure.ignoreUntil;
       bot.coinAttempts.delete(id);
       bot.coinProgress = buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck');
-	      if (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === id) {
-	        bot.lastTarget = null;
-	        bot.lastTargetAt = 0;
-	      }
-	      clearOpportunityChoiceFor('coin', id);
-	      if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
+      clearIgnoredCoinRuntimeState(id);
       const escape = staleCoinEscapeDirection(action, self, t);
       return buildIgnoredCoinPatrolActionCore(
         action,
@@ -11255,12 +11262,7 @@ ${importantLogSource()}
     const ignoreUntil = failure.ignoreUntil;
     bot.coinAttempts.delete(id);
     bot.coinProgress = buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress');
-	    if (bot.lastTarget?.kind === 'coin' && String(bot.lastTarget.id) === id) {
-	      bot.lastTarget = null;
-	      bot.lastTargetAt = 0;
-	    }
-	    clearOpportunityChoiceFor('coin', id);
-	    if (bot.coinApproachLock?.id === id) bot.coinApproachLock = null;
+    clearIgnoredCoinRuntimeState(id);
     const escape = staleCoinEscapeDirection(action, self, t);
     return buildIgnoredCoinPatrolActionCore(
       action,
