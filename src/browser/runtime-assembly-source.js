@@ -1,6 +1,5 @@
 'use strict';
 
-const { staminaExhaustedWindowLabel } = require('../shared/exit-summary');
 const { runtimeBootstrapSource } = require('./runtime-bootstrap-source');
 const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
@@ -39,7 +38,7 @@ const { chooseActionSource } = require('./choose-action-source');
 const { tickSource } = require('./tick-source');
 const { startupSource } = require('./startup-source');
 const { botObjectSource } = require('./bot-object-source');
-const { controlLoginSource } = require('./control-login-source');
+const { controlLoginRuntimeSource } = require('./control-login-runtime-source');
 const { nativeStateSource } = require('./native-state-source');
 const { nativeControlSource } = require('./native-control-source');
 const { coinMotionRuntimeSource } = require('./coin-motion-runtime-source');
@@ -137,7 +136,7 @@ function browserRuntimeAssemblySource(config) {
     `
 
 			`,
-    () => controlLoginSource({ staminaExhaustedWindowLabel }),
+    controlLoginRuntimeSource,
     `
 
 `,
