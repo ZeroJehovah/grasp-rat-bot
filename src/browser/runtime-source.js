@@ -1,6 +1,6 @@
 'use strict';
 
-const { browserBotSource } = require('./bot-source');
+const { browserRuntimeAssemblySource } = require('./runtime-assembly-source');
 
 function browserRuntimeConfig(options = {}) {
   const config = {
@@ -16,7 +16,7 @@ function browserRuntimeConfig(options = {}) {
 }
 
 function browserRuntimeSource(options = {}) {
-  return browserBotSource(browserRuntimeConfig(options));
+  return browserRuntimeAssemblySource(browserRuntimeConfig(options));
 }
 
 function remoteBrowserRuntimeSource(options = {}) {
