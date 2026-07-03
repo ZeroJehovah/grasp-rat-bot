@@ -377,6 +377,17 @@ This is a small real-runtime migration slice. It does not remove every direct `w
 
 This is still an equivalent runtime-boundary cleanup only. It reduces direct page-global coupling in a large browser fragment without changing login, zoom, pause, or strategy behavior.
 
+## 2026-07-03 Follow-up: Phase 2AB Manual Login Page-Global Gate
+
+`bootstrap-0.4.300` continues the same adapter migration across manual login globals:
+
+- Manual-login bypass markers now write and read `__graspRatManualLoginBypassUntil` / `__graspRatManualLoginBypassReason` through `installPageGlobal()` and `readPageGlobal()`.
+- `installStartLinuxDoLoginGate()` now reads the existing gate flags and `startLinuxDoLogin` function through the page-global adapter, preserves the raw function through `installPageGlobal()`, and installs the guarded function through the same adapter.
+- The manual login execution path in `src/browser/bot-source.js` now reads both raw and guarded `startLinuxDoLogin` through `readPageGlobal()` and invokes the selected function with `pageGlobal` as `this`.
+- Static verification now rejects direct `window.__graspRatManualLoginBypass*`, `window.__graspRatBotRawStartLinuxDoLogin`, `window.__graspRatBotStartLinuxDoLoginGateVersion`, and `window.startLinuxDoLogin` usage in the migrated control-login path.
+
+This keeps the same browser global names and login behavior while reducing another runtime-global dependency before true browser module ownership replaces the generated-source internals.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -407,9 +418,10 @@ This is still an equivalent runtime-boundary cleanup only. It reduces direct pag
 25. Browser runtime source boundary: integrated in `bootstrap-0.4.297`
 26. Page-global core integration: integrated in `bootstrap-0.4.298`
 27. Control-login page-global guards: integrated in `bootstrap-0.4.299`
-28. Constants: partially integrated for high-value coin defaults
-29. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-30. Run live validation sessions after each behavior-touching replacement
+28. Manual login page-global gate: integrated in `bootstrap-0.4.300`
+29. Constants: partially integrated for high-value coin defaults
+30. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+31. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

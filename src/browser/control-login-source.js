@@ -1843,14 +1843,14 @@ function controlLoginSource(helpers = {}) {
 
   function markManualLoginBypass(reason = 'manual login', durationMs = 5000) {
     try {
-      window.__graspRatManualLoginBypassUntil = Date.now() + Math.max(1000, Number(durationMs) || 5000);
-      window.__graspRatManualLoginBypassReason = String(reason || 'manual login');
+      installPageGlobal('__graspRatManualLoginBypassUntil', Date.now() + Math.max(1000, Number(durationMs) || 5000), pageGlobal);
+      installPageGlobal('__graspRatManualLoginBypassReason', String(reason || 'manual login'), pageGlobal);
     } catch (_) {}
   }
 
   function manualLoginBypassActive() {
     try {
-      return Number(window.__graspRatManualLoginBypassUntil || 0) > Date.now();
+      return Number(readPageGlobal('__graspRatManualLoginBypassUntil', 0, pageGlobal) || 0) > Date.now();
     } catch (_) {
       return false;
     }
@@ -1911,12 +1911,12 @@ function controlLoginSource(helpers = {}) {
   }
 
   function installStartLinuxDoLoginGate() {
-    if (window.__graspRatStartLinuxDoLoginGateInstalled) return;
-    if (window.__graspRatBotStartLinuxDoLoginGateVersion === cfg.version) return;
-    const current = window.startLinuxDoLogin;
-    const preservedRaw = window.__graspRatBotRawStartLinuxDoLogin;
+    if (readPageGlobal('__graspRatStartLinuxDoLoginGateInstalled', false, pageGlobal)) return;
+    if (readPageGlobal('__graspRatBotStartLinuxDoLoginGateVersion', '', pageGlobal) === cfg.version) return;
+    const current = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
+    const preservedRaw = readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal);
     const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
-    window.__graspRatBotRawStartLinuxDoLogin = previous;
+    installPageGlobal('__graspRatBotRawStartLinuxDoLogin', previous, pageGlobal);
     const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
       if (manualLoginBypassActive()) {
         if (typeof previous === 'function') return previous.apply(this, args);
@@ -1959,8 +1959,8 @@ function controlLoginSource(helpers = {}) {
       return previous;
     };
     try {
-      window.startLinuxDoLogin = guardedStartLinuxDoLogin;
-      window.__graspRatBotStartLinuxDoLoginGateVersion = cfg.version;
+      installPageGlobal('startLinuxDoLogin', guardedStartLinuxDoLogin, pageGlobal);
+      installPageGlobal('__graspRatBotStartLinuxDoLoginGateVersion', cfg.version, pageGlobal);
     } catch (_) {}
   }
 
