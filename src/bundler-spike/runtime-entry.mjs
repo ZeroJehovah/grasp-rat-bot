@@ -2,7 +2,7 @@
 
 import runtimeUtils from '../browser/runtime/runtime-utils.js';
 import displayFormat from '../browser/runtime/display-format.js';
-import * as targetWhitelist from '../shared/target-whitelist.js';
+import targetWhitelist from '../browser/runtime/target-whitelist.js';
 import * as actionPriority from '../strategy/action-priority.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';

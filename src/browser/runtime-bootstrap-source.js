@@ -18,7 +18,7 @@ const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
-} = require('../shared/target-whitelist');
+} = require('./runtime/target-whitelist');
 const { OPPORTUNITY_CONSTANTS } = require('../strategy/opportunity-constants');
 
 function runtimeBootstrapSource(config) {

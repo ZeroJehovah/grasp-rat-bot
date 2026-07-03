@@ -272,6 +272,7 @@ function main() {
   const remoteBundledBuildSource = readText('scripts/build-remote-bot-bundled.js');
   const bundlerSpikeEntrySource = readText('src/bundler-spike/runtime-entry.mjs');
   const browserPageGlobalCoreSource = readText('src/browser/page-global-core.js');
+  const targetWhitelistRuntimeModule = readText('src/browser/runtime/target-whitelist.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -365,6 +366,7 @@ function main() {
     runtimeFragmentsSourceModule,
     runtimeBootstrapSourceModule,
     browserPageGlobalCoreSource,
+    targetWhitelistRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -523,7 +525,9 @@ function main() {
     assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
-    assert(runtimeBootstrapSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
+    assert(runtimeBootstrapSourceModule.includes("require('./runtime/target-whitelist')"), 'runtime bootstrap source does not import the browser target-whitelist helper module');
+    assert(targetWhitelistRuntimeModule.includes("require('../../shared/target-whitelist')"), 'browser target-whitelist helper module does not reuse shared target-whitelist helpers');
+    assert(targetWhitelistRuntimeModule.includes('normalizeTargetWhitelistName') && targetWhitelistRuntimeModule.includes('parseTargetWhitelistNames') && targetWhitelistRuntimeModule.includes('deriveTargetWhitelistUrl'), 'browser target-whitelist helper module exports are incomplete');
     assert(runtimeFragmentsSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./status-panel-runtime-source')"), 'status-panel runtime source module import not found');
@@ -1219,7 +1223,7 @@ function main() {
   check('bundler spike bundles shared and strategy helpers into a browser IIFE', () => {
     assert(bundlerSpikeEntrySource.includes("import runtimeUtils from '../browser/runtime/runtime-utils.js'"), 'bundler spike does not import runtime utils through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import displayFormat from '../browser/runtime/display-format.js'"), 'bundler spike does not import display helpers through the browser runtime helper module');
-    assert(bundlerSpikeEntrySource.includes("import * as targetWhitelist from '../shared/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers as a module');
+    assert(bundlerSpikeEntrySource.includes("import targetWhitelist from '../browser/runtime/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
