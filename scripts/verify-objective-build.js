@@ -281,6 +281,7 @@ function main() {
   const actionSwitchDiagnosticsRuntimeModule = readText('src/browser/runtime/action-switch-diagnostics.js');
   const coinDiagnosticsRuntimeModule = readText('src/browser/runtime/coin-diagnostics.js');
   const coinMotionRuntimeModule = readText('src/browser/runtime/coin-motion.js');
+  const coinTargetRuntimeModule = readText('src/browser/runtime/coin-target.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -383,6 +384,7 @@ function main() {
     actionSwitchDiagnosticsRuntimeModule,
     coinDiagnosticsRuntimeModule,
     coinMotionRuntimeModule,
+    coinTargetRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1266,6 +1268,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js'"), 'bundler spike does not import action-switch diagnostics through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import coinDiagnostics from '../browser/runtime/coin-diagnostics.js'"), 'bundler spike does not import coin diagnostics through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import coinMotion from '../browser/runtime/coin-motion.js'"), 'bundler spike does not import coin motion through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import coinTarget from '../browser/runtime/coin-target.js'"), 'bundler spike does not import coin target through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
@@ -1276,6 +1279,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(sampleAction, switchState, { nowMs: 1000 })'), 'bundler spike does not execute the action-switch diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes('coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes('coinMotion.coinDirectionToCore({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin motion helper module');
+    assert(bundlerSpikeEntrySource.includes("coinTarget.coinTargetKeyCore({ drop_id: 'target-spike'"), 'bundler spike does not execute the coin target helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -2846,7 +2850,10 @@ function main() {
     assert(strategyCoinTargetSource.includes('function snapshotCoinWorthLongTravelCore'), 'strategy snapshot coin worth core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinNavigationReasonCore'), 'strategy snapshot coin reason core not found');
     const coinTargetRuntimeBody = functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource');
-    assert(coinTargetRuntimeSourceModule.includes("require('../strategy/coin-target')"), 'coin-target runtime source does not import coin target strategy module');
+    assert(coinTargetRuntimeSourceModule.includes("require('./runtime/coin-target')"), 'coin-target runtime source does not import coin target through the browser runtime helper module');
+    assert(!coinTargetRuntimeSourceModule.includes("require('../strategy/coin-target')"), 'coin-target runtime source still imports coin target directly from strategy');
+    assert(coinTargetRuntimeModule.includes("require('../../strategy/coin-target')"), 'browser coin target helper module does not reuse the strategy coin target helpers');
+    assert(coinTargetRuntimeModule.includes('coinTargetKeyCore') && coinTargetRuntimeModule.includes('coinMatchesTrackedTargetCore') && coinTargetRuntimeModule.includes('buildNativeCoinSnapshotCore') && coinTargetRuntimeModule.includes('snapshotCoinNavigationReasonCore'), 'browser coin target helper module exports are incomplete');
     assert(coinTargetRuntimeBody.includes('coinTargetKeyCore.toString()'), 'coin-target runtime source does not inject coin target key core');
     assert(coinTargetRuntimeBody.includes('coinMatchesTrackedTargetCore.toString()'), 'coin-target runtime source does not inject coin target matcher core');
     assert(coinTargetRuntimeBody.includes('trackedCoinTargetForCollectionCore.toString()'), 'coin-target runtime source does not inject tracked coin target core');

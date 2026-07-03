@@ -10,7 +10,7 @@ const {
   pickIncidentalCoinPickupsCore,
   snapshotCoinWorthLongTravelCore,
   snapshotCoinNavigationReasonCore
-} = require('../strategy/coin-target');
+} = require('./runtime/coin-target');
 
 function coinTargetRuntimeSource() {
   return String.raw`
