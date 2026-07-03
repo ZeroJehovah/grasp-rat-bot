@@ -20,24 +20,46 @@ const {
   rememberOpportunityChoiceCore
 } = require('./runtime/opportunity-choice');
 
-function opportunityChoiceSource() {
-  return String.raw`			  ${opportunityKey.toString()}
-			  ${opportunityChoiceType.toString()}
-			  ${opportunityChoiceId.toString()}
-			  ${opportunityChoiceKey.toString()}
-			  ${opportunityPairKey.toString()}
-			  ${opportunityByKey.toString()}
-			  ${opportunityMatchesChoiceCore.toString()}
-			  ${isHighValueCoinOpportunityCore.toString()}
-			  ${highValueCoinHoldBlocksEnemySwitchCore.toString()}
-			  ${lockedOpportunityChoiceCore.toString()}
-			  ${applyOpportunityOscillationLockCore.toString()}
-			  ${chooseStableOpportunityCore.toString()}
-			  ${opportunityMissingHoldUntilCore.toString()}
-			  ${missingHeldCoinCoveredByVisibleAuthorityCore.toString()}
-			  ${buildMissingHeldOpportunityCore.toString()}
-			  ${opportunityRouteIds.toString()}
-			  ${rememberOpportunityChoiceCore.toString()}
+function opportunityChoiceInlineSource(helpers = {}) {
+  const {
+    opportunityKey,
+    opportunityChoiceType,
+    opportunityChoiceId,
+    opportunityChoiceKey,
+    opportunityPairKey,
+    opportunityByKey,
+    opportunityMatchesChoiceCore,
+    isHighValueCoinOpportunityCore,
+    highValueCoinHoldBlocksEnemySwitchCore,
+    lockedOpportunityChoiceCore,
+    applyOpportunityOscillationLockCore,
+    chooseStableOpportunityCore,
+    opportunityMissingHoldUntilCore,
+    missingHeldCoinCoveredByVisibleAuthorityCore,
+    buildMissingHeldOpportunityCore,
+    opportunityRouteIds,
+    rememberOpportunityChoiceCore
+  } = helpers;
+  const opportunityChoiceHelperSource = [
+    opportunityKey,
+    opportunityChoiceType,
+    opportunityChoiceId,
+    opportunityChoiceKey,
+    opportunityPairKey,
+    opportunityByKey,
+    opportunityMatchesChoiceCore,
+    isHighValueCoinOpportunityCore,
+    highValueCoinHoldBlocksEnemySwitchCore,
+    lockedOpportunityChoiceCore,
+    applyOpportunityOscillationLockCore,
+    chooseStableOpportunityCore,
+    opportunityMissingHoldUntilCore,
+    missingHeldCoinCoveredByVisibleAuthorityCore,
+    buildMissingHeldOpportunityCore,
+    opportunityRouteIds,
+    rememberOpportunityChoiceCore
+  ].map(fn => typeof fn === 'function' ? `\t\t\t  ${fn.toString()}` : '').join('\n');
+  return String.raw`${opportunityChoiceHelperSource}
 
 			  function opportunityChoiceCoreOptions(extra = {}) {
 			    return {
@@ -207,4 +229,55 @@ function opportunityChoiceSource() {
 `;
 }
 
-module.exports = { opportunityChoiceSource };
+function bundledOpportunityChoiceSource() {
+  return `const {
+  opportunityKey,
+  opportunityChoiceType,
+  opportunityChoiceId,
+  opportunityChoiceKey,
+  opportunityPairKey,
+  opportunityByKey,
+  opportunityMatchesChoiceCore,
+  isHighValueCoinOpportunityCore,
+  highValueCoinHoldBlocksEnemySwitchCore,
+  lockedOpportunityChoiceCore,
+  applyOpportunityOscillationLockCore,
+  chooseStableOpportunityCore,
+  opportunityMissingHoldUntilCore,
+  missingHeldCoinCoveredByVisibleAuthorityCore,
+  buildMissingHeldOpportunityCore,
+  opportunityRouteIds,
+  rememberOpportunityChoiceCore
+} = require('./src/browser/runtime/opportunity-choice');
+
+${opportunityChoiceInlineSource()}`;
+}
+
+function opportunityChoiceSource(options = {}) {
+  if (options.bundledRuntime) return bundledOpportunityChoiceSource(options);
+  return opportunityChoiceInlineSource({
+    opportunityKey,
+    opportunityChoiceType,
+    opportunityChoiceId,
+    opportunityChoiceKey,
+    opportunityPairKey,
+    opportunityByKey,
+    opportunityMatchesChoiceCore,
+    isHighValueCoinOpportunityCore,
+    highValueCoinHoldBlocksEnemySwitchCore,
+    lockedOpportunityChoiceCore,
+    applyOpportunityOscillationLockCore,
+    chooseStableOpportunityCore,
+    opportunityMissingHoldUntilCore,
+    missingHeldCoinCoveredByVisibleAuthorityCore,
+    buildMissingHeldOpportunityCore,
+    opportunityRouteIds,
+    rememberOpportunityChoiceCore
+  });
+}
+
+module.exports = {
+  bundledOpportunityChoiceSource,
+  opportunityChoiceInlineSource,
+  opportunityChoiceSource
+};
