@@ -658,6 +658,17 @@ This is a source-organization split only. It preserves combat action arbitration
 
 This is a source-organization split only. It preserves post-attack visible drop attribution, recovery drop override thresholds, killed-target wait behavior, post-attack strategy-core wrapper calls, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BH Opportunity Actions Source Factory
+
+`bootstrap-0.4.335` extracts opportunity action source generation into a dedicated browser source module:
+
+- `src/browser/opportunity-actions-source.js` now owns the raw browser source for enemy opportunity candidate filtering, coin action construction, and enemy action construction.
+- `src/browser/bot-source.js` imports and injects `${opportunityActionsSource()}` immediately after `${postAttackSource()}`, preserving the generated runtime order before opportunity choice strategy helpers.
+- Static verification checks the new source-factory shape, injection point, enemy candidate helper, coin action builder, and enemy action builder anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves AFK/profitable enemy action construction, coin route action metadata wiring, opportunity action score/stamina metadata, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -723,9 +734,10 @@ This is a source-organization split only. It preserves post-attack visible drop 
 60. Combat leave cover source factory: integrated in `bootstrap-0.4.332`
 61. Opportunity snapshot source factory: integrated in `bootstrap-0.4.333`
 62. Post-attack source factory: integrated in `bootstrap-0.4.334`
-63. Constants: partially integrated for high-value coin defaults
-64. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-65. Run live validation sessions after each behavior-touching replacement
+63. Opportunity actions source factory: integrated in `bootstrap-0.4.335`
+64. Constants: partially integrated for high-value coin defaults
+65. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+66. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

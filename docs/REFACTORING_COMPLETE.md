@@ -130,7 +130,7 @@ Created **8 new modules** totaling **1,686 lines** of well-documented, tested co
 ✓ Test coverage  
 ✓ Performance characteristics  
 
-As of the later `bootstrap-0.4.334` source-builder extraction, the main file (`grasp-rat-bot.js`) is **320 lines** and keeps the Node/CDP CLI, status/diagnose flow, `--print-source` wrapper, and self-test delegation. The browser runtime source generator lives behind `src/browser/runtime-source.js` / `src/browser/bot-source.js`, with large browser runtime fragments split into dedicated source factories such as combat, opportunity, and post-attack modules. The generated remote bot remains a single browser script.
+As of the later `bootstrap-0.4.335` source-builder extraction, the main file (`grasp-rat-bot.js`) is **320 lines** and keeps the Node/CDP CLI, status/diagnose flow, `--print-source` wrapper, and self-test delegation. The browser runtime source generator lives behind `src/browser/runtime-source.js` / `src/browser/bot-source.js`, with large browser runtime fragments split into dedicated source factories such as combat, opportunity, post-attack, and opportunity-action modules. The generated remote bot remains a single browser script.
 
 ---
 
@@ -148,6 +148,7 @@ grasp-rat-bot/
 │   │   ├── control-login-source.js
 │   │   ├── native-state-source.js
 │   │   ├── post-attack-source.js
+│   │   ├── opportunity-actions-source.js
 │   │   ├── entity-activity-source.js
 │   │   ├── stamina-runtime-source.js
 │   │   ├── leave-command-source.js
