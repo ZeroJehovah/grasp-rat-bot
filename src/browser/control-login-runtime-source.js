@@ -3,8 +3,18 @@
 const { staminaExhaustedWindowLabel } = require('./runtime/exit-summary');
 const { controlLoginSource } = require('./control-login-source');
 
-function controlLoginRuntimeSource() {
+function bundledControlLoginRuntimeSource() {
+  return `const { staminaExhaustedWindowLabel } = require('./src/browser/runtime/exit-summary');
+
+${controlLoginSource()}`;
+}
+
+function controlLoginRuntimeSource(options = {}) {
+  if (options.bundledRuntime) return bundledControlLoginRuntimeSource();
   return controlLoginSource({ staminaExhaustedWindowLabel });
 }
 
-module.exports = { controlLoginRuntimeSource };
+module.exports = {
+  bundledControlLoginRuntimeSource,
+  controlLoginRuntimeSource
+};

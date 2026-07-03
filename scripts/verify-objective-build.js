@@ -647,6 +647,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-utility-clone', () => runtimeUtilityCloneSource(config)]"), 'runtime-utility-clone fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['control-login-runtime', () => controlLoginRuntimeSource(config)]"), 'control-login-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -667,8 +668,11 @@ function main() {
     assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
     assert(combatLogRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCombatLogRuntimeSource();'), 'combat-log runtime source factory does not switch to bundler-owned source in remote builds');
     assert(combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime source does not bind exit-summary helper');
-    assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
-    assert(controlLoginRuntimeSourceModule.includes('module.exports = { controlLoginRuntimeSource }'), 'control-login runtime source export not found');
+    assert(controlLoginRuntimeSourceModule.includes('function bundledControlLoginRuntimeSource()'), 'bundled control-login runtime source factory not found');
+    assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource(options = {})'), 'control-login runtime source factory not found');
+    assert(controlLoginRuntimeSourceModule.includes('module.exports = {\n  bundledControlLoginRuntimeSource,\n  controlLoginRuntimeSource\n}'), 'control-login runtime source export not found');
+    assert(controlLoginRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'control-login runtime source does not expose a bundler-owned exit-summary require');
+    assert(controlLoginRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledControlLoginRuntimeSource();'), 'control-login runtime source factory does not switch to bundler-owned source in remote builds');
     assert(controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime source does not bind stamina helper');
     assert(runtimeBootstrapSourceModule.includes('function bundledRuntimeBootstrapHelperSource()'), 'bundled runtime-bootstrap helper source factory not found');
     assert(runtimeBootstrapSourceModule.includes('function inlineRuntimeBootstrapHelperSource()'), 'inline runtime-bootstrap helper source factory not found');
