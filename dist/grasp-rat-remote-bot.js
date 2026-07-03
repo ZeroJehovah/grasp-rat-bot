@@ -41,7 +41,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.299" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.300" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5912,14 +5912,14 @@
     }
     function markManualLoginBypass(reason = "manual login", durationMs = 5e3) {
       try {
-        window.__graspRatManualLoginBypassUntil = Date.now() + Math.max(1e3, Number(durationMs) || 5e3);
-        window.__graspRatManualLoginBypassReason = String(reason || "manual login");
+        installPageGlobal("__graspRatManualLoginBypassUntil", Date.now() + Math.max(1e3, Number(durationMs) || 5e3), pageGlobal);
+        installPageGlobal("__graspRatManualLoginBypassReason", String(reason || "manual login"), pageGlobal);
       } catch (_) {
       }
     }
     function manualLoginBypassActive() {
       try {
-        return Number(window.__graspRatManualLoginBypassUntil || 0) > Date.now();
+        return Number(readPageGlobal("__graspRatManualLoginBypassUntil", 0, pageGlobal) || 0) > Date.now();
       } catch (_) {
         return false;
       }
@@ -5977,12 +5977,12 @@
       updateBotPanel(bot.lastDecision);
     }
     function installStartLinuxDoLoginGate() {
-      if (window.__graspRatStartLinuxDoLoginGateInstalled) return;
-      if (window.__graspRatBotStartLinuxDoLoginGateVersion === cfg.version) return;
-      const current = window.startLinuxDoLogin;
-      const preservedRaw = window.__graspRatBotRawStartLinuxDoLogin;
+      if (readPageGlobal("__graspRatStartLinuxDoLoginGateInstalled", false, pageGlobal)) return;
+      if (readPageGlobal("__graspRatBotStartLinuxDoLoginGateVersion", "", pageGlobal) === cfg.version) return;
+      const current = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
+      const preservedRaw = readPageGlobal("__graspRatBotRawStartLinuxDoLogin", null, pageGlobal);
       const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
-      window.__graspRatBotRawStartLinuxDoLogin = previous;
+      installPageGlobal("__graspRatBotRawStartLinuxDoLogin", previous, pageGlobal);
       const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
         if (manualLoginBypassActive()) {
           if (typeof previous === "function") return previous.apply(this, args);
@@ -6025,8 +6025,8 @@
         return previous;
       };
       try {
-        window.startLinuxDoLogin = guardedStartLinuxDoLogin;
-        window.__graspRatBotStartLinuxDoLoginGateVersion = cfg.version;
+        installPageGlobal("startLinuxDoLogin", guardedStartLinuxDoLogin, pageGlobal);
+        installPageGlobal("__graspRatBotStartLinuxDoLoginGateVersion", cfg.version, pageGlobal);
       } catch (_) {
       }
     }
@@ -8466,7 +8466,8 @@
       const loginRequired = hasLoginRequiredText();
       const self = getSelf();
       const hasAliveSelf = Boolean(self && isAlive(self));
-      const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === "function");
+      const currentStartLinuxDoLogin = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
+      const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === "function");
       const hasPageSession = Boolean(hasToken || hasNativeSession);
       const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || force && canStartLogin && (!hasNativeSession || allowLiveSessionTakeoverBypass));
       if (!needsLogin) {
@@ -8584,11 +8585,13 @@
       };
       bot.lastLoginAt = t;
       try {
-        const rawStartLinuxDoLogin = manualOverride && typeof window.__graspRatBotRawStartLinuxDoLogin === "function" ? window.__graspRatBotRawStartLinuxDoLogin : null;
-        const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLogin === "function" ? startLinuxDoLogin : null);
+        const rawStartLinuxDoLoginCandidate = manualOverride ? readPageGlobal("__graspRatBotRawStartLinuxDoLogin", null, pageGlobal) : null;
+        const rawStartLinuxDoLogin = typeof rawStartLinuxDoLoginCandidate === "function" ? rawStartLinuxDoLoginCandidate : null;
+        const startLinuxDoLoginFn = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
+        const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === "function" ? startLinuxDoLoginFn : null);
         if (manualOverride) markManualLoginBypass(String(reason || "manual login"));
         if (typeof startLoginFn === "function") {
-          const result = startLoginFn.call(window);
+          const result = startLoginFn.call(pageGlobal);
           if (result && typeof result.then === "function") await result;
           detail.attempted = true;
           detail.method = rawStartLinuxDoLogin ? "rawStartLinuxDoLogin" : "startLinuxDoLogin";

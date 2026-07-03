@@ -3841,7 +3841,8 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     const loginRequired = hasLoginRequiredText();
     const self = getSelf();
     const hasAliveSelf = Boolean(self && isAlive(self));
-    const canStartLogin = Boolean(loginControl || typeof startLinuxDoLogin === 'function');
+    const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
+    const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === 'function');
     const hasPageSession = Boolean(hasToken || hasNativeSession);
     const needsLogin = !hasAliveSelf && (
       loginRequired
@@ -3965,13 +3966,17 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
     };
     bot.lastLoginAt = t;
     try {
-      const rawStartLinuxDoLogin = manualOverride && typeof window.__graspRatBotRawStartLinuxDoLogin === 'function'
-        ? window.__graspRatBotRawStartLinuxDoLogin
+      const rawStartLinuxDoLoginCandidate = manualOverride
+        ? readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal)
         : null;
-      const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLogin === 'function' ? startLinuxDoLogin : null);
+      const rawStartLinuxDoLogin = typeof rawStartLinuxDoLoginCandidate === 'function'
+        ? rawStartLinuxDoLoginCandidate
+        : null;
+      const startLinuxDoLoginFn = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
+      const startLoginFn = rawStartLinuxDoLogin || (typeof startLinuxDoLoginFn === 'function' ? startLinuxDoLoginFn : null);
       if (manualOverride) markManualLoginBypass(String(reason || 'manual login'));
       if (typeof startLoginFn === 'function') {
-        const result = startLoginFn.call(window);
+        const result = startLoginFn.call(pageGlobal);
         if (result && typeof result.then === 'function') await result;
         detail.attempted = true;
         detail.method = rawStartLinuxDoLogin ? 'rawStartLinuxDoLogin' : 'startLinuxDoLogin';
