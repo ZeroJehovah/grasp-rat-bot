@@ -713,6 +713,17 @@ This is a source-organization split only. It preserves choice hold windows, osci
 
 This is a source-organization split only. It preserves stale coin ignore/backoff, no-progress cleanup, approach-lock clearing, opportunity-choice clearing, stale-coin escape patrol actions, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BM Opportunity Pick Source Factory
+
+`bootstrap-0.4.340` extracts best opportunity picker source generation into a dedicated browser source module:
+
+- `src/browser/opportunity-pick-source.js` now owns the raw browser source for `pickBestOpportunity()`, including enemy candidate collection, visible coin-route selection, opportunity candidate core construction, coin/enemy action closures, missing-held insertion, stable choice selection, and choice persistence.
+- `src/browser/bot-source.js` imports and injects `${opportunityPickSource()}` immediately after `${opportunityChoiceSource()}`, preserving generated runtime order before patrol and action selection helpers.
+- Static verification checks the new source-factory shape, injection point, `pickBestOpportunity()` wrapper, route opportunity selection, and candidate core call anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves visible opportunity selection, route-aware opportunity scoring, missing-held insertion, stable choice selection, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -783,9 +794,10 @@ This is a source-organization split only. It preserves stale coin ignore/backoff
 65. Opportunity candidate source factory: integrated in `bootstrap-0.4.337`
 66. Opportunity choice source factory: integrated in `bootstrap-0.4.338`
 67. Coin progress runtime source factory: integrated in `bootstrap-0.4.339`
-68. Constants: partially integrated for high-value coin defaults
-69. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-70. Run live validation sessions after each behavior-touching replacement
+68. Opportunity pick source factory: integrated in `bootstrap-0.4.340`
+69. Constants: partially integrated for high-value coin defaults
+70. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+71. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
