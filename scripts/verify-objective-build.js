@@ -287,6 +287,7 @@ function main() {
   const coinProgressRuntimeModule = readText('src/browser/runtime/coin-progress.js');
   const coinRouteRuntimeModule = readText('src/browser/runtime/coin-route.js');
   const opportunityChoiceRuntimeModule = readText('src/browser/runtime/opportunity-choice.js');
+  const opportunityClearRuntimeModule = readText('src/browser/runtime/opportunity-clear.js');
   const opportunityCandidatesRuntimeModule = readText('src/browser/runtime/opportunity-candidates.js');
   const postAttackDropRuntimeModule = readText('src/browser/runtime/post-attack-drop.js');
   const staminaBudgetRuntimeModule = readText('src/browser/runtime/stamina-budget.js');
@@ -300,6 +301,7 @@ function main() {
   const strategyCoinProgressSource = readText('src/strategy/coin-progress.js');
   const strategyCoinRouteSource = readText('src/strategy/coin-route.js');
   const strategyOpportunityChoiceSource = readText('src/strategy/opportunity-choice.js');
+  const strategyOpportunityClearSource = readText('src/strategy/opportunity-clear.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
   const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
@@ -398,6 +400,7 @@ function main() {
     coinProgressRuntimeModule,
     coinRouteRuntimeModule,
     opportunityChoiceRuntimeModule,
+    opportunityClearRuntimeModule,
     opportunityCandidatesRuntimeModule,
     postAttackDropRuntimeModule,
     staminaBudgetRuntimeModule,
@@ -536,6 +539,7 @@ function main() {
     assert(distSource.includes('var require_coin_route = __commonJS'), 'bundled production dist does not bundle the coin-route runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_candidates = __commonJS'), 'bundled production dist does not bundle the opportunity-candidates runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_choice = __commonJS'), 'bundled production dist does not bundle the opportunity-choice runtime module through esbuild');
+    assert(distSource.includes('var require_opportunity_clear = __commonJS'), 'bundled production dist does not bundle the opportunity-clear runtime module through esbuild');
     assert(distSource.includes('var require_coin_diagnostics = __commonJS'), 'bundled production dist does not bundle the coin-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_stamina_budget = __commonJS'), 'bundled production dist does not bundle the stamina-budget runtime module through esbuild');
     assert(distSource.includes('var require_post_attack_drop = __commonJS'), 'bundled production dist does not bundle the post-attack-drop runtime module through esbuild');
@@ -616,6 +620,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./opportunity-snapshot-source')"), 'opportunity-snapshot source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-candidate', () => opportunityCandidateSource(config)]"), 'opportunity-candidate source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-choice', () => opportunityChoiceSource(config)]"), 'opportunity-choice source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['opportunity-clear', () => opportunityClearSource(config)]"), 'opportunity-clear source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['post-attack', () => postAttackSource(config)]"), 'post-attack source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./choose-action-source')"), 'choose-action source module import not found');
@@ -1050,12 +1055,16 @@ function main() {
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('function patrolDirection'), 'patrol source factory does not include patrolDirection');
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('scan-toward-distant-coin'), 'patrol source factory does not include distant coin patrol branch');
     assert(functionBody(patrolSourceModule, 'patrolSource').includes('maintain-safe-spacing'), 'patrol source factory does not include safe spacing patrol branch');
-    assert(opportunityClearSourceModule.includes('function opportunityClearSource() {'), 'opportunity-clear source factory not found');
-    assert(opportunityClearSourceModule.includes('module.exports = { opportunityClearSource }'), 'opportunity-clear source module export not found');
-    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('String.raw`'), 'opportunity-clear source factory does not return raw browser source');
-    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('function clearOpportunityChoiceFor'), 'opportunity-clear source factory does not include clearOpportunityChoiceFor');
-    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('bot.opportunityChoice = null'), 'opportunity-clear source factory does not clear opportunity choice');
-    assert(functionBody(opportunityClearSourceModule, 'opportunityClearSource').includes('resetOpportunitySwitchLock()'), 'opportunity-clear source factory does not reset switch lock');
+    assert(opportunityClearSourceModule.includes('function opportunityClearInlineSource() {'), 'opportunity-clear inline source factory not found');
+    assert(opportunityClearSourceModule.includes('function bundledOpportunityClearSource() {'), 'opportunity-clear bundled source factory not found');
+    assert(opportunityClearSourceModule.includes('function opportunityClearSource(options = {}) {'), 'opportunity-clear source selector not found');
+    assert(opportunityClearSourceModule.includes('bundledOpportunityClearSource') && opportunityClearSourceModule.includes('opportunityClearInlineSource') && opportunityClearSourceModule.includes('opportunityClearSource'), 'opportunity-clear source module exports are incomplete');
+    const opportunityClearInlineBody = functionBody(opportunityClearSourceModule, 'opportunityClearInlineSource');
+    assert(opportunityClearInlineBody.includes('String.raw`'), 'opportunity-clear inline source factory does not return raw browser source');
+    assert(opportunityClearInlineBody.includes('function clearOpportunityChoiceFor'), 'opportunity-clear inline source factory does not include clearOpportunityChoiceFor');
+    assert(opportunityClearInlineBody.includes('bot.opportunityChoice = null'), 'opportunity-clear inline source factory does not clear opportunity choice');
+    assert(opportunityClearInlineBody.includes('resetOpportunitySwitchLock()'), 'opportunity-clear inline source factory does not reset switch lock');
+    assert(functionBody(opportunityClearSourceModule, 'bundledOpportunityClearSource').includes("require('./src/browser/runtime/opportunity-clear')"), 'opportunity-clear bundled source does not hand clear helper to the bundler');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteInlineSource(helpers = {}) {'), 'opportunity-route inline source factory not found');
     assert(opportunityRouteSourceModule.includes('function bundledOpportunityRouteSource() {'), 'opportunity-route bundled source factory not found');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource(options = {}) {'), 'opportunity-route source selector not found');
@@ -1403,6 +1412,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import coinDiagnostics from '../browser/runtime/coin-diagnostics.js'"), 'bundler spike does not import coin diagnostics through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import coinMotion from '../browser/runtime/coin-motion.js'"), 'bundler spike does not import coin motion through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import coinTarget from '../browser/runtime/coin-target.js'"), 'bundler spike does not import coin target through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import opportunityClear from '../browser/runtime/opportunity-clear.js'"), 'bundler spike does not import opportunity clear through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import postAttackDrop from '../browser/runtime/post-attack-drop.js'"), 'bundler spike does not import post-attack drop through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import staminaBudget from '../browser/runtime/stamina-budget.js'"), 'bundler spike does not import stamina budget through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import opportunityConstants from '../browser/runtime/opportunity-constants.js'"), 'bundler spike does not import opportunity constants through the browser runtime helper module');
@@ -1417,6 +1427,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes('coinMotion.coinDirectionToCore({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin motion helper module');
     assert(bundlerSpikeEntrySource.includes("coinTarget.coinTargetKeyCore({ drop_id: 'target-spike'"), 'bundler spike does not execute the coin target helper module');
+    assert(bundlerSpikeEntrySource.includes('opportunityClear.shouldClearOpportunityChoiceCore('), 'bundler spike does not execute the opportunity clear helper module');
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute the post-attack drop helper module');
     assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute the stamina budget helper module');
     assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute the opportunity constants helper module');
@@ -1448,6 +1459,7 @@ function main() {
     assert(bundlerSpikeBuildSource.includes("assert(source.includes('function arrayCount')"), 'bundler spike self-test does not verify browser runtime helper bundling');
     assert(bundlerSpikeBuildSource.includes('status.nameCount === 2'), 'bundler spike self-test does not verify browser runtime helper execution');
     assert(bundlerSpikeBuildSource.includes("status.postAttackDropSelectedId === 'post-attack-coin'"), 'bundler spike self-test does not assert post-attack drop execution');
+    assert(bundlerSpikeBuildSource.includes('status.opportunityClearExact === true'), 'bundler spike self-test does not assert opportunity clear execution');
     assert(bundlerSpikeBuildSource.includes('status.staminaBudgetExitShortageMs === 50'), 'bundler spike self-test does not assert stamina budget execution');
     assert(bundlerSpikeBuildSource.includes('status.opportunityConstantRoi === 5'), 'bundler spike self-test does not assert opportunity constants execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');
@@ -3159,6 +3171,22 @@ function main() {
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'bundled dist does not contain opportunity choice persistence core');
     assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'bundled dist does not contain missing-held opportunity core');
     assert(generatedRuntimeSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
+  });
+
+  check('opportunity clear uses strategy module core', () => {
+    assert(strategyOpportunityClearSource.includes('function shouldClearOpportunityChoiceCore'), 'strategy opportunity clear core not found');
+    assert(strategyOpportunityClearSource.includes("require('./opportunity-choice')"), 'strategy opportunity clear core does not reuse choice identity helpers');
+    assert(opportunityClearSourceModule.includes("require('./src/browser/runtime/opportunity-clear')"), 'opportunity-clear bundled source does not require the browser runtime helper module');
+    assert(!opportunityClearSourceModule.includes("require('../strategy/opportunity-clear')"), 'opportunity-clear source still imports opportunity clear directly from strategy');
+    assert(opportunityClearRuntimeModule.includes("require('../../strategy/opportunity-clear')"), 'opportunity-clear runtime adapter does not reuse strategy module core');
+    assert(opportunityClearRuntimeModule.includes('shouldClearOpportunityChoiceCore'), 'opportunity-clear runtime adapter does not export expected helper');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-clear.js'"), 'bundler spike does not import opportunity clear runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('opportunityClear.shouldClearOpportunityChoiceCore('), 'bundler spike does not execute opportunity clear helper');
+    assert(bundlerSpikeBuildSource.includes('status.opportunityClearExact === true'), 'bundler spike self-test does not assert opportunity clear execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-clear')"), 'generated remote runtime does not hand opportunity clear helper to the bundler');
+    assert(!generatedRuntimeSource.includes('function shouldClearOpportunityChoiceCore'), 'generated remote runtime still inlines opportunity clear core before bundling');
+    assert(distSource.includes('function shouldClearOpportunityChoiceCore'), 'bundled dist does not contain opportunity clear core');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)'), 'bundled dist clear wrapper does not call opportunity clear core');
   });
 
   check('opportunity candidate construction uses strategy module core', () => {

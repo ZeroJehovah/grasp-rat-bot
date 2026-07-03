@@ -15,6 +15,7 @@ import coinTarget from '../browser/runtime/coin-target.js';
 import coinProgress from '../browser/runtime/coin-progress.js';
 import coinRoute from '../browser/runtime/coin-route.js';
 import opportunityChoice from '../browser/runtime/opportunity-choice.js';
+import opportunityClear from '../browser/runtime/opportunity-clear.js';
 import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
 import postAttackDrop from '../browser/runtime/post-attack-drop.js';
 import staminaBudget from '../browser/runtime/stamina-budget.js';
@@ -147,6 +148,16 @@ function helperStatus(config = {}) {
     null,
     { nowMs: 1000, switchHoldMs: 500 }
   );
+  const opportunityClearExact = opportunityClear.shouldClearOpportunityChoiceCore(
+    { type: 'coin', id: 'choice-held' },
+    'coin',
+    'choice-held'
+  );
+  const opportunityClearMismatch = opportunityClear.shouldClearOpportunityChoiceCore(
+    { type: 'coin', id: 'choice-held' },
+    'enemy',
+    'choice-held'
+  );
   const opportunityCandidateList = opportunityCandidates.buildOpportunityCandidatesCore(
     { x: 0, y: 0 },
     [],
@@ -248,6 +259,8 @@ function helperStatus(config = {}) {
     opportunityChoiceKey: opportunityChoice.opportunityKey(opportunityChoiceResult.chosen),
     opportunityChoiceHeld: opportunityChoiceResult.chosen?.held === true,
     opportunityChoiceHoldRemainingMs: opportunityRemembered.action?.opportunityChoice?.holdRemainingMs,
+    opportunityClearExact,
+    opportunityClearMismatch,
     opportunityCandidateCount: arrayCountRuntime.arrayCount(opportunityCandidateList),
     opportunityCandidateCoinReason: opportunityCandidateList.find(item => item.type === 'coin')?.reason,
     opportunityBestCoinScore,
