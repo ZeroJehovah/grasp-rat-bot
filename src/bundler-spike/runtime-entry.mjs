@@ -5,6 +5,7 @@ import displayFormat from '../browser/runtime/display-format.js';
 import targetWhitelist from '../browser/runtime/target-whitelist.js';
 import exitSummary from '../browser/runtime/exit-summary.js';
 import preservedState from '../browser/runtime/browser-preserved-state.js';
+import persistentExit from '../browser/runtime/persistent-exit.js';
 import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
@@ -324,6 +325,47 @@ function helperStatus(config = {}) {
     { id: 'last-self-written', hp: 77 },
     2000
   );
+  const persistentExitStorage = {
+    value: JSON.stringify({
+      at: 1000,
+      reason: 'enemy-leave',
+      reloginUntil: 1200,
+      reloginDelayMs: 500
+    }),
+    getItem() {
+      return this.value;
+    },
+    setItem(key, value) {
+      this.writtenKey = key;
+      this.writtenValue = JSON.parse(value);
+    }
+  };
+  const persistentExitRefresh = (detail, t) => ({
+    ...detail,
+    refreshedAt: t,
+    holdRemainingMs: Math.max(0, Number(detail.reloginUntil || 0) - t)
+  });
+  const persistentExitRead = persistentExit.readPersistentExitStateCore(
+    persistentExitStorage,
+    'exit-key',
+    persistentExitRefresh,
+    1500
+  );
+  const persistentExitWrite = persistentExit.writePersistentExitStateCore(
+    persistentExitStorage,
+    'exit-key',
+    {
+      at: 1100,
+      attempted: true,
+      method: 'leave',
+      reason: 'offline-leave',
+      summary: 'offline',
+      reloginUntil: 3000,
+      reloginDelayMs: 1000
+    },
+    persistentExitRefresh,
+    2000
+  );
   const persistentClearRemoved = persistentClear.clearPersistentStorageKey('persistent-clear-spike');
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
@@ -375,6 +417,11 @@ function helperStatus(config = {}) {
     persistentLastSelfId: persistentLastSelfRead?.id,
     persistentLastSelfWrite,
     persistentLastSelfWrittenAt: persistentLastSelfStorage.writtenValue?.at,
+    persistentExitReadRestored: persistentExitRead?.restored === true,
+    persistentExitReadReloginUntil: persistentExitRead?.reloginUntil,
+    persistentExitWrite,
+    persistentExitWrittenReason: persistentExitStorage.writtenValue?.reason,
+    persistentExitWrittenHoldMs: persistentExitStorage.writtenValue?.holdRemainingMs,
     persistentClearRemoved,
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
