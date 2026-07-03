@@ -573,9 +573,10 @@ This is a source-organization split only. It preserves HP summaries, stamina exh
 42. Exit/relogin hold source factory: integrated in `bootstrap-0.4.314`
 43. Pending-exit and pursuit tracking source factory: integrated in `bootstrap-0.4.315`
 44. Offline safety assessment source factory: integrated in `bootstrap-0.4.316`
-45. Constants: partially integrated for high-value coin defaults
-46. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-47. Run live validation sessions after each behavior-touching replacement
+45. Leave command helper source factory: integrated in `bootstrap-0.4.317`
+46. Constants: partially integrated for high-value coin defaults
+47. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+48. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices

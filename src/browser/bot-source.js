@@ -50,6 +50,7 @@ const { entityActivitySource } = require('./entity-activity-source');
 const { staminaRuntimeSource } = require('./stamina-runtime-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
+const { leaveCommandSource } = require('./leave-command-source');
 const { offlineSafetySource } = require('./offline-safety-source');
 const { pageNativeSnapshotSource } = require('./page-native-snapshot-source');
 const { actionArbitrationSource } = require('./action-arbitration-source');
@@ -1132,63 +1133,7 @@ ${combatLogSource({ combatLogExitSummaryFromDecision })}
 ${pageNativeSnapshotSource()}
 
 ${exitReloginSource()}
-${pendingExitSource()}  function waitWithTimeout(promise, timeoutMs, label) {
-    const ms = Math.max(100, Number(timeoutMs) || 0);
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error((label || 'operation') + ' timed out after ' + ms + 'ms'));
-      }, ms);
-      Promise.resolve(promise).then(
-        value => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(value);
-        },
-        err => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          reject(err);
-        }
-      );
-    });
-  }
-
-  function leaveCommandFailureMessage(value) {
-    if (value === false) return 'leave request returned false';
-    if (!value || typeof value !== 'object') return '';
-    if (value.ok === false || value.success === false) {
-      return value.message || value.error || 'leave request returned failure';
-    }
-    if (value.error && value.ok !== true && value.success !== true) {
-      return value.message || value.error || 'leave request returned error';
-    }
-    const status = Number(value.status || value.statusCode || 0);
-    if (status >= 400) return value.statusText || value.message || ('leave request HTTP ' + status);
-    return '';
-  }
-
-  function summarizeLeaveCommandResult(value) {
-    if (value === undefined) return { type: 'undefined' };
-    if (value === null) return { type: 'null' };
-    if (value === false || value === true) return { type: 'boolean', value: Boolean(value) };
-    if (typeof value !== 'object') return { type: typeof value, value: String(value).slice(0, 200) };
-    return {
-      type: Array.isArray(value) ? 'array' : 'object',
-      ok: value.ok ?? null,
-      success: value.success ?? null,
-      status: value.status ?? value.statusCode ?? null,
-      statusText: value.statusText || '',
-      message: value.message || '',
-      error: value.error || ''
-    };
-  }
-
-  function clashLeaveRescueHook() {
+${pendingExitSource()}${leaveCommandSource()}  function clashLeaveRescueHook() {
     try {
       const hook = readPageGlobal('__graspRatBotClashLeaveRescue', null, pageGlobal);
       return typeof hook === 'function' ? hook : null;

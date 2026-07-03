@@ -299,6 +299,7 @@ function main() {
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
+  const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
   const offlineSafetySourceModule = readText('src/browser/offline-safety-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
@@ -331,6 +332,7 @@ function main() {
     staminaRuntimeSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
+    leaveCommandSourceModule,
     offlineSafetySourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
@@ -464,6 +466,7 @@ function main() {
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
+    assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
     assert(botSourceModule.includes('${offlineSafetySource()}'), 'offline-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinTargetRuntimeSource()}'), 'coin-target runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
@@ -490,6 +493,9 @@ function main() {
     assert(generatedRuntimeSource.includes('function summarizePendingExit'), 'generated runtime does not include pending-exit summary helper');
     assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
     assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
+    assert(generatedRuntimeSource.includes('function waitWithTimeout'), 'generated runtime does not include wait-with-timeout helper');
+    assert(generatedRuntimeSource.includes('function leaveCommandFailureMessage'), 'generated runtime does not include leave command failure helper');
+    assert(generatedRuntimeSource.includes('function summarizeLeaveCommandResult'), 'generated runtime does not include leave command result summary helper');
     assert(generatedRuntimeSource.includes('function summarizeOfflineThreat'), 'generated runtime does not include offline threat summary helper');
     assert(generatedRuntimeSource.includes('function assessOfflineSafety'), 'generated runtime does not include offline safety assessment helper');
     assert(generatedRuntimeSource.includes('function pickActiveCombatWaitThreat'), 'generated runtime does not include active combat wait picker');
@@ -630,6 +636,12 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function summarizePendingExit'), 'pending-exit source factory does not include summary helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
+    assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
+    assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('String.raw`'), 'leave-command source factory does not return raw browser source');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function waitWithTimeout'), 'leave-command source factory does not include timeout helper');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function leaveCommandFailureMessage'), 'leave-command source factory does not include failure helper');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function summarizeLeaveCommandResult'), 'leave-command source factory does not include result summary helper');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
