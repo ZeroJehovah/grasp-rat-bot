@@ -1152,6 +1152,18 @@ This is a source-organization split only. It keeps target-switch diagnostics beh
 
 This is a source-organization split only. It keeps final-action arbitration behavior unchanged while removing the remaining direct strategy import from `src/browser/action-arbitration-source.js`.
 
+## 2026-07-04 Follow-up: Phase 2CZ Coin Diagnostics Helper Module
+
+`bootstrap-0.4.379` continues the strategy-helper-to-browser-runtime adapter pass with coin diagnostics:
+
+- `src/browser/runtime/coin-diagnostics.js` now owns the executable browser runtime helper exports for coin summaries, filtered-coin diagnostics, diagnostic list summaries, and diagnostics object construction by reusing `src/strategy/coin-diagnostics.js`.
+- `src/browser/coin-safety-source.js` imports coin diagnostics through that browser runtime module while still inlining the same helper function text into the generated runtime.
+- `src/bundler-spike/runtime-entry.mjs` imports coin diagnostics through the browser runtime module path and now verifies `buildCoinDiagnostics()` execution for ignored and snapshot-only nearby coins through the spike status payload.
+- Static verification checks the runtime helper module, the coin-safety import path, the strategy-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.379` hash stayed `769436c54ccc13c0a878ad55b651ea12878106199fce281bd8a2b129381c01ba` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps coin diagnostics behavior unchanged while moving the diagnostics strategy helper behind an executable browser runtime adapter.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1261,9 +1273,10 @@ This is a source-organization split only. It keeps final-action arbitration beha
 104. Action-priority true runtime helper module: integrated in `bootstrap-0.4.376`
 105. Action-switch diagnostics true runtime helper module: integrated in `bootstrap-0.4.377`
 106. Action-arbitration true runtime helper module: integrated in `bootstrap-0.4.378`
-107. Constants: partially integrated for high-value coin defaults
-108. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-109. Run live validation sessions after each behavior-touching replacement
+107. Coin-diagnostics true runtime helper module: integrated in `bootstrap-0.4.379`
+108. Constants: partially integrated for high-value coin defaults
+109. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+110. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
