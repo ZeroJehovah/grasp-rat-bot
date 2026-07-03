@@ -113,6 +113,7 @@ async function selfTest() {
   assert(source.includes('function restoreRuntimeStateCore'), 'restored runtime state helper was not bundled');
   assert(source.includes('function normalizeLoginSnapshotGateStateCore'), 'login snapshot gate helper was not bundled');
   assert(source.includes('function recordRuntimeDiagnosticsCore'), 'runtime diagnostics helper was not bundled');
+  assert(source.includes('function leaveWaitDisplayCore'), 'exit-relogin display helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -224,6 +225,9 @@ async function selfTest() {
   assert(status.loginSnapshotResetReason === 'spike-reset', 'spike did not preserve login snapshot reset reason');
   assert(status.runtimeDiagnosticsTickMs === 12.3, 'spike did not merge runtime diagnostics values');
   assert(status.runtimeDiagnosticsSource === 'bundler-spike', 'spike did not preserve runtime diagnostics source');
+  assert(status.exitReloginDisplay === '离线退出，等待3秒', 'spike did not append exit relogin wait display');
+  assert(status.exitReloginSummary === '离线退出', 'spike did not preserve exit relogin summary');
+  assert(status.exitReloginDisplayReason === '离线退出，等待2秒', 'spike did not finalize exit relogin display reason');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

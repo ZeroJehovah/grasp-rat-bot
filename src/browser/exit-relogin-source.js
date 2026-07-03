@@ -1,6 +1,6 @@
 'use strict';
 
-function exitReloginSource() {
+function exitReloginDisplayInlineSource() {
   return String.raw`	  function leaveWaitDisplay(base, detail) {
 	    const summary = String(base || '').trim();
 	    const waitMs = Number(detail?.holdRemainingMs ?? detail?.reloginDelayMs ?? 0);
@@ -16,7 +16,27 @@ function exitReloginSource() {
     detail.displayReason = leaveWaitDisplay(base, detail);
     return detail;
   }
+`;
+}
 
+function bundledExitReloginDisplaySource() {
+  return `	  const {
+	    leaveWaitDisplayCore,
+	    finalizeLeaveDisplayReasonCore
+	  } = require('./src/browser/runtime/exit-relogin');
+
+	  function leaveWaitDisplay(base, detail) {
+	    return leaveWaitDisplayCore(base, detail, formatDurationMs);
+	  }
+
+	  function finalizeLeaveDisplayReason(detail) {
+	    return finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay);
+	  }
+`;
+}
+
+function exitReloginRemainderSource() {
+  return String.raw`
   function normalizeEnemyActor(actor) {
     if (!actor) return null;
     const rawId = actor.user_id ?? actor.id ?? actor.targetId;
@@ -647,6 +667,16 @@ function exitReloginSource() {
 `;
 }
 
+function exitReloginSource(options = {}) {
+  const displaySource = options.bundledRuntime
+    ? bundledExitReloginDisplaySource()
+    : exitReloginDisplayInlineSource();
+  return displaySource + exitReloginRemainderSource();
+}
+
 module.exports = {
+  exitReloginDisplayInlineSource,
+  bundledExitReloginDisplaySource,
+  exitReloginRemainderSource,
   exitReloginSource
 };

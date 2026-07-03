@@ -176,7 +176,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['exit-relogin', exitReloginSource],
+    ['exit-relogin', () => exitReloginSource(config)],
     ['separator-after-exit-relogin',
     `
 `],
