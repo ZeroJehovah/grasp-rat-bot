@@ -326,6 +326,7 @@ function main() {
   const refreshExitDetailSourceModule = readText('src/browser/refresh-exit-detail-source.js');
   const restoredCoinFailuresSourceModule = readText('src/browser/restored-coin-failures-source.js');
   const loginSnapshotGateSourceModule = readText('src/browser/login-snapshot-gate-source.js');
+  const runtimeDiagnosticsSourceModule = readText('src/browser/runtime-diagnostics-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
@@ -390,6 +391,7 @@ function main() {
     refreshExitDetailSourceModule,
     restoredCoinFailuresSourceModule,
     loginSnapshotGateSourceModule,
+    runtimeDiagnosticsSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
@@ -564,6 +566,7 @@ function main() {
     assert(botSourceModule.includes('${refreshExitDetailSource()}'), 'refresh-exit-detail module is not injected into browser runtime');
     assert(botSourceModule.includes('${restoredCoinFailuresSource()}'), 'restored-coin-failures module is not injected into browser runtime');
     assert(botSourceModule.includes('${loginSnapshotGateSource()}'), 'login-snapshot-gate module is not injected into browser runtime');
+    assert(botSourceModule.includes('${runtimeDiagnosticsSource()}'), 'runtime-diagnostics module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
@@ -951,6 +954,13 @@ function main() {
     assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('function normalizeLoginSnapshotGateState'), 'login-snapshot-gate source factory does not include state normalizer');
     assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('lastSampleAt'), 'login-snapshot-gate source factory does not preserve last sample timestamp');
     assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('resetReason'), 'login-snapshot-gate source factory does not preserve reset reason');
+    assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsSource() {'), 'runtime-diagnostics source factory not found');
+    assert(runtimeDiagnosticsSourceModule.includes('module.exports = { runtimeDiagnosticsSource }'), 'runtime-diagnostics source module export not found');
+    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('String.raw`'), 'runtime-diagnostics source factory does not return raw browser source');
+    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('function recordRuntimeDiagnostics'), 'runtime-diagnostics source factory does not include runtime diagnostics recorder');
+    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('bot.runtimeDiagnostics'), 'runtime-diagnostics source factory does not update bot runtime diagnostics');
+    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('Object.assign(bot.runtimeDiagnostics, values)'), 'runtime-diagnostics source factory does not merge diagnostic values');
+    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('catch (_) {}'), 'runtime-diagnostics source factory does not preserve error swallowing');
     assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
     assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');

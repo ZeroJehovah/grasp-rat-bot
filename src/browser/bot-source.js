@@ -76,6 +76,7 @@ const { pendingExitPersistenceSource } = require('./pending-exit-persistence-sou
 const { refreshExitDetailSource } = require('./refresh-exit-detail-source');
 const { restoredCoinFailuresSource } = require('./restored-coin-failures-source');
 const { loginSnapshotGateSource } = require('./login-snapshot-gate-source');
+const { runtimeDiagnosticsSource } = require('./runtime-diagnostics-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -178,13 +179,7 @@ ${restoredCoinFailuresSource()}
 			  const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });
 			  const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });
 ${loginSnapshotGateSource()}
-
-  function recordRuntimeDiagnostics(values = {}) {
-    try {
-      if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== 'object') bot.runtimeDiagnostics = {};
-      Object.assign(bot.runtimeDiagnostics, values);
-    } catch (_) {}
-  }
+${runtimeDiagnosticsSource()}
 
 		  const bot = {
 	    running: true,
