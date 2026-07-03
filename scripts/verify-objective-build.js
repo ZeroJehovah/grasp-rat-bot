@@ -322,6 +322,7 @@ function main() {
   const startupSourceModule = readText('src/browser/startup-source.js');
   const botObjectSourceModule = readText('src/browser/bot-object-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
+  const controlLoginRuntimeSourceModule = readText('src/browser/control-login-runtime-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
   const coinMotionRuntimeSourceModule = readText('src/browser/coin-motion-runtime-source.js');
@@ -399,6 +400,7 @@ function main() {
     startupSourceModule,
     botObjectSourceModule,
     controlLoginSourceModule,
+    controlLoginRuntimeSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
     coinMotionRuntimeSourceModule,
@@ -498,12 +500,13 @@ function main() {
     assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
-    assert(runtimeAssemblySourceModule.includes("require('../shared/exit-summary')"), 'exit-summary module import not found');
     assert(runtimeUtilsSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils source module import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('../shared/display-format')"), 'status-panel runtime source display-format import not found');
     assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
     assert(combatLogRuntimeSourceModule.includes("require('../shared/exit-summary')"), 'combat-log runtime source exit-summary import not found');
     assert(combatLogRuntimeSourceModule.includes("require('./combat-log-source')"), 'combat-log runtime source module import not found');
+    assert(controlLoginRuntimeSourceModule.includes("require('../shared/exit-summary')"), 'control-login runtime source exit-summary import not found');
+    assert(controlLoginRuntimeSourceModule.includes("require('./control-login-source')"), 'control-login runtime source module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
@@ -527,7 +530,7 @@ function main() {
     assert(runtimeAssemblySourceModule.includes("require('./tick-source')"), 'tick source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./startup-source')"), 'startup source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./bot-object-source')"), 'bot-object source module import not found');
-    assert(runtimeAssemblySourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
+    assert(runtimeAssemblySourceModule.includes("require('./control-login-runtime-source')"), 'control-login runtime source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
     assert(runtimeAssemblySourceModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
@@ -564,6 +567,9 @@ function main() {
     assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
     assert(combatLogRuntimeSourceModule.includes('module.exports = { combatLogRuntimeSource }'), 'combat-log runtime source export not found');
     assert(combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime source does not bind exit-summary helper');
+    assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
+    assert(controlLoginRuntimeSourceModule.includes('module.exports = { controlLoginRuntimeSource }'), 'control-login runtime source export not found');
+    assert(controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime source does not bind stamina helper');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
     assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
@@ -644,6 +650,7 @@ function main() {
       'tickSource',
       'startupSource',
       'botObjectSource',
+      'controlLoginRuntimeSource',
       'nativeStateSource',
       'nativeControlSource',
       'coinMotionRuntimeSource',
@@ -656,7 +663,6 @@ function main() {
     ].forEach(name => {
       assert(assemblyBody.includes(name), `${name} is not listed in the runtime assembly fragment registry`);
     });
-    assert(assemblyBody.includes('() => controlLoginSource({ staminaExhaustedWindowLabel })'), 'control-login module is not injected into browser runtime with stamina helper');
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
     assert(generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl'), 'generated runtime does not inline target whitelist helpers');
