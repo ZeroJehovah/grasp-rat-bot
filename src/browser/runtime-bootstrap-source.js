@@ -10,7 +10,7 @@ const {
 } = require('./runtime/browser-preserved-state');
 const {
   buildRuntimeDefaults
-} = require('../shared/runtime-defaults');
+} = require('./runtime/runtime-defaults');
 const {
   browserPageGlobalSource
 } = require('./page-global-core');
