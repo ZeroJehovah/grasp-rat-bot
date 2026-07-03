@@ -293,6 +293,7 @@ function main() {
   const classifySourceModule = readText('src/browser/classify-source.js');
   const coinSafetySourceModule = readText('src/browser/coin-safety-source.js');
   const targetSelectionSourceModule = readText('src/browser/target-selection-source.js');
+  const combatMovementSourceModule = readText('src/browser/combat-movement-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -332,6 +333,7 @@ function main() {
     classifySourceModule,
     coinSafetySourceModule,
     targetSelectionSourceModule,
+    combatMovementSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -478,6 +480,7 @@ function main() {
     assert(botSourceModule.includes('${classifySource()}'), 'classify module is not injected into browser runtime');
     assert(botSourceModule.includes('${coinSafetySource()}'), 'coin-safety module is not injected into browser runtime');
     assert(botSourceModule.includes('${targetSelectionSource()}'), 'target-selection module is not injected into browser runtime');
+    assert(botSourceModule.includes('${combatMovementSource()}'), 'combat-movement module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -607,6 +610,18 @@ function main() {
     assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function defensiveTargetOverridesEngaged'), 'target-selection source factory does not include defensive override helper');
     assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function attachOpportunisticShot'), 'target-selection source factory does not include opportunistic shot attachment');
     assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function buildOpportunisticShotWait'), 'target-selection source factory does not include opportunistic shot wait builder');
+    assert(combatMovementSourceModule.includes('function combatMovementSource() {'), 'combat-movement source factory not found');
+    assert(combatMovementSourceModule.includes('module.exports = {\n  combatMovementSource'), 'combat-movement source module export not found');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('String.raw`'), 'combat-movement source factory does not return raw browser source');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatMoveVelocityForDirection'), 'combat-movement source factory does not include velocity helper');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatBulletThreats'), 'combat-movement source factory does not include bullet threat classifier');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatThreatFieldCandidate'), 'combat-movement source factory does not include threat-field candidate scorer');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function tangentMoveForBullet'), 'combat-movement source factory does not include tangent dodge helper');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatSpacingVector'), 'combat-movement source factory does not include spacing vector helper');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatPressureDisadvantageState'), 'combat-movement source factory does not include pressure disadvantage helper');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatOutOfRangeReengageState'), 'combat-movement source factory does not include out-of-range reengage helper');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatPassiveRunnerState'), 'combat-movement source factory does not include passive runner helper');
+    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatOutOfRangeDodgeAction'), 'combat-movement source factory does not include out-of-range dodge action');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
