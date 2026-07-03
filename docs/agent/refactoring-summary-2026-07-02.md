@@ -1068,6 +1068,18 @@ This is a source-organization split only. It keeps the raw generated runtime equ
 
 This is a source-organization split only. It keeps status-panel rendering behavior unchanged while moving display-format helper ownership to executable browser runtime modules.
 
+## 2026-07-04 Follow-up: Phase 2CS Target Whitelist Helper Module
+
+`bootstrap-0.4.372` continues the true browser runtime-module migration for target whitelist helpers:
+
+- `src/browser/runtime/target-whitelist.js` now owns the executable browser runtime helper exports for `normalizeTargetWhitelistName()`, `parseTargetWhitelistNames()`, and `deriveTargetWhitelistUrl()` by reusing `src/shared/target-whitelist.js`.
+- `src/browser/runtime-bootstrap-source.js` imports that browser runtime helper module and still inlines the same helper function text into the generated runtime bootstrap.
+- `src/bundler-spike/runtime-entry.mjs` imports target whitelist helpers through the browser runtime module path and still verifies `parseTargetWhitelistNames()` execution through the spike status payload.
+- Static verification checks the runtime helper module, the bootstrap import path, the shared-helper reuse path, and the bundler spike import/execution anchors.
+- A fixed-version `--print-source --bot-version bootstrap-0.4.372` hash stayed `424e16e018860991ad765b35c131b1745ce5c10a2513733e63d0e7529d4741d2` before and after the helper-module extraction, proving the generated browser source is unchanged.
+
+This is a source-organization split only. It keeps whitelist parsing, URL derivation, and generated runtime behavior unchanged while moving target-whitelist helper ownership to executable browser runtime modules.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -1170,9 +1182,10 @@ This is a source-organization split only. It keeps status-panel rendering behavi
 97. Array-count true runtime helper module: integrated in `bootstrap-0.4.369`
 98. Runtime-utils true runtime helper module: integrated in `bootstrap-0.4.370`
 99. Display-format true runtime helper module: integrated in `bootstrap-0.4.371`
-100. Constants: partially integrated for high-value coin defaults
-101. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-102. Run live validation sessions after each behavior-touching replacement
+100. Target-whitelist true runtime helper module: integrated in `bootstrap-0.4.372`
+101. Constants: partially integrated for high-value coin defaults
+102. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+103. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
