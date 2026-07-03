@@ -290,6 +290,7 @@ function main() {
   const opportunityClearRuntimeModule = readText('src/browser/runtime/opportunity-clear.js');
   const opportunityCandidatesRuntimeModule = readText('src/browser/runtime/opportunity-candidates.js');
   const opportunityPickRuntimeModule = readText('src/browser/runtime/opportunity-pick.js');
+  const patrolRuntimeModule = readText('src/browser/runtime/patrol.js');
   const postAttackDropRuntimeModule = readText('src/browser/runtime/post-attack-drop.js');
   const staminaBudgetRuntimeModule = readText('src/browser/runtime/stamina-budget.js');
   const opportunityConstantsRuntimeModule = readText('src/browser/runtime/opportunity-constants.js');
@@ -305,6 +306,7 @@ function main() {
   const strategyOpportunityClearSource = readText('src/strategy/opportunity-clear.js');
   const strategyOpportunityCandidatesSource = readText('src/strategy/opportunity-candidates.js');
   const strategyOpportunityPickSource = readText('src/strategy/opportunity-pick.js');
+  const strategyPatrolSource = readText('src/strategy/patrol.js');
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
   const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
   const strategyOpportunityConstantsSource = readText('src/strategy/opportunity-constants.js');
@@ -542,6 +544,7 @@ function main() {
     assert(distSource.includes('var require_opportunity_candidates = __commonJS'), 'bundled production dist does not bundle the opportunity-candidates runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_choice = __commonJS'), 'bundled production dist does not bundle the opportunity-choice runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_pick = __commonJS'), 'bundled production dist does not bundle the opportunity-pick runtime module through esbuild');
+    assert(distSource.includes('var require_patrol = __commonJS'), 'bundled production dist does not bundle the patrol runtime module through esbuild');
     assert(distSource.includes('var require_opportunity_clear = __commonJS'), 'bundled production dist does not bundle the opportunity-clear runtime module through esbuild');
     assert(distSource.includes('var require_coin_diagnostics = __commonJS'), 'bundled production dist does not bundle the coin-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_stamina_budget = __commonJS'), 'bundled production dist does not bundle the stamina-budget runtime module through esbuild');
@@ -624,6 +627,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("['opportunity-candidate', () => opportunityCandidateSource(config)]"), 'opportunity-candidate source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-choice', () => opportunityChoiceSource(config)]"), 'opportunity-choice source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-pick', () => opportunityPickSource(config)]"), 'opportunity-pick source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['patrol', () => patrolSource(config)]"), 'patrol source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['opportunity-clear', () => opportunityClearSource(config)]"), 'opportunity-clear source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['post-attack', () => postAttackSource(config)]"), 'post-attack source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./coin-target-runtime-source')"), 'coin-target runtime source module import not found');
@@ -1057,12 +1061,16 @@ function main() {
     assert(opportunityPickInlineBody.includes('pickCoinRouteOpportunity'), 'opportunity-pick inline source factory does not include route opportunity selection');
     assert(opportunityPickInlineBody.includes('buildOpportunityCandidatesCore'), 'opportunity-pick inline source factory does not include candidate core call');
     assert(functionBody(opportunityPickSourceModule, 'bundledOpportunityPickSource').includes("require('./src/browser/runtime/opportunity-pick')"), 'opportunity-pick bundled source does not hand picker core to the bundler');
-    assert(patrolSourceModule.includes('function patrolSource() {'), 'patrol source factory not found');
-    assert(patrolSourceModule.includes('module.exports = { patrolSource }'), 'patrol source module export not found');
-    assert(functionBody(patrolSourceModule, 'patrolSource').includes('String.raw`'), 'patrol source factory does not return raw browser source');
-    assert(functionBody(patrolSourceModule, 'patrolSource').includes('function patrolDirection'), 'patrol source factory does not include patrolDirection');
-    assert(functionBody(patrolSourceModule, 'patrolSource').includes('scan-toward-distant-coin'), 'patrol source factory does not include distant coin patrol branch');
-    assert(functionBody(patrolSourceModule, 'patrolSource').includes('maintain-safe-spacing'), 'patrol source factory does not include safe spacing patrol branch');
+    assert(patrolSourceModule.includes('function patrolInlineSource() {'), 'patrol inline source factory not found');
+    assert(patrolSourceModule.includes('function bundledPatrolSource() {'), 'patrol bundled source factory not found');
+    assert(patrolSourceModule.includes('function patrolSource(options = {}) {'), 'patrol source selector not found');
+    assert(patrolSourceModule.includes('bundledPatrolSource') && patrolSourceModule.includes('patrolInlineSource') && patrolSourceModule.includes('patrolSource'), 'patrol source module exports are incomplete');
+    const patrolInlineBody = functionBody(patrolSourceModule, 'patrolInlineSource');
+    assert(patrolInlineBody.includes('String.raw`'), 'patrol inline source factory does not return raw browser source');
+    assert(patrolInlineBody.includes('function patrolDirection'), 'patrol inline source factory does not include patrolDirection');
+    assert(patrolInlineBody.includes('scan-toward-distant-coin'), 'patrol inline source factory does not include distant coin patrol branch');
+    assert(patrolInlineBody.includes('maintain-safe-spacing'), 'patrol inline source factory does not include safe spacing patrol branch');
+    assert(functionBody(patrolSourceModule, 'bundledPatrolSource').includes("require('./src/browser/runtime/patrol')"), 'patrol bundled source does not hand patrol core to the bundler');
     assert(opportunityClearSourceModule.includes('function opportunityClearInlineSource() {'), 'opportunity-clear inline source factory not found');
     assert(opportunityClearSourceModule.includes('function bundledOpportunityClearSource() {'), 'opportunity-clear bundled source factory not found');
     assert(opportunityClearSourceModule.includes('function opportunityClearSource(options = {}) {'), 'opportunity-clear source selector not found');
@@ -3198,6 +3206,25 @@ function main() {
     assert(!generatedRuntimeSource.includes('function pickBestOpportunityCore'), 'generated remote runtime still inlines opportunity pick core before bundling');
     assert(distSource.includes('function pickBestOpportunityCore'), 'bundled dist does not contain opportunity pick core');
     assert(distSource.includes('return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups'), 'bundled dist pick wrapper does not call opportunity pick core');
+  });
+
+  check('patrol direction uses strategy module core', () => {
+    assert(strategyPatrolSource.includes('function patrolDirectionCore'), 'strategy patrol direction core not found');
+    assert(strategyPatrolSource.includes("reason: 'scan-toward-distant-coin'"), 'strategy patrol core does not preserve scan coin reason');
+    assert(strategyPatrolSource.includes("reason: 'maintain-safe-spacing'"), 'strategy patrol core does not preserve safe-spacing reason');
+    assert(strategyPatrolSource.includes("reason: 'wait-for-visible-coin-refresh'"), 'strategy patrol core does not preserve wait reason');
+    assert(patrolSourceModule.includes("require('./src/browser/runtime/patrol')"), 'patrol bundled source does not require the browser runtime helper module');
+    assert(!patrolSourceModule.includes("require('../strategy/patrol')"), 'patrol source still imports patrol directly from strategy');
+    assert(patrolRuntimeModule.includes("require('../../strategy/patrol')"), 'patrol runtime adapter does not reuse strategy module core');
+    assert(patrolRuntimeModule.includes('patrolDirectionCore'), 'patrol runtime adapter does not export expected helper');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/patrol.js'"), 'bundler spike does not import patrol runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('patrol.patrolDirectionCore('), 'bundler spike does not execute patrol helper');
+    assert(bundlerSpikeBuildSource.includes("status.patrolReason === 'scan-toward-distant-coin'"), 'bundler spike self-test does not assert patrol execution');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/patrol')"), 'generated remote runtime does not hand patrol helper to the bundler');
+    assert(!generatedRuntimeSource.includes('function patrolDirectionCore'), 'generated remote runtime still inlines patrol core before bundling');
+    assert(distSource.includes('function patrolDirectionCore'), 'bundled dist does not contain patrol direction core');
+    assert(distSource.includes('patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin'), 'bundled dist patrol wrapper does not call patrol direction core');
+    assert(distSource.includes('if (result?.clearPatrolHeading) bot.patrolHeading = null'), 'bundled dist patrol wrapper does not preserve patrol heading clear side effect');
   });
 
   check('opportunity clear uses strategy module core', () => {

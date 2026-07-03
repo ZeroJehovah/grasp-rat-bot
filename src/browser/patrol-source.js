@@ -1,6 +1,6 @@
 'use strict';
 
-function patrolSource() {
+function patrolInlineSource() {
   return String.raw`
 
 	  function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
@@ -42,4 +42,31 @@ function patrolSource() {
 		  }`;
 }
 
-module.exports = { patrolSource };
+function bundledPatrolSource() {
+  return `const { patrolDirectionCore } = require('./src/browser/runtime/patrol');
+
+	  function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
+	    const result = patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin, {
+	      directionTo,
+	      dist,
+	      patrolPrecisionTolerance: cfg.patrolPrecisionTolerance,
+	      patrolCoinMaxDistance: cfg.patrolCoinMaxDistance,
+	      dangerRadius: cfg.dangerRadius,
+	      activeAvoidMaxDistance: cfg.activeAvoidMaxDistance,
+	      activeCautionRadius: cfg.activeCautionRadius
+	    });
+	    if (result?.clearPatrolHeading) bot.patrolHeading = null;
+	    return result?.direction || { dx: 0, dy: 0, distance: 0, reason: 'wait-for-visible-coin-refresh' };
+	  }`;
+}
+
+function patrolSource(options = {}) {
+  if (options.bundledRuntime) return bundledPatrolSource();
+  return patrolInlineSource();
+}
+
+module.exports = {
+  bundledPatrolSource,
+  patrolInlineSource,
+  patrolSource
+};

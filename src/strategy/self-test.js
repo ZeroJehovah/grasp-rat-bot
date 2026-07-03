@@ -58,6 +58,7 @@ const {
   bestCoinOpportunityScoreCore
 } = require('./opportunity-candidates');
 const { pickBestOpportunityCore } = require('./opportunity-pick');
+const { patrolDirectionCore } = require('./patrol');
 const {
   postAttackVisibleCoinExistsCore,
   pickPostAttackDropCoinCore,
@@ -1244,6 +1245,44 @@ function runStrategyModuleSelfTests() {
     name: 'opportunity-pick-core-includes-missing-held-opportunity',
     passed: pickedMissingHeldOpportunity?.pickedId === 'missing-pick'
       && pickedMissingHeldOpportunity?.reason === 'missing-held'
+  });
+
+  const patrolScan = patrolDirectionCore({ x: 0, y: 0 }, [], [], { x: 200, y: 0 }, {
+    patrolPrecisionTolerance: 10,
+    patrolCoinMaxDistance: 500
+  });
+  results.push({
+    name: 'patrol-direction-core-scans-toward-distant-coin',
+    passed: patrolScan.direction?.dx === 1
+      && patrolScan.direction?.dy === 0
+      && patrolScan.direction?.reason === 'scan-toward-distant-coin'
+      && patrolScan.clearPatrolHeading === false
+  });
+
+  const patrolSpacing = patrolDirectionCore({ x: 0, y: 0 }, [{ x: 1000, y: 0 }], [{ x: 0, y: 1000 }], null, {
+    dangerRadius: 3000,
+    activeAvoidMaxDistance: 3000,
+    activeCautionRadius: 2000
+  });
+  results.push({
+    name: 'patrol-direction-core-maintains-safe-spacing',
+    passed: patrolSpacing.direction?.dx === -1
+      && patrolSpacing.direction?.dy === -1
+      && patrolSpacing.direction?.reason === 'maintain-safe-spacing'
+      && patrolSpacing.clearPatrolHeading === true
+  });
+
+  const patrolWait = patrolDirectionCore({ x: 0, y: 0 }, [{ x: 9000, y: 0 }], [{ x: 60000, y: 0 }], null, {
+    dangerRadius: 3000,
+    activeAvoidMaxDistance: 3000,
+    activeCautionRadius: 2000
+  });
+  results.push({
+    name: 'patrol-direction-core-waits-without-visible-profit',
+    passed: patrolWait.direction?.dx === 0
+      && patrolWait.direction?.dy === 0
+      && patrolWait.direction?.reason === 'wait-for-visible-coin-refresh'
+      && patrolWait.clearPatrolHeading === true
   });
 
   const postAttackDist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
