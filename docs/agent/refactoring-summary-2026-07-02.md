@@ -636,6 +636,17 @@ This is a source-organization split only. It preserves stamina-aware fire discip
 
 This is a source-organization split only. It preserves combat retreat-ignore state, HP/trade disadvantage confirmation, no-damage state construction, combat trend fire windows, combat-only sampling outage gating, combat tick-gap offline handling, and final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2BF Combat Action Source Factory
+
+`bootstrap-0.4.330` extracts combat action construction source generation into a dedicated browser source module:
+
+- `src/browser/combat-action-source.js` now owns the raw browser source for `buildCombatAction()`, including combat leave/cover branches, HP and pressure disadvantage exits, retreating/disengage handling, out-of-range reengage/hold actions, pressure-close movement composition, shooting plan wiring, aim metadata logging, and combat-state frame metadata.
+- `src/browser/bot-source.js` imports and injects `${combatActionSource()}` immediately after `${combatFireSource()}`, preserving the generated runtime order before snapshot coin helpers.
+- Static verification checks the new source-factory shape, injection point, combat action builder, leave-cover wiring, out-of-range dodge wiring, combat trend wiring, shooting plan wiring, and combat-state logging anchors.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves combat action arbitration inputs, leave cover fallback behavior, HP/trade/pressure exits, finish-pressure/reengage decisions, movement/aim/shoot metadata, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -696,9 +707,10 @@ This is a source-organization split only. It preserves combat retreat-ignore sta
 55. Combat aim source factory: integrated in `bootstrap-0.4.327`
 56. Combat fire source factory: integrated in `bootstrap-0.4.328`
 57. Combat state source factory: integrated in `bootstrap-0.4.329`
-58. Constants: partially integrated for high-value coin defaults
-59. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-60. Run live validation sessions after each behavior-touching replacement
+58. Combat action source factory: integrated in `bootstrap-0.4.330`
+59. Constants: partially integrated for high-value coin defaults
+60. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+61. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
