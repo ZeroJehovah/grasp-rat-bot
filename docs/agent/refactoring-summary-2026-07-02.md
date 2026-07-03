@@ -537,6 +537,17 @@ This is a source-organization split only. It preserves HP summaries, stamina exh
 
 This is a source-organization split only. It preserves automatic relogin gating, manual login bypass behavior, exit/important-log flush blocking, login-point snapshot gating, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AW Leave Flow Source Factory
+
+`bootstrap-0.4.321` extracts high-level leave flow source generation into a dedicated browser source module:
+
+- `src/browser/leave-flow-source.js` now owns the raw browser source for `leaveOffline()`, `leaveForInjury()`, `leaveForPursuit()`, `leaveForCombat()`, and `leaveDuringEnemyHold()`.
+- `src/browser/bot-source.js` imports and injects `${leaveFlowSource()}` immediately after `${autoLoginSource()}`, preserving the generated runtime order before native state helpers.
+- Static verification checks the new source-factory shape, injection point, all five leave wrapper functions, pending-exit duplicate-leave guards, and generated runtime behavior anchors for cooldown summaries and pending-exit skip paths.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves offline/injury/pursuit/combat leave cooldown handling, pending-exit duplicate suppression, exit audit starts, unsafe/stamina relogin suppression, pending-exit recording, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -588,9 +599,10 @@ This is a source-organization split only. It preserves automatic relogin gating,
 46. Clash leave rescue helper source factory: integrated in `bootstrap-0.4.318`
 47. Leave command completion/issue source factory: integrated in `bootstrap-0.4.319`
 48. Auto/manual login source factory: integrated in `bootstrap-0.4.320`
-49. Constants: partially integrated for high-value coin defaults
-50. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-51. Run live validation sessions after each behavior-touching replacement
+49. Leave flow source factory: integrated in `bootstrap-0.4.321`
+50. Constants: partially integrated for high-value coin defaults
+51. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+52. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
