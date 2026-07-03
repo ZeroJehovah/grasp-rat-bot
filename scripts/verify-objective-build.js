@@ -612,22 +612,26 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
+    assert(runtimeFragmentsSourceModule.includes('function materializeRuntimeFragments(entries)'), 'runtime fragment materializer not found');
+    assert(runtimeFragmentsSourceModule.includes('function browserRuntimeFragmentEntries(config)'), 'runtime fragment entries factory not found');
     assert(runtimeFragmentsSourceModule.includes('function browserRuntimeFragments(config)'), 'runtime fragments source factory not found');
-    assert(runtimeFragmentsSourceModule.includes('module.exports = {\n  runtimeFragment,\n  browserRuntimeFragments'), 'runtime fragments source export not found');
+    assert(runtimeFragmentsSourceModule.includes('module.exports = {\n  runtimeFragment,\n  materializeRuntimeFragments,\n  browserRuntimeFragmentEntries,\n  browserRuntimeFragments'), 'runtime fragments source export not found');
     const runtimeSourceBody = functionBody(runtimeSourceModule, 'browserRuntimeSource');
     const fragmentRegistryBody = functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragments');
+    const fragmentEntriesBody = functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries');
+    const fragmentMaterializerBody = functionBody(runtimeFragmentsSourceModule, 'materializeRuntimeFragments');
     assert(runtimeSourceBody.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime source does not render the fragment registry');
-    assert(fragmentRegistryBody.includes('const fragments = ['), 'runtime fragments source does not use an explicit fragment registry');
+    assert(fragmentEntriesBody.includes('return ['), 'runtime fragments source does not use an explicit fragment entries registry');
+    assert(fragmentMaterializerBody.includes('return entries.map(([name, source]) => runtimeFragment(name, source));'), 'runtime fragment materializer does not convert explicit entries to named fragment objects');
+    assert(fragmentRegistryBody.includes('return materializeRuntimeFragments(browserRuntimeFragmentEntries(config));'), 'runtime fragments source does not materialize the explicit entries registry');
     assert(runtimeFragmentsSourceModule.includes('function runtimeFragment(name, source)'), 'runtime fragment metadata helper not found');
     assert(runtimeFragmentsSourceModule.includes("typeof name !== 'string'"), 'runtime fragment helper does not validate explicit names');
     assert(runtimeFragmentsSourceModule.includes('source === undefined || source === null'), 'runtime fragment helper does not validate sources');
     assert(!runtimeFragmentsSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
-    assert(fragmentRegistryBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
-    assert(fragmentRegistryBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
-    assert(fragmentRegistryBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
-    assert(fragmentRegistryBody.includes('].map(([name, source]) => runtimeFragment(name, source));'), 'runtime fragments are not converted from explicit names to named fragment objects');
-    assert(fragmentRegistryBody.includes('return fragments;'), 'runtime fragments source does not return the fragment registry');
-    assert(fragmentRegistryBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
+    assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
+    assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
+    assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
+    assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
     assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');
     assert(restoredRuntimeStateSourceModule.includes('module.exports = { restoredRuntimeStateSource }'), 'restored runtime state source module export not found');
     assert(restoredRuntimeStateSourceModule.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state source does not restore coin failures');
@@ -733,7 +737,7 @@ function main() {
       'networkQualitySummarySource',
       'runtimeSummarySource'
     ].forEach(name => {
-      assert(fragmentRegistryBody.includes(name), `${name} is not listed in the runtime fragment registry`);
+      assert(fragmentEntriesBody.includes(name), `${name} is not listed in the runtime fragment entries registry`);
     });
     assert(generatedRuntimeSource.includes('function safeStringify') && generatedRuntimeSource.includes('function formatDistance') && generatedRuntimeSource.includes('function buildRuntimeDefaults'), 'generated runtime does not inline shared helper functions');
     assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
