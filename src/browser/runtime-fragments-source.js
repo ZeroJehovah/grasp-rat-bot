@@ -139,7 +139,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-stamina-runtime',
     `
 `],
-    ['attack-worth', attackWorthSource],
+    ['attack-worth', () => attackWorthSource(config)],
     ['separator-after-attack-worth',
     `
 `],

@@ -9,6 +9,7 @@
 const { ACTION_PRIORITY_BANDS, getActionPriorityBand, buildActionFocus } = require('./action-priority');
 const { applyFinalActionArbitration } = require('./action-arbitration');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
+const { attackWorthTakingCore } = require('./attack-worth');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const {
   coinAxisLockShouldHoldCore,
@@ -95,6 +96,29 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'action-priority-profit',
     passed: getActionPriorityBand({ kind: 'coin' }) === ACTION_PRIORITY_BANDS.profit
+  });
+
+  const attackWorthOptions = {
+    isWhitelistedTarget: target => target?.whitelisted === true,
+    dropValue: actor => Number(actor?.drop || 0),
+    isAfkProfitTarget: target => target?.afk === true,
+    attackMinDrop: 3,
+    attackMinAfkDrop: 2,
+    attackMinRewardRatio: 1.5
+  };
+  results.push({
+    name: 'attack-worth-core-blocks-whitelisted-target',
+    passed: attackWorthTakingCore({ drop: 0 }, { drop: 99, whitelisted: true }, attackWorthOptions) === false
+  });
+  results.push({
+    name: 'attack-worth-core-uses-afk-drop-threshold',
+    passed: attackWorthTakingCore({ drop: 0 }, { drop: 2, afk: true }, attackWorthOptions) === true
+      && attackWorthTakingCore({ drop: 0 }, { drop: 1, afk: true }, attackWorthOptions) === false
+  });
+  results.push({
+    name: 'attack-worth-core-uses-reward-ratio-for-active-target',
+    passed: attackWorthTakingCore({ drop: 4 }, { drop: 5 }, attackWorthOptions) === false
+      && attackWorthTakingCore({ drop: 4 }, { drop: 6 }, attackWorthOptions) === true
   });
 
   // Test action focus building

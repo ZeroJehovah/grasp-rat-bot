@@ -764,6 +764,39 @@
     }
   });
 
+  // src/strategy/attack-worth.js
+  var require_attack_worth = __commonJS({
+    "src/strategy/attack-worth.js"(exports, module) {
+      "use strict";
+      function attackWorthTakingCore(self, target, options = {}) {
+        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
+        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
+        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
+        if (isWhitelistedTarget(target)) return false;
+        const targetDrop = dropValue(target);
+        if (isAfkProfitTarget(target)) {
+          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
+        }
+        const ownDrop = dropValue(self);
+        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
+      }
+      module.exports = { attackWorthTakingCore };
+    }
+  });
+
+  // src/browser/runtime/attack-worth.js
+  var require_attack_worth2 = __commonJS({
+    "src/browser/runtime/attack-worth.js"(exports, module) {
+      "use strict";
+      var {
+        attackWorthTakingCore
+      } = require_attack_worth();
+      module.exports = {
+        attackWorthTakingCore
+      };
+    }
+  });
+
   // src/shared/display-format.js
   var require_display_format = __commonJS({
     "src/shared/display-format.js"(exports, module) {
@@ -3510,7 +3543,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.411" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.412" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4633,13 +4666,15 @@
       const staminaState = detail?.offlineSafety?.staminaExhausted;
       return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
     }
-    const attackWorthTaking = (self, target) => {
-      if (isWhitelistedTarget(target)) return false;
-      const targetDrop = dropValue(target);
-      if (isAfkProfitTarget(target)) return targetDrop >= Math.max(0, Number(cfg.attackMinAfkDrop ?? cfg.attackMinDrop));
-      const ownDrop = dropValue(self);
-      return targetDrop >= cfg.attackMinDrop && (!ownDrop || targetDrop >= ownDrop * cfg.attackMinRewardRatio);
-    };
+    const { attackWorthTakingCore } = require_attack_worth2();
+    const attackWorthTaking = (self, target) => attackWorthTakingCore(self, target, {
+      isWhitelistedTarget,
+      dropValue,
+      isAfkProfitTarget,
+      attackMinAfkDrop: cfg.attackMinAfkDrop,
+      attackMinDrop: cfg.attackMinDrop,
+      attackMinRewardRatio: cfg.attackMinRewardRatio
+    });
     function exitMotionStopLockRemainingMs(t = Date.now()) {
       const stoppedAt = Number(bot.lastExitMotionStopAt || 0);
       if (!stoppedAt) return 0;
