@@ -11,7 +11,7 @@ const {
   buildEnemyOpportunityCandidatesCore,
   buildOpportunityCandidatesCore,
   bestCoinOpportunityScoreCore
-} = require('../strategy/opportunity-candidates');
+} = require('./runtime/opportunity-candidates');
 
 function opportunityCandidateSource() {
   return String.raw`

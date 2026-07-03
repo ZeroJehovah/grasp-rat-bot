@@ -15,6 +15,7 @@ import coinTarget from '../browser/runtime/coin-target.js';
 import coinProgress from '../browser/runtime/coin-progress.js';
 import coinRoute from '../browser/runtime/coin-route.js';
 import opportunityChoice from '../browser/runtime/opportunity-choice.js';
+import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
 import pageAdapter from '../browser/page-global-core.js';
 import arrayCountRuntime from '../browser/runtime/array-count.js';
 
@@ -143,6 +144,45 @@ function helperStatus(config = {}) {
     null,
     { nowMs: 1000, switchHoldMs: 500 }
   );
+  const opportunityCandidateList = opportunityCandidates.buildOpportunityCandidatesCore(
+    { x: 0, y: 0 },
+    [],
+    [{
+      coins: [{ drop_id: 'candidate-coin', amount: 4, distance: 200, x: 200, y: 0 }],
+      maxDistance: 500
+    }],
+    [{ user_id: 'candidate-enemy', distance: 100, opportunityScore: 3, staminaCost: 100 }],
+    null,
+    {
+      safeCoinCandidates: coins => coins,
+      coinStaminaCost: coin => Number(coin.distance || 0),
+      coinStaminaAffordable: () => true,
+      scoreCoinOpportunity: coin => Number(coin.amount || 0),
+      snapshotCoinNavigationReason: () => 'candidate-coin',
+      maxCoinDistance: 500,
+      scoreEnemyOpportunity: target => Number(target.opportunityScore || 0),
+      enemyStaminaCost: target => Number(target.staminaCost || 0),
+      opportunityStaminaAffordable: () => true,
+      isAfkProfitTarget: () => true,
+      attackRange: 150,
+      attackEngageRange: 200,
+      priorityTier: item => opportunityCandidates.opportunityPriorityTierCore(item, { visibleDistance: 500 })
+    }
+  );
+  const opportunityBestCoinScore = opportunityCandidates.bestCoinOpportunityScoreCore(
+    { x: 0, y: 0 },
+    [{
+      coins: [{ drop_id: 'candidate-coin', amount: 4, distance: 200, x: 200, y: 0 }],
+      maxDistance: 500
+    }],
+    [],
+    null,
+    {
+      safeCoinCandidates: coins => coins,
+      coinStaminaAffordable: () => true,
+      scoreCoinOpportunity: coin => Number(coin.amount || 0)
+    }
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -170,6 +210,9 @@ function helperStatus(config = {}) {
     opportunityChoiceKey: opportunityChoice.opportunityKey(opportunityChoiceResult.chosen),
     opportunityChoiceHeld: opportunityChoiceResult.chosen?.held === true,
     opportunityChoiceHoldRemainingMs: opportunityRemembered.action?.opportunityChoice?.holdRemainingMs,
+    opportunityCandidateCount: arrayCountRuntime.arrayCount(opportunityCandidateList),
+    opportunityCandidateCoinReason: opportunityCandidateList.find(item => item.type === 'coin')?.reason,
+    opportunityBestCoinScore,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']

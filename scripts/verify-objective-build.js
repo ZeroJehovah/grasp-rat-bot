@@ -285,6 +285,7 @@ function main() {
   const coinProgressRuntimeModule = readText('src/browser/runtime/coin-progress.js');
   const coinRouteRuntimeModule = readText('src/browser/runtime/coin-route.js');
   const opportunityChoiceRuntimeModule = readText('src/browser/runtime/opportunity-choice.js');
+  const opportunityCandidatesRuntimeModule = readText('src/browser/runtime/opportunity-candidates.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -391,6 +392,7 @@ function main() {
     coinProgressRuntimeModule,
     coinRouteRuntimeModule,
     opportunityChoiceRuntimeModule,
+    opportunityCandidatesRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -3000,7 +3002,13 @@ function main() {
     assert(strategyOpportunityCandidatesSource.includes('function buildEnemyOpportunityCandidatesCore'), 'strategy enemy opportunity candidate core not found');
     assert(strategyOpportunityCandidatesSource.includes('function bestCoinOpportunityScoreCore'), 'strategy best coin opportunity score core not found');
     assert(strategyOpportunityCandidatesSource.includes('function opportunityValueScoreCore'), 'strategy opportunity value score core not found');
-    assert(opportunityCandidateSourceModule.includes("require('../strategy/opportunity-candidates')"), 'opportunity-candidate source does not import opportunity candidate strategy module');
+    assert(opportunityCandidateSourceModule.includes("require('./runtime/opportunity-candidates')"), 'opportunity-candidate source does not import opportunity candidates through browser runtime adapter');
+    assert(!opportunityCandidateSourceModule.includes("require('../strategy/opportunity-candidates')"), 'opportunity-candidate source still imports opportunity candidates directly from strategy');
+    assert(opportunityCandidatesRuntimeModule.includes("require('../../strategy/opportunity-candidates')"), 'opportunity-candidates runtime adapter does not reuse strategy module core');
+    assert(opportunityCandidatesRuntimeModule.includes('buildOpportunityCandidatesCore') && opportunityCandidatesRuntimeModule.includes('bestCoinOpportunityScoreCore'), 'opportunity-candidates runtime adapter does not export expected helpers');
+    assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-candidates.js'"), 'bundler spike does not import opportunity candidates runtime adapter');
+    assert(bundlerSpikeEntrySource.includes('opportunityCandidates.buildOpportunityCandidatesCore('), 'bundler spike does not execute opportunity candidate combiner helper');
+    assert(bundlerSpikeBuildSource.includes('status.opportunityCandidateCount === 2'), 'bundler spike self-test does not assert opportunity candidate execution');
     assert(sourceRuntimeText.includes('buildOpportunityCandidatesCore.toString()'), 'source bot does not inject opportunity candidate core');
     assert(sourceRuntimeText.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
     assert(generatedRuntimeSource.includes('function buildOpportunityCandidatesCore'), 'generated runtime does not inline opportunity candidate core');
