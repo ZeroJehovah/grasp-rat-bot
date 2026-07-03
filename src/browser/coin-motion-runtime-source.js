@@ -11,7 +11,27 @@ const {
   coinMotionMetaCore
 } = require('./runtime/coin-motion');
 
-function coinMotionRuntimeSource() {
+function coinMotionRuntimeInlineSource(helpers = {}) {
+  const {
+    coinMotionNumber,
+    coinMotionTolerance,
+    coinAxisApproachDirectionCore,
+    coinPickupPrecisionPulseMsCore,
+    coinAxisLockShouldHoldCore,
+    coinNearApproachAxisCore,
+    coinDirectionToCore,
+    coinMotionMetaCore
+  } = helpers;
+  const coinMotionHelperSource = [
+    coinMotionNumber,
+    coinMotionTolerance,
+    coinAxisApproachDirectionCore,
+    coinPickupPrecisionPulseMsCore,
+    coinAxisLockShouldHoldCore,
+    coinNearApproachAxisCore,
+    coinDirectionToCore,
+    coinMotionMetaCore
+  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
   return String.raw`  function directionTo(self, target, tolerance = 250) {
     const dxRaw = Number(target.x) - Number(self.x);
     const dyRaw = Number(target.y) - Number(self.y);
@@ -24,14 +44,7 @@ function coinMotionRuntimeSource() {
     };
   }
 
-  ${coinMotionNumber.toString()}
-  ${coinMotionTolerance.toString()}
-  ${coinAxisApproachDirectionCore.toString()}
-  ${coinPickupPrecisionPulseMsCore.toString()}
-  ${coinAxisLockShouldHoldCore.toString()}
-  ${coinNearApproachAxisCore.toString()}
-  ${coinDirectionToCore.toString()}
-  ${coinMotionMetaCore.toString()}
+${coinMotionHelperSource}
 
   function coinMotionCoreOptions(tolerance = cfg.coinPrecisionTolerance, extra = {}) {
     return {
@@ -116,6 +129,37 @@ function coinMotionRuntimeSource() {
   }`;
 }
 
+function bundledCoinMotionRuntimeSource() {
+  return `const {
+  coinMotionNumber,
+  coinMotionTolerance,
+  coinAxisApproachDirectionCore,
+  coinPickupPrecisionPulseMsCore,
+  coinAxisLockShouldHoldCore,
+  coinNearApproachAxisCore,
+  coinDirectionToCore,
+  coinMotionMetaCore
+} = require('./src/browser/runtime/coin-motion');
+
+${coinMotionRuntimeInlineSource()}`;
+}
+
+function coinMotionRuntimeSource(options = {}) {
+  if (options.bundledRuntime) return bundledCoinMotionRuntimeSource();
+  return coinMotionRuntimeInlineSource({
+    coinMotionNumber,
+    coinMotionTolerance,
+    coinAxisApproachDirectionCore,
+    coinPickupPrecisionPulseMsCore,
+    coinAxisLockShouldHoldCore,
+    coinNearApproachAxisCore,
+    coinDirectionToCore,
+    coinMotionMetaCore
+  });
+}
+
 module.exports = {
+  bundledCoinMotionRuntimeSource,
+  coinMotionRuntimeInlineSource,
   coinMotionRuntimeSource
 };
