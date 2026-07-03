@@ -293,6 +293,7 @@ function main() {
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
+  const coinMotionRuntimeSourceModule = readText('src/browser/coin-motion-runtime-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
   const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
@@ -318,6 +319,7 @@ function main() {
     controlLoginSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
+    coinMotionRuntimeSourceModule,
     pageNativeSnapshotSourceModule,
     actionArbitrationSourceModule,
     networkQualitySourceModule,
@@ -409,6 +411,7 @@ function main() {
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./native-control-source')"), 'native-control source module import not found');
+    assert(botSourceModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
@@ -444,6 +447,7 @@ function main() {
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeControlSource()}'), 'native-control module is not injected into browser runtime');
+    assert(botSourceModule.includes('${coinMotionRuntimeSource()}'), 'coin-motion runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
     assert(botSourceModule.includes('${actionArbitrationSource()}'), 'action-arbitration module is not injected into browser runtime');
     assert(botSourceModule.includes('${networkQualitySource()}'), 'network-quality module is not injected into browser runtime');
@@ -545,6 +549,12 @@ function main() {
     assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function stopMotionSafely'), 'native-control source factory does not include safe stop helper');
     assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function sendNativeShoot'), 'native-control source factory does not include native shoot helper');
     assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function shootAt'), 'native-control source factory does not include shoot cadence wrapper');
+    assert(coinMotionRuntimeSourceModule.includes('function coinMotionRuntimeSource() {'), 'coin-motion runtime source factory not found');
+    assert(coinMotionRuntimeSourceModule.includes('module.exports = {\n  coinMotionRuntimeSource'), 'coin-motion runtime module export not found');
+    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('String.raw`'), 'coin-motion runtime source factory does not return raw browser source');
+    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('coinDirectionToCore.toString()'), 'coin-motion runtime source factory does not inline coin direction core');
+    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('function coinMotionCoreOptions'), 'coin-motion runtime source factory does not include core options wrapper');
+    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime source factory does not include lock update wrapper');
     assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
@@ -2131,14 +2141,15 @@ function main() {
     assert(strategyCoinMotionSource.includes('function coinPickupPrecisionPulseMsCore'), 'strategy coin pickup pulse core not found');
     assert(strategyCoinMotionSource.includes('function coinAxisLockShouldHoldCore'), 'strategy coin axis lock core not found');
     assert(strategyCoinMotionSource.includes('function coinMotionMetaCore'), 'strategy coin motion metadata core not found');
-    assert(botSourceModule.includes("require('../strategy/coin-motion')"), 'source bot does not import coin motion strategy module');
-    assert(sourceRuntimeText.includes('coinDirectionToCore.toString()'), 'source bot does not inject coin direction core');
-    assert(sourceRuntimeText.includes('coinMotionMetaCore.toString()'), 'source bot does not inject coin motion metadata core');
-    assert(sourceRuntimeText.includes('function coinMotionCoreOptions'), 'source bot coin motion runtime wrapper options not found');
-    assert(sourceRuntimeText.includes('function applyCoinApproachLockUpdate'), 'source bot coin approach lock wrapper not found');
-    assert(sourceRuntimeText.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'source bot coin direction wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'source bot coin direction wrapper does not apply lock updates');
-    assert(sourceRuntimeText.includes('return coinMotionMetaCore(dir);'), 'source bot coin motion metadata wrapper does not call strategy core');
+    const coinMotionRuntimeBody = functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource');
+    assert(coinMotionRuntimeSourceModule.includes("require('../strategy/coin-motion')"), 'coin-motion runtime source does not import coin motion strategy module');
+    assert(coinMotionRuntimeBody.includes('coinDirectionToCore.toString()'), 'coin-motion runtime source does not inject coin direction core');
+    assert(coinMotionRuntimeBody.includes('coinMotionMetaCore.toString()'), 'coin-motion runtime source does not inject coin motion metadata core');
+    assert(coinMotionRuntimeBody.includes('function coinMotionCoreOptions'), 'coin-motion runtime wrapper options not found');
+    assert(coinMotionRuntimeBody.includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime coin approach lock wrapper not found');
+    assert(coinMotionRuntimeBody.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'coin-motion runtime coin direction wrapper does not call strategy core');
+    assert(coinMotionRuntimeBody.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'coin-motion runtime coin direction wrapper does not apply lock updates');
+    assert(coinMotionRuntimeBody.includes('return coinMotionMetaCore(dir);'), 'coin-motion runtime coin motion metadata wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes('function coinDirectionToCore'), 'generated runtime does not inline coin direction core');
     assert(generatedRuntimeSource.includes('function coinPickupPrecisionPulseMsCore'), 'generated runtime does not inline coin pickup pulse core');
     assert(generatedRuntimeSource.includes('function coinMotionCoreOptions'), 'generated runtime coin motion wrapper options not found');

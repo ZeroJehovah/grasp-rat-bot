@@ -482,6 +482,17 @@ This is a source-organization split only. It preserves coin target identity, nat
 
 This is a source-organization split only. It preserves movement transport, stop semantics, shot cadence, shot logging, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AL Coin Motion Runtime Source Factory
+
+`bootstrap-0.4.310` extracts coin motion runtime wrapper source generation into a dedicated browser source module:
+
+- `src/browser/coin-motion-runtime-source.js` now owns the raw browser source for `directionTo()`, coin motion strategy core inlining, `coinMotionCoreOptions()`, pickup failure/slow-attempt counters, approach-lock updates, `coinDirectionTo()`, and `coinMotionMeta()`.
+- `src/browser/bot-source.js` imports and injects `${coinMotionRuntimeSource()}` after `${nativeControlSource()}`.
+- Static verification checks the new source-factory shape plus coin motion strategy module import, core helper inlining, lock-update wrapper, and wrapper calls into `coinDirectionToCore()` / `coinMotionMetaCore()`.
+- A fixed-version `--print-source` baseline matched byte-for-byte after the extraction, proving the generated browser source is unchanged by the source split.
+
+This is a source-organization split only. It preserves coin movement direction, pickup pulse metadata, approach-lock behavior, and the final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -522,9 +533,10 @@ This is a source-organization split only. It preserves movement transport, stop 
 35. Combat history source factory: integrated in `bootstrap-0.4.307`
 36. Coin target runtime source factory: integrated in `bootstrap-0.4.308`
 37. Native control source factory: integrated in `bootstrap-0.4.309`
-38. Constants: partially integrated for high-value coin defaults
-39. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-40. Run live validation sessions after each behavior-touching replacement
+38. Coin motion runtime source factory: integrated in `bootstrap-0.4.310`
+39. Constants: partially integrated for high-value coin defaults
+40. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+41. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
