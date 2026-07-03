@@ -291,6 +291,7 @@ function main() {
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const pageNativeSnapshotSourceModule = readText('src/browser/page-native-snapshot-source.js');
+  const actionArbitrationSourceModule = readText('src/browser/action-arbitration-source.js');
   const networkQualitySourceModule = readText('src/browser/network-quality-source.js');
   const networkQualitySummarySourceModule = readText('src/browser/network-quality-summary-source.js');
   const runtimeSummarySourceModule = readText('src/browser/runtime-summary-source.js');
@@ -312,6 +313,7 @@ function main() {
     controlLoginSourceModule,
     nativeStateSourceModule,
     pageNativeSnapshotSourceModule,
+    actionArbitrationSourceModule,
     networkQualitySourceModule,
     networkQualitySummarySourceModule,
     runtimeSummarySourceModule
@@ -399,6 +401,7 @@ function main() {
     assert(botSourceModule.includes("require('./control-login-source')"), 'control-login source module import not found');
     assert(botSourceModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(botSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
+    assert(botSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
     assert(botSourceModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
     assert(botSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
@@ -430,6 +433,7 @@ function main() {
     assert(botSourceModule.includes('${controlLoginSource({ staminaExhaustedWindowLabel })}'), 'control-login module is not injected into browser runtime');
     assert(botSourceModule.includes('${nativeStateSource()}'), 'native-state module is not injected into browser runtime');
     assert(botSourceModule.includes('${pageNativeSnapshotSource()}'), 'page-native snapshot module is not injected into browser runtime');
+    assert(botSourceModule.includes('${actionArbitrationSource()}'), 'action-arbitration module is not injected into browser runtime');
     assert(botSourceModule.includes('${networkQualitySource()}'), 'network-quality module is not injected into browser runtime');
     assert(botSourceModule.includes('${networkQualitySummarySource()}'), 'network-quality summary module is not injected into browser runtime');
     assert(botSourceModule.includes('${runtimeSummarySource()}'), 'runtime-summary module is not injected into browser runtime');
@@ -509,6 +513,14 @@ function main() {
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
+    assert(actionArbitrationSourceModule.includes('function actionArbitrationSource() {'), 'action-arbitration source factory not found');
+    assert(actionArbitrationSourceModule.includes('module.exports = {\n  actionArbitrationSource'), 'action-arbitration module export not found');
+    assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('String.raw`'), 'action-arbitration source factory does not return raw browser source');
+    assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('function recordActionSwitchDiagnostics'), 'action-arbitration source factory does not include target switch diagnostics wrapper');
+    assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('function applyFinalActionArbitration'), 'action-arbitration source factory does not include final action arbitration wrapper');
+    assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('actionPriorityBand.toString()'), 'action-arbitration source factory does not inline action priority helpers');
+    assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('recordActionSwitchDiagnosticsCore.toString()'), 'action-arbitration source factory does not inline target switch diagnostics core');
+    assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('applyFinalActionArbitrationCore.toString()'), 'action-arbitration source factory does not inline final action arbitration core');
     assert(networkQualitySourceModule.includes('function networkQualitySource() {'), 'network-quality source factory not found');
     assert(networkQualitySourceModule.includes('module.exports = {\n  networkQualitySource'), 'network-quality module export not found');
     assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('String.raw`'), 'network-quality source factory does not return raw browser source');

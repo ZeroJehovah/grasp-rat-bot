@@ -439,6 +439,16 @@ This is a diagnostic/status source split only. It preserves network quality samp
 
 This completes the current network-quality diagnostic source split. It preserves status output, combat-log network diagnostics, movement/shooting ACK tracking, and the final single-file generated runtime.
 
+## 2026-07-03 Follow-up: Phase 2AH Action Arbitration Source Factory
+
+`bootstrap-0.4.306` extracts target-switch diagnostics and final-action arbitration source generation into a small browser source module:
+
+- `src/browser/action-arbitration-source.js` now owns the raw browser source for action priority helper inlining, target-switch diagnostics wrappers, and final-action arbitration wrappers.
+- `src/browser/bot-source.js` imports and injects `${actionArbitrationSource()}` before the remaining coin target/runtime wrappers.
+- Static verification checks the new source-factory shape plus target-switch diagnostics, final-action arbitration, action-priority helper inlining, and strategy-core inlining.
+
+This is a source-organization split only. It preserves the existing strategy module cores, target-switch diagnostic events, final action hold behavior, and final single-file generated runtime.
+
 ## Next Steps (Not Implemented Yet)
 
 ### Phase 2: Integration
@@ -475,9 +485,10 @@ This completes the current network-quality diagnostic source split. It preserves
 31. Target whitelist source factory: integrated in `bootstrap-0.4.303`
 32. Network quality summary source factory: integrated in `bootstrap-0.4.304`
 33. Network quality sampler/ACK source factory: integrated in `bootstrap-0.4.305`
-34. Constants: partially integrated for high-value coin defaults
-35. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-36. Run live validation sessions after each behavior-touching replacement
+34. Action arbitration source factory: integrated in `bootstrap-0.4.306`
+35. Constants: partially integrated for high-value coin defaults
+36. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+37. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
