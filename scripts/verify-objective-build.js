@@ -264,6 +264,7 @@ function main() {
   const sourceBot = readText('grasp-rat-bot.js');
   const runtimeSourceModule = readText('src/browser/runtime-source.js');
   const botSourceModule = readText('src/browser/bot-source.js');
+  const runtimeBootstrapSourceModule = readText('src/browser/runtime-bootstrap-source.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
   const remoteBundleSource = readText('scripts/remote-bot-bundle.js');
@@ -354,6 +355,7 @@ function main() {
     sourceBot,
     runtimeSourceModule,
     botSourceModule,
+    runtimeBootstrapSourceModule,
     browserPageGlobalCoreSource,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
@@ -489,10 +491,10 @@ function main() {
     assert(botSourceModule.includes("require('../shared/exit-summary')"), 'exit-summary module import not found');
     assert(botSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils module import not found');
     assert(botSourceModule.includes("require('../shared/display-format')"), 'display-format module import not found');
-    assert(botSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
-    assert(botSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
-    assert(botSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
-    assert(botSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
+    assert(runtimeBootstrapSourceModule.includes("require('../shared/browser-preserved-state')"), 'browser-preserved-state module import not found');
+    assert(runtimeBootstrapSourceModule.includes("require('../shared/runtime-defaults')"), 'runtime-defaults module import not found');
+    assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
+    assert(runtimeBootstrapSourceModule.includes("require('../shared/target-whitelist')"), 'target-whitelist module import not found');
     assert(botSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
     assert(botSourceModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
     assert(botSourceModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
@@ -528,11 +530,15 @@ function main() {
     assert(botSourceModule.includes("require('./network-quality-source')"), 'network-quality source module import not found');
     assert(botSourceModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
     assert(botSourceModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
+    assert(botSourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
     assert(botSourceModule.includes('function browserBotSource(config)'), 'browserBotSource factory not found');
     assert(botSourceModule.includes('module.exports = {\n  browserBotSource'), 'browserBotSource module export not found');
-    assert(botSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
-    assert(botSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
-    assert(botSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
+    assert(botSourceModule.includes('${runtimeBootstrapSource(config)}'), 'runtime-bootstrap module is not injected into browser runtime');
+    assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
+    assert(runtimeBootstrapSourceModule.includes('module.exports = { runtimeBootstrapSource }'), 'runtime-bootstrap source module export not found');
+    assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
+    assert(runtimeBootstrapSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
+    assert(runtimeBootstrapSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
     assert(sourceRuntimeText.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
     assert(autoLoginSourceModule.includes("const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'login availability does not read startLinuxDoLogin through page-global adapter');
     assert(autoLoginSourceModule.includes("readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal)"), 'manual login does not read raw startLinuxDoLogin through page-global adapter');
@@ -544,10 +550,10 @@ function main() {
     assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
     assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
     assert(botSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the shared module');
-    assert(botSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
-    assert(botSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
-    assert(botSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
-    assert(botSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
+    assert(runtimeBootstrapSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the shared module');
+    assert(runtimeBootstrapSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the shared module');
+    assert(runtimeBootstrapSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the shared module');
+    assert(runtimeBootstrapSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the shared module');
     assert(botSourceModule.includes('${targetOverlaySource()}'), 'target-overlay module is not injected into browser runtime');
     assert(botSourceModule.includes('${targetWhitelistSource()}'), 'target-whitelist module is not injected into browser runtime');
     assert(botSourceModule.includes('${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay })}'), 'status-panel module is not injected into browser runtime');
