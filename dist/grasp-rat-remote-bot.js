@@ -1487,6 +1487,135 @@
         }
         return streak;
       }
+      function combatExitSummaryCore(reason, target, combatState = {}, helpers) {
+        const cfg = helpers.cfg;
+        const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
+        const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
+        const hpGap = Number(combatState.hpGap ?? (Number.isFinite(targetHp) && Number.isFinite(selfHp) ? targetHp - selfHp : NaN));
+        if (reason === "combat-critical-hp-leave") {
+          return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\u4F4E\u4E8E" + cfg.combatCriticalHpLeaveThreshold + "\uFF0C\u7D27\u6025\u9000\u51FA";
+        }
+        if (reason === "combat-hp-disadvantage-leave") {
+          if (combatState?.serverStallNoDamage) {
+            const noDamageText = Number.isFinite(Number(combatState.serverStallNoDamage.noDamageMs)) ? "\uFF0C" + Math.round(Number(combatState.serverStallNoDamage.noDamageMs) / 1e3) + "\u79D2\u672A\u9020\u6210\u4F24\u5BB3" : "";
+            const gapText = Number.isFinite(hpGap) ? "\uFF0C\u5DEE\u8DDD" + helpers.hpDisplay(hpGap) : "";
+            return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6EDE\u4E0B\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + gapText + noDamageText + "\uFF0C\u52A3\u52BF\u9000\u51FA";
+          }
+          if (combatState?.pressureDisadvantage) {
+            const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance)) ? "\uFF0C\u8DDD\u79BB" + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + "\u7C73" : "";
+            return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u8FD1\u8EAB\u5F39\u538B\u4E0B\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + "\uFF0C\u5DEE\u8DDD" + helpers.hpDisplay(hpGap) + distanceText + "\uFF0C\u63D0\u524D\u52A3\u52BF\u9000\u51FA";
+          }
+          if (combatState?.sustainedPressureDisadvantage) {
+            const pressure = combatState.sustainedPressureDisadvantage;
+            const noDamageText = Number.isFinite(Number(pressure.noDamageMs)) ? "\uFF0C" + Math.round(Number(pressure.noDamageMs) / 1e3) + "\u79D2\u672A\u9020\u6210\u4F24\u5BB3" : "";
+            const distanceText = Number.isFinite(Number(pressure.distance)) ? "\uFF0C\u8DDD\u79BB" + Math.round(Number(pressure.distance) / 100) + "\u7C73" : "";
+            return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u6301\u7EED\u5F39\u538B\u4E0B\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + "\uFF0C\u5DEE\u8DDD" + helpers.hpDisplay(hpGap) + noDamageText + distanceText + "\uFF0C\u63D0\u524D\u52A3\u52BF\u9000\u51FA";
+          }
+          if (combatState?.tradeEstimate) {
+            const estimate = combatState.tradeEstimate;
+            const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? "\uFF0C\u9884\u8BA1\u627F\u4F24\u5012\u8BA1\u65F6" + helpers.formatDurationMs(estimate.tDeathMs) : "";
+            const killText = Number.isFinite(Number(estimate.tKillMs)) ? "\uFF0C\u9884\u8BA1\u51FB\u6740\u9700" + helpers.formatDurationMs(estimate.tKillMs) : "";
+            return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u4EA4\u6362\u6BD4\u52A3\u52BF" + deathText + killText + "\uFF0C\u63D0\u524D\u9000\u51FA";
+          }
+          return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + "\uFF0C\u5DEE\u8DDD" + helpers.hpDisplay(hpGap) + "\uFF0C\u52A3\u52BF\u9000\u51FA";
+        }
+        if (reason === "combat-low-hp-no-damage-leave") {
+          const noDamageText = Number.isFinite(Number(combatState.noDamageMs)) ? "\uFF0C" + Math.round(Number(combatState.noDamageMs) / 1e3) + "\u79D2\u672A\u9020\u6210\u4F24\u5BB3" : "";
+          return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + noDamageText + "\uFF0C\u4F4E\u8840\u4E45\u653B\u672A\u4E2D\u9000\u51FA";
+        }
+        if (reason === "combat-low-hp-leave" && combatState?.closeRisk) {
+          const distanceText = Number.isFinite(Number(combatState.closeRisk.distance)) ? "\uFF0C\u8DDD\u79BB" + Math.round(Number(combatState.closeRisk.distance) / 100) + "\u7C73" : "";
+          return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\u4E0D\u8DB3" + cfg.combatLowHpLeaveThreshold + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + distanceText + "\uFF0C\u4F4E\u8840\u8FD1\u8EAB\u98CE\u9669\u9000\u51FA";
+        }
+        return "\u4E0E" + helpers.actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + helpers.hpDisplay(selfHp) + "\u4E0D\u8DB3" + cfg.combatLowHpLeaveThreshold + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + helpers.hpDisplay(targetHp) + "\uFF0C\u52A3\u52BF\u9000\u51FA";
+      }
+      function combatLeaveActionCore(reason, baseTarget, combatState = {}, cover = null, helpers) {
+        const exitSummary = helpers.combatExitSummary(reason, baseTarget, combatState);
+        const normalizedCover = cover ? { ...cover, target: cover.target || baseTarget } : null;
+        return {
+          kind: "leave",
+          reason,
+          exitSummary,
+          displayReason: exitSummary,
+          combat: true,
+          ignoreReturnBlock: true,
+          dx: normalizedCover ? helpers.clamp(Math.round(Number(normalizedCover.dx) || 0), -1, 1) : 0,
+          dy: normalizedCover ? helpers.clamp(Math.round(Number(normalizedCover.dy) || 0), -1, 1) : 0,
+          shoot: Boolean(normalizedCover?.shoot),
+          forceShoot: Boolean(normalizedCover?.forceShoot),
+          shootEveryMs: normalizedCover?.shootEveryMs,
+          aimTarget: normalizedCover?.aimTarget || null,
+          incomingBullet: normalizedCover?.incomingBullet || null,
+          target: baseTarget,
+          combatCover: normalizedCover,
+          combatState: {
+            ...combatState,
+            leaveCover: normalizedCover
+          }
+        };
+      }
+      function pursuitLeaveSummaryCore(pursuit, helpers) {
+        const target = pursuit || {};
+        const duration = Number(target.durationMs);
+        const durationText = Number.isFinite(duration) && duration > 0 ? "\uFF0C\u6301\u7EED" + helpers.formatDurationMs(duration) : "";
+        const distance = Number(target.distance);
+        const distanceText = Number.isFinite(distance) ? "\uFF0C\u8DDD\u79BB" + helpers.formatDistance(distance) : "";
+        return "\u88AB" + helpers.actorLabel(target) + "\u6301\u7EED\u8FFD\u51FB" + durationText + distanceText + "\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      }
+      function injuryLeaveSummaryCore(injury, helpers) {
+        const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
+        const previousHp = Number(injury?.previousHp ?? NaN);
+        const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
+        const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp) ? "\uFF0C\u8840\u91CF\u4ECE" + helpers.hpDisplay(previousHp) + "\u964D\u5230" + helpers.hpDisplay(currentHp) : Number.isFinite(currentHp) ? "\uFF0C\u5F53\u524D\u8840\u91CF" + helpers.hpDisplay(currentHp) : "";
+        return (actor ? "\u53D7\u5230" + helpers.actorLabel(actor) + "\u4F24\u5BB3/\u9644\u8FD1\u5A01\u80C1" : "\u68C0\u6D4B\u5230\u8840\u91CF\u4E0B\u964D") + hpText + "\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      }
+      function offlineLeaveSummaryCore(reason, offlineSafety, helpers) {
+        if (offlineSafety?.staminaBudgetExit) {
+          return helpers.staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit);
+        }
+        const staminaLabel = helpers.staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
+        if (staminaLabel === "1h") return "\u4E00\u5C0F\u65F6\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (staminaLabel === "1d") return "\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (staminaLabel === "1h/1d") return "\u4E00\u5C0F\u65F6\u548C\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        const text = String(reason || "").toLowerCase();
+        if (text.includes("stamina")) return "\u957F\u5468\u671F\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (offlineSafety?.loginPointSafetyGate || text.includes("login point safety")) return "\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167\u672A\u6EE1\u8DB3\uFF0C\u9000\u51FA\u7B49\u5F85\u5B89\u5168\u91CD\u8FDE";
+        if (offlineSafety?.noSelfGameSession || text.includes("missing self")) return "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("combat tick gap") || offlineSafety?.combatTickGap) return "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u6CE2\u52A8\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("sampling outage") || offlineSafety?.samplingOutage) return "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u6CE2\u52A8\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("reconnect churn") || offlineSafety?.reconnectChurn) return "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("action settlement") || offlineSafety?.actionSettlementStall) return "\u79FB\u52A8/\u5F00\u706B\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (text.includes("server position")) return "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        if (offlineSafety?.unsafe) return "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u4E14\u5468\u56F4\u5371\u9669\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+        return "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      }
+      function currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = "", helpers) {
+        const currentSummary = helpers.offlineLeaveSummary(reason, offlineSafety);
+        const leaveDisplay = String(leaveResult?.displayReason || "");
+        const leaveSummary = String(leaveResult?.summary || leaveResult?.exitSummary || "");
+        if (currentSummary && leaveDisplay && (leaveSummary === currentSummary || leaveDisplay.includes(currentSummary))) {
+          return leaveDisplay;
+        }
+        if (currentSummary) return currentSummary;
+        return leaveDisplay || String(offlineDetail?.displayReason || "") || String(fallback || "");
+      }
+      function reloginDelayForHpCore(selfLike, detail, helpers) {
+        const cfg = helpers.cfg;
+        const info = helpers.hpInfoForRelogin(selfLike, detail);
+        const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
+        const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);
+        const baseMaxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs ?? minMs) || 0);
+        const maxMs = Math.max(baseMaxMs, repeatMinMs);
+        const dangerFactor = Math.pow(1 - info.ratio, 1.35);
+        const jitterMs = Math.max(0, Number(cfg.enemyReloginJitterMs) || 0);
+        const hpDelayMs = helpers.clamp(
+          Math.round(minMs + (maxMs - minMs) * dangerFactor + helpers.randomBetween(0, jitterMs)),
+          minMs,
+          maxMs
+        );
+        const delayMs = Math.max(hpDelayMs, repeatMinMs);
+        return { delayMs, hpDelayMs, minMs, maxMs, baseMaxMs, repeatMinMs, hp: info };
+      }
       module.exports = {
         leaveWaitDisplayCore,
         finalizeLeaveDisplayReasonCore,
@@ -1495,7 +1624,14 @@
         enemyRepeatDelayMsForCountCore,
         readEnemyLeaveStreakCore,
         writeEnemyLeaveStreakCore,
-        updateEnemyLeaveStreakCore
+        updateEnemyLeaveStreakCore,
+        combatExitSummaryCore,
+        combatLeaveActionCore,
+        pursuitLeaveSummaryCore,
+        injuryLeaveSummaryCore,
+        offlineLeaveSummaryCore,
+        currentOfflineDisplayReasonCore,
+        reloginDelayForHpCore
       };
     }
   });
@@ -4102,7 +4238,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.425" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.426" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -9672,132 +9808,35 @@
         enemyRepeatDelayMsForCount
       });
     }
+    const {
+      combatExitSummaryCore,
+      combatLeaveActionCore,
+      pursuitLeaveSummaryCore,
+      injuryLeaveSummaryCore,
+      offlineLeaveSummaryCore,
+      currentOfflineDisplayReasonCore,
+      reloginDelayForHpCore
+    } = require_exit_relogin();
     function combatExitSummary(reason, target, combatState = {}) {
-      const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
-      const targetHp = Number(combatState.targetHp ?? target?.hp ?? NaN);
-      const hpGap = Number(combatState.hpGap ?? (Number.isFinite(targetHp) && Number.isFinite(selfHp) ? targetHp - selfHp : NaN));
-      if (reason === "combat-critical-hp-leave") {
-        return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + hpDisplay(selfHp) + "\u4F4E\u4E8E" + cfg.combatCriticalHpLeaveThreshold + "\uFF0C\u7D27\u6025\u9000\u51FA";
-      }
-      if (reason === "combat-hp-disadvantage-leave") {
-        if (combatState?.serverStallNoDamage) {
-          const noDamageText = Number.isFinite(Number(combatState.serverStallNoDamage.noDamageMs)) ? "\uFF0C" + Math.round(Number(combatState.serverStallNoDamage.noDamageMs) / 1e3) + "\u79D2\u672A\u9020\u6210\u4F24\u5BB3" : "";
-          const gapText = Number.isFinite(hpGap) ? "\uFF0C\u5DEE\u8DDD" + hpDisplay(hpGap) : "";
-          return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6EDE\u4E0B\u8840\u91CF" + hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + gapText + noDamageText + "\uFF0C\u52A3\u52BF\u9000\u51FA";
-        }
-        if (combatState?.pressureDisadvantage) {
-          const distanceText = Number.isFinite(Number(combatState.pressureDisadvantage.distance)) ? "\uFF0C\u8DDD\u79BB" + Math.round(Number(combatState.pressureDisadvantage.distance) / 100) + "\u7C73" : "";
-          return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u8FD1\u8EAB\u5F39\u538B\u4E0B\u8840\u91CF" + hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + "\uFF0C\u5DEE\u8DDD" + hpDisplay(hpGap) + distanceText + "\uFF0C\u63D0\u524D\u52A3\u52BF\u9000\u51FA";
-        }
-        if (combatState?.sustainedPressureDisadvantage) {
-          const pressure = combatState.sustainedPressureDisadvantage;
-          const noDamageText = Number.isFinite(Number(pressure.noDamageMs)) ? "\uFF0C" + Math.round(Number(pressure.noDamageMs) / 1e3) + "\u79D2\u672A\u9020\u6210\u4F24\u5BB3" : "";
-          const distanceText = Number.isFinite(Number(pressure.distance)) ? "\uFF0C\u8DDD\u79BB" + Math.round(Number(pressure.distance) / 100) + "\u7C73" : "";
-          return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u6301\u7EED\u5F39\u538B\u4E0B\u8840\u91CF" + hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + "\uFF0C\u5DEE\u8DDD" + hpDisplay(hpGap) + noDamageText + distanceText + "\uFF0C\u63D0\u524D\u52A3\u52BF\u9000\u51FA";
-        }
-        if (combatState?.tradeEstimate) {
-          const estimate = combatState.tradeEstimate;
-          const deathText = Number.isFinite(Number(estimate.tDeathMs)) ? "\uFF0C\u9884\u8BA1\u627F\u4F24\u5012\u8BA1\u65F6" + formatDurationMs(estimate.tDeathMs) : "";
-          const killText = Number.isFinite(Number(estimate.tKillMs)) ? "\uFF0C\u9884\u8BA1\u51FB\u6740\u9700" + formatDurationMs(estimate.tKillMs) : "";
-          return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u4EA4\u6362\u6BD4\u52A3\u52BF" + deathText + killText + "\uFF0C\u63D0\u524D\u9000\u51FA";
-        }
-        return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + "\uFF0C\u5DEE\u8DDD" + hpDisplay(hpGap) + "\uFF0C\u52A3\u52BF\u9000\u51FA";
-      }
-      if (reason === "combat-low-hp-no-damage-leave") {
-        const noDamageText = Number.isFinite(Number(combatState.noDamageMs)) ? "\uFF0C" + Math.round(Number(combatState.noDamageMs) / 1e3) + "\u79D2\u672A\u9020\u6210\u4F24\u5BB3" : "";
-        return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + hpDisplay(selfHp) + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + noDamageText + "\uFF0C\u4F4E\u8840\u4E45\u653B\u672A\u4E2D\u9000\u51FA";
-      }
-      if (reason === "combat-low-hp-leave" && combatState?.closeRisk) {
-        const distanceText = Number.isFinite(Number(combatState.closeRisk.distance)) ? "\uFF0C\u8DDD\u79BB" + Math.round(Number(combatState.closeRisk.distance) / 100) + "\u7C73" : "";
-        return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + hpDisplay(selfHp) + "\u4E0D\u8DB3" + cfg.combatLowHpLeaveThreshold + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + distanceText + "\uFF0C\u4F4E\u8840\u8FD1\u8EAB\u98CE\u9669\u9000\u51FA";
-      }
-      return "\u4E0E" + actorLabel(target) + "\u6218\u6597\uFF0C\u8840\u91CF" + hpDisplay(selfHp) + "\u4E0D\u8DB3" + cfg.combatLowHpLeaveThreshold + "\uFF0C\u5BF9\u65B9\u8840\u91CF" + hpDisplay(targetHp) + "\uFF0C\u52A3\u52BF\u9000\u51FA";
+      return combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs });
     }
     function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
-      const exitSummary = combatExitSummary(reason, baseTarget, combatState);
-      const normalizedCover = cover ? { ...cover, target: cover.target || baseTarget } : null;
-      return {
-        kind: "leave",
-        reason,
-        exitSummary,
-        displayReason: exitSummary,
-        combat: true,
-        ignoreReturnBlock: true,
-        dx: normalizedCover ? clamp(Math.round(Number(normalizedCover.dx) || 0), -1, 1) : 0,
-        dy: normalizedCover ? clamp(Math.round(Number(normalizedCover.dy) || 0), -1, 1) : 0,
-        shoot: Boolean(normalizedCover?.shoot),
-        forceShoot: Boolean(normalizedCover?.forceShoot),
-        shootEveryMs: normalizedCover?.shootEveryMs,
-        aimTarget: normalizedCover?.aimTarget || null,
-        incomingBullet: normalizedCover?.incomingBullet || null,
-        target: baseTarget,
-        combatCover: normalizedCover,
-        combatState: {
-          ...combatState,
-          leaveCover: normalizedCover
-        }
-      };
+      return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
     }
     function pursuitLeaveSummary(pursuit) {
-      const target = pursuit || {};
-      const duration = Number(target.durationMs);
-      const durationText = Number.isFinite(duration) && duration > 0 ? "\uFF0C\u6301\u7EED" + formatDurationMs(duration) : "";
-      const distance = Number(target.distance);
-      const distanceText = Number.isFinite(distance) ? "\uFF0C\u8DDD\u79BB" + formatDistance(distance) : "";
-      return "\u88AB" + actorLabel(target) + "\u6301\u7EED\u8FFD\u51FB" + durationText + distanceText + "\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      return pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance });
     }
     function injuryLeaveSummary(injury) {
-      const actor = injury?.nearestActive || injury?.nearestAvoidance || injury?.nearestHuman || null;
-      const previousHp = Number(injury?.previousHp ?? NaN);
-      const currentHp = Number(injury?.currentHp ?? injury?.self?.hp ?? NaN);
-      const hpText = Number.isFinite(previousHp) && Number.isFinite(currentHp) ? "\uFF0C\u8840\u91CF\u4ECE" + hpDisplay(previousHp) + "\u964D\u5230" + hpDisplay(currentHp) : Number.isFinite(currentHp) ? "\uFF0C\u5F53\u524D\u8840\u91CF" + hpDisplay(currentHp) : "";
-      return (actor ? "\u53D7\u5230" + actorLabel(actor) + "\u4F24\u5BB3/\u9644\u8FD1\u5A01\u80C1" : "\u68C0\u6D4B\u5230\u8840\u91CF\u4E0B\u964D") + hpText + "\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      return injuryLeaveSummaryCore(injury, { actorLabel, hpDisplay });
     }
     function offlineLeaveSummary(reason, offlineSafety) {
-      if (offlineSafety?.staminaBudgetExit) {
-        return staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit);
-      }
-      const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
-      if (staminaLabel === "1h") return "\u4E00\u5C0F\u65F6\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (staminaLabel === "1d") return "\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (staminaLabel === "1h/1d") return "\u4E00\u5C0F\u65F6\u548C\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      const text = String(reason || "").toLowerCase();
-      if (text.includes("stamina")) return "\u957F\u5468\u671F\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (offlineSafety?.loginPointSafetyGate || text.includes("login point safety")) return "\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167\u672A\u6EE1\u8DB3\uFF0C\u9000\u51FA\u7B49\u5F85\u5B89\u5168\u91CD\u8FDE";
-      if (offlineSafety?.noSelfGameSession || text.includes("missing self")) return "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (text.includes("combat tick gap") || offlineSafety?.combatTickGap) return "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u6CE2\u52A8\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (text.includes("sampling outage") || offlineSafety?.samplingOutage) return "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u6CE2\u52A8\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (text.includes("reconnect churn") || offlineSafety?.reconnectChurn) return "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (text.includes("action settlement") || offlineSafety?.actionSettlementStall) return "\u79FB\u52A8/\u5F00\u706B\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (text.includes("server position")) return "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u79BB\u7EBF\u5904\u7406\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      if (offlineSafety?.unsafe) return "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u4E14\u5468\u56F4\u5371\u9669\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-      return "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
     }
     function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = "") {
-      const currentSummary = offlineLeaveSummary(reason, offlineSafety);
-      const leaveDisplay = String(leaveResult?.displayReason || "");
-      const leaveSummary = String(leaveResult?.summary || leaveResult?.exitSummary || "");
-      if (currentSummary && leaveDisplay && (leaveSummary === currentSummary || leaveDisplay.includes(currentSummary))) {
-        return leaveDisplay;
-      }
-      if (currentSummary) return currentSummary;
-      return leaveDisplay || String(offlineDetail?.displayReason || "") || String(fallback || "");
+      return currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary });
     }
     function reloginDelayForHp(selfLike, detail) {
-      const info = hpInfoForRelogin(selfLike, detail);
-      const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
-      const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);
-      const baseMaxMs = Math.max(minMs, Number(cfg.enemyReloginMaxDelayMs ?? minMs) || 0);
-      const maxMs = Math.max(baseMaxMs, repeatMinMs);
-      const dangerFactor = Math.pow(1 - info.ratio, 1.35);
-      const jitterMs = Math.max(0, Number(cfg.enemyReloginJitterMs) || 0);
-      const hpDelayMs = clamp(
-        Math.round(minMs + (maxMs - minMs) * dangerFactor + randomBetween(0, jitterMs)),
-        minMs,
-        maxMs
-      );
-      const delayMs = Math.max(hpDelayMs, repeatMinMs);
-      return { delayMs, hpDelayMs, minMs, maxMs, baseMaxMs, repeatMinMs, hp: info };
+      return reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp });
     }
     function isExitLoginSuppressReason(reason) {
       return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ""));

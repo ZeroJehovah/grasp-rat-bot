@@ -1486,6 +1486,8 @@ function main() {
     assert(exitReloginSourceModule.includes('function bundledExitReloginActorSource() {'), 'exit-relogin actor bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginStreakInlineSource() {'), 'exit-relogin streak inline source factory not found');
     assert(exitReloginSourceModule.includes('function bundledExitReloginStreakSource() {'), 'exit-relogin streak bundled source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginSummaryInlineSource() {'), 'exit-relogin summary inline source factory not found');
+    assert(exitReloginSourceModule.includes('function bundledExitReloginSummarySource() {'), 'exit-relogin summary bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
     assert(exitReloginSourceModule.includes('module.exports = {'), 'exit-relogin source module exports not found');
@@ -1496,6 +1498,8 @@ function main() {
       'bundledExitReloginActorSource',
       'exitReloginStreakInlineSource',
       'bundledExitReloginStreakSource',
+      'exitReloginSummaryInlineSource',
+      'bundledExitReloginSummarySource',
       'exitReloginRemainderSource',
       'exitReloginSource'
     ]) {
@@ -1536,7 +1540,28 @@ function main() {
     assert(exitReloginStreakBundledBody.includes('writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak)'), 'exit-relogin streak bundled source does not bind storage/bot writer state');
     assert(exitReloginStreakBundledBody.includes('updateEnemyLeaveStreakCore(detail, t'), 'exit-relogin streak bundled source does not call runtime updater');
     assert(exitReloginStreakBundledBody.includes('enemyActorFromLeaveDetail') && exitReloginStreakBundledBody.includes('readEnemyLeaveStreak') && exitReloginStreakBundledBody.includes('writeEnemyLeaveStreak') && exitReloginStreakBundledBody.includes('enemyRepeatDelayMsForCount'), 'exit-relogin streak bundled source does not pass required helper bindings');
+    const exitReloginSummaryInlineBody = functionBody(exitReloginSourceModule, 'exitReloginSummaryInlineSource');
+    assert(exitReloginSummaryInlineBody.includes('function combatExitSummary'), 'exit-relogin summary inline source does not include combat summary helper');
+    assert(exitReloginSummaryInlineBody.includes('function combatLeaveAction'), 'exit-relogin summary inline source does not include combat leave action helper');
+    assert(exitReloginSummaryInlineBody.includes('function pursuitLeaveSummary'), 'exit-relogin summary inline source does not include pursuit summary helper');
+    assert(exitReloginSummaryInlineBody.includes('function injuryLeaveSummary'), 'exit-relogin summary inline source does not include injury summary helper');
+    assert(exitReloginSummaryInlineBody.includes('function offlineLeaveSummary'), 'exit-relogin summary inline source does not include offline summary helper');
+    assert(exitReloginSummaryInlineBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary inline source does not include offline display helper');
+    assert(exitReloginSummaryInlineBody.includes('function reloginDelayForHp'), 'exit-relogin summary inline source does not include relogin HP delay helper');
+    assert(exitReloginSummaryInlineBody.includes('combatState?.pressureDisadvantage'), 'exit-relogin summary inline source does not preserve pressure disadvantage branch');
+    assert(exitReloginSummaryInlineBody.includes('staminaExhaustedWindowLabel'), 'exit-relogin summary inline source does not preserve stamina label helper');
+    assert(exitReloginSummaryInlineBody.includes('repeatMinMs'), 'exit-relogin summary inline source does not preserve repeat relogin delay minimum');
+    const exitReloginSummaryBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginSummarySource');
+    assert(exitReloginSummaryBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin summary bundled source does not hand summary helpers to the bundler');
+    assert(exitReloginSummaryBundledBody.includes('combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'exit-relogin summary bundled source does not bind combat summary helpers');
+    assert(exitReloginSummaryBundledBody.includes('combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp })'), 'exit-relogin summary bundled source does not bind combat leave action helpers');
+    assert(exitReloginSummaryBundledBody.includes('pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance })'), 'exit-relogin summary bundled source does not bind pursuit summary helpers');
+    assert(exitReloginSummaryBundledBody.includes('injuryLeaveSummaryCore(injury, { actorLabel, hpDisplay })'), 'exit-relogin summary bundled source does not bind injury summary helpers');
+    assert(exitReloginSummaryBundledBody.includes('offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'exit-relogin summary bundled source does not bind offline summary helpers');
+    assert(exitReloginSummaryBundledBody.includes('currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary })'), 'exit-relogin summary bundled source does not bind offline display helper');
+    assert(exitReloginSummaryBundledBody.includes('reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'), 'exit-relogin summary bundled source does not bind HP relogin delay helpers');
     const exitReloginRemainderBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderSource');
+    assert(!exitReloginRemainderBody.includes('function combatExitSummary'), 'exit-relogin remainder source still owns combat summary helper');
     assert(exitReloginRemainderBody.includes('function setExitReloginSuppress'), 'exit-relogin remainder source does not include suppress helper');
     assert(exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source does not include enemy hold cleanup helper');
     assert(exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source does not include offline hold cleanup helper');
@@ -1563,7 +1588,21 @@ function main() {
     assert(exitReloginRuntimeModule.includes('helpers.readEnemyLeaveStreak(t)'), 'exit-relogin streak updater runtime core does not read previous streak through helper');
     assert(exitReloginRuntimeModule.includes('helpers.writeEnemyLeaveStreak(streak)'), 'exit-relogin streak updater runtime core does not write streak through helper');
     assert(exitReloginRuntimeModule.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak updater runtime core does not preserve repeat delay metadata');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('function combatExitSummaryCore(reason, target, combatState = {}, helpers)'), 'exit-relogin summary runtime combat summary core not found');
+    assert(exitReloginRuntimeModule.includes('combatState?.pressureDisadvantage'), 'exit-relogin summary runtime core does not preserve pressure disadvantage branch');
+    assert(exitReloginRuntimeModule.includes('helpers.formatDurationMs(estimate.tDeathMs)'), 'exit-relogin summary runtime core does not bind duration formatting');
+    assert(exitReloginRuntimeModule.includes('function combatLeaveActionCore(reason, baseTarget, combatState = {}, cover = null, helpers)'), 'exit-relogin summary runtime combat action core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.clamp(Math.round(Number(normalizedCover.dx) || 0), -1, 1)'), 'exit-relogin summary runtime core does not clamp cover dx');
+    assert(exitReloginRuntimeModule.includes('combatCover: normalizedCover'), 'exit-relogin summary runtime core does not preserve combat cover metadata');
+    assert(exitReloginRuntimeModule.includes('function pursuitLeaveSummaryCore(pursuit, helpers)'), 'exit-relogin summary runtime pursuit core not found');
+    assert(exitReloginRuntimeModule.includes('function injuryLeaveSummaryCore(injury, helpers)'), 'exit-relogin summary runtime injury core not found');
+    assert(exitReloginRuntimeModule.includes('function offlineLeaveSummaryCore(reason, offlineSafety, helpers)'), 'exit-relogin summary runtime offline core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit)'), 'exit-relogin summary runtime offline core does not preserve stamina budget branch');
+    assert(exitReloginRuntimeModule.includes('function currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = \'\', helpers)'), 'exit-relogin summary runtime offline display core not found');
+    assert(exitReloginRuntimeModule.includes('leaveDisplay.includes(currentSummary)'), 'exit-relogin summary runtime offline display core does not preserve display reuse rule');
+    assert(exitReloginRuntimeModule.includes('function reloginDelayForHpCore(selfLike, detail, helpers)'), 'exit-relogin summary runtime HP delay core not found');
+    assert(exitReloginRuntimeModule.includes('const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);'), 'exit-relogin summary runtime HP delay core does not preserve repeat minimum');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
@@ -1813,8 +1852,11 @@ function main() {
       }
       const staminaSummaryBody = functionBody(text, 'staminaBudgetCoinLeaveSummary');
       assert(staminaSummaryBody.includes("最近金币距离' + formatDistance(detail.distance)"), 'stamina budget leave summary does not use meter distance formatting');
-      const pursuitSummaryBody = functionBody(text, 'pursuitLeaveSummary');
-      assert(pursuitSummaryBody.includes("'，距离' + formatDistance(distance)"), 'pursuit leave summary does not use meter distance formatting');
+      const pursuitSummarySource = functionBody(text, 'pursuitLeaveSummary') + '\n' + finalRuntimeText;
+      assert(
+        pursuitSummarySource.includes("'，距离' + formatDistance(distance)") || pursuitSummarySource.includes('helpers.formatDistance(distance)'),
+        'pursuit leave summary does not use meter distance formatting'
+      );
     });
     check(`${file} displays relogin wait using remaining hold before original delay`, () => {
       const body = functionBody(text, 'leaveWaitDisplay');
@@ -1910,9 +1952,10 @@ function main() {
       assert(text.includes('combatTickGap: this.lastCombatTickGap || null'), 'status does not expose combat tick gap state');
       assert(text.includes('lastTickGapMs: this.lastTickGapMs'), 'status does not expose last tick gap');
       assert(text.includes('lastTickReentryGapAt: this.lastTickReentryGapAt || 0'), 'status does not expose tick reentry gap timestamp');
-      assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
-      assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
-      assert(functionBody(text, 'offlineLeaveSummary').includes('offlineSafety?.actionSettlementStall'), 'runtime offline leave summary does not mention action settlement stall');
+      const offlineSummarySource = functionBody(text, 'offlineLeaveSummary') + '\n' + finalRuntimeText;
+      assert(offlineSummarySource.includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
+      assert(offlineSummarySource.includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
+      assert(offlineSummarySource.includes('offlineSafety?.actionSettlementStall'), 'runtime offline leave summary does not mention action settlement stall');
       const leaveOfflineBody = functionBody(text, 'leaveOffline');
       assert(leaveOfflineBody.includes('const summary = offlineLeaveSummary(reason, offlineSafety);'), 'offline leave retry cooldown does not compute the current offline summary');
       assert(leaveOfflineBody.includes('summary: summary || active?.summary'), 'offline leave retry cooldown can still prefer a stale active summary over the current reason');

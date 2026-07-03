@@ -116,6 +116,7 @@ async function selfTest() {
   assert(source.includes('function leaveWaitDisplayCore'), 'exit-relogin display helper was not bundled');
   assert(source.includes('function normalizeEnemyActorCore'), 'exit-relogin actor helper was not bundled');
   assert(source.includes('function readEnemyLeaveStreakCore'), 'exit-relogin streak helper was not bundled');
+  assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -239,6 +240,15 @@ async function selfTest() {
   assert(status.exitReloginUpdatedRepeatDelay === 2000, 'spike did not attach exit relogin repeat delay');
   assert(status.exitReloginWrittenStreakCount === 2, 'spike did not write exit relogin streak');
   assert(status.exitReloginBotStreakKey === 'id:42', 'spike did not update bot exit relogin streak');
+  assert(String(status.exitReloginCombatSummary || '').includes('近身弹压'), 'spike did not execute exit relogin combat summary');
+  assert(status.exitReloginCombatActionDx === 1, 'spike did not clamp exit relogin combat leave action dx');
+  assert(status.exitReloginCombatActionShoot === true, 'spike did not preserve exit relogin combat leave shooting');
+  assert(String(status.exitReloginPursuitSummary || '').includes('持续追击'), 'spike did not execute exit relogin pursuit summary');
+  assert(String(status.exitReloginInjurySummary || '').includes('血量从90HP降到55HP'), 'spike did not execute exit relogin injury summary');
+  assert(String(status.exitReloginOfflineSummary || '').includes('移动/开火结算卡死'), 'spike did not execute exit relogin offline summary');
+  assert(String(status.exitReloginOfflineDisplay || '').includes('等待3秒'), 'spike did not preserve exit relogin offline display reason');
+  assert(status.exitReloginHpDelayMs === 6000, 'spike did not honor exit relogin repeat minimum delay');
+  assert(status.exitReloginHpDelayRepeatMinMs === 6000, 'spike did not preserve exit relogin repeat minimum metadata');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

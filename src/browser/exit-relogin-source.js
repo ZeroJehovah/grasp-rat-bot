@@ -195,7 +195,7 @@ function bundledExitReloginStreakSource() {
 `;
 }
 
-function exitReloginRemainderSource() {
+function exitReloginSummaryInlineSource() {
   return String.raw`
   function combatExitSummary(reason, target, combatState = {}) {
     const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
@@ -344,7 +344,52 @@ function exitReloginRemainderSource() {
     const delayMs = Math.max(hpDelayMs, repeatMinMs);
 	    return { delayMs, hpDelayMs, minMs, maxMs, baseMaxMs, repeatMinMs, hp: info };
 	  }
+`;
+}
 
+function bundledExitReloginSummarySource() {
+  return `	  const {
+\t    combatExitSummaryCore,
+\t    combatLeaveActionCore,
+\t    pursuitLeaveSummaryCore,
+\t    injuryLeaveSummaryCore,
+\t    offlineLeaveSummaryCore,
+\t    currentOfflineDisplayReasonCore,
+\t    reloginDelayForHpCore
+\t  } = require('./src/browser/runtime/exit-relogin');
+
+\t  function combatExitSummary(reason, target, combatState = {}) {
+\t    return combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs });
+\t  }
+
+\t  function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
+\t    return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
+\t  }
+
+\t  function pursuitLeaveSummary(pursuit) {
+\t    return pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance });
+\t  }
+
+\t  function injuryLeaveSummary(injury) {
+\t    return injuryLeaveSummaryCore(injury, { actorLabel, hpDisplay });
+\t  }
+
+\t  function offlineLeaveSummary(reason, offlineSafety) {
+\t    return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
+\t  }
+
+\t  function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '') {
+\t    return currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary });
+\t  }
+
+\t  function reloginDelayForHp(selfLike, detail) {
+\t    return reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp });
+\t  }
+`;
+}
+
+function exitReloginRemainderSource() {
+  return String.raw`
   function isExitLoginSuppressReason(reason) {
     return /enemy leave|offline.*leave|combat leave|pursuit leave/i.test(String(reason || ''));
   }
@@ -733,7 +778,10 @@ function exitReloginSource(options = {}) {
   const streakSource = options.bundledRuntime
     ? bundledExitReloginStreakSource()
     : exitReloginStreakInlineSource();
-  return displaySource + actorSource + streakSource + exitReloginRemainderSource();
+  const summarySource = options.bundledRuntime
+    ? bundledExitReloginSummarySource()
+    : exitReloginSummaryInlineSource();
+  return displaySource + actorSource + streakSource + summarySource + exitReloginRemainderSource();
 }
 
 module.exports = {
@@ -743,6 +791,8 @@ module.exports = {
   bundledExitReloginActorSource,
   exitReloginStreakInlineSource,
   bundledExitReloginStreakSource,
+  exitReloginSummaryInlineSource,
+  bundledExitReloginSummarySource,
   exitReloginRemainderSource,
   exitReloginSource
 };
