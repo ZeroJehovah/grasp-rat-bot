@@ -277,6 +277,7 @@ function main() {
   const browserPreservedStateRuntimeModule = readText('src/browser/runtime/browser-preserved-state.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
+  const actionSwitchDiagnosticsRuntimeModule = readText('src/browser/runtime/action-switch-diagnostics.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
   const strategyActionPrioritySource = readText('src/strategy/action-priority.js');
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
@@ -375,6 +376,7 @@ function main() {
     browserPreservedStateRuntimeModule,
     runtimeDefaultsRuntimeModule,
     actionPriorityRuntimeModule,
+    actionSwitchDiagnosticsRuntimeModule,
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
@@ -1198,8 +1200,12 @@ function main() {
     assert(actionArbitrationSourceModule.includes('function actionArbitrationSource() {'), 'action-arbitration source factory not found');
     assert(actionArbitrationSourceModule.includes('module.exports = {\n  actionArbitrationSource'), 'action-arbitration module export not found');
     assert(actionArbitrationSourceModule.includes("require('./runtime/action-priority')"), 'action-arbitration source does not import action-priority through the browser runtime helper module');
+    assert(actionArbitrationSourceModule.includes("require('./runtime/action-switch-diagnostics')"), 'action-arbitration source does not import action-switch diagnostics through the browser runtime helper module');
+    assert(!actionArbitrationSourceModule.includes("require('../strategy/action-switch-diagnostics')"), 'action-arbitration source still imports action-switch diagnostics directly from strategy');
     assert(actionPriorityRuntimeModule.includes("require('../../strategy/action-priority')"), 'browser action-priority helper module does not reuse the strategy action-priority helpers');
     assert(actionPriorityRuntimeModule.includes('actionPriorityBand') && actionPriorityRuntimeModule.includes('actionFocusSummary') && actionPriorityRuntimeModule.includes('getActionTargetKey'), 'browser action-priority helper module exports are incomplete');
+    assert(actionSwitchDiagnosticsRuntimeModule.includes("require('../../strategy/action-switch-diagnostics')"), 'browser action-switch diagnostics helper module does not reuse the strategy action-switch diagnostics helpers');
+    assert(actionSwitchDiagnosticsRuntimeModule.includes('actionSwitchPairKey') && actionSwitchDiagnosticsRuntimeModule.includes('buildPreviousDecisionSummary') && actionSwitchDiagnosticsRuntimeModule.includes('recordActionSwitchDiagnosticsCore'), 'browser action-switch diagnostics helper module exports are incomplete');
     assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('String.raw`'), 'action-arbitration source factory does not return raw browser source');
     assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('function recordActionSwitchDiagnostics'), 'action-arbitration source factory does not include target switch diagnostics wrapper');
     assert(functionBody(actionArbitrationSourceModule, 'actionArbitrationSource').includes('function applyFinalActionArbitration'), 'action-arbitration source factory does not include final action arbitration wrapper');
@@ -1246,12 +1252,14 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import preservedState from '../browser/runtime/browser-preserved-state.js'"), 'bundler spike does not import preserved-state helper through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import runtimeDefaults from '../browser/runtime/runtime-defaults.js'"), 'bundler spike does not import runtime-defaults helper through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionPriority from '../browser/runtime/action-priority.js'"), 'bundler spike does not import action-priority through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js'"), 'bundler spike does not import action-switch diagnostics through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
     assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true })"), 'bundler spike does not execute the exit-summary helper module');
     assert(bundlerSpikeEntrySource.includes('preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({'), 'bundler spike does not execute the preserved-state helper module');
     assert(bundlerSpikeEntrySource.includes('defaultStatusEvery: runtimeDefaults.buildRuntimeDefaults({ statusEvery: 0 }, false).statusEvery'), 'bundler spike does not execute the runtime-defaults helper module');
+    assert(bundlerSpikeEntrySource.includes('actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(sampleAction, switchState, { nowMs: 1000 })'), 'bundler spike does not execute the action-switch diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
