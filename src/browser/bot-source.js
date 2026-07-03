@@ -38,6 +38,7 @@ const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
 const { statusPanelSource } = require('./status-panel-source');
 const { combatLogSource } = require('./combat-log-source');
+const { tickSafetySource } = require('./tick-safety-source');
 const { importantLogSource } = require('./important-log-source');
 const { combatHistorySource } = require('./combat-history-source');
 const { entityRefreshSource } = require('./entity-refresh-source');
@@ -733,60 +734,7 @@ ${statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, 
       ${sanitizeCombatLogIdPart.toString()}
 
 ${combatLogSource({ combatLogExitSummaryFromDecision })}
-
-      function recordUnhandledTickError(source, err) {
-        const entry = {
-          at: Date.now(),
-          source,
-          message: err?.message || String(err),
-          stack: String(err?.stack || '')
-        };
-        try {
-          if (!Array.isArray(bot.errors)) bot.errors = [];
-          bot.errors.push(entry);
-          if (bot.errors.length > 20) bot.errors.splice(0, bot.errors.length - 20);
-        } catch (_) {}
-        try {
-          console.error('[grasp-rat-bot:unhandled-tick]', err);
-        } catch (_) {}
-        return entry;
-      }
-
-      function runTickSafely(source = 'timer') {
-        const tickStartedAt = Date.now();
-        const tickStartedPerf = now();
-        recordRuntimeDiagnostics({
-          lastTickStartedAt: tickStartedAt,
-          lastTickSource: source
-        });
-        return Promise.resolve()
-          .then(() => tick(source))
-          .catch(err => {
-            recordUnhandledTickError(source, err);
-          })
-          .finally(() => {
-            recordRuntimeDiagnostics({
-              lastTickCompletedAt: Date.now(),
-              lastTickDurationMs: Math.max(0, Math.round(now() - tickStartedPerf)),
-              lastTickSource: source
-            });
-          });
-      }
-
-      function runCallbackSafely(label, fn) {
-        return function (...args) {
-          try {
-            const result = fn.apply(this, args);
-            if (result && typeof result.then === 'function') {
-              result.catch(err => recordUnhandledTickError(label, err));
-            }
-            return result;
-          } catch (err) {
-            recordUnhandledTickError(label, err);
-            return undefined;
-          }
-        };
-      }
+${tickSafetySource()}
 
 			${controlLoginSource({ staminaExhaustedWindowLabel })}
 
