@@ -575,9 +575,10 @@ This is a source-organization split only. It preserves HP summaries, stamina exh
 44. Offline safety assessment source factory: integrated in `bootstrap-0.4.316`
 45. Leave command helper source factory: integrated in `bootstrap-0.4.317`
 46. Clash leave rescue helper source factory: integrated in `bootstrap-0.4.318`
-47. Constants: partially integrated for high-value coin defaults
-48. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-49. Run live validation sessions after each behavior-touching replacement
+47. Leave command completion/issue source factory: integrated in `bootstrap-0.4.319`
+48. Constants: partially integrated for high-value coin defaults
+49. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+50. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace the internal `browserBotSource()` full-source generator behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
