@@ -262,6 +262,7 @@ function main() {
   const targetWhitelistConfig = readJson('dist/target-whitelist.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
+  const runtimeSourceModule = readText('src/browser/runtime-source.js');
   const botSourceModule = readText('src/browser/bot-source.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
@@ -296,6 +297,7 @@ function main() {
   const sharedTargetWhitelistSource = readText('src/shared/target-whitelist.js');
   const sourceRuntimeText = [
     sourceBot,
+    runtimeSourceModule,
     botSourceModule,
     targetOverlaySourceModule,
     statusPanelSourceModule,
@@ -354,7 +356,9 @@ function main() {
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
     assert(!buildRemoteSource.includes('browserBotSource'), 'production build should not bypass the shared remote bundler');
     assert(remoteBundleSource.includes("const esbuild = require('esbuild')"), 'shared remote bundler does not use esbuild');
-    assert(remoteBundleSource.includes("const { browserBotSource } = require('../src/browser/bot-source')"), 'shared remote bundler does not use the browser source builder');
+    assert(remoteBundleSource.includes("const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source')"), 'shared remote bundler does not use the browser runtime source boundary');
+    assert(remoteBundleSource.includes('remoteBrowserRuntimeSource(options)'), 'shared remote bundler does not get direct source through the runtime source boundary');
+    assert(!remoteBundleSource.includes("require('../src/browser/bot-source')"), 'shared remote bundler should not depend directly on the old browser source builder');
     assert(remoteBundleSource.includes('write: false'), 'shared remote bundler should generate source through esbuild outputFiles');
     assert(remoteBundleSource.includes("format: BUNDLER_INFO.format"), 'shared remote bundler does not centralize IIFE format');
     assert(remoteBundleSource.includes("platform: BUNDLER_INFO.platform"), 'shared remote bundler does not centralize browser platform');
@@ -362,7 +366,14 @@ function main() {
   });
 
   check('source modules split browser source generation while generated runtime stays single file', () => {
-    assert(sourceBot.includes("require('./src/browser/bot-source')"), 'main bot source builder import not found');
+    assert(sourceBot.includes("require('./src/browser/runtime-source')"), 'main bot runtime source boundary import not found');
+    assert(sourceBot.includes('browserRuntimeSource({'), 'main bot does not use the runtime source boundary for injection/print-source');
+    assert(!sourceBot.includes("require('./src/browser/bot-source')"), 'main bot should not import the old browser source builder directly');
+    assert(runtimeSourceModule.includes("const { browserBotSource } = require('./bot-source')"), 'runtime source boundary does not own the browser source builder dependency');
+    assert(runtimeSourceModule.includes('function browserRuntimeConfig(options = {})'), 'browser runtime config adapter not found');
+    assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
+    assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
+    assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
     assert(botSourceModule.includes("require('../shared/exit-summary')"), 'exit-summary module import not found');
     assert(botSourceModule.includes("require('../shared/runtime-utils')"), 'runtime-utils module import not found');
     assert(botSourceModule.includes("require('../shared/display-format')"), 'display-format module import not found');
