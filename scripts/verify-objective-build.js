@@ -321,6 +321,7 @@ function main() {
   const exitMotionSourceModule = readText('src/browser/exit-motion-source.js');
   const persistentLastSelfSourceModule = readText('src/browser/persistent-last-self-source.js');
   const persistentExitSourceModule = readText('src/browser/persistent-exit-source.js');
+  const persistentClearSourceModule = readText('src/browser/persistent-clear-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
@@ -380,6 +381,7 @@ function main() {
     exitMotionSourceModule,
     persistentLastSelfSourceModule,
     persistentExitSourceModule,
+    persistentClearSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
@@ -549,6 +551,7 @@ function main() {
     assert(botSourceModule.includes('${exitMotionSource()}'), 'exit-motion module is not injected into browser runtime');
     assert(botSourceModule.includes('${persistentLastSelfSource()}'), 'persistent-last-self module is not injected into browser runtime');
     assert(botSourceModule.includes('${persistentExitSource()}'), 'persistent-exit module is not injected into browser runtime');
+    assert(botSourceModule.includes('${persistentClearSource()}'), 'persistent-clear module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
     assert(botSourceModule.includes('${pendingExitSource()}'), 'pending-exit module is not injected into browser runtime');
     assert(botSourceModule.includes('${leaveCommandSource()}'), 'leave-command module is not injected into browser runtime');
@@ -900,6 +903,12 @@ function main() {
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('function readPersistentExitState'), 'persistent-exit source factory does not include read helper');
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('function writePersistentExitState'), 'persistent-exit source factory does not include write helper');
     assert(functionBody(persistentExitSourceModule, 'persistentExitSource').includes('refreshExitDetail'), 'persistent-exit source factory does not refresh exit detail');
+    assert(persistentClearSourceModule.includes('function persistentClearSource() {'), 'persistent-clear source factory not found');
+    assert(persistentClearSourceModule.includes('module.exports = { persistentClearSource }'), 'persistent-clear source module export not found');
+    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('String.raw`'), 'persistent-clear source factory does not return raw browser source');
+    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('function clearPersistentExitState'), 'persistent-clear source factory does not include exit clear helper');
+    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('function clearPersistentPendingExitState'), 'persistent-clear source factory does not include pending-exit clear helper');
+    assert(functionBody(persistentClearSourceModule, 'persistentClearSource').includes('PENDING_EXIT_STATE_KEY'), 'persistent-clear source factory does not clear pending-exit storage key');
     assert(exitReloginSourceModule.includes('function exitReloginSource() {'), 'exit-relogin source factory not found');
     assert(exitReloginSourceModule.includes('module.exports = {\n  exitReloginSource'), 'exit-relogin source module export not found');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('String.raw`'), 'exit-relogin source factory does not return raw browser source');
