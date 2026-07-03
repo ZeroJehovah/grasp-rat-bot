@@ -7,7 +7,19 @@ const {
   pickNearestDailyStaminaFinalCoinCore
 } = require('./runtime/stamina-budget');
 
-function opportunityStaminaSource() {
+function opportunityStaminaInlineSource(helpers = {}) {
+  const {
+    dailyStaminaBudgetIsLimitingCore,
+    summarizeBlockedStaminaOpportunityCore,
+    summarizeNearestCoinStaminaBudgetExitCore,
+    pickNearestDailyStaminaFinalCoinCore
+  } = helpers;
+  const staminaBudgetHelperSource = [
+    dailyStaminaBudgetIsLimitingCore,
+    summarizeBlockedStaminaOpportunityCore,
+    summarizeNearestCoinStaminaBudgetExitCore,
+    pickNearestDailyStaminaFinalCoinCore
+  ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
   return String.raw`  function opportunityEffectiveStaminaCost(staminaCost) {
     return opportunityEffectiveStaminaCostCore(staminaCost, {
       distanceFloor: cfg.opportunityDistanceFloor
@@ -53,10 +65,7 @@ function opportunityStaminaSource() {
 	    return Math.min(...values);
 	  }
 
-	  ${dailyStaminaBudgetIsLimitingCore.toString()}
-	  ${summarizeBlockedStaminaOpportunityCore.toString()}
-	  ${summarizeNearestCoinStaminaBudgetExitCore.toString()}
-	  ${pickNearestDailyStaminaFinalCoinCore.toString()}
+${staminaBudgetHelperSource}
 
 	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
 	    return dailyStaminaBudgetIsLimitingCore(
@@ -171,4 +180,29 @@ function opportunityStaminaSource() {
 `;
 }
 
-module.exports = { opportunityStaminaSource };
+function bundledOpportunityStaminaSource() {
+  return `const {
+  dailyStaminaBudgetIsLimitingCore,
+  summarizeBlockedStaminaOpportunityCore,
+  summarizeNearestCoinStaminaBudgetExitCore,
+  pickNearestDailyStaminaFinalCoinCore
+} = require('./src/browser/runtime/stamina-budget');
+
+${opportunityStaminaInlineSource()}`;
+}
+
+function opportunityStaminaSource(options = {}) {
+  if (options.bundledRuntime) return bundledOpportunityStaminaSource();
+  return opportunityStaminaInlineSource({
+    dailyStaminaBudgetIsLimitingCore,
+    summarizeBlockedStaminaOpportunityCore,
+    summarizeNearestCoinStaminaBudgetExitCore,
+    pickNearestDailyStaminaFinalCoinCore
+  });
+}
+
+module.exports = {
+  bundledOpportunityStaminaSource,
+  opportunityStaminaInlineSource,
+  opportunityStaminaSource
+};

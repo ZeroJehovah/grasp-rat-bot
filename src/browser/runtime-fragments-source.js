@@ -237,7 +237,7 @@ function browserRuntimeFragmentEntries(config) {
     ['target-selection', targetSelectionSource],
     ['combat-movement', combatMovementSource],
     ['combat-aim', combatAimSource],
-    ['opportunity-stamina', opportunityStaminaSource],
+    ['opportunity-stamina', () => opportunityStaminaSource(config)],
     ['separator-after-opportunity-stamina',
     `
 `],
