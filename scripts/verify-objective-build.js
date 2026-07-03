@@ -280,6 +280,7 @@ function main() {
   const persistentExitRuntimeModule = readText('src/browser/runtime/persistent-exit.js');
   const persistentLastSelfRuntimeModule = readText('src/browser/runtime/persistent-last-self.js');
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
+  const refreshExitDetailRuntimeModule = readText('src/browser/runtime/refresh-exit-detail.js');
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
   const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
@@ -406,6 +407,7 @@ function main() {
     persistentExitRuntimeModule,
     persistentLastSelfRuntimeModule,
     persistentClearRuntimeModule,
+    refreshExitDetailRuntimeModule,
     restoredCoinFailuresRuntimeModule,
     loginSnapshotGateRuntimeModule,
     runtimeDefaultsRuntimeModule,
@@ -553,6 +555,7 @@ function main() {
     assert(distSource.includes('var require_persistent_exit = __commonJS'), 'bundled production dist does not bundle the persistent-exit runtime module through esbuild');
     assert(distSource.includes('var require_persistent_last_self = __commonJS'), 'bundled production dist does not bundle the persistent-last-self runtime module through esbuild');
     assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
+    assert(distSource.includes('var require_refresh_exit_detail = __commonJS'), 'bundled production dist does not bundle the refresh-exit-detail runtime module through esbuild');
     assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
     assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
@@ -647,6 +650,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("['persistent-last-self', () => persistentLastSelfSource(config)]"), 'persistent-last-self source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-exit', () => persistentExitSource(config)]"), 'persistent-exit source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['refresh-exit-detail', () => refreshExitDetailSource(config)]"), 'refresh-exit-detail source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['restored-coin-failures', () => restoredCoinFailuresSource(config)]"), 'restored-coin-failures source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['login-snapshot-gate', () => loginSnapshotGateSource(config)]"), 'login-snapshot-gate source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
@@ -1343,13 +1347,26 @@ function main() {
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function writePersistentPendingExitState'), 'pending-exit persistence source factory does not include storage writer');
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('function chooseInitialPendingExitState'), 'pending-exit persistence source factory does not include initial-state chooser');
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('PENDING_EXIT_STATE_KEY'), 'pending-exit persistence source factory does not use pending-exit storage key');
-    assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource() {'), 'refresh-exit-detail source factory not found');
-    assert(refreshExitDetailSourceModule.includes('module.exports = { refreshExitDetailSource }'), 'refresh-exit-detail source module export not found');
-    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('String.raw`'), 'refresh-exit-detail source factory does not return raw browser source');
-    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('function refreshExitDetail'), 'refresh-exit-detail source factory does not include refresh helper');
-    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('holdRemainingMs'), 'refresh-exit-detail source factory does not refresh relogin hold remaining time');
-    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('staminaBudgetExit'), 'refresh-exit-detail source factory does not refresh stamina-budget exit summary');
-    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail source factory does not finalize display reason');
+    assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
+    assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
+    assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
+    assert(refreshExitDetailSourceModule.includes('refreshExitDetailInlineSource,\n  bundledRefreshExitDetailSource,\n  refreshExitDetailSource'), 'refresh-exit-detail source module exports not found');
+    const refreshExitDetailInlineBody = functionBody(refreshExitDetailSourceModule, 'refreshExitDetailInlineSource');
+    assert(refreshExitDetailInlineBody.includes('String.raw`'), 'refresh-exit-detail inline source factory does not return raw browser source');
+    assert(refreshExitDetailInlineBody.includes('function refreshExitDetail'), 'refresh-exit-detail inline source factory does not include refresh helper');
+    assert(refreshExitDetailInlineBody.includes('holdRemainingMs'), 'refresh-exit-detail inline source factory does not refresh relogin hold remaining time');
+    assert(refreshExitDetailInlineBody.includes('staminaBudgetExit'), 'refresh-exit-detail inline source factory does not refresh stamina-budget exit summary');
+    assert(refreshExitDetailInlineBody.includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail inline source factory does not finalize display reason');
+    const refreshExitDetailBundledBody = functionBody(refreshExitDetailSourceModule, 'bundledRefreshExitDetailSource');
+    assert(refreshExitDetailBundledBody.includes("require('./src/browser/runtime/refresh-exit-detail')"), 'refresh-exit-detail bundled source does not hand refresh helper to the bundler');
+    assert(refreshExitDetailBundledBody.includes('refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t)'), 'refresh-exit-detail bundled source does not bind runtime summary/finalizer helpers');
+    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('options.bundledRuntime'), 'refresh-exit-detail source selector does not switch on bundled runtime mode');
+    assert(refreshExitDetailRuntimeModule.includes('function refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason'), 'refresh-exit-detail runtime core not found');
+    assert(refreshExitDetailRuntimeModule.includes('detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));'), 'refresh-exit-detail runtime core does not refresh relogin hold remaining time');
+    assert(refreshExitDetailRuntimeModule.includes('detail.offlineSafety?.staminaBudgetExit'), 'refresh-exit-detail runtime core does not refresh stamina-budget exit summary');
+    assert(refreshExitDetailRuntimeModule.includes('detail.offlineSafety?.staminaExhausted'), 'refresh-exit-detail runtime core does not refresh stamina-exhausted exit summary');
+    assert(refreshExitDetailRuntimeModule.includes('return finalizeLeaveDisplayReason(detail);'), 'refresh-exit-detail runtime core does not finalize display reason');
+    assert(refreshExitDetailRuntimeModule.includes('module.exports = { refreshExitDetailCore }'), 'refresh-exit-detail runtime core export not found');
     assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresInlineSource() {'), 'restored-coin-failures inline source factory not found');
     assert(restoredCoinFailuresSourceModule.includes('function bundledRestoredCoinFailuresSource() {'), 'restored-coin-failures bundled source factory not found');
     assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresSource(options = {})'), 'restored-coin-failures source selector not found');

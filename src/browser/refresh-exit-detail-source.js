@@ -1,6 +1,6 @@
 'use strict';
 
-function refreshExitDetailSource() {
+function refreshExitDetailInlineSource() {
   return String.raw`
 		  function refreshExitDetail(detail, t = Date.now()) {
 	    if (!detail || typeof detail !== 'object') return detail;
@@ -15,4 +15,21 @@ function refreshExitDetailSource() {
 	  }`;
 }
 
-module.exports = { refreshExitDetailSource };
+function bundledRefreshExitDetailSource() {
+  return `const { refreshExitDetailCore } = require('./src/browser/runtime/refresh-exit-detail');
+
+		  function refreshExitDetail(detail, t = Date.now()) {
+	    return refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t);
+	  }`;
+}
+
+function refreshExitDetailSource(options = {}) {
+  if (options.bundledRuntime) return bundledRefreshExitDetailSource();
+  return refreshExitDetailInlineSource();
+}
+
+module.exports = {
+  refreshExitDetailInlineSource,
+  bundledRefreshExitDetailSource,
+  refreshExitDetailSource
+};

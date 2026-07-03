@@ -107,6 +107,7 @@ async function selfTest() {
   assert(source.includes('function readPersistentLastSelfStateCore'), 'persistent-last-self read helper was not bundled');
   assert(source.includes('function writePersistentLastSelfStateCore'), 'persistent-last-self write helper was not bundled');
   assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
+  assert(source.includes('function refreshExitDetailCore'), 'refresh-exit-detail helper was not bundled');
   assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
   assert(source.includes('function normalizeLoginSnapshotGateStateCore'), 'login snapshot gate helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
@@ -194,6 +195,9 @@ async function selfTest() {
   assert(status.persistentExitWrittenReason === 'offline-leave', 'spike did not write persistent-exit reason');
   assert(status.persistentExitWrittenHoldMs === 1000, 'spike did not refresh persistent-exit hold');
   assert(status.persistentClearRemoved === true, 'spike did not execute persistent-clear helper');
+  assert(status.refreshExitHoldRemainingMs === 1400, 'spike did not refresh exit hold remaining time');
+  assert(status.refreshExitSummary === 'summary:stamina budget coin leave', 'spike did not refresh stamina-budget exit summary');
+  assert(status.refreshExitDisplayReason === 'summary:stamina budget coin leave', 'spike did not finalize refreshed exit display reason');
   assert(status.restoredFailureCount === 2, 'spike did not filter restored near coin failures');
   assert(status.restoredFailureHardIgnoreUntil === 1600, 'spike did not extend restored hard coin failure ignore window');
   assert(status.restoredFailureStaleIgnoreUntil === 1200, 'spike did not preserve stale restored coin failure ignore window');

@@ -8,6 +8,7 @@ import preservedState from '../browser/runtime/browser-preserved-state.js';
 import persistentExit from '../browser/runtime/persistent-exit.js';
 import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
+import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
 import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
@@ -369,6 +370,16 @@ function helperStatus(config = {}) {
     2000
   );
   const persistentClearRemoved = persistentClear.clearPersistentStorageKey('persistent-clear-spike');
+  const refreshedExitDetail = refreshExitDetail.refreshExitDetailCore({
+    reason: '',
+    reloginUntil: 2400,
+    offlineSafety: { staminaBudgetExit: true }
+  }, (reason, offlineSafety) => (
+    offlineSafety?.staminaBudgetExit ? `summary:${reason}` : `other:${reason}`
+  ), detail => ({
+    ...detail,
+    displayReason: String(detail.summary || detail.reason || '')
+  }), 1000);
   const restoredFailureList = restoredCoinFailures.restoredCoinFailuresCore([
     ['near-drop', { count: 1, reason: 'near', lastAt: 900 }],
     ['hard-drop', { count: 3, reason: 'progress', lastAt: 900 }],
@@ -443,6 +454,9 @@ function helperStatus(config = {}) {
     persistentExitWrittenReason: persistentExitStorage.writtenValue?.reason,
     persistentExitWrittenHoldMs: persistentExitStorage.writtenValue?.holdRemainingMs,
     persistentClearRemoved,
+    refreshExitHoldRemainingMs: refreshedExitDetail.holdRemainingMs,
+    refreshExitSummary: refreshedExitDetail.summary,
+    refreshExitDisplayReason: refreshedExitDetail.displayReason,
     restoredFailureCount: arrayCountRuntime.arrayCount(restoredFailureList),
     restoredFailureHardIgnoreUntil: restoredFailureList.find(([id]) => id === 'hard-drop')?.[1]?.ignoreUntil,
     restoredFailureStaleIgnoreUntil: restoredFailureList.find(([id]) => id === 'stale-drop')?.[1]?.ignoreUntil,

@@ -893,6 +893,25 @@
     }
   });
 
+  // src/browser/runtime/refresh-exit-detail.js
+  var require_refresh_exit_detail = __commonJS({
+    "src/browser/runtime/refresh-exit-detail.js"(exports, module) {
+      "use strict";
+      function refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t = Date.now()) {
+        if (!detail || typeof detail !== "object") return detail;
+        const reloginUntil = Number(detail.reloginUntil || 0);
+        if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
+        if (detail.offlineSafety?.staminaBudgetExit) {
+          detail.summary = offlineLeaveSummary(detail.reason || "stamina budget coin leave", detail.offlineSafety);
+        } else if (detail.offlineSafety?.staminaExhausted) {
+          detail.summary = offlineLeaveSummary(detail.reason || "stamina exhausted", detail.offlineSafety);
+        }
+        return finalizeLeaveDisplayReason(detail);
+      }
+      module.exports = { refreshExitDetailCore };
+    }
+  });
+
   // src/browser/runtime/restored-coin-failures.js
   var require_restored_coin_failures = __commonJS({
     "src/browser/runtime/restored-coin-failures.js"(exports, module) {
@@ -3782,7 +3801,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.418" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.419" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -3954,16 +3973,9 @@
       const storedStamp = Math.max(Number(stored.updatedAt || 0), Number(stored.lastAttemptAt || 0), Number(stored.at || 0));
       return storedStamp > memoryStamp ? stored : memory;
     }
+    const { refreshExitDetailCore } = require_refresh_exit_detail();
     function refreshExitDetail(detail, t = Date.now()) {
-      if (!detail || typeof detail !== "object") return detail;
-      const reloginUntil = Number(detail.reloginUntil || 0);
-      if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
-      if (detail.offlineSafety?.staminaBudgetExit) {
-        detail.summary = offlineLeaveSummary(detail.reason || "stamina budget coin leave", detail.offlineSafety);
-      } else if (detail.offlineSafety?.staminaExhausted) {
-        detail.summary = offlineLeaveSummary(detail.reason || "stamina exhausted", detail.offlineSafety);
-      }
-      return finalizeLeaveDisplayReason(detail);
+      return refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t);
     }
     const { restoredCoinFailuresCore } = require_restored_coin_failures();
     function restoredCoinFailures() {
