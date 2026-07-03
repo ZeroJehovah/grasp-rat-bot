@@ -301,6 +301,7 @@ function main() {
   const combatActionSourceModule = readText('src/browser/combat-action-source.js');
   const opportunityStaminaSourceModule = readText('src/browser/opportunity-stamina-source.js');
   const opportunitySnapshotSourceModule = readText('src/browser/opportunity-snapshot-source.js');
+  const postAttackSourceModule = readText('src/browser/post-attack-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -348,6 +349,7 @@ function main() {
     combatActionSourceModule,
     opportunityStaminaSourceModule,
     opportunitySnapshotSourceModule,
+    postAttackSourceModule,
     coinTargetRuntimeSourceModule,
     controlLoginSourceModule,
     nativeStateSourceModule,
@@ -509,6 +511,7 @@ function main() {
     assert(botSourceModule.includes('${combatActionSource()}'), 'combat-action module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunityStaminaSource()}'), 'opportunity-stamina module is not injected into browser runtime');
     assert(botSourceModule.includes('${opportunitySnapshotSource()}'), 'opportunity-snapshot module is not injected into browser runtime');
+    assert(botSourceModule.includes('${postAttackSource()}'), 'post-attack module is not injected into browser runtime');
     assert(botSourceModule.includes('${entityActivitySource()}'), 'entity-activity module is not injected into browser runtime');
     assert(botSourceModule.includes('${staminaRuntimeSource()}'), 'stamina-runtime module is not injected into browser runtime');
     assert(botSourceModule.includes('${exitReloginSource()}'), 'exit-relogin module is not injected into browser runtime');
@@ -715,6 +718,14 @@ function main() {
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function updateOpportunityAfkStaminaObservations'), 'opportunity-snapshot source factory does not include AFK stamina observation updater');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function afkOpportunityBlockedByStaminaCooldown'), 'opportunity-snapshot source factory does not include AFK cooldown gate');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreEnemyOpportunity'), 'opportunity-snapshot source factory does not include enemy opportunity scorer');
+    assert(postAttackSourceModule.includes('function postAttackSource() {'), 'post-attack source factory not found');
+    assert(postAttackSourceModule.includes('module.exports = { postAttackSource }'), 'post-attack source module export not found');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('String.raw`'), 'post-attack source factory does not return raw browser source');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function pickPostAttackDropCoin'), 'post-attack source factory does not include drop coin picker');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function pickPostAttackDropWaitTarget'), 'post-attack source factory does not include wait target picker');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function buildPostAttackDropWaitAction'), 'post-attack source factory does not include wait action builder');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('pickPostAttackDropCoinCore.toString()'), 'post-attack source factory does not inline drop coin core');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('pickPostAttackDropWaitTargetCore.toString()'), 'post-attack source factory does not inline wait target core');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource() {'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  coinTargetRuntimeSource'), 'coin-target runtime module export not found');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('String.raw`'), 'coin-target runtime source factory does not return raw browser source');
@@ -2576,7 +2587,7 @@ function main() {
     assert(strategyPostAttackDropSource.includes('function resolvedRecentPostAttackDropsCore'), 'strategy post-attack resolved attack core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropCoinCore'), 'strategy post-attack drop coin picker core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropWaitTargetCore'), 'strategy post-attack wait picker core not found');
-    assert(botSourceModule.includes("require('../strategy/post-attack-drop')"), 'source bot does not import post-attack drop strategy module');
+    assert(postAttackSourceModule.includes("require('../strategy/post-attack-drop')"), 'post-attack source does not import post-attack drop strategy module');
     assert(sourceRuntimeText.includes('postAttackVisibleCoinExistsCore.toString()'), 'source bot does not inject post-attack visible coin core');
     assert(sourceRuntimeText.includes('resolvedRecentPostAttackDropsCore.toString()'), 'source bot does not inject post-attack resolved attack core');
     assert(sourceRuntimeText.includes('buildPostAttackDropCoinCandidateCore.toString()'), 'source bot does not inject post-attack drop coin metadata core');
