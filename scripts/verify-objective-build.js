@@ -1484,9 +1484,23 @@ function main() {
     assert(exitReloginSourceModule.includes('function bundledExitReloginDisplaySource() {'), 'exit-relogin display bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginActorInlineSource() {'), 'exit-relogin actor inline source factory not found');
     assert(exitReloginSourceModule.includes('function bundledExitReloginActorSource() {'), 'exit-relogin actor bundled source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginStreakInlineSource() {'), 'exit-relogin streak inline source factory not found');
+    assert(exitReloginSourceModule.includes('function bundledExitReloginStreakSource() {'), 'exit-relogin streak bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
-    assert(exitReloginSourceModule.includes('exitReloginDisplayInlineSource,\n  bundledExitReloginDisplaySource,\n  exitReloginActorInlineSource,\n  bundledExitReloginActorSource,\n  exitReloginRemainderSource,\n  exitReloginSource'), 'exit-relogin source module exports not found');
+    assert(exitReloginSourceModule.includes('module.exports = {'), 'exit-relogin source module exports not found');
+    for (const exportedName of [
+      'exitReloginDisplayInlineSource',
+      'bundledExitReloginDisplaySource',
+      'exitReloginActorInlineSource',
+      'bundledExitReloginActorSource',
+      'exitReloginStreakInlineSource',
+      'bundledExitReloginStreakSource',
+      'exitReloginRemainderSource',
+      'exitReloginSource'
+    ]) {
+      assert(exitReloginSourceModule.includes(`  ${exportedName}`), `exit-relogin source module does not export ${exportedName}`);
+    }
     const exitReloginDisplayInlineBody = functionBody(exitReloginSourceModule, 'exitReloginDisplayInlineSource');
     assert(exitReloginDisplayInlineBody.includes('String.raw`'), 'exit-relogin display inline source factory does not return raw browser source');
     assert(exitReloginDisplayInlineBody.includes('function leaveWaitDisplay'), 'exit-relogin display inline source does not include wait display helper');
@@ -1507,8 +1521,22 @@ function main() {
     assert(exitReloginActorBundledBody.includes('normalizeEnemyActorCore(actor)'), 'exit-relogin actor bundled source does not bind actor normalizer');
     assert(exitReloginActorBundledBody.includes('enemyActorFromLeaveDetailCore(detail, normalizeEnemyActor)'), 'exit-relogin actor bundled source does not bind actor resolver');
     assert(exitReloginActorBundledBody.includes('enemyRepeatDelayMsForCountCore(count, cfg)'), 'exit-relogin actor bundled source does not bind cfg repeat delays');
+    const exitReloginStreakInlineBody = functionBody(exitReloginSourceModule, 'exitReloginStreakInlineSource');
+    assert(exitReloginStreakInlineBody.includes('function readEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak reader');
+    assert(exitReloginStreakInlineBody.includes('function writeEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak writer');
+    assert(exitReloginStreakInlineBody.includes('function updateEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak updater');
+    assert(exitReloginStreakInlineBody.includes('localStorage.getItem(ENEMY_LEAVE_STREAK_KEY)'), 'exit-relogin streak inline source does not read streak storage');
+    assert(exitReloginStreakInlineBody.includes('localStorage.removeItem(ENEMY_LEAVE_STREAK_KEY)'), 'exit-relogin streak inline source does not remove expired streak storage');
+    assert(exitReloginStreakInlineBody.includes('localStorage.setItem(ENEMY_LEAVE_STREAK_KEY'), 'exit-relogin streak inline source does not write streak storage');
+    assert(exitReloginStreakInlineBody.includes('bot.enemyLeaveStreak = normalized'), 'exit-relogin streak inline source does not preserve normalized bot state');
+    assert(exitReloginStreakInlineBody.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak inline source does not preserve repeat delay metadata');
+    const exitReloginStreakBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginStreakSource');
+    assert(exitReloginStreakBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin streak bundled source does not hand streak helpers to the bundler');
+    assert(exitReloginStreakBundledBody.includes('readEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, cfg, t, enemyRepeatDelayMsForCount)'), 'exit-relogin streak bundled source does not bind storage/cfg/bot reader state');
+    assert(exitReloginStreakBundledBody.includes('writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak)'), 'exit-relogin streak bundled source does not bind storage/bot writer state');
+    assert(exitReloginStreakBundledBody.includes('updateEnemyLeaveStreakCore(detail, t'), 'exit-relogin streak bundled source does not call runtime updater');
+    assert(exitReloginStreakBundledBody.includes('enemyActorFromLeaveDetail') && exitReloginStreakBundledBody.includes('readEnemyLeaveStreak') && exitReloginStreakBundledBody.includes('writeEnemyLeaveStreak') && exitReloginStreakBundledBody.includes('enemyRepeatDelayMsForCount'), 'exit-relogin streak bundled source does not pass required helper bindings');
     const exitReloginRemainderBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderSource');
-    assert(exitReloginRemainderBody.includes('function readEnemyLeaveStreak'), 'exit-relogin remainder source does not include enemy streak reader');
     assert(exitReloginRemainderBody.includes('function setExitReloginSuppress'), 'exit-relogin remainder source does not include suppress helper');
     assert(exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source does not include enemy hold cleanup helper');
     assert(exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source does not include offline hold cleanup helper');
@@ -1525,7 +1553,17 @@ function main() {
     assert(exitReloginRuntimeModule.includes('detail?.injury?.nearestHuman'), 'exit-relogin actor runtime resolver does not preserve injury fallback');
     assert(exitReloginRuntimeModule.includes('function enemyRepeatDelayMsForCountCore(count, cfg)'), 'exit-relogin repeat delay runtime core not found');
     assert(exitReloginRuntimeModule.includes('enemyReloginRepeatSecondMaxMs') && exitReloginRuntimeModule.includes('enemyReloginRepeatThirdMaxMs'), 'exit-relogin repeat delay runtime core does not preserve config delays');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('function readEnemyLeaveStreakCore(storage, key, bot, cfg, t, enemyRepeatDelayMsForCount)'), 'exit-relogin streak reader runtime core not found');
+    assert(exitReloginRuntimeModule.includes('storage.getItem(key)'), 'exit-relogin streak reader runtime core does not read storage key');
+    assert(exitReloginRuntimeModule.includes('storage.removeItem(key)'), 'exit-relogin streak reader runtime core does not remove expired storage key');
+    assert(exitReloginRuntimeModule.includes('bot.enemyLeaveStreak = normalized;'), 'exit-relogin streak reader runtime core does not write normalized bot state');
+    assert(exitReloginRuntimeModule.includes('function writeEnemyLeaveStreakCore(storage, key, bot, streak)'), 'exit-relogin streak writer runtime core not found');
+    assert(exitReloginRuntimeModule.includes('storage.setItem(key, JSON.stringify(streak))'), 'exit-relogin streak writer runtime core does not persist streak JSON');
+    assert(exitReloginRuntimeModule.includes('function updateEnemyLeaveStreakCore(detail, t, helpers)'), 'exit-relogin streak updater runtime core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.readEnemyLeaveStreak(t)'), 'exit-relogin streak updater runtime core does not read previous streak through helper');
+    assert(exitReloginRuntimeModule.includes('helpers.writeEnemyLeaveStreak(streak)'), 'exit-relogin streak updater runtime core does not write streak through helper');
+    assert(exitReloginRuntimeModule.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak updater runtime core does not preserve repeat delay metadata');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
