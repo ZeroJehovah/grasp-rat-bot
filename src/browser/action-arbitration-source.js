@@ -16,7 +16,7 @@ const {
   actionSwitchPairKey,
   buildPreviousDecisionSummary,
   recordActionSwitchDiagnosticsCore
-} = require('../strategy/action-switch-diagnostics');
+} = require('./runtime/action-switch-diagnostics');
 
 function actionArbitrationSource() {
   return String.raw`
