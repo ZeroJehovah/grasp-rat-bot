@@ -4,6 +4,9 @@ function combatLogSource(helpers = {}) {
   const {
     combatLogExitSummaryFromDecision
   } = helpers;
+  const combatLogExitSummarySource = typeof combatLogExitSummaryFromDecision === 'function'
+    ? `      const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};`
+    : '';
   return String.raw`      function combatLogEntryFailureKey(entry) {
         if (!entry || typeof entry !== 'object') return '';
         return [
@@ -1133,7 +1136,7 @@ function combatLogSource(helpers = {}) {
         }
       }
 
-      const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};
+${combatLogExitSummarySource}
 
       function combatLogExitSummary(decision) {
         return combatLogExitSummaryFromDecision(decision);

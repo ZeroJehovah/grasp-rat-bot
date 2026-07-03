@@ -1363,8 +1363,9 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 122. Bundler-owned `runtime-utils` runtime fragment for remote builds: integrated in `bootstrap-0.4.394`
 123. Bundler-owned `runtime-bootstrap` shared helper bindings for remote builds: integrated in `bootstrap-0.4.395`
 124. Bundler-owned `status-panel-runtime` display-format bindings for remote builds: integrated in `bootstrap-0.4.396`
-125. Combat/profit/safety helpers: integrate only in small, replay-validated slices
-126. Run live validation sessions after each behavior-touching replacement
+125. Bundler-owned `combat-log-runtime` exit-summary binding for remote builds: integrated in `bootstrap-0.4.397`
+126. Combat/profit/safety helpers: integrate only in small, replay-validated slices
+127. Run live validation sessions after each behavior-touching replacement
 
 ### Phase 3: Further Extraction
 1. Replace generated source-fragment factories behind `src/browser/runtime-source.js` with a true browser runtime entry in validated slices
