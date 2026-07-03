@@ -5,6 +5,7 @@ import * as displayFormat from '../shared/display-format.js';
 import * as targetWhitelist from '../shared/target-whitelist.js';
 import * as actionPriority from '../strategy/action-priority.js';
 import pageAdapter from '../browser/page-global-core.js';
+import arrayCountRuntime from '../browser/runtime/array-count.js';
 
 const SPIKE_KEY = '__graspRatBundlerSpike';
 const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__';
@@ -27,6 +28,7 @@ function helperStatus(config = {}) {
     version: String(config.version || 'bundler-spike'),
     distance: displayFormat.formatDistance(12345),
     names,
+    nameCount: arrayCountRuntime.arrayCount(names),
     actionFocus: actionPriority.actionFocusSummary(sampleAction),
     storageProbe: pageAdapter.readPageLocalStorageJson('graspRatBundlerSpikeProbe', { ok: false }),
     json: runtimeUtils.safeStringify({

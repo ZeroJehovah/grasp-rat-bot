@@ -289,6 +289,7 @@ function main() {
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const statusPanelRuntimeSourceModule = readText('src/browser/status-panel-runtime-source.js');
   const arrayCountSourceModule = readText('src/browser/array-count-source.js');
+  const arrayCountRuntimeModule = readText('src/browser/runtime/array-count.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
   const combatLogRuntimeSourceModule = readText('src/browser/combat-log-runtime-source.js');
@@ -367,6 +368,7 @@ function main() {
     statusPanelSourceModule,
     statusPanelRuntimeSourceModule,
     arrayCountSourceModule,
+    arrayCountRuntimeModule,
     runtimeUtilsSourceModule,
     combatLogSourceModule,
     combatLogRuntimeSourceModule,
@@ -1046,9 +1048,12 @@ function main() {
     assert(functionBody(exitMotionSourceModule, 'exitMotionSource').includes('removeTargetOverlay()'), 'exit-motion source factory does not clear target overlay');
     assert(arrayCountSourceModule.includes('function arrayCountSource() {'), 'array-count source factory not found');
     assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
-    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('String.raw`'), 'array-count source factory does not return raw browser source');
-    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('function arrayCount'), 'array-count source factory does not include array count helper');
-    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('Array.isArray(value) ? value.length : 0'), 'array-count source factory does not preserve array length fallback');
+    assert(arrayCountSourceModule.includes("require('./runtime/array-count')"), 'array-count source factory does not import the runtime helper module');
+    assert(arrayCountSourceModule.includes('function indentSource(source, spaces)'), 'array-count source factory does not preserve generated indentation');
+    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('arrayCount.toString()'), 'array-count source factory does not inline the runtime helper module');
+    assert(arrayCountRuntimeModule.includes('function arrayCount(value)'), 'array-count runtime helper not found');
+    assert(arrayCountRuntimeModule.includes('Array.isArray(value) ? value.length : 0'), 'array-count runtime helper does not preserve array length fallback');
+    assert(arrayCountRuntimeModule.includes('module.exports = {\n  arrayCount\n}'), 'array-count runtime helper export not found');
     assert(tickSafetySourceModule.includes('function tickSafetySource() {'), 'tick-safety source factory not found');
     assert(tickSafetySourceModule.includes('module.exports = { tickSafetySource }'), 'tick-safety source module export not found');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('String.raw`'), 'tick-safety source factory does not return raw browser source');
@@ -1209,6 +1214,8 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import * as targetWhitelist from '../shared/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
+    assert(bundlerSpikeEntrySource.includes("import arrayCountRuntime from '../browser/runtime/array-count.js'"), 'bundler spike does not import the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes('nameCount: arrayCountRuntime.arrayCount(names)'), 'bundler spike does not execute the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -1234,6 +1241,8 @@ function main() {
     assert(bundlerSpikeBuildSource.includes("assert(source.includes('__graspRatBundlerSpike')"), 'bundler spike self-test does not assert the global key positively');
     assert(!bundlerSpikeBuildSource.includes("!source.includes('require("), 'bundler spike still uses obsolete blanket require assertion');
     assert(bundlerSpikeBuildSource.includes("assert(source.includes('function resolvePageGlobal')"), 'bundler spike self-test does not verify adapter bundling');
+    assert(bundlerSpikeBuildSource.includes("assert(source.includes('function arrayCount')"), 'bundler spike self-test does not verify browser runtime helper bundling');
+    assert(bundlerSpikeBuildSource.includes('status.nameCount === 2'), 'bundler spike self-test does not verify browser runtime helper execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');
     assert(bundlerSpikeBuildSource.includes('context => context.window'), 'bundler spike self-test does not read installed window global');
     assert(bundlerSpikeBuildSource.includes("storageProbe?.scope === 'globalThis'"), 'bundler spike self-test does not cover globalThis localStorage');

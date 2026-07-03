@@ -1,8 +1,8 @@
 {
-  "version": "bootstrap-0.4.368",
-  "builtAt": "2026-07-03T16:26:17.458Z",
+  "version": "bootstrap-0.4.369",
+  "builtAt": "2026-07-03T16:36:08.944Z",
   "scriptUrl": "https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/grasp-rat-remote-bot.js",
-  "sha256": "65ca16e7ea7d3857fd649250ac4b65ed3bb91caeb45e895133c3cb29fd36ec09",
+  "sha256": "61f8e054d9696db0555f3e5f903fc3862a50450f25cbae58fa8b3a791722165a",
   "statusEvery": 30000,
   "production": true,
   "bundler": {
@@ -11,7 +11,7 @@
     "platform": "browser",
     "target": "es2020",
     "mode": "production-full-generated-remote",
-    "directSha256": "cda4cc309a6986d20597be0728c416e17485c34ccf2486fc633bd4d7844ac6d5"
+    "directSha256": "8049986c2d9f9b9b0f72a027ed311dd66630c9d1af90873419bc1da57bfcad1d"
   },
   "config": {}
 }
