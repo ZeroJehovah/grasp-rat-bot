@@ -288,6 +288,7 @@ function main() {
   const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const statusPanelRuntimeSourceModule = readText('src/browser/status-panel-runtime-source.js');
+  const displayFormatRuntimeModule = readText('src/browser/runtime/display-format.js');
   const arrayCountSourceModule = readText('src/browser/array-count-source.js');
   const arrayCountRuntimeModule = readText('src/browser/runtime/array-count.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
@@ -368,6 +369,7 @@ function main() {
     targetWhitelistSourceModule,
     statusPanelSourceModule,
     statusPanelRuntimeSourceModule,
+    displayFormatRuntimeModule,
     arrayCountSourceModule,
     arrayCountRuntimeModule,
     runtimeUtilsSourceModule,
@@ -510,7 +512,9 @@ function main() {
     assert(runtimeUtilsSourceModule.includes("require('./runtime/runtime-utils')"), 'runtime-utils source module does not import the browser runtime helper module');
     assert(runtimeUtilsRuntimeModule.includes("require('../../shared/runtime-utils')"), 'browser runtime-utils helper module does not reuse shared runtime utilities');
     assert(runtimeUtilsRuntimeModule.includes('safeStringify') && runtimeUtilsRuntimeModule.includes('safeJsonClone') && runtimeUtilsRuntimeModule.includes('sanitizeCombatLogIdPart'), 'browser runtime-utils helper module exports are incomplete');
-    assert(statusPanelRuntimeSourceModule.includes("require('../shared/display-format')"), 'status-panel runtime source display-format import not found');
+    assert(statusPanelRuntimeSourceModule.includes("require('./runtime/display-format')"), 'status-panel runtime source does not import the browser display-format helper module');
+    assert(displayFormatRuntimeModule.includes("require('../../shared/display-format')"), 'browser display-format helper module does not reuse shared display helpers');
+    assert(displayFormatRuntimeModule.includes('escapeHtml') && displayFormatRuntimeModule.includes('formatDistance') && displayFormatRuntimeModule.includes('formatDurationMs') && displayFormatRuntimeModule.includes('actorLabel') && displayFormatRuntimeModule.includes('hpDisplay'), 'browser display-format helper module exports are incomplete');
     assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
     assert(combatLogRuntimeSourceModule.includes("require('../shared/exit-summary')"), 'combat-log runtime source exit-summary import not found');
     assert(combatLogRuntimeSourceModule.includes("require('./combat-log-source')"), 'combat-log runtime source module import not found');
@@ -1214,7 +1218,7 @@ function main() {
 
   check('bundler spike bundles shared and strategy helpers into a browser IIFE', () => {
     assert(bundlerSpikeEntrySource.includes("import runtimeUtils from '../browser/runtime/runtime-utils.js'"), 'bundler spike does not import runtime utils through the browser runtime helper module');
-    assert(bundlerSpikeEntrySource.includes("import * as displayFormat from '../shared/display-format.js'"), 'bundler spike does not import display helpers as a module');
+    assert(bundlerSpikeEntrySource.includes("import displayFormat from '../browser/runtime/display-format.js'"), 'bundler spike does not import display helpers through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import * as targetWhitelist from '../shared/target-whitelist.js'"), 'bundler spike does not import target whitelist helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import * as actionPriority from '../strategy/action-priority.js'"), 'bundler spike does not import strategy helpers as a module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
