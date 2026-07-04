@@ -1,5 +1,15 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-05 Follow-up: Runtime Shell Boundary
+
+`bootstrap-0.4.504` moves the runtime IIFE shell out of the fragment registry and into the runtime-source boundary:
+
+- `src/browser/runtime-source.js` now exposes `browserRuntimeBodySource(options)` for the rendered fragment body and `wrapBrowserRuntimeIife(source)` for the browser IIFE shell.
+- `browserRuntimeSource(options)` composes the body source with the wrapper, preserving the generated runtime shape.
+- `src/browser/runtime-fragment-registry.js` no longer owns `runtime-iife-open` or `runtime-iife-close`; it now holds only ordered runtime fragments and separator fragments.
+- Static verification checks the new body/wrapper boundary and rejects IIFE shell entries in the registry.
+- The production dist records manifest SHA-256 `f3f6604929cc44c7aa883c19d4c93704005d283fa09d4adc0ea396a1e05c53c1` with direct source SHA-256 `a7f7cd6022213b6ebcf2c5e0e8209725cdd1b023a3282953173a9186a55f6b8e`.
+
 ## 2026-07-05 Follow-up: Runtime Helper Entry Promotion
 
 `bootstrap-0.4.503` removes the last dedicated bundler-spike source directory and promotes its smoke test into the browser runtime tree:
