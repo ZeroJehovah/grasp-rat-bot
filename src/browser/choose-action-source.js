@@ -43,6 +43,16 @@ function chooseActionSource(options = {}) {
 	          targetDrop: dropValue
 	        })`
     : String.raw`summarizeBlockedStaminaOpportunity(self, realtimeCoins, [])`;
+  const pickCoinRouteOpportunityOption = options.bundledRuntime
+    ? String.raw`(routeSelf, routeCoins, routeThreats) => pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {
+          ...coinRouteCoreOptions(routeSelf),
+          heldChoice: currentHeldCoinChoice(),
+          heldRouteChoice: currentHeldCoinRouteChoice()
+        })`
+    : 'pickCoinRouteOpportunity';
+  const snapshotCoinNavigationReasonCall = options.bundledRuntime
+    ? 'snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'
+    : 'snapshotCoinNavigationReason(localRealtimeCoin)';
   return String.raw`  function chooseAction(self) {
     const {
       entities,
@@ -411,7 +421,7 @@ function chooseActionSource(options = {}) {
       ? pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups, {
         enemyOpportunityCandidates,
         uniqueVisibleRouteCoins,
-        pickCoinRouteOpportunity,
+        pickCoinRouteOpportunity: ${pickCoinRouteOpportunityOption},
         opportunityCandidateCoreOptions,
         buildCoinAction,
         buildEnemyAction,
@@ -449,7 +459,7 @@ function chooseActionSource(options = {}) {
       const action = buildCoinAction(
         self,
         localRealtimeCoin,
-        snapshotCoinNavigationReason(localRealtimeCoin),
+        ${snapshotCoinNavigationReasonCall},
         localRealtimeCoin.distance <= cfg.coinMaxDistance ? 'coin' : 'seek-coin'
       );
       return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, action), self, realtimeEntities, { recovery });

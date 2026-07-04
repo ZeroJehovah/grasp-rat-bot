@@ -36,6 +36,13 @@ function opportunityCandidateInlineSource(helpers = {}, options = {}) {
     buildOpportunityCandidatesCore,
     bestCoinOpportunityScoreCore
   ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
+  const pickCoinRouteOpportunityCall = options.bundledRuntime
+    ? String.raw`pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {
+      ...coinRouteCoreOptions(self),
+      heldChoice: currentHeldCoinChoice(),
+      heldRouteChoice: currentHeldCoinRouteChoice()
+    })`
+    : String.raw`pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats)`;
   return String.raw`
   function opportunityPriorityTier(item) {
     return opportunityPriorityTierCore(item, {
@@ -72,7 +79,7 @@ ${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(se
   }
 
   function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-    const route = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
+    const route = ${pickCoinRouteOpportunityCall};
     return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
   }
 

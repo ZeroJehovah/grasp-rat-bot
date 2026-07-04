@@ -995,7 +995,7 @@ function main() {
     assert(functionBody(classifySourceModule, 'classifySource').includes('const combatDodgeOnlyTargets = attackableEntities'), 'classify source factory does not preserve combat dodge-only classification');
     assert(functionBody(classifySourceModule, 'classifySource').includes('const snapshotCoins = allCoins.filter'), 'classify source factory does not preserve snapshot coin classification');
     assert(coinSafetySourceModule.includes('function bundledCoinSafetySource()'), 'bundled coin-safety source factory not found');
-    assert(coinSafetySourceModule.includes('function coinSafetyInlineSource(helpers = {})'), 'inline coin-safety source factory not found');
+    assert(coinSafetySourceModule.includes('function coinSafetyInlineSource(helpers = {}, options = {})'), 'inline coin-safety source factory not found');
     assert(coinSafetySourceModule.includes('function coinSafetySource(options = {})'), 'coin-safety source factory not found');
     assert(coinSafetySourceModule.includes('module.exports = {\n  bundledCoinSafetySource,\n  coinSafetyInlineSource,\n  coinSafetySource\n}'), 'coin-safety source module export not found');
     assert(coinSafetySourceModule.includes("require('./src/browser/runtime/coin-diagnostics')"), 'coin-safety source does not expose a bundler-owned coin-diagnostics require');
@@ -1094,7 +1094,7 @@ function main() {
     assert(opportunityStaminaInlineBody.includes('function staminaBudgetCoinLeaveAction'), 'opportunity-stamina inline source factory does not include stamina budget leave action');
     assert(opportunityStaminaInlineBody.includes('function mergeCoinRouteDisplay'), 'opportunity-stamina inline source factory does not include coin route display wrapper');
     assert(functionBody(opportunityStaminaSourceModule, 'bundledOpportunityStaminaSource').includes("require('./src/browser/runtime/stamina-budget')"), 'opportunity-stamina bundled source does not hand stamina-budget helpers to the bundler');
-    assert(opportunitySnapshotSourceModule.includes('function opportunitySnapshotSource() {'), 'opportunity-snapshot source factory not found');
+    assert(opportunitySnapshotSourceModule.includes('function opportunitySnapshotSource(options = {}) {'), 'opportunity-snapshot source factory not found');
     assert(opportunitySnapshotSourceModule.includes('module.exports = { opportunitySnapshotSource }'), 'opportunity-snapshot source module export not found');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('String.raw`'), 'opportunity-snapshot source factory does not return raw browser source');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function snapshotCoinAgeMs'), 'opportunity-snapshot source factory does not include snapshot coin age helper');
@@ -1104,7 +1104,7 @@ function main() {
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function updateOpportunityAfkStaminaObservations'), 'opportunity-snapshot source factory does not include AFK stamina observation updater');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function afkOpportunityBlockedByStaminaCooldown'), 'opportunity-snapshot source factory does not include AFK cooldown gate');
     assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreEnemyOpportunity'), 'opportunity-snapshot source factory does not include enemy opportunity scorer');
-    assert(postAttackSourceModule.includes('function postAttackInlineSource(helpers = {}) {'), 'post-attack inline source factory not found');
+    assert(postAttackSourceModule.includes('function postAttackInlineSource(helpers = {}, options = {}) {'), 'post-attack inline source factory not found');
     assert(postAttackSourceModule.includes('function bundledPostAttackSource() {'), 'post-attack bundled source factory not found');
     assert(postAttackSourceModule.includes('function postAttackSource(options = {}) {'), 'post-attack source selector not found');
     assert(postAttackSourceModule.includes('bundledPostAttackSource') && postAttackSourceModule.includes('postAttackInlineSource') && postAttackSourceModule.includes('postAttackSource'), 'post-attack source module exports are incomplete');
@@ -1181,7 +1181,7 @@ function main() {
     assert(opportunityClearCallSourceModule.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice'), 'opportunity-clear direct call helper does not call clear core');
     assert(opportunityClearCallSourceModule.includes('bot.opportunityChoice = null'), 'opportunity-clear direct call helper does not clear choice state');
     assert(opportunityClearCallSourceModule.includes('resetOpportunitySwitchLock()'), 'opportunity-clear direct call helper does not reset switch lock');
-    assert(opportunityRouteSourceModule.includes('function opportunityRouteInlineSource(helpers = {}) {'), 'opportunity-route inline source factory not found');
+    assert(opportunityRouteSourceModule.includes('function opportunityRouteInlineSource(helpers = {}, options = {}) {'), 'opportunity-route inline source factory not found');
     assert(opportunityRouteSourceModule.includes('function bundledOpportunityRouteSource() {'), 'opportunity-route bundled source factory not found');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource(options = {}) {'), 'opportunity-route source selector not found');
     assert(opportunityRouteSourceModule.includes('bundledOpportunityRouteSource') && opportunityRouteSourceModule.includes('opportunityRouteInlineSource') && opportunityRouteSourceModule.includes('opportunityRouteSource'), 'opportunity-route source module exports are incomplete');
@@ -2487,7 +2487,6 @@ function main() {
       assert(body.includes('estimatedKillShots(target) * Math.max(0, Number(cfg.opportunityShotStaminaCostMs || 500))'), 'enemy opportunity shooting cost missing');
     });
     check(`${file} plans bounded native visible coin routes inside opportunity scoring`, () => {
-      const routeBody = functionBody(text, 'pickCoinRouteOpportunity');
       const routeCoreSource = file === 'grasp-rat-bot.js' ? strategyCoinRouteSource : finalRuntimeText;
       const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
       const bestBody = functionBody(text, 'bestCoinOpportunityScore');
@@ -2496,16 +2495,11 @@ function main() {
       const pickCoreBody = functionBody(pickCoreSource, 'pickBestOpportunityCore');
       const opportunityCandidateCoreSource = file === 'grasp-rat-bot.js' ? strategyOpportunityCandidatesSource : finalRuntimeText;
       const coinCandidateBody = functionBody(opportunityCandidateCoreSource, 'buildCoinOpportunityCandidatesCore');
-      assert(text.includes('function pickCoinRouteOpportunity'), 'coin route planner not found');
       assert(strategyCoinRouteSource.includes('function pickCoinRouteOpportunityCore'), 'strategy coin route planner core not found');
       assert(strategyCoinRouteSource.includes('function buildCoinRouteFromAnchorCore'), 'strategy coin route builder core not found');
       assert(strategyCoinRouteSource.includes('function coinRouteLegClearCore'), 'strategy coin route leg safety core not found');
-      assert(text.includes('function coinRouteLegClear'), 'coin route leg safety checker not found');
-      assert(text.includes('function coinRouteSkipsCloserFirstCoin'), 'coin route closer-first guard not found');
       assert(text.includes('function currentHeldCoinChoice'), 'coin route held single-coin choice helper not found');
-      assert(text.includes('function coinRouteSkipsHeldSingleCoin'), 'coin route held single-coin skip guard not found');
       assert(text.includes('function currentHeldCoinRouteChoice'), 'coin route held-choice stabilizer not found');
-      assert(text.includes('function heldCoinRouteBeatsSwitch'), 'coin route switch hysteresis helper not found');
       assert(routeCoreSource.includes('function coinRoutePoints'), 'coin route point metadata helper not found');
       assert(text.includes('best-opportunity-coin-route'), 'coin route decision reason not found');
       assert(routeCoreSource.includes('points: coinRoutePoints(bestRoute)'), 'coin route action metadata does not expose route points');
@@ -2514,9 +2508,38 @@ function main() {
       assert(text.includes('anchorLimit: cfg.coinRouteAnchorLimit') || routeCoreBody.includes('options.anchorLimit'), 'coin route planner is not anchor bounded');
       assert(routeCoreBody.includes('coinRouteLegClearCore(self, anchor, activeThreats, options)'), 'coin route planner does not safety-check first leg');
       assert(routeCoreBody.includes('coinRouteSkipsCloserFirstCoinCore(self, route, candidates, options)'), 'coin route planner can skip much closer local coins');
-      assert(text.includes('heldChoice: currentHeldCoinChoice()') && routeCoreBody.includes('coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, options)'), 'coin route planner can skip the held nearby single coin');
-      assert(text.includes('heldRouteChoice: currentHeldCoinRouteChoice()') && routeCoreBody.includes('heldCoinRouteBeatsSwitchCore(heldRoute, best, options)'), 'coin route planner does not stabilize held route first coin');
-      assert(bestBody.includes('pickCoinRouteOpportunity') && bestBody.includes('bestCoinOpportunityScoreCore'), 'profitable combat comparison does not include coin route score');
+      assert(text.includes('heldChoice: currentHeldCoinChoice()') || text.includes('heldChoice: currentHeldCoinChoice(),') || text.includes('heldChoice: currentHeldCoinChoice()'), 'coin route direct call does not pass held single-coin choice');
+      assert(text.includes('heldRouteChoice: currentHeldCoinRouteChoice()'), 'coin route direct call does not pass held route choice');
+      assert(routeCoreBody.includes('coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, options)'), 'coin route planner can skip the held nearby single coin');
+      assert(routeCoreBody.includes('heldCoinRouteBeatsSwitchCore(heldRoute, best, options)'), 'coin route planner does not stabilize held route first coin');
+      if (file === 'grasp-rat-bot.js') {
+        assert(text.includes('function pickCoinRouteOpportunity'), 'local coin route planner wrapper not found');
+        assert(text.includes('function coinRouteLegClear'), 'local coin route leg safety checker not found');
+        assert(text.includes('function coinRouteSkipsCloserFirstCoin'), 'local coin route closer-first guard not found');
+        assert(text.includes('function coinRouteSkipsHeldSingleCoin'), 'local coin route held single-coin skip guard not found');
+        assert(text.includes('function heldCoinRouteBeatsSwitch'), 'local coin route switch hysteresis helper not found');
+        assert(bestBody.includes('pickCoinRouteOpportunity') && bestBody.includes('bestCoinOpportunityScoreCore'), 'profitable combat comparison does not include coin route score');
+      } else {
+        for (const wrapperName of [
+          'coinRouteLegStaminaCost',
+          'coinRouteLegClear',
+          'coinRoutePointLimit',
+          'coinRouteSummary',
+          'buildCoinRouteFromAnchor',
+          'coinRouteSkipsCloserFirstCoin',
+          'coinRouteSkipsHeldSingleCoin',
+          'coinRouteMatchesHeldChoice',
+          'heldCoinRouteBeatsSwitch',
+          'pickCoinRouteOpportunity'
+        ]) {
+          assert(!text.includes(`function ${wrapperName}(`), `generated runtime still declares unused ${wrapperName} wrapper`);
+          assert(!finalRuntimeText.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+        }
+        assert(text.includes('pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {'), 'generated profitable combat comparison does not call coin route core directly');
+        assert(text.includes('pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {'), 'generated opportunity pick option does not bind coin route core directly');
+        assert(finalRuntimeText.includes('pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {'), 'bundled dist profitable combat comparison does not call coin route core directly');
+        assert(finalRuntimeText.includes('pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {'), 'bundled dist opportunity pick option does not bind coin route core directly');
+      }
       assert(pickBody.includes('pickCoinRouteOpportunity') || pickCoreBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
       assert(pickBody.includes('buildOpportunityCandidatesCore') || pickCoreBody.includes('buildOpportunityCandidatesCore'), 'visible opportunity selection does not use opportunity candidate core');
       if (file !== 'grasp-rat-bot.js') {
@@ -3933,6 +3956,14 @@ function main() {
     assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-target')"), 'generated remote runtime does not hand coin target helpers to the bundler');
+    for (const wrapperName of ['snapshotCoinWorthLongTravel', 'snapshotCoinNavigationReason']) {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
+      assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+    }
+    assert(generatedRuntimeSource.includes('snapshotCoinWorthLongTravelCore(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount, coinTargetCoreOptions())'), 'generated snapshot sticky path does not call snapshot worth core directly');
+    assert(generatedRuntimeSource.includes('snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'), 'generated local realtime coin fallback does not call snapshot reason core directly');
+    assert(distSource.includes('snapshotCoinWorthLongTravelCore(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount, coinTargetCoreOptions())'), 'bundled dist snapshot sticky path does not call snapshot worth core directly');
+    assert(distSource.includes('snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'), 'bundled dist local realtime coin fallback does not call snapshot reason core directly');
     assert(distSource.includes('function coinTargetKeyCore'), 'bundled dist does not contain coin target key core');
     assert(distSource.includes('function coinMatchesTrackedTargetCore'), 'bundled dist does not contain coin target matcher core');
     assert(distSource.includes('function trackedCoinTargetForCollectionCore'), 'bundled dist does not contain tracked coin target core');
@@ -4302,6 +4333,8 @@ function main() {
     assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/post-attack-drop')"), 'generated remote runtime does not hand post-attack drop helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function pickPostAttackDropCoinCore'), 'generated remote runtime still inlines post-attack drop coin core before bundling');
+    assert(!generatedRuntimeSource.includes('function postAttackVisibleCoinExists('), 'generated remote runtime still declares unused postAttackVisibleCoinExists wrapper');
+    assert(!distSource.includes('function postAttackVisibleCoinExists('), 'bundled dist still declares unused postAttackVisibleCoinExists wrapper');
     assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'bundled dist does not contain post-attack visible coin core');
     assert(distSource.includes('function resolvedRecentPostAttackDropsCore'), 'bundled dist does not contain post-attack resolved attack core');
     assert(distSource.includes('function buildPostAttackDropCoinCandidateCore'), 'bundled dist does not contain post-attack drop coin metadata core');
@@ -4334,6 +4367,7 @@ function main() {
       'summarizeBlockedStaminaOpportunity',
       'summarizeNearestCoinStaminaBudgetExit',
       'pickNearestDailyStaminaFinalCoin',
+      'opportunityValueScore',
       'mergeCoinRouteDisplay'
     ]) {
       assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
@@ -4342,9 +4376,11 @@ function main() {
     assert(generatedRuntimeSource.includes('const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExitCore('), 'generated choose-action stamina exit path does not call nearest coin stamina core directly');
     assert(generatedRuntimeSource.includes('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoinCore('), 'generated choose-action daily final coin path does not call daily final core directly');
     assert(generatedRuntimeSource.includes('summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {'), 'generated choose-action stamina wait path does not call blocked stamina core directly');
+    assert(generatedRuntimeSource.includes('opportunityValueScoreCore(totalAmount, staminaCost, {'), 'generated opportunity ROI scoring does not call value score core directly');
     assert(distSource.includes('const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExitCore('), 'bundled dist stamina exit path does not call nearest coin stamina core directly');
     assert(distSource.includes('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoinCore('), 'bundled dist daily final coin path does not call daily final core directly');
     assert(distSource.includes('summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {'), 'bundled dist stamina wait path does not call blocked stamina core directly');
+    assert(distSource.includes('opportunityValueScoreCore(totalAmount, staminaCost, {'), 'bundled dist opportunity ROI scoring does not call value score core directly');
     assert(distSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'bundled dist does not contain daily stamina budget core');
     assert(distSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'bundled dist does not contain blocked stamina summary core');
     assert(distSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'bundled dist does not contain nearest stamina exit core');

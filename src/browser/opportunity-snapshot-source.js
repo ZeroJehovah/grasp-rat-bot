@@ -1,6 +1,26 @@
 'use strict';
 
-function opportunitySnapshotSource() {
+function opportunitySnapshotSource(options = {}) {
+  const opportunityValueScoreCall = (valueExpr, staminaExpr, weightExpr) => options.bundledRuntime
+    ? `opportunityValueScoreCore(${valueExpr}, ${staminaExpr}, {
+        weight: ${weightExpr},
+        distanceFloor: cfg.opportunityDistanceFloor,
+        distanceScoreScale: cfg.opportunityDistanceScoreScale
+      })`
+    : `opportunityValueScore(${valueExpr}, ${staminaExpr}, ${weightExpr})`;
+  const snapshotCoinWorthLongTravelCall = (coinExpr, membersExpr, totalExpr) => options.bundledRuntime
+    ? `snapshotCoinWorthLongTravelCore(${coinExpr}, ${membersExpr}, ${totalExpr}, coinTargetCoreOptions())`
+    : `snapshotCoinWorthLongTravel(${coinExpr}, ${membersExpr}, ${totalExpr})`;
+  const localSnapshotCoinWrapperSource = options.bundledRuntime ? '' : String.raw`
+  function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
+    return snapshotCoinWorthLongTravelCore(coin, members, totalAmount, coinTargetCoreOptions());
+  }
+
+	  function snapshotCoinNavigationReason(coin) {
+	    return snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions());
+  }
+
+`;
   return String.raw`	  function snapshotCoinAgeMs() {
 	    return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
 	  }
@@ -22,7 +42,7 @@ function opportunitySnapshotSource() {
 	      const members = candidates.filter(other => dist(coin, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
 	      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 	      const staminaCost = opportunityCoinStaminaCost(coin);
-	      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+	      const score = ${opportunityValueScoreCall('totalAmount', 'staminaCost', 'cfg.coinOpportunityValue')};
 	      return {
 	        ...coin,
 	        snapshotMembers: members.length,
@@ -40,7 +60,7 @@ function opportunitySnapshotSource() {
 	      if (sticky) {
 	        const stickyItem = buildSnapshotItem(sticky);
 	        if (coinStaminaAffordableWithDiagnostic(self, sticky, stickyItem.opportunityStaminaCost)
-	          && snapshotCoinWorthLongTravel(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount)) return asOpportunity(stickyItem);
+	          && ${snapshotCoinWorthLongTravelCall('sticky', 'stickyItem.snapshotMembers', 'stickyItem.snapshotAmount')}) return asOpportunity(stickyItem);
 	        if (allowIdleFallback) stickyFallback = stickyItem;
 	      }
 	    }
@@ -52,7 +72,7 @@ function opportunitySnapshotSource() {
 	      const members = candidates.filter(other => dist(coin, other) <= radius);
 	      const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 	      const staminaCost = opportunityCoinStaminaCost(coin);
-	      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+	      const score = ${opportunityValueScoreCall('totalAmount', 'staminaCost', 'cfg.coinOpportunityValue')};
 	      const item = {
 	        ...coin,
         snapshotMembers: members.length,
@@ -62,7 +82,7 @@ function opportunitySnapshotSource() {
 	        snapshotAgeMs: ageMs
 	      };
 	      const affordable = coinStaminaAffordableWithDiagnostic(self, coin, staminaCost);
-	      if (affordable && snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
+	      if (affordable && ${snapshotCoinWorthLongTravelCall('coin', 'members.length', 'totalAmount')}) {
 	        if (!best
 	          || item.snapshotScore > best.snapshotScore
 	          || (item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins)
@@ -78,13 +98,7 @@ function opportunitySnapshotSource() {
 	    return idleBest ? asIdleFallback(idleBest) : null;
 	  }
 
-  function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
-    return snapshotCoinWorthLongTravelCore(coin, members, totalAmount, coinTargetCoreOptions());
-  }
-
-	  function snapshotCoinNavigationReason(coin) {
-	    return snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions());
-  }
+${localSnapshotCoinWrapperSource}
 
   function scoreCoinOpportunity(coin) {
     const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? coin?.fieldScore ?? NaN);
@@ -92,7 +106,7 @@ function opportunitySnapshotSource() {
     const sticky = bot.lastTarget?.kind === 'coin'
       && String(bot.lastTarget.id) === String(coin.drop_id)
       && now() - bot.lastTargetAt < cfg.coinStickMs;
-    return opportunityValueScore(coin.amount, opportunityCoinStaminaCost(coin), cfg.coinOpportunityValue)
+    return ${opportunityValueScoreCall('coin.amount', 'opportunityCoinStaminaCost(coin)', 'cfg.coinOpportunityValue')}
       + (sticky ? cfg.opportunityStickBonus : 0);
   }
 
@@ -178,11 +192,7 @@ function opportunitySnapshotSource() {
     const sticky = bot.lastTarget?.kind === 'enemy'
       && String(bot.lastTarget.id) === String(target.user_id)
       && now() - bot.lastTargetAt < cfg.targetStickMs;
-    return opportunityValueScore(
-      target.drop,
-      opportunityEnemyStaminaCost(target),
-      afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue
-    ) + (sticky ? cfg.opportunityStickBonus : 0);
+    return ${opportunityValueScoreCall('target.drop', 'opportunityEnemyStaminaCost(target)', 'afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue')} + (sticky ? cfg.opportunityStickBonus : 0);
   }
 `;
 }

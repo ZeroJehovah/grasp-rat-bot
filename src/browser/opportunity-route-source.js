@@ -18,7 +18,7 @@ const {
   pickCoinRouteOpportunityCore
 } = require('./runtime/coin-route');
 
-function opportunityRouteInlineSource(helpers = {}) {
+function opportunityRouteInlineSource(helpers = {}, options = {}) {
   const {
     defaultDist,
     coinRouteKey,
@@ -57,6 +57,52 @@ function opportunityRouteInlineSource(helpers = {}) {
     const indent = index >= 5 && index <= 9 ? '\t\t\t  ' : '\t  ';
     return `${indent}${fn.toString()}`;
   }).join('\n');
+  const localCoinRouteWrapperSource = options.bundledRuntime ? '' : String.raw`
+	  function coinRouteLegStaminaCost(from, to) {
+	    return coinRouteLegStaminaCostCore(from, to, coinRouteCoreOptions());
+	  }
+
+	  function coinRouteLegClear(from, to, activeThreats) {
+	    return coinRouteLegClearCore(from, to, activeThreats, coinRouteCoreOptions());
+	  }
+
+	  function coinRoutePointLimit(anchor, candidates) {
+	    return coinRoutePointLimitCore(anchor, candidates, coinRouteCoreOptions());
+	  }
+
+	  function coinRouteSummary(route, self) {
+	    return coinRouteSummaryCore(route, self, coinRouteCoreOptions());
+	  }
+
+	  function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
+	    return buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, coinRouteCoreOptions(self));
+	  }
+
+	  function coinRouteSkipsCloserFirstCoin(self, route, candidates) {
+	    return coinRouteSkipsCloserFirstCoinCore(self, route, candidates, coinRouteCoreOptions());
+	  }
+
+	  function coinRouteSkipsHeldSingleCoin(self, route, choice) {
+	    return coinRouteSkipsHeldSingleCoinCore(self, route, choice, coinRouteCoreOptions());
+	  }
+
+	  function coinRouteMatchesHeldChoice(route, choice) {
+	    return coinRouteMatchesHeldChoiceCore(route, choice, coinRouteCoreOptions());
+	  }
+
+	  function heldCoinRouteBeatsSwitch(heldRoute, bestRoute) {
+	    return heldCoinRouteBeatsSwitchCore(heldRoute, bestRoute, coinRouteCoreOptions());
+	  }
+
+	  function pickCoinRouteOpportunity(self, coins, activeThreats) {
+	    return pickCoinRouteOpportunityCore(self, coins, activeThreats, {
+	      ...coinRouteCoreOptions(self),
+	      heldChoice: currentHeldCoinChoice(),
+	      heldRouteChoice: currentHeldCoinRouteChoice()
+	    });
+	  }
+
+`;
   return String.raw`${coinRouteHelperSource}
 
 	  function coinRouteCoreOptions(self = null) {
@@ -95,30 +141,6 @@ function opportunityRouteInlineSource(helpers = {}) {
 	    };
 	  }
 
-	  function coinRouteLegStaminaCost(from, to) {
-	    return coinRouteLegStaminaCostCore(from, to, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteLegClear(from, to, activeThreats) {
-	    return coinRouteLegClearCore(from, to, activeThreats, coinRouteCoreOptions());
-	  }
-
-	  function coinRoutePointLimit(anchor, candidates) {
-	    return coinRoutePointLimitCore(anchor, candidates, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteSummary(route, self) {
-	    return coinRouteSummaryCore(route, self, coinRouteCoreOptions());
-	  }
-
-	  function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
-	    return buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, coinRouteCoreOptions(self));
-	  }
-
-	  function coinRouteSkipsCloserFirstCoin(self, route, candidates) {
-	    return coinRouteSkipsCloserFirstCoinCore(self, route, candidates, coinRouteCoreOptions());
-	  }
-
   function currentHeldCoinRouteChoice(t = now()) {
     const choice = bot.opportunityChoice;
     if (!choice || opportunityChoiceType(choice) !== 'coin') return null;
@@ -138,25 +160,7 @@ function opportunityRouteInlineSource(helpers = {}) {
     return choice;
   }
 
-	  function coinRouteSkipsHeldSingleCoin(self, route, choice) {
-	    return coinRouteSkipsHeldSingleCoinCore(self, route, choice, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteMatchesHeldChoice(route, choice) {
-	    return coinRouteMatchesHeldChoiceCore(route, choice, coinRouteCoreOptions());
-	  }
-
-	  function heldCoinRouteBeatsSwitch(heldRoute, bestRoute) {
-	    return heldCoinRouteBeatsSwitchCore(heldRoute, bestRoute, coinRouteCoreOptions());
-	  }
-
-	  function pickCoinRouteOpportunity(self, coins, activeThreats) {
-	    return pickCoinRouteOpportunityCore(self, coins, activeThreats, {
-	      ...coinRouteCoreOptions(self),
-	      heldChoice: currentHeldCoinChoice(),
-	      heldRouteChoice: currentHeldCoinRouteChoice()
-	    });
-	  }
+${localCoinRouteWrapperSource}
 
 `;
 }
@@ -180,7 +184,7 @@ function bundledOpportunityRouteSource() {
   pickCoinRouteOpportunityCore
 } = require('./src/browser/runtime/coin-route');
 
-${opportunityRouteInlineSource()}`;
+${opportunityRouteInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function opportunityRouteSource(options = {}) {
@@ -201,7 +205,7 @@ function opportunityRouteSource(options = {}) {
     coinRouteMatchesHeldChoiceCore,
     heldCoinRouteBeatsSwitchCore,
     pickCoinRouteOpportunityCore
-  });
+  }, options);
 }
 
 module.exports = {

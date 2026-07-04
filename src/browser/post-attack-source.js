@@ -8,7 +8,7 @@ const {
   pickPostAttackDropWaitTargetCore
 } = require('./runtime/post-attack-drop');
 
-function postAttackInlineSource(helpers = {}) {
+function postAttackInlineSource(helpers = {}, options = {}) {
   const {
     postAttackVisibleCoinExistsCore,
     resolvedRecentPostAttackDropsCore,
@@ -23,6 +23,15 @@ function postAttackInlineSource(helpers = {}) {
     pickPostAttackDropCoinCore,
     pickPostAttackDropWaitTargetCore
   ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
+  const localPostAttackVisibleCoinExistsSource = options.bundledRuntime ? '' : String.raw`
+  function postAttackVisibleCoinExists(coins, attack) {
+    return postAttackVisibleCoinExistsCore(coins, attack, {
+      dist,
+      dropCoinRadius: cfg.postAttackDropCoinRadius
+    });
+  }
+
+`;
   return String.raw`  function attackEntityMatches(entity, attack) {
     const id = String(attack?.id ?? '');
     const name = String(attack?.name || '');
@@ -81,12 +90,7 @@ function postAttackInlineSource(helpers = {}) {
 
 ${postAttackDropHelperSource}
 
-  function postAttackVisibleCoinExists(coins, attack) {
-    return postAttackVisibleCoinExistsCore(coins, attack, {
-      dist,
-      dropCoinRadius: cfg.postAttackDropCoinRadius
-    });
-  }
+${localPostAttackVisibleCoinExistsSource}
 
   function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
     const t = Date.now();
@@ -151,7 +155,7 @@ function bundledPostAttackSource() {
   pickPostAttackDropWaitTargetCore
 } = require('./src/browser/runtime/post-attack-drop');
 
-${postAttackInlineSource()}`;
+${postAttackInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function postAttackSource(options = {}) {
@@ -162,7 +166,7 @@ function postAttackSource(options = {}) {
     buildPostAttackDropCoinCandidateCore,
     pickPostAttackDropCoinCore,
     pickPostAttackDropWaitTargetCore
-  });
+  }, options);
 }
 
 module.exports = {
