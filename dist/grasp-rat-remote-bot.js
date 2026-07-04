@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.485" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.486" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19809,8 +19809,6 @@
       opportunityPairKey,
       opportunityByKey,
       opportunityMatchesChoiceCore,
-      isHighValueCoinOpportunityCore,
-      highValueCoinHoldBlocksEnemySwitchCore,
       lockedOpportunityChoiceCore,
       applyOpportunityOscillationLockCore,
       chooseStableOpportunityCore,
@@ -19961,12 +19959,6 @@
       const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
       bot.opportunityChoice = result.choice;
       return result.action;
-    }
-    function isHighValueCoinOpportunity(item) {
-      return isHighValueCoinOpportunityCore(item, opportunityChoiceCoreOptions());
-    }
-    function highValueCoinHoldBlocksEnemySwitch(held, best) {
-      return highValueCoinHoldBlocksEnemySwitchCore(held, best, opportunityChoiceCoreOptions());
     }
     function chooseStableOpportunity(opportunities) {
       const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());

@@ -61,6 +61,15 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
     rememberOpportunityChoiceCore
   ].map(fn => typeof fn === 'function' ? `\t\t\t  ${fn.toString()}` : '').join('\n');
   const clearMissingVisibleCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'idText || null', options);
+  const highValueOpportunityWrapperSource = options.bundledRuntime ? '' : String.raw`
+		  function isHighValueCoinOpportunity(item) {
+		    return isHighValueCoinOpportunityCore(item, opportunityChoiceCoreOptions());
+		  }
+
+		  function highValueCoinHoldBlocksEnemySwitch(held, best) {
+		    return highValueCoinHoldBlocksEnemySwitchCore(held, best, opportunityChoiceCoreOptions());
+		  }
+`;
   return String.raw`${opportunityChoiceHelperSource}
 
 			  function opportunityChoiceCoreOptions(extra = {}) {
@@ -215,14 +224,7 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
 	    return result.action;
 	  }
 
-		  function isHighValueCoinOpportunity(item) {
-		    return isHighValueCoinOpportunityCore(item, opportunityChoiceCoreOptions());
-		  }
-
-		  function highValueCoinHoldBlocksEnemySwitch(held, best) {
-		    return highValueCoinHoldBlocksEnemySwitchCore(held, best, opportunityChoiceCoreOptions());
-		  }
-
+${highValueOpportunityWrapperSource}
 		  function chooseStableOpportunity(opportunities) {
 		    const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
 		    bot.opportunitySwitchLock = result.switchLock;
@@ -240,8 +242,6 @@ function bundledOpportunityChoiceSource() {
   opportunityPairKey,
   opportunityByKey,
   opportunityMatchesChoiceCore,
-  isHighValueCoinOpportunityCore,
-  highValueCoinHoldBlocksEnemySwitchCore,
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,
   chooseStableOpportunityCore,
