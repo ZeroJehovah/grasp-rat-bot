@@ -4742,7 +4742,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.449" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.450" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10364,21 +10364,8 @@
       });
     }
     const {
-      setOfflineLeaveSuppressCore,
-      setOfflineLeaveSuppressBoundCore,
       primePendingStaminaExitLoginSuppressBoundCore
     } = require_exit_relogin();
-    function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-      return setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike, options, {
-        now: Date.now,
-        staminaBudgetReloginDelayMs,
-        staminaResetHoldUntil,
-        finalizeLeaveDisplayReason,
-        writePersistentExitState,
-        setExitReloginSuppress,
-        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
-      });
-    }
     function primePendingStaminaExitLoginSuppress(detail) {
       return primePendingStaminaExitLoginSuppressBoundCore(detail, {
         now: Date.now,
@@ -10446,6 +10433,7 @@
         offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
       });
     }
+    const { setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
     function summarizePursuit(pursuit = bot.pursuit) {
       if (!pursuit) return null;
       const t = now();
@@ -11004,7 +10992,7 @@
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
       clearCombatEngagement("exit-confirmed");
       if (pending.scope === "offline") {
-        setOfflineLeaveSuppress(detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions);
+        setOfflineLeaveSuppressBoundCore(bot, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, finalizeLeaveDisplayReason, writePersistentExitState, setExitReloginSuppress, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });
       } else {
         setExitReloginSuppress("enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
         if (pending.source === "combat") bot.lastCombatLeaveResult = detail;

@@ -796,22 +796,8 @@ function exitReloginRemainderPrefixInlineSource() {
 
 function bundledExitReloginRemainderPrefixSource() {
   return `	  const {
-	    setOfflineLeaveSuppressCore,
-	    setOfflineLeaveSuppressBoundCore,
 	    primePendingStaminaExitLoginSuppressBoundCore
 	  } = require('./src/browser/runtime/exit-relogin');
-
-\t  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-\t    return setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike, options, {
-\t      now: Date.now,
-\t      staminaBudgetReloginDelayMs,
-\t      staminaResetHoldUntil,
-\t      finalizeLeaveDisplayReason,
-\t      writePersistentExitState,
-\t      setExitReloginSuppress,
-\t      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
-\t    });
-\t  }
 
 \t  function primePendingStaminaExitLoginSuppress(detail) {
 \t    return primePendingStaminaExitLoginSuppressBoundCore(detail, {

@@ -1624,9 +1624,10 @@ function main() {
     assert(exitReloginRemainderPrefixInlineBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix inline source does not preserve unsafe offline predicate call');
     const exitReloginRemainderPrefixBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginRemainderPrefixSource');
     assert(exitReloginRemainderPrefixBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin remainder prefix bundled source does not hand helpers to the bundler');
-    assert(exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike, options'), 'exit-relogin remainder prefix bundled source does not bind offline suppress bound core');
+    assert(!exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressCore'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress core import');
+    assert(!exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressBoundCore'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress bound core import');
+    assert(!exitReloginRemainderPrefixBundledBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress wrapper');
     assert(exitReloginRemainderPrefixBundledBody.includes('primePendingStaminaExitLoginSuppressBoundCore(detail'), 'exit-relogin remainder prefix bundled source does not bind pending stamina suppress bound core');
-    assert(exitReloginRemainderPrefixBundledBody.includes('staminaBudgetReloginDelayMs') && exitReloginRemainderPrefixBundledBody.includes('staminaResetHoldUntil') && exitReloginRemainderPrefixBundledBody.includes('writePersistentExitState'), 'exit-relogin remainder prefix bundled source does not pass required offline suppress bindings');
     assert(exitReloginRemainderPrefixBundledBody.includes('setLoginSuppress'), 'exit-relogin remainder prefix bundled source does not pass required pending stamina suppress binding');
     const exitReloginHoldReadInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldReadInlineSource');
     assert(exitReloginHoldReadInlineBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include enemy hold reader');
@@ -1831,6 +1832,9 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("options.bundledRuntime"), 'pending-exit source does not select bundled enemy suppress call from runtime config');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setOfflineLeaveSuppressBoundCore'), 'pending-exit source does not import runtime offline suppress bound core for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('staminaBudgetReloginDelayMs, staminaResetHoldUntil, finalizeLeaveDisplayReason, writePersistentExitState, setExitReloginSuppress, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind offline suppress helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppress(detail.reason || 'websocket offline'"), 'pending-exit source does not preserve inline offline suppress wrapper call');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppress('enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through fixed reason writer');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
     assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
