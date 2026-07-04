@@ -38,6 +38,7 @@ import postAttackDrop from './runtime/post-attack-drop.js';
 import dropMatchedKill from './runtime/drop-matched-kill.js';
 import staminaBudget from './runtime/stamina-budget.js';
 import opportunityConstants from './runtime/opportunity-constants.js';
+import runtimeBootstrapBindings from './runtime/runtime-bootstrap-bindings.js';
 import pageAdapter from './page-global-core.js';
 import arrayCountRuntime from './runtime/array-count.js';
 
@@ -333,6 +334,26 @@ function helperStatus(config = {}) {
   );
   const opportunityConstantHighValue = opportunityConstants.OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT;
   const opportunityConstantRoi = opportunityConstants.calculateOpportunityROI(10, 2);
+  const runtimeBootstrapBinding = runtimeBootstrapBindings.createRuntimeBootstrapBindings({
+    version: 'bootstrap-base',
+    sourceUrl: 'https://example.invalid/dist/grasp-rat-remote-bot.js',
+    targetWhitelistUrl: 'https://example.invalid/dist/target-whitelist.json',
+    targetWhitelistMaxNames: 5
+  }, {
+    pageGlobal: {
+      __graspRatBotRuntimeConfig: {
+        version: 'bootstrap-runtime',
+        targetWhitelistUrl: 'https://example.invalid/dist/target-whitelist.json'
+      },
+      __graspRatBot: {
+        targetWhitelist: {
+          url: 'https://example.invalid/dist/target-whitelist.json',
+          names: ['Alpha', 'Beta'],
+          lastOkAt: 1234
+        }
+      }
+    }
+  });
   const persistentLastSelfStorage = {
     value: JSON.stringify({ at: 1000, self: { id: 'last-self-spike', hp: 88 } }),
     getItem() {
@@ -1323,6 +1344,10 @@ function helperStatus(config = {}) {
     staminaBudgetExitShortageMs: staminaBudgetExit?.shortageMs,
     opportunityConstantHighValue,
     opportunityConstantRoi,
+    runtimeBootstrapVersion: runtimeBootstrapBinding.cfg.version,
+    runtimeBootstrapBotKey: runtimeBootstrapBinding.BOT_KEY,
+    runtimeBootstrapWhitelistCount: runtimeBootstrapBinding.targetWhitelistState.names.length,
+    runtimeBootstrapWhitelistLastOkAt: runtimeBootstrapBinding.targetWhitelistState.lastOkAt,
     offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true }),
     persistentLastSelfId: persistentLastSelfRead?.id,
     persistentLastSelfWrite,

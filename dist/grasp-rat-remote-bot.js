@@ -4,6 +4,69 @@
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
   };
 
+  // src/browser/page-global-core.js
+  var require_page_global_core = __commonJS({
+    "src/browser/page-global-core.js"(exports, module) {
+      "use strict";
+      function pageGlobalObject(value) {
+        return value && (typeof value === "object" || typeof value === "function") ? value : null;
+      }
+      function resolvePageGlobal(fallback = {}) {
+        if (typeof window !== "undefined" && pageGlobalObject(window)) return window;
+        if (typeof globalThis !== "undefined" && pageGlobalObject(globalThis)) return globalThis;
+        return pageGlobalObject(fallback) || {};
+      }
+      function readPageGlobal(key, fallback = void 0, root = resolvePageGlobal()) {
+        if (typeof key !== "string" || key.length === 0) return fallback;
+        const source = pageGlobalObject(root) || resolvePageGlobal();
+        if (!Object.prototype.hasOwnProperty.call(source, key)) return fallback;
+        return source[key];
+      }
+      function installPageGlobal(key, value, root = resolvePageGlobal()) {
+        if (typeof key !== "string" || key.length === 0) return false;
+        const target = pageGlobalObject(root) || resolvePageGlobal();
+        if (!target) return false;
+        target[key] = value;
+        return true;
+      }
+      function readPageLocalStorageJson(key, fallback = null, root = resolvePageGlobal()) {
+        if (typeof key !== "string" || key.length === 0) return fallback;
+        const source = pageGlobalObject(root) || resolvePageGlobal();
+        const storage = source && source.localStorage;
+        if (!storage || typeof storage.getItem !== "function") return fallback;
+        let raw;
+        try {
+          raw = storage.getItem(key);
+        } catch (err) {
+          return fallback;
+        }
+        if (typeof raw !== "string" || raw.length === 0) return fallback;
+        try {
+          return JSON.parse(raw);
+        } catch (err) {
+          return fallback;
+        }
+      }
+      function browserPageGlobalSource() {
+        return [
+          pageGlobalObject.toString(),
+          resolvePageGlobal.toString(),
+          readPageGlobal.toString(),
+          installPageGlobal.toString(),
+          readPageLocalStorageJson.toString()
+        ].join("\n\n");
+      }
+      module.exports = {
+        pageGlobalObject,
+        resolvePageGlobal,
+        readPageGlobal,
+        installPageGlobal,
+        readPageLocalStorageJson,
+        browserPageGlobalSource
+      };
+    }
+  });
+
   // src/shared/browser-preserved-state.js
   var require_browser_preserved_state = __commonJS({
     "src/shared/browser-preserved-state.js"(exports, module) {
@@ -760,6 +823,270 @@
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
         combatLogExitSummaryFromDecision
+      };
+    }
+  });
+
+  // src/strategy/opportunity-constants.js
+  var require_opportunity_constants = __commonJS({
+    "src/strategy/opportunity-constants.js"(exports, module) {
+      "use strict";
+      var OPPORTUNITY_CONSTANTS = {
+        // Coin priorities and distances
+        NEAR_COIN_PRIORITY_DISTANCE: 13500,
+        // nearCoinPriorityDistance - near coin threshold
+        FOOT_COIN_PRIORITY_DISTANCE: 1200,
+        // footCoinPriorityDistance - foot coin threshold
+        GLOBAL_COIN_MAX_DISTANCE: 2e5,
+        // globalCoinMaxDistance - far coin limit
+        // Coin routing
+        COIN_ROUTE_MIN_COINS: 3,
+        // Minimum coins to form a route
+        COIN_ROUTE_FIRST_COIN_DISTANCE_RATIO: 1.45,
+        // coinRouteFirstCoinDistanceRatio
+        COIN_ROUTE_FIRST_COIN_DISTANCE_SLACK: 6e3,
+        // coinRouteFirstCoinDistanceSlack
+        COIN_ROUTE_NEARBY_FIRST_COIN_DISTANCE: 22e3,
+        // coinRouteNearbyFirstCoinDistance
+        COIN_ROUTE_SWITCH_MARGIN: 3e3,
+        // coinRouteSwitchMargin
+        COIN_ROUTE_SWITCH_RELATIVE_MARGIN: 0.1,
+        // coinRouteSwitchRelativeMargin
+        // High value coin priority
+        HIGH_VALUE_COIN_PRIORITY_AMOUNT: 10,
+        // highValueCoinPriorityAmount
+        HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP: 50,
+        // highValueCoinPriorityHealthyHp
+        // Post-attack drop handling
+        POST_ATTACK_DROP_COIN_MAX_DISTANCE: 15e3,
+        // postAttackDropCoinMaxDistance
+        POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE: 8e3,
+        // postAttackRecoveryDropMaxDistance
+        POST_ATTACK_RECOVERY_DROP_MIN_SCORE: 5,
+        // postAttackRecoveryDropMinScore
+        POST_ATTACK_DROP_WAIT_MS: 1e3,
+        // postAttackDropWaitMs
+        // AFK target handling
+        AFK_RECENT_ACTIVITY_COOLDOWN_MS: 12e3,
+        // afkRecentActivityCooldownMs
+        AFK_STAMINA_OBSERVE_COOLDOWN_MS: 6e4,
+        // Out-of-range AFK stamina cooldown
+        // Opportunity selection
+        OPPORTUNITY_HOLD_MS: 1e3,
+        // opportunityHoldMs - hold selected opportunity
+        OPPORTUNITY_SWITCH_HOLD_MS: 1500,
+        // opportunitySwitchHoldMs - extended hold on switch
+        OPPORTUNITY_MISSING_HOLD_MS: 800,
+        // opportunityMissingHoldMs - hold missing opportunity
+        OPPORTUNITY_SWITCH_MARGIN: 0.15,
+        // opportunitySwitchMargin - ROI margin to switch
+        // Stamina and ROI
+        STAMINA_COST_PER_CM: 1,
+        // Movement stamina cost (1ms per 1cm)
+        SHOT_STAMINA_COST_MS: 500,
+        // shootStaminaCostMs - stamina per shot
+        ESTIMATED_DAMAGE_PER_SHOT: 3,
+        // Estimated HP damage per accepted shot
+        // Coin danger and safety
+        COIN_DANGER_RADIUS: 8e3,
+        // Base coin danger radius near threats
+        INVULNERABLE_COIN_DANGER_RADIUS: 12e3,
+        // Wider danger for invulnerable threats
+        // Recovery coin handling
+        RECOVERY_COIN_MAX_DISTANCE: 5e3,
+        // recoveryCoinMaxDistance
+        // Native coin authority
+        NATIVE_COIN_AUTHORITATIVE_RADIUS: 5e4
+        // nativeCoinAuthoritativeRadius - local coin authority
+      };
+      function calculateOpportunityROI(reward, staminaCost) {
+        if (staminaCost <= 0) return reward > 0 ? Infinity : 0;
+        return reward / staminaCost;
+      }
+      function calculateMovementStaminaCost(distanceCm) {
+        return distanceCm * OPPORTUNITY_CONSTANTS.STAMINA_COST_PER_CM;
+      }
+      function calculateShotStaminaCost(shotCount) {
+        return shotCount * OPPORTUNITY_CONSTANTS.SHOT_STAMINA_COST_MS;
+      }
+      function estimateOpportunityStaminaCost(distanceCm, estimatedShots = 0) {
+        return calculateMovementStaminaCost(distanceCm) + calculateShotStaminaCost(estimatedShots);
+      }
+      function satisfiesSwitchMargin(newROI, currentROI, margin = OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_MARGIN) {
+        if (currentROI <= 0) return true;
+        const relativeImprovement = (newROI - currentROI) / currentROI;
+        return relativeImprovement >= margin;
+      }
+      function validateOpportunityConstants() {
+        const errors = [];
+        if (OPPORTUNITY_CONSTANTS.NEAR_COIN_PRIORITY_DISTANCE <= 0) {
+          errors.push("NEAR_COIN_PRIORITY_DISTANCE must be positive");
+        }
+        if (OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT <= 0) {
+          errors.push("HIGH_VALUE_COIN_PRIORITY_AMOUNT must be positive");
+        }
+        if (OPPORTUNITY_CONSTANTS.STAMINA_COST_PER_CM <= 0) {
+          errors.push("STAMINA_COST_PER_CM must be positive");
+        }
+        if (OPPORTUNITY_CONSTANTS.OPPORTUNITY_SWITCH_MARGIN < 0) {
+          errors.push("OPPORTUNITY_SWITCH_MARGIN should be non-negative");
+        }
+        return errors;
+      }
+      module.exports = {
+        OPPORTUNITY_CONSTANTS,
+        calculateOpportunityROI,
+        calculateMovementStaminaCost,
+        calculateShotStaminaCost,
+        estimateOpportunityStaminaCost,
+        satisfiesSwitchMargin,
+        validateOpportunityConstants
+      };
+    }
+  });
+
+  // src/browser/runtime/opportunity-constants.js
+  var require_opportunity_constants2 = __commonJS({
+    "src/browser/runtime/opportunity-constants.js"(exports, module) {
+      "use strict";
+      var {
+        OPPORTUNITY_CONSTANTS,
+        calculateOpportunityROI,
+        calculateMovementStaminaCost,
+        calculateShotStaminaCost,
+        estimateOpportunityStaminaCost,
+        satisfiesSwitchMargin,
+        validateOpportunityConstants
+      } = require_opportunity_constants();
+      module.exports = {
+        OPPORTUNITY_CONSTANTS,
+        calculateOpportunityROI,
+        calculateMovementStaminaCost,
+        calculateShotStaminaCost,
+        estimateOpportunityStaminaCost,
+        satisfiesSwitchMargin,
+        validateOpportunityConstants
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-bootstrap-bindings.js
+  var require_runtime_bootstrap_bindings = __commonJS({
+    "src/browser/runtime/runtime-bootstrap-bindings.js"(exports, module) {
+      "use strict";
+      var {
+        pageGlobalObject,
+        resolvePageGlobal,
+        readPageGlobal,
+        installPageGlobal,
+        readPageLocalStorageJson
+      } = require_page_global_core();
+      var {
+        buildBrowserPreservedState
+      } = require_browser_preserved_state2();
+      var {
+        buildRuntimeDefaults
+      } = require_runtime_defaults2();
+      var {
+        normalizeTargetWhitelistName,
+        parseTargetWhitelistNames,
+        deriveTargetWhitelistUrl
+      } = require_target_whitelist2();
+      var {
+        staminaExhaustedLongWindows,
+        staminaEvidenceRemaining,
+        staminaHoldContradictedByStaminaEvidence
+      } = require_exit_summary2();
+      var {
+        OPPORTUNITY_CONSTANTS
+      } = require_opportunity_constants2();
+      var RUNTIME_KEYS = Object.freeze({
+        BOT_KEY: "__graspRatBot",
+        PANEL_ID: "grasp-rat-bot-panel",
+        TARGET_OVERLAY_ID: "grasp-rat-target-overlay",
+        PAUSED_KEY: "graspRatBotPaused",
+        PAUSE_REASON_KEY: "graspRatBotPauseReason",
+        LOGIN_SUPPRESS_KEY: "graspRatLoginSuppressUntil",
+        LOGIN_SUPPRESS_REASON_KEY: "graspRatLoginSuppressReason",
+        LOGIN_POINT_SAFETY_KEY: "graspRatLoginPointSafety",
+        SESSION_MISMATCH_RECOVERY_KEY: "graspRatSessionMismatchRecovery",
+        EXIT_AUDIT_PENDING_LOGS_KEY: "graspRatExitAuditPendingLogs",
+        COMBAT_LOG_PENDING_ENTRIES_KEY: "graspRatCombatLogPendingEntries",
+        IMPORTANT_LOGS_KEY: "graspRatImportantLogs",
+        PENDING_EXIT_STATE_KEY: "graspRatPendingExitState",
+        ENEMY_LEAVE_STREAK_KEY: "graspRatEnemyLeaveStreak",
+        ENEMY_LEAVE_STATE_KEY: "graspRatEnemyLeaveState",
+        OFFLINE_LEAVE_STATE_KEY: "graspRatOfflineLeaveState",
+        LAST_SELF_STATE_KEY: "graspRatLastSelfState",
+        CLOUDFLARE_RELOAD_KEY: "graspRatCloudflareReloadAt"
+      });
+      function readRuntimeConfig(pageGlobal) {
+        try {
+          const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
+          return value && typeof value === "object" ? value : {};
+        } catch (_) {
+          return {};
+        }
+      }
+      function createRuntimeBootstrapBindings(baseConfig = {}, options = {}) {
+        const pageGlobal = options.pageGlobal || resolvePageGlobal();
+        const runtimeConfig = readRuntimeConfig(pageGlobal);
+        const config = { ...baseConfig && typeof baseConfig === "object" ? baseConfig : {}, ...runtimeConfig };
+        const previousBot = readPageGlobal(RUNTIME_KEYS.BOT_KEY, null, pageGlobal);
+        const preserved = buildBrowserPreservedState(previousBot);
+        const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
+        const cfg = buildRuntimeDefaults(config, combatLogEndpointConfigured);
+        const targetWhitelistUrl = deriveTargetWhitelistUrl(cfg.sourceUrl, cfg.targetWhitelistUrl);
+        const preservedTargetWhitelistUrl = String(preserved.targetWhitelist?.url || "");
+        const preservedTargetWhitelistMatchesUrl = Boolean(targetWhitelistUrl && preservedTargetWhitelistUrl === targetWhitelistUrl);
+        const preservedTargetWhitelistNames = preservedTargetWhitelistMatchesUrl ? parseTargetWhitelistNames(preserved.targetWhitelist?.names || [], cfg.targetWhitelistMaxNames) : [];
+        const targetWhitelistState = {
+          url: targetWhitelistUrl,
+          names: preservedTargetWhitelistNames,
+          nameSet: new Set(preservedTargetWhitelistNames),
+          timer: 0,
+          fetching: false,
+          lastFetchAt: 0,
+          lastOkAt: preservedTargetWhitelistMatchesUrl ? Number(preserved.targetWhitelist?.lastOkAt || 0) || 0 : 0,
+          lastErrorAt: 0,
+          lastError: "",
+          lastReason: preservedTargetWhitelistNames.length ? "preserved" : "empty"
+        };
+        return {
+          pageGlobalObject,
+          resolvePageGlobal,
+          readPageGlobal,
+          installPageGlobal,
+          readPageLocalStorageJson,
+          pageGlobal,
+          baseConfig,
+          runtimeConfig,
+          config,
+          OPPORTUNITY_CONSTANTS,
+          ...RUNTIME_KEYS,
+          buildBrowserPreservedState,
+          buildRuntimeDefaults,
+          normalizeTargetWhitelistName,
+          parseTargetWhitelistNames,
+          deriveTargetWhitelistUrl,
+          staminaExhaustedLongWindows,
+          staminaEvidenceRemaining,
+          staminaHoldContradictedByStaminaEvidence,
+          previousBot,
+          preserved,
+          combatLogEndpointConfigured,
+          cfg,
+          targetWhitelistUrl,
+          preservedTargetWhitelistUrl,
+          preservedTargetWhitelistMatchesUrl,
+          preservedTargetWhitelistNames,
+          targetWhitelistState
+        };
+      }
+      module.exports = {
+        RUNTIME_KEYS,
+        createRuntimeBootstrapBindings,
+        readRuntimeConfig
       };
     }
   });
@@ -5341,99 +5668,53 @@
 
   // grasp-rat-virtual-entry:grasp-rat-remote-runtime-entry.js
   (() => {
-    function pageGlobalObject(value) {
-      return value && (typeof value === "object" || typeof value === "function") ? value : null;
-    }
-    function resolvePageGlobal(fallback = {}) {
-      if (typeof window !== "undefined" && pageGlobalObject(window)) return window;
-      if (typeof globalThis !== "undefined" && pageGlobalObject(globalThis)) return globalThis;
-      return pageGlobalObject(fallback) || {};
-    }
-    function readPageGlobal(key, fallback = void 0, root = resolvePageGlobal()) {
-      if (typeof key !== "string" || key.length === 0) return fallback;
-      const source = pageGlobalObject(root) || resolvePageGlobal();
-      if (!Object.prototype.hasOwnProperty.call(source, key)) return fallback;
-      return source[key];
-    }
-    function installPageGlobal(key, value, root = resolvePageGlobal()) {
-      if (typeof key !== "string" || key.length === 0) return false;
-      const target = pageGlobalObject(root) || resolvePageGlobal();
-      if (!target) return false;
-      target[key] = value;
-      return true;
-    }
-    function readPageLocalStorageJson(key, fallback = null, root = resolvePageGlobal()) {
-      if (typeof key !== "string" || key.length === 0) return fallback;
-      const source = pageGlobalObject(root) || resolvePageGlobal();
-      const storage = source && source.localStorage;
-      if (!storage || typeof storage.getItem !== "function") return fallback;
-      let raw;
-      try {
-        raw = storage.getItem(key);
-      } catch (err) {
-        return fallback;
-      }
-      if (typeof raw !== "string" || raw.length === 0) return fallback;
-      try {
-        return JSON.parse(raw);
-      } catch (err) {
-        return fallback;
-      }
-    }
-    const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.505" };
-    const runtimeConfig = (() => {
-      try {
-        const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
-        return value && typeof value === "object" ? value : {};
-      } catch (_) {
-        return {};
-      }
-    })();
-    const config = { ...baseConfig, ...runtimeConfig };
-    const OPPORTUNITY_CONSTANTS = { "NEAR_COIN_PRIORITY_DISTANCE": 13500, "FOOT_COIN_PRIORITY_DISTANCE": 1200, "GLOBAL_COIN_MAX_DISTANCE": 2e5, "COIN_ROUTE_MIN_COINS": 3, "COIN_ROUTE_FIRST_COIN_DISTANCE_RATIO": 1.45, "COIN_ROUTE_FIRST_COIN_DISTANCE_SLACK": 6e3, "COIN_ROUTE_NEARBY_FIRST_COIN_DISTANCE": 22e3, "COIN_ROUTE_SWITCH_MARGIN": 3e3, "COIN_ROUTE_SWITCH_RELATIVE_MARGIN": 0.1, "HIGH_VALUE_COIN_PRIORITY_AMOUNT": 10, "HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP": 50, "POST_ATTACK_DROP_COIN_MAX_DISTANCE": 15e3, "POST_ATTACK_RECOVERY_DROP_MAX_DISTANCE": 8e3, "POST_ATTACK_RECOVERY_DROP_MIN_SCORE": 5, "POST_ATTACK_DROP_WAIT_MS": 1e3, "AFK_RECENT_ACTIVITY_COOLDOWN_MS": 12e3, "AFK_STAMINA_OBSERVE_COOLDOWN_MS": 6e4, "OPPORTUNITY_HOLD_MS": 1e3, "OPPORTUNITY_SWITCH_HOLD_MS": 1500, "OPPORTUNITY_MISSING_HOLD_MS": 800, "OPPORTUNITY_SWITCH_MARGIN": 0.15, "STAMINA_COST_PER_CM": 1, "SHOT_STAMINA_COST_MS": 500, "ESTIMATED_DAMAGE_PER_SHOT": 3, "COIN_DANGER_RADIUS": 8e3, "INVULNERABLE_COIN_DANGER_RADIUS": 12e3, "RECOVERY_COIN_MAX_DISTANCE": 5e3, "NATIVE_COIN_AUTHORITATIVE_RADIUS": 5e4 };
-    const BOT_KEY = "__graspRatBot";
-    const PANEL_ID = "grasp-rat-bot-panel";
-    const TARGET_OVERLAY_ID = "grasp-rat-target-overlay";
-    const PAUSED_KEY = "graspRatBotPaused";
-    const PAUSE_REASON_KEY = "graspRatBotPauseReason";
-    const LOGIN_SUPPRESS_KEY = "graspRatLoginSuppressUntil";
-    const LOGIN_SUPPRESS_REASON_KEY = "graspRatLoginSuppressReason";
-    const LOGIN_POINT_SAFETY_KEY = "graspRatLoginPointSafety";
-    const SESSION_MISMATCH_RECOVERY_KEY = "graspRatSessionMismatchRecovery";
-    const EXIT_AUDIT_PENDING_LOGS_KEY = "graspRatExitAuditPendingLogs";
-    const COMBAT_LOG_PENDING_ENTRIES_KEY = "graspRatCombatLogPendingEntries";
-    const IMPORTANT_LOGS_KEY = "graspRatImportantLogs";
-    const PENDING_EXIT_STATE_KEY = "graspRatPendingExitState";
-    const ENEMY_LEAVE_STREAK_KEY = "graspRatEnemyLeaveStreak";
-    const ENEMY_LEAVE_STATE_KEY = "graspRatEnemyLeaveState";
-    const OFFLINE_LEAVE_STATE_KEY = "graspRatOfflineLeaveState";
-    const LAST_SELF_STATE_KEY = "graspRatLastSelfState";
-    const CLOUDFLARE_RELOAD_KEY = "graspRatCloudflareReloadAt";
-    const { buildBrowserPreservedState } = require_browser_preserved_state2();
-    const { buildRuntimeDefaults } = require_runtime_defaults2();
-    const { normalizeTargetWhitelistName, parseTargetWhitelistNames, deriveTargetWhitelistUrl } = require_target_whitelist2();
-    const { staminaExhaustedLongWindows, staminaEvidenceRemaining, staminaHoldContradictedByStaminaEvidence } = require_exit_summary2();
-    const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);
-    const preserved = buildBrowserPreservedState(previousBot);
-    const combatLogEndpointConfigured = Boolean(config.combatLogEndpointConfigured);
-    const cfg = buildRuntimeDefaults(config, combatLogEndpointConfigured);
-    const targetWhitelistUrl = deriveTargetWhitelistUrl(cfg.sourceUrl, cfg.targetWhitelistUrl);
-    const preservedTargetWhitelistUrl = String(preserved.targetWhitelist?.url || "");
-    const preservedTargetWhitelistMatchesUrl = Boolean(targetWhitelistUrl && preservedTargetWhitelistUrl === targetWhitelistUrl);
-    const preservedTargetWhitelistNames = preservedTargetWhitelistMatchesUrl ? parseTargetWhitelistNames(preserved.targetWhitelist?.names || [], cfg.targetWhitelistMaxNames) : [];
-    const targetWhitelistState = {
-      url: targetWhitelistUrl,
-      names: preservedTargetWhitelistNames,
-      nameSet: new Set(preservedTargetWhitelistNames),
-      timer: 0,
-      fetching: false,
-      lastFetchAt: 0,
-      lastOkAt: preservedTargetWhitelistMatchesUrl ? Number(preserved.targetWhitelist?.lastOkAt || 0) || 0 : 0,
-      lastErrorAt: 0,
-      lastError: "",
-      lastReason: preservedTargetWhitelistNames.length ? "preserved" : "empty"
-    };
+    const { createRuntimeBootstrapBindings } = require_runtime_bootstrap_bindings();
+    const runtimeBootstrapBindings = createRuntimeBootstrapBindings({ "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.506" });
+    const {
+      pageGlobalObject,
+      resolvePageGlobal,
+      readPageGlobal,
+      installPageGlobal,
+      readPageLocalStorageJson,
+      pageGlobal,
+      baseConfig,
+      runtimeConfig,
+      config,
+      OPPORTUNITY_CONSTANTS,
+      BOT_KEY,
+      PANEL_ID,
+      TARGET_OVERLAY_ID,
+      PAUSED_KEY,
+      PAUSE_REASON_KEY,
+      LOGIN_SUPPRESS_KEY,
+      LOGIN_SUPPRESS_REASON_KEY,
+      LOGIN_POINT_SAFETY_KEY,
+      SESSION_MISMATCH_RECOVERY_KEY,
+      EXIT_AUDIT_PENDING_LOGS_KEY,
+      COMBAT_LOG_PENDING_ENTRIES_KEY,
+      IMPORTANT_LOGS_KEY,
+      PENDING_EXIT_STATE_KEY,
+      ENEMY_LEAVE_STREAK_KEY,
+      ENEMY_LEAVE_STATE_KEY,
+      OFFLINE_LEAVE_STATE_KEY,
+      LAST_SELF_STATE_KEY,
+      CLOUDFLARE_RELOAD_KEY,
+      normalizeTargetWhitelistName,
+      parseTargetWhitelistNames,
+      deriveTargetWhitelistUrl,
+      staminaExhaustedLongWindows,
+      staminaEvidenceRemaining,
+      staminaHoldContradictedByStaminaEvidence,
+      previousBot,
+      preserved,
+      combatLogEndpointConfigured,
+      cfg,
+      targetWhitelistUrl,
+      preservedTargetWhitelistUrl,
+      preservedTargetWhitelistMatchesUrl,
+      preservedTargetWhitelistNames,
+      targetWhitelistState
+    } = runtimeBootstrapBindings;
     const { createRuntimeStateBindings } = require_runtime_state_bindings();
     const runtimeStateBindings = createRuntimeStateBindings({
       storage: localStorage,
