@@ -615,7 +615,6 @@ function bundledExitReloginHoldSource() {
 \t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressBoundCore,
 \t    setEnemyLeaveSuppressCore,
-\t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
 \t    staminaExitHoldUntilForDetailBoundCore,
 \t    offlineExitRequiresUnsafeReloginDelayCore
@@ -668,10 +667,6 @@ function bundledExitReloginHoldSource() {
       setExitReloginSuppress
     });
   }
-
-\t  function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
-\t    return staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs);
-\t  }
 
   function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
     return staminaExitHoldUntilForDetailBoundCore(detail, t, {
