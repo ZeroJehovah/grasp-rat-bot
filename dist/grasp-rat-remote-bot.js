@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.467" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.468" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4892,9 +4892,6 @@
         stringify: safeStringify,
         clearPersistentPendingExitState
       };
-    }
-    function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
-      return normalizePendingExitReloadConfirmationCore(value, pending, t, options);
     }
     function normalizePendingExitStateForStorage(value, t = Date.now(), options = {}) {
       return normalizePendingExitStateForStorageCore(value, t, options, pendingExitPersistenceCoreHelpers());
@@ -8220,7 +8217,7 @@
       if (exitAuditFlushPending()) {
         const blocked = exitAuditFlushBlockDetail("leave-confirmation-reload:" + (reason || ""));
         bot.exitAudit.lastBlockedReload = blocked;
-        const reloadConfirmation2 = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, Date.now());
+        const reloadConfirmation2 = normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending, Date.now());
         if (reloadConfirmation2) {
           reloadConfirmation2.lastBlocked = blocked;
           pending.reloadConfirmation = reloadConfirmation2;
@@ -8247,7 +8244,7 @@
       }
       const t = Date.now();
       const previousRequestedAt = Number(pending.reloadConfirmation?.requestedAt || 0) || 0;
-      const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t) || {
+      const reloadConfirmation = normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending, t) || {
         required: true,
         reason: String(reason || "leave-success"),
         leaveSucceededAt: Number(pending.lastResult?.lastLeaveRequest?.completedAt || pending.lastResult?.at || t) || t,
@@ -10386,7 +10383,7 @@
       const t = Date.now();
       const retryMs = pendingExitRetryMs(pending);
       const lastAttemptAt = Number(pending.lastAttemptAt || 0);
-      const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t);
+      const reloadConfirmation = normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending, t);
       return {
         scope: pending.scope || "",
         source: pending.source || "",
@@ -10666,8 +10663,8 @@
       return !request || Boolean(request.completedAt || request.method || detail.method);
     }
     function leaveSuccessReloadConfirmationForDetail(detail, pending = null, t = Date.now()) {
-      if (!leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return normalizePendingExitReloadConfirmation(pending?.reloadConfirmation, pending, t);
-      const existing = normalizePendingExitReloadConfirmation(detail.reloadConfirmation || pending?.reloadConfirmation, pending, t);
+      if (!leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return normalizePendingExitReloadConfirmationCore(pending?.reloadConfirmation, pending, t);
+      const existing = normalizePendingExitReloadConfirmationCore(detail.reloadConfirmation || pending?.reloadConfirmation, pending, t);
       const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
       return {
         required: true,
@@ -11077,7 +11074,7 @@
         return pendingExitWaitDecision(pending, self, detail2, detail2.exitConfirmation, true);
       }
       if (leaveDetailSucceeded(lastDetail)) {
-        const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, lastDetail) || normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending);
+        const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, lastDetail) || normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending);
         if (!leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)) {
           requestLeaveConfirmationReload("leave-success", pending);
           const detail3 = pendingExitLeaveSuccessReloadWaitDetail(

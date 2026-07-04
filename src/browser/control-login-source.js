@@ -19,6 +19,9 @@ function controlLoginSource(helpers = {}) {
   const finalizeLeaveDisplayReasonCall = detail => bundledRuntime
     ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForControlLoginCore', 'leaveWaitDisplayForControlLoginCore')
     : `finalizeLeaveDisplayReason(${detail})`;
+  const normalizePendingExitReloadConfirmationCall = args => bundledRuntime
+    ? `normalizePendingExitReloadConfirmationCore(${args})`
+    : `normalizePendingExitReloadConfirmation(${args})`;
   const enemyHoldRemainingMsCall = bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore')
     : 'enemyReloginHoldRemainingMs()';
@@ -77,7 +80,7 @@ function controlLoginSource(helpers = {}) {
 		    if (exitAuditFlushPending()) {
 		      const blocked = exitAuditFlushBlockDetail('leave-confirmation-reload:' + (reason || ''));
 		      bot.exitAudit.lastBlockedReload = blocked;
-		      const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, Date.now());
+		      const reloadConfirmation = ${normalizePendingExitReloadConfirmationCall('pending.reloadConfirmation, pending, Date.now()')};
 		      if (reloadConfirmation) {
 		        reloadConfirmation.lastBlocked = blocked;
 		        pending.reloadConfirmation = reloadConfirmation;
@@ -103,7 +106,7 @@ function controlLoginSource(helpers = {}) {
 		    } catch (_) {}
 		    const t = Date.now();
 		    const previousRequestedAt = Number(pending.reloadConfirmation?.requestedAt || 0) || 0;
-		    const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t) || {
+		    const reloadConfirmation = ${normalizePendingExitReloadConfirmationCall('pending.reloadConfirmation, pending, t')} || {
 		      required: true,
 		      reason: String(reason || 'leave-success'),
 		      leaveSucceededAt: Number(pending.lastResult?.lastLeaveRequest?.completedAt || pending.lastResult?.at || t) || t,
