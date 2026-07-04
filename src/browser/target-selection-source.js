@@ -343,7 +343,16 @@ function targetSelectionSource() {
       .map(e => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) }))
       .filter(e => !isWhitelistedTarget(e))
       .filter(e => e.distance <= cfg.attackRange)
-      .filter(e => attackWorthTaking(self, e) && !isInvulnerable(e))
+      .filter(e => (typeof attackWorthTakingCore === 'function'
+        ? attackWorthTakingCore(self, e, {
+          isWhitelistedTarget,
+          dropValue,
+          isAfkProfitTarget,
+          attackMinAfkDrop: cfg.attackMinAfkDrop,
+          attackMinDrop: cfg.attackMinDrop,
+          attackMinRewardRatio: cfg.attackMinRewardRatio
+        })
+        : attackWorthTaking(self, e)) && !isInvulnerable(e))
       .filter(isAfkProfitTarget)
       .map(e => ({
         ...e,

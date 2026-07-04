@@ -12,16 +12,7 @@ function attackWorthInlineSource() {
 }
 
 function bundledAttackWorthSource() {
-  return `const { attackWorthTakingCore } = require('./src/browser/runtime/attack-worth');
-
-  const attackWorthTaking = (self, target) => attackWorthTakingCore(self, target, {
-    isWhitelistedTarget,
-    dropValue,
-    isAfkProfitTarget,
-    attackMinAfkDrop: cfg.attackMinAfkDrop,
-    attackMinDrop: cfg.attackMinDrop,
-    attackMinRewardRatio: cfg.attackMinRewardRatio
-  });`;
+  return `const { attackWorthTakingCore } = require('./src/browser/runtime/attack-worth');`;
 }
 
 function attackWorthSource(options = {}) {

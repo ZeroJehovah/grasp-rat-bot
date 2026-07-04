@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.478" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.479" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5754,14 +5754,6 @@
       return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
     }
     const { attackWorthTakingCore } = require_attack_worth2();
-    const attackWorthTaking = (self, target) => attackWorthTakingCore(self, target, {
-      isWhitelistedTarget,
-      dropValue,
-      isAfkProfitTarget,
-      attackMinAfkDrop: cfg.attackMinAfkDrop,
-      attackMinDrop: cfg.attackMinDrop,
-      attackMinRewardRatio: cfg.attackMinRewardRatio
-    });
     const {
       exitMotionStopLockRemainingMsCore,
       postExitDecisionWithoutTargetCore
@@ -16334,7 +16326,14 @@
       return false;
     }
     function pickOpportunisticShotTarget(self, entities) {
-      const candidates = (entities || []).filter((e) => Number(e.user_id) !== Number(self.user_id)).filter((e) => e.native).filter(entityFreshEnoughForOffense).filter(isAlive).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) })).filter((e) => !isWhitelistedTarget(e)).filter((e) => e.distance <= cfg.attackRange).filter((e) => attackWorthTaking(self, e) && !isInvulnerable(e)).filter(isAfkProfitTarget).map((e) => ({
+      const candidates = (entities || []).filter((e) => Number(e.user_id) !== Number(self.user_id)).filter((e) => e.native).filter(entityFreshEnoughForOffense).filter(isAlive).map((e) => ({ ...e, distance: dist(self, e), drop: dropValue(e), speed: speed(e), hp: combatHpValue(e) })).filter((e) => !isWhitelistedTarget(e)).filter((e) => e.distance <= cfg.attackRange).filter((e) => (typeof attackWorthTakingCore === "function" ? attackWorthTakingCore(self, e, {
+        isWhitelistedTarget,
+        dropValue,
+        isAfkProfitTarget,
+        attackMinAfkDrop: cfg.attackMinAfkDrop,
+        attackMinDrop: cfg.attackMinDrop,
+        attackMinRewardRatio: cfg.attackMinRewardRatio
+      }) : attackWorthTaking(self, e)) && !isInvulnerable(e)).filter(isAfkProfitTarget).map((e) => ({
         ...e,
         score: scoreEnemyOpportunity(e) ?? -Infinity,
         staminaCost: opportunityEnemyStaminaCost(e),
@@ -19736,7 +19735,14 @@
         if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
         if (isWhitelistedTarget(raw)) continue;
         if (isInvulnerable(raw)) continue;
-        if (!attackWorthTaking(self, { ...raw, drop })) continue;
+        if (!(typeof attackWorthTakingCore === "function" ? attackWorthTakingCore(self, { ...raw, drop }, {
+          isWhitelistedTarget,
+          dropValue,
+          isAfkProfitTarget,
+          attackMinAfkDrop: cfg.attackMinAfkDrop,
+          attackMinDrop: cfg.attackMinDrop,
+          attackMinRewardRatio: cfg.attackMinRewardRatio
+        }) : attackWorthTaking(self, { ...raw, drop }))) continue;
         if (activeThreats.some((t) => dist(raw, t) <= cfg.attackDangerRadius)) continue;
         const item = { ...raw, drop, distance };
         const previous = byId.get(String(id));
