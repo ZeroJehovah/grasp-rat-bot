@@ -1202,9 +1202,11 @@ function main() {
     assert(functionBody(startupSourceModule, 'startupSource').includes('startTargetWhitelistPolling()'), 'startup source factory does not preserve target whitelist polling');
     assert(functionBody(startupSourceModule, 'startupSource').includes("tick('startup')"), 'startup source factory does not preserve startup tick');
     assert(functionBody(startupSourceModule, 'startupSource').includes("runTickSafely('timer')"), 'startup source factory does not preserve timer tick safety');
-    assert(botObjectSourceModule.includes('function botObjectSource() {'), 'bot-object source factory not found');
+    assert(botObjectSourceModule.includes('function botObjectSource(options = {}) {'), 'bot-object source factory not found');
     assert(botObjectSourceModule.includes('module.exports = { botObjectSource }'), 'bot-object source module export not found');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('String.raw`'), 'bot-object source factory does not return raw browser source');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now()') && functionBody(botObjectSourceModule, 'botObjectSource').includes('enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'bot-object source factory does not bind bundled enemy streak status through runtime bound core');
+    assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['bot-object', () => botObjectSource(config)]"), 'runtime fragment registry does not pass config into bot-object source');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('const bot = {'), 'bot-object source factory does not include bot object');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('pendingExit: initialPendingExitState'), 'bot-object source factory does not preserve pending exit initialization');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('combatLogging: {'), 'bot-object source factory does not preserve combat logging state');
@@ -1557,11 +1559,11 @@ function main() {
     assert(exitReloginStreakInlineBody.includes('bot.enemyLeaveStreak = normalized'), 'exit-relogin streak inline source does not preserve normalized bot state');
     assert(exitReloginStreakInlineBody.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak inline source does not preserve repeat delay metadata');
     const exitReloginStreakBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginStreakSource');
-    assert(exitReloginStreakBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin streak bundled source does not hand streak helpers to the bundler');
-    assert(exitReloginStreakBundledBody.includes('readEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, cfg, t, enemyRepeatDelayMsForCount)'), 'exit-relogin streak bundled source does not bind storage/cfg/bot reader state');
-    assert(exitReloginStreakBundledBody.includes('writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak)'), 'exit-relogin streak bundled source does not bind storage/bot writer state');
-    assert(exitReloginStreakBundledBody.includes('updateEnemyLeaveStreakCore(detail, t'), 'exit-relogin streak bundled source does not call runtime updater');
-    assert(exitReloginStreakBundledBody.includes('enemyActorFromLeaveDetail') && exitReloginStreakBundledBody.includes('readEnemyLeaveStreak') && exitReloginStreakBundledBody.includes('writeEnemyLeaveStreak') && exitReloginStreakBundledBody.includes('enemyRepeatDelayMsForCount'), 'exit-relogin streak bundled source does not pass required helper bindings');
+    assert(exitReloginStreakBundledBody.includes("return '';"), 'exit-relogin streak bundled source should be empty after bound-core handoff');
+    assert(!exitReloginStreakBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin streak bundled source should not keep unused runtime import');
+    assert(!exitReloginStreakBundledBody.includes('function readEnemyLeaveStreak'), 'exit-relogin streak bundled source should not keep reader wrapper');
+    assert(!exitReloginStreakBundledBody.includes('function writeEnemyLeaveStreak'), 'exit-relogin streak bundled source should not keep writer wrapper');
+    assert(!exitReloginStreakBundledBody.includes('function updateEnemyLeaveStreak'), 'exit-relogin streak bundled source should not keep updater wrapper');
     const exitReloginSummaryInlineBody = functionBody(exitReloginSourceModule, 'exitReloginSummaryInlineSource');
     assert(exitReloginSummaryInlineBody.includes('function combatExitSummary'), 'exit-relogin summary inline source does not include combat summary helper');
     assert(exitReloginSummaryInlineBody.includes('function combatLeaveAction'), 'exit-relogin summary inline source does not include combat leave action helper');
@@ -1688,6 +1690,10 @@ function main() {
     assert(exitReloginRuntimeModule.includes('helpers.readEnemyLeaveStreak(t)'), 'exit-relogin streak updater runtime core does not read previous streak through helper');
     assert(exitReloginRuntimeModule.includes('helpers.writeEnemyLeaveStreak(streak)'), 'exit-relogin streak updater runtime core does not write streak through helper');
     assert(exitReloginRuntimeModule.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak updater runtime core does not preserve repeat delay metadata');
+    assert(exitReloginRuntimeModule.includes('function readEnemyLeaveStreakBoundCore(storage, bot, cfg, t, helpers)'), 'exit-relogin streak reader bound core not found');
+    assert(exitReloginRuntimeModule.includes('function writeEnemyLeaveStreakBoundCore(storage, bot, streak, helpers)'), 'exit-relogin streak writer bound core not found');
+    assert(exitReloginRuntimeModule.includes('function updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, cfg, helpers)'), 'exit-relogin streak updater bound core not found');
+    assert(exitReloginRuntimeModule.includes('enemyActorFromLeaveDetail: value => enemyActorFromLeaveDetailCore(value, normalizeEnemyActorCore)') && exitReloginRuntimeModule.includes('readEnemyLeaveStreak: readAt => readEnemyLeaveStreakBoundCore(storage, bot, cfg, readAt, helpers)'), 'exit-relogin streak updater bound core does not bind actor/read helpers');
     assert(exitReloginRuntimeModule.includes('function combatExitSummaryCore(reason, target, combatState = {}, helpers)'), 'exit-relogin summary runtime combat summary core not found');
     assert(exitReloginRuntimeModule.includes('combatState?.pressureDisadvantage'), 'exit-relogin summary runtime core does not preserve pressure disadvantage branch');
     assert(exitReloginRuntimeModule.includes('helpers.formatDurationMs(estimate.tDeathMs)'), 'exit-relogin summary runtime core does not bind duration formatting');
@@ -1725,6 +1731,7 @@ function main() {
     assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);'), 'exit-relogin hold runtime suppress writer does not persist offline leave detail');
     assert(exitReloginRuntimeModule.includes('function setExitReloginSuppressBoundCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers)'), 'exit-relogin hold runtime suppress writer bound core not found');
     assert(exitReloginRuntimeModule.includes('return setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options, {') && exitReloginRuntimeModule.includes('isExitLoginSuppressReason: isExitLoginSuppressReasonCore'), 'exit-relogin hold runtime suppress writer bound core does not preserve helper binding');
+    assert(exitReloginRuntimeModule.includes('updateEnemyLeaveStreak: (detail, t) => updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, helpers.cfg') && exitReloginRuntimeModule.includes('enemyLeaveStreakKey: helpers.enemyLeaveStreakKey'), 'exit-relogin hold runtime suppress writer bound core does not bind streak updater internally');
     assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress core not found');
     assert(exitReloginRuntimeModule.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve longest-delay rule');
     assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressReason = suppressReason;'), 'exit-relogin hold runtime pending unsafe suppress core does not write suppress reason');
@@ -1793,6 +1800,9 @@ function main() {
       'readEnemyLeaveStreakCore',
       'writeEnemyLeaveStreakCore',
       'updateEnemyLeaveStreakCore',
+      'readEnemyLeaveStreakBoundCore',
+      'writeEnemyLeaveStreakBoundCore',
+      'updateEnemyLeaveStreakBoundCore',
       'combatExitSummaryCore',
       'combatLeaveActionCore',
       'pursuitLeaveSummaryCore',
@@ -1840,11 +1850,12 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setExitReloginSuppressBoundCore'), 'pending-exit source does not import runtime suppress writer bound core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setOfflineLeaveSuppressBoundCore'), 'pending-exit source does not import runtime offline suppress bound core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline'"), 'pending-exit source does not pass storage into bundled offline suppress bound core');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'pending-exit source does not bind cfg/streak key for bundled offline suppress');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppress(detail.reason || 'websocket offline'"), 'pending-exit source does not preserve inline offline suppress wrapper call');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through bound runtime writer');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
     assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
@@ -2033,7 +2044,9 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressZeroSkipped === true'), 'bundler spike self-test does not assert suppress zero-delay execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressNewUntil === 7000'), 'bundler spike self-test does not assert suppress new-hold execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressBoundUntil === 6000'), 'bundler spike self-test does not assert bound suppress writer execution');
-    assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressEventCount === 9'), 'bundler spike self-test does not assert suppress writer side-effect count');
+    assert(bundlerSpikeBuildSource.includes('status.exitReloginBoundStreakCount === 3'), 'bundler spike self-test does not assert bound streak updater execution');
+    assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressBoundStreakCount === 1'), 'bundler spike self-test does not assert bound suppress writer streak execution');
+    assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressEventCount === 8'), 'bundler spike self-test does not assert suppress writer side-effect count');
     assert(bundlerSpikeBuildSource.includes("status.exitReloginStaminaHoldBoundReason === 'stamina reset'"), 'bundler spike self-test does not assert bound stamina hold selector execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginOfflineSuppressBoundReturn === 4000'), 'bundler spike self-test does not assert bound offline suppress execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');

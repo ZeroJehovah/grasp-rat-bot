@@ -122,7 +122,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['bot-object', botObjectSource],
+    ['bot-object', () => botObjectSource(config)],
     ['separator-after-bot-object',
     `
 

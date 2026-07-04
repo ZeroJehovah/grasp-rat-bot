@@ -169,30 +169,7 @@ function exitReloginStreakInlineSource() {
 }
 
 function bundledExitReloginStreakSource() {
-  return `	  const {
-	    readEnemyLeaveStreakCore,
-	    writeEnemyLeaveStreakCore,
-	    updateEnemyLeaveStreakCore
-	  } = require('./src/browser/runtime/exit-relogin');
-
-	  function readEnemyLeaveStreak(t = Date.now()) {
-	    return readEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, cfg, t, enemyRepeatDelayMsForCount);
-	  }
-
-	  function writeEnemyLeaveStreak(streak) {
-	    return writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak);
-	  }
-
-\t  function updateEnemyLeaveStreak(detail, t = Date.now()) {
-\t    return updateEnemyLeaveStreakCore(detail, t, {
-\t      cfg,
-\t      enemyActorFromLeaveDetail,
-\t      readEnemyLeaveStreak,
-\t      writeEnemyLeaveStreak,
-\t      enemyRepeatDelayMsForCount
-\t    });
-\t  }
-`;
+  return '';
 }
 
 function exitReloginSummaryInlineSource() {

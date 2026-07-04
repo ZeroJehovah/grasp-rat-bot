@@ -1145,236 +1145,6 @@
     }
   });
 
-  // src/strategy/attack-worth.js
-  var require_attack_worth = __commonJS({
-    "src/strategy/attack-worth.js"(exports, module) {
-      "use strict";
-      function attackWorthTakingCore(self, target, options = {}) {
-        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
-        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
-        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
-        if (isWhitelistedTarget(target)) return false;
-        const targetDrop = dropValue(target);
-        if (isAfkProfitTarget(target)) {
-          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
-        }
-        const ownDrop = dropValue(self);
-        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
-      }
-      module.exports = { attackWorthTakingCore };
-    }
-  });
-
-  // src/browser/runtime/attack-worth.js
-  var require_attack_worth2 = __commonJS({
-    "src/browser/runtime/attack-worth.js"(exports, module) {
-      "use strict";
-      var {
-        attackWorthTakingCore
-      } = require_attack_worth();
-      module.exports = {
-        attackWorthTakingCore
-      };
-    }
-  });
-
-  // src/strategy/exit-motion.js
-  var require_exit_motion = __commonJS({
-    "src/strategy/exit-motion.js"(exports, module) {
-      "use strict";
-      function exitMotionStopLockRemainingMsCore(stoppedAtValue, lockMsValue, t = Date.now()) {
-        const stoppedAt = Number(stoppedAtValue || 0);
-        if (!stoppedAt) return 0;
-        const lockMs = Math.max(0, Number(lockMsValue || 0) || 0);
-        return Math.max(0, Math.round(stoppedAt + lockMs - t));
-      }
-      function postExitDecisionWithoutTargetCore(decision, reason = "", options = {}) {
-        const previous = decision && typeof decision === "object" ? decision : {};
-        const lockRemaining = typeof options.exitMotionLockRemainingMs === "function" ? options.exitMotionLockRemainingMs() : Number(options.exitMotionLockRemainingMs || 0);
-        return {
-          ...previous,
-          kind: "wait",
-          reason: reason || previous.reason || "exit-motion-stopped",
-          dx: 0,
-          dy: 0,
-          target: null,
-          aimTarget: null,
-          opportunisticShot: null,
-          combat: false,
-          shoot: false,
-          forceShoot: false,
-          combatCover: null,
-          exitMotionStopped: true,
-          exitMotionStopReason: reason || options.lastExitMotionStopReason || "",
-          exitMotionLockRemainingMs: lockRemaining
-        };
-      }
-      module.exports = {
-        exitMotionStopLockRemainingMsCore,
-        postExitDecisionWithoutTargetCore
-      };
-    }
-  });
-
-  // src/browser/runtime/exit-motion.js
-  var require_exit_motion2 = __commonJS({
-    "src/browser/runtime/exit-motion.js"(exports, module) {
-      "use strict";
-      var {
-        exitMotionStopLockRemainingMsCore,
-        postExitDecisionWithoutTargetCore
-      } = require_exit_motion();
-      module.exports = {
-        exitMotionStopLockRemainingMsCore,
-        postExitDecisionWithoutTargetCore
-      };
-    }
-  });
-
-  // src/shared/display-format.js
-  var require_display_format = __commonJS({
-    "src/shared/display-format.js"(exports, module) {
-      "use strict";
-      function escapeHtml(value) {
-        return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;"
-        })[ch]);
-      }
-      function formatDistance(value) {
-        const n = Number(value);
-        if (!Number.isFinite(n)) return "-";
-        const meters = n / 100;
-        if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + "\u7C73";
-        return Math.round(meters) + "\u7C73";
-      }
-      function formatDurationMs(ms) {
-        const value = Math.max(0, Math.round(Number(ms) || 0));
-        if (value >= 36e5) {
-          const minutes = Math.round(value / 6e4);
-          if (minutes % 60 === 0) return Math.round(minutes / 60) + "\u5C0F\u65F6";
-          return minutes + "\u5206\u949F";
-        }
-        if (value >= 6e4) return Math.round(value / 6e4) + "\u5206\u949F";
-        if (value >= 1e3) return Math.round(value / 1e3) + "\u79D2";
-        return value + "ms";
-      }
-      function actorLabel(actor) {
-        if (!actor) return "\u672A\u77E5\u76EE\u6807";
-        const id = actor.user_id ?? actor.id ?? actor.targetId;
-        return actor.name || actor.label || (id !== void 0 && id !== null && id !== "" ? "#" + id : "\u672A\u77E5\u76EE\u6807");
-      }
-      function hpDisplay(value) {
-        const n = Number(value);
-        return Number.isFinite(n) ? String(Math.round(n)) : "-";
-      }
-      module.exports = {
-        escapeHtml,
-        formatDistance,
-        formatDurationMs,
-        actorLabel,
-        hpDisplay
-      };
-    }
-  });
-
-  // src/browser/runtime/display-format.js
-  var require_display_format2 = __commonJS({
-    "src/browser/runtime/display-format.js"(exports, module) {
-      "use strict";
-      var {
-        escapeHtml,
-        formatDistance,
-        formatDurationMs,
-        actorLabel,
-        hpDisplay
-      } = require_display_format();
-      module.exports = {
-        escapeHtml,
-        formatDistance,
-        formatDurationMs,
-        actorLabel,
-        hpDisplay
-      };
-    }
-  });
-
-  // src/shared/runtime-utils.js
-  var require_runtime_utils = __commonJS({
-    "src/shared/runtime-utils.js"(exports, module) {
-      "use strict";
-      function safeStringify(value) {
-        const seen = /* @__PURE__ */ new WeakSet();
-        try {
-          const text = JSON.stringify(value, function(_key, item) {
-            if (typeof item === "bigint") return String(item);
-            if (item && typeof item === "object") {
-              if (seen.has(item)) return "[Circular]";
-              seen.add(item);
-            }
-            return item;
-          });
-          return String(text || "");
-        } catch (err) {
-          try {
-            return JSON.stringify({ error: err?.message || String(err) });
-          } catch (_) {
-            return '{"error":"stringify failed"}';
-          }
-        }
-      }
-      function safeJsonClone(value) {
-        try {
-          return JSON.parse(safeStringify(value));
-        } catch (_) {
-          return null;
-        }
-      }
-      function sanitizeCombatLogIdPart(value, fallback = "unknown") {
-        const text = String(value || fallback).replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
-        return text || fallback;
-      }
-      module.exports = {
-        safeStringify,
-        safeJsonClone,
-        sanitizeCombatLogIdPart
-      };
-    }
-  });
-
-  // src/browser/runtime/runtime-utils.js
-  var require_runtime_utils2 = __commonJS({
-    "src/browser/runtime/runtime-utils.js"(exports, module) {
-      "use strict";
-      var {
-        safeStringify,
-        safeJsonClone,
-        sanitizeCombatLogIdPart
-      } = require_runtime_utils();
-      module.exports = {
-        safeStringify,
-        safeJsonClone,
-        sanitizeCombatLogIdPart
-      };
-    }
-  });
-
-  // src/browser/runtime/array-count.js
-  var require_array_count = __commonJS({
-    "src/browser/runtime/array-count.js"(exports, module) {
-      "use strict";
-      function arrayCount(value) {
-        return Array.isArray(value) ? value.length : 0;
-      }
-      module.exports = {
-        arrayCount
-      };
-    }
-  });
-
   // src/browser/runtime/exit-relogin.js
   var require_exit_relogin = __commonJS({
     "src/browser/runtime/exit-relogin.js"(exports, module) {
@@ -1486,6 +1256,28 @@
           }
         }
         return streak;
+      }
+      function readEnemyLeaveStreakBoundCore(storage, bot, cfg, t, helpers) {
+        return readEnemyLeaveStreakCore(
+          storage,
+          helpers.enemyLeaveStreakKey,
+          bot,
+          cfg,
+          t,
+          (count) => enemyRepeatDelayMsForCountCore(count, cfg)
+        );
+      }
+      function writeEnemyLeaveStreakBoundCore(storage, bot, streak, helpers) {
+        return writeEnemyLeaveStreakCore(storage, helpers.enemyLeaveStreakKey, bot, streak);
+      }
+      function updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, cfg, helpers) {
+        return updateEnemyLeaveStreakCore(detail, t, {
+          cfg,
+          enemyActorFromLeaveDetail: (value) => enemyActorFromLeaveDetailCore(value, normalizeEnemyActorCore),
+          readEnemyLeaveStreak: (readAt) => readEnemyLeaveStreakBoundCore(storage, bot, cfg, readAt, helpers),
+          writeEnemyLeaveStreak: (streak) => writeEnemyLeaveStreakBoundCore(storage, bot, streak, helpers),
+          enemyRepeatDelayMsForCount: (count) => enemyRepeatDelayMsForCountCore(count, cfg)
+        });
       }
       function combatExitSummaryCore(reason, target, combatState = {}, helpers) {
         const cfg = helpers.cfg;
@@ -1791,7 +1583,9 @@
           isExitLoginSuppressReason: isExitLoginSuppressReasonCore,
           hpInfoForRelogin: helpers.hpInfoForRelogin,
           reloginDelayForHp: helpers.reloginDelayForHp,
-          updateEnemyLeaveStreak: helpers.updateEnemyLeaveStreak,
+          updateEnemyLeaveStreak: (detail2, t) => updateEnemyLeaveStreakBoundCore(detail2, t, storage, bot, helpers.cfg, {
+            enemyLeaveStreakKey: helpers.enemyLeaveStreakKey
+          }),
           clearLoginSuppressMatching: helpers.clearLoginSuppressMatching,
           finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
           writePersistentExitState: helpers.writePersistentExitState,
@@ -2129,6 +1923,9 @@
         readEnemyLeaveStreakCore,
         writeEnemyLeaveStreakCore,
         updateEnemyLeaveStreakCore,
+        readEnemyLeaveStreakBoundCore,
+        writeEnemyLeaveStreakBoundCore,
+        updateEnemyLeaveStreakBoundCore,
         combatExitSummaryCore,
         combatLeaveActionCore,
         pursuitLeaveSummaryCore,
@@ -2163,6 +1960,236 @@
         clearOfflineReloginHoldCore,
         clearEnemyReloginHoldBoundCore,
         clearOfflineReloginHoldBoundCore
+      };
+    }
+  });
+
+  // src/strategy/attack-worth.js
+  var require_attack_worth = __commonJS({
+    "src/strategy/attack-worth.js"(exports, module) {
+      "use strict";
+      function attackWorthTakingCore(self, target, options = {}) {
+        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
+        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
+        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
+        if (isWhitelistedTarget(target)) return false;
+        const targetDrop = dropValue(target);
+        if (isAfkProfitTarget(target)) {
+          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
+        }
+        const ownDrop = dropValue(self);
+        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
+      }
+      module.exports = { attackWorthTakingCore };
+    }
+  });
+
+  // src/browser/runtime/attack-worth.js
+  var require_attack_worth2 = __commonJS({
+    "src/browser/runtime/attack-worth.js"(exports, module) {
+      "use strict";
+      var {
+        attackWorthTakingCore
+      } = require_attack_worth();
+      module.exports = {
+        attackWorthTakingCore
+      };
+    }
+  });
+
+  // src/strategy/exit-motion.js
+  var require_exit_motion = __commonJS({
+    "src/strategy/exit-motion.js"(exports, module) {
+      "use strict";
+      function exitMotionStopLockRemainingMsCore(stoppedAtValue, lockMsValue, t = Date.now()) {
+        const stoppedAt = Number(stoppedAtValue || 0);
+        if (!stoppedAt) return 0;
+        const lockMs = Math.max(0, Number(lockMsValue || 0) || 0);
+        return Math.max(0, Math.round(stoppedAt + lockMs - t));
+      }
+      function postExitDecisionWithoutTargetCore(decision, reason = "", options = {}) {
+        const previous = decision && typeof decision === "object" ? decision : {};
+        const lockRemaining = typeof options.exitMotionLockRemainingMs === "function" ? options.exitMotionLockRemainingMs() : Number(options.exitMotionLockRemainingMs || 0);
+        return {
+          ...previous,
+          kind: "wait",
+          reason: reason || previous.reason || "exit-motion-stopped",
+          dx: 0,
+          dy: 0,
+          target: null,
+          aimTarget: null,
+          opportunisticShot: null,
+          combat: false,
+          shoot: false,
+          forceShoot: false,
+          combatCover: null,
+          exitMotionStopped: true,
+          exitMotionStopReason: reason || options.lastExitMotionStopReason || "",
+          exitMotionLockRemainingMs: lockRemaining
+        };
+      }
+      module.exports = {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
+  // src/browser/runtime/exit-motion.js
+  var require_exit_motion2 = __commonJS({
+    "src/browser/runtime/exit-motion.js"(exports, module) {
+      "use strict";
+      var {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      } = require_exit_motion();
+      module.exports = {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
+  // src/shared/display-format.js
+  var require_display_format = __commonJS({
+    "src/shared/display-format.js"(exports, module) {
+      "use strict";
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        })[ch]);
+      }
+      function formatDistance(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "-";
+        const meters = n / 100;
+        if (Math.abs(meters) < 10) return Number(meters.toFixed(1)) + "\u7C73";
+        return Math.round(meters) + "\u7C73";
+      }
+      function formatDurationMs(ms) {
+        const value = Math.max(0, Math.round(Number(ms) || 0));
+        if (value >= 36e5) {
+          const minutes = Math.round(value / 6e4);
+          if (minutes % 60 === 0) return Math.round(minutes / 60) + "\u5C0F\u65F6";
+          return minutes + "\u5206\u949F";
+        }
+        if (value >= 6e4) return Math.round(value / 6e4) + "\u5206\u949F";
+        if (value >= 1e3) return Math.round(value / 1e3) + "\u79D2";
+        return value + "ms";
+      }
+      function actorLabel(actor) {
+        if (!actor) return "\u672A\u77E5\u76EE\u6807";
+        const id = actor.user_id ?? actor.id ?? actor.targetId;
+        return actor.name || actor.label || (id !== void 0 && id !== null && id !== "" ? "#" + id : "\u672A\u77E5\u76EE\u6807");
+      }
+      function hpDisplay(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? String(Math.round(n)) : "-";
+      }
+      module.exports = {
+        escapeHtml,
+        formatDistance,
+        formatDurationMs,
+        actorLabel,
+        hpDisplay
+      };
+    }
+  });
+
+  // src/browser/runtime/display-format.js
+  var require_display_format2 = __commonJS({
+    "src/browser/runtime/display-format.js"(exports, module) {
+      "use strict";
+      var {
+        escapeHtml,
+        formatDistance,
+        formatDurationMs,
+        actorLabel,
+        hpDisplay
+      } = require_display_format();
+      module.exports = {
+        escapeHtml,
+        formatDistance,
+        formatDurationMs,
+        actorLabel,
+        hpDisplay
+      };
+    }
+  });
+
+  // src/shared/runtime-utils.js
+  var require_runtime_utils = __commonJS({
+    "src/shared/runtime-utils.js"(exports, module) {
+      "use strict";
+      function safeStringify(value) {
+        const seen = /* @__PURE__ */ new WeakSet();
+        try {
+          const text = JSON.stringify(value, function(_key, item) {
+            if (typeof item === "bigint") return String(item);
+            if (item && typeof item === "object") {
+              if (seen.has(item)) return "[Circular]";
+              seen.add(item);
+            }
+            return item;
+          });
+          return String(text || "");
+        } catch (err) {
+          try {
+            return JSON.stringify({ error: err?.message || String(err) });
+          } catch (_) {
+            return '{"error":"stringify failed"}';
+          }
+        }
+      }
+      function safeJsonClone(value) {
+        try {
+          return JSON.parse(safeStringify(value));
+        } catch (_) {
+          return null;
+        }
+      }
+      function sanitizeCombatLogIdPart(value, fallback = "unknown") {
+        const text = String(value || fallback).replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
+        return text || fallback;
+      }
+      module.exports = {
+        safeStringify,
+        safeJsonClone,
+        sanitizeCombatLogIdPart
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-utils.js
+  var require_runtime_utils2 = __commonJS({
+    "src/browser/runtime/runtime-utils.js"(exports, module) {
+      "use strict";
+      var {
+        safeStringify,
+        safeJsonClone,
+        sanitizeCombatLogIdPart
+      } = require_runtime_utils();
+      module.exports = {
+        safeStringify,
+        safeJsonClone,
+        sanitizeCombatLogIdPart
+      };
+    }
+  });
+
+  // src/browser/runtime/array-count.js
+  var require_array_count = __commonJS({
+    "src/browser/runtime/array-count.js"(exports, module) {
+      "use strict";
+      function arrayCount(value) {
+        return Array.isArray(value) ? value.length : 0;
+      }
+      module.exports = {
+        arrayCount
       };
     }
   });
@@ -4769,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.453" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.454" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4918,6 +4945,7 @@
     function recordRuntimeDiagnostics(values = {}) {
       return recordRuntimeDiagnosticsCore(bot, values);
     }
+    const { readEnemyLeaveStreakBoundCore } = require_exit_relogin();
     const bot = {
       running: true,
       version: cfg.version,
@@ -5416,7 +5444,7 @@
             reason: enemyLeaveDetail?.reason || this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || "",
             summary: enemyLeaveDetail?.summary || latestEnemyLeaveSummary(),
             displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
-            streak: readEnemyLeaveStreak(),
+            streak: readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY }),
             lastWaitMs: this.lastEnemyLeaveWaitMs || enemyLeaveDetail?.reloginDelayMs || enemyLeaveDetail?.holdRemainingMs || 0,
             enemyActor: enemyLeaveDetail?.enemyActor || null,
             reloginRepeatCount: enemyLeaveDetail?.reloginRepeatCount || enemyLeaveDetail?.enemyLeaveStreak?.count || 0,
@@ -10320,26 +10348,6 @@
       return enemyRepeatDelayMsForCountCore(count, cfg);
     }
     const {
-      readEnemyLeaveStreakCore,
-      writeEnemyLeaveStreakCore,
-      updateEnemyLeaveStreakCore
-    } = require_exit_relogin();
-    function readEnemyLeaveStreak(t = Date.now()) {
-      return readEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, cfg, t, enemyRepeatDelayMsForCount);
-    }
-    function writeEnemyLeaveStreak(streak) {
-      return writeEnemyLeaveStreakCore(localStorage, ENEMY_LEAVE_STREAK_KEY, bot, streak);
-    }
-    function updateEnemyLeaveStreak(detail, t = Date.now()) {
-      return updateEnemyLeaveStreakCore(detail, t, {
-        cfg,
-        enemyActorFromLeaveDetail,
-        readEnemyLeaveStreak,
-        writeEnemyLeaveStreak,
-        enemyRepeatDelayMsForCount
-      });
-    }
-    const {
       combatExitSummaryCore,
       combatLeaveActionCore,
       pursuitLeaveSummaryCore,
@@ -10987,9 +10995,9 @@
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
       clearCombatEngagement("exit-confirmed");
       if (pending.scope === "offline") {
-        setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });
+        setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });
       } else {
-        setExitReloginSuppressBoundCore(bot, localStorage, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now });
+        setExitReloginSuppressBoundCore(bot, localStorage, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now });
         if (pending.source === "combat") bot.lastCombatLeaveResult = detail;
         if (pending.source === "pursuit") bot.lastPursuitLeaveResult = detail;
         if (pending.source === "injury") bot.lastInjuryLeaveResult = detail;

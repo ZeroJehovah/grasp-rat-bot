@@ -253,7 +253,9 @@ async function selfTest() {
   assert(status.exitReloginReadStreakCount === 1, 'spike did not read exit relogin streak');
   assert(status.exitReloginUpdatedStreakCount === 2, 'spike did not update exit relogin streak');
   assert(status.exitReloginUpdatedRepeatDelay === 2000, 'spike did not attach exit relogin repeat delay');
-  assert(status.exitReloginWrittenStreakCount === 2, 'spike did not write exit relogin streak');
+  assert(status.exitReloginBoundStreakCount === 3, 'spike did not update exit relogin bound streak');
+  assert(status.exitReloginBoundStreakRepeatDelay === 5000, 'spike did not attach exit relogin bound repeat delay');
+  assert(status.exitReloginWrittenStreakCount === 3, 'spike did not write exit relogin streak');
   assert(status.exitReloginBotStreakKey === 'id:42', 'spike did not update bot exit relogin streak');
   assert(String(status.exitReloginCombatSummary || '').includes('近身弹压'), 'spike did not execute exit relogin combat summary');
   assert(status.exitReloginCombatActionDx === 1, 'spike did not clamp exit relogin combat leave action dx');
@@ -296,8 +298,8 @@ async function selfTest() {
   assert(status.exitReloginSuppressNewPersisted === true, 'spike did not persist new suppress detail');
   assert(status.exitReloginSuppressBoundUntil === 6000, 'spike did not create bound suppress hold');
   assert(status.exitReloginSuppressBoundDelay === 5000, 'spike did not honor bound suppress minimum delay');
-  assert(status.exitReloginSuppressBoundStreaked === true, 'spike did not update enemy leave streak through bound suppress core');
-  assert(status.exitReloginSuppressEventCount === 9, 'spike did not execute all suppress core side effects');
+  assert(status.exitReloginSuppressBoundStreakCount === 1, 'spike did not update enemy leave streak through bound suppress core');
+  assert(status.exitReloginSuppressEventCount === 8, 'spike did not execute all suppress core side effects');
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
   assert(status.exitReloginStaminaHoldBoundReason === 'stamina reset', 'spike did not execute exit relogin bound stamina hold selector');
