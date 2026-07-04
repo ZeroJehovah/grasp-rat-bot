@@ -1676,3 +1676,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-fragment-registry.js` keeps the stable `combat-log-runtime` fragment name, but imports `combatLogSource` directly and calls `combatLogSource(config)`.
 - Static verification rejects reintroducing the deleted wrapper, requires the direct registry import, and still verifies the final bundled exit-summary helper path.
 - The `.512` manifest records bundled SHA-256 `933d340ef895681b72705b86496d713f093391f8b9fffe5e3ea9bceb1603c75a` and pre-bundle remote direct SHA-256 `5cd8bd0237856a62e5044bd4eeab954147860501eac0636bee568d726da1af69`.
+
+`bootstrap-0.4.513` removes the control-login runtime wrapper:
+
+- `src/browser/control-login-runtime-source.js` is removed.
+- `src/browser/runtime-fragment-registry.js` keeps the stable `control-login-runtime` fragment name, but imports `controlLoginSource` directly and calls `controlLoginSource(config)`.
+- Static verification rejects reintroducing the deleted wrapper, requires the direct registry import, and continues checking the underlying control-login source factory shape.
+- The `.513` manifest records bundled SHA-256 `bf752fe3697efcc7e73eb8e6b15ce3c34a151e3a071d72b5dad778460b4a0b7a` and pre-bundle remote direct SHA-256 `df1ef6c9391ce64c06460b3a6510096819267c4df38b3d7fd1ee7263bdc7f792`.
