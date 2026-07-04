@@ -1668,3 +1668,11 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-fragment-registry.js` keeps the stable `status-panel-runtime` fragment name, but imports `statusPanelSource` directly and calls `statusPanelSource(config)`.
 - Static verification rejects reintroducing the deleted wrapper, requires the direct registry import, and still verifies the final bundled display-format helper path.
 - The `.511` manifest records bundled SHA-256 `35b180182e1d35b1eea19e4c7a53a46e41ef7043fa3aca35fb1300984d1de999` and pre-bundle remote direct SHA-256 `ae397bbc2bbfa14644e417bd1469e5cb2c899f8a5a5d032a4fa2bb15cb6b7d17`.
+
+`bootstrap-0.4.512` removes the combat-log runtime wrapper:
+
+- `src/browser/combat-log-runtime-source.js` is removed.
+- `src/browser/combat-log-source.js` now emits the bundled `require('./src/browser/runtime/exit-summary')` prelude directly before the combat-log source body.
+- `src/browser/runtime-fragment-registry.js` keeps the stable `combat-log-runtime` fragment name, but imports `combatLogSource` directly and calls `combatLogSource(config)`.
+- Static verification rejects reintroducing the deleted wrapper, requires the direct registry import, and still verifies the final bundled exit-summary helper path.
+- The `.512` manifest records bundled SHA-256 `933d340ef895681b72705b86496d713f093391f8b9fffe5e3ea9bceb1603c75a` and pre-bundle remote direct SHA-256 `5cd8bd0237856a62e5044bd4eeab954147860501eac0636bee568d726da1af69`.
