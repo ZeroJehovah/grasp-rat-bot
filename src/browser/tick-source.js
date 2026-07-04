@@ -13,10 +13,14 @@ const {
   applyFinalActionArbitrationCall,
   recordActionSwitchDiagnosticsCall
 } = require('./action-arbitration-source');
+const {
+  pendingExitSummaryPreludeSource,
+  summarizePendingExitCall
+} = require('./pending-exit-summary-call-source');
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./src/browser/runtime/exit-motion');\n  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./src/browser/runtime/exit-motion');\n  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('Tick', options) + "\n"
     : '';
   const enemyHoldRemainingMsCall = options.bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForTickBoundCore')
@@ -686,7 +690,7 @@ function tickSource(options = {}) {
 	            offlineSafety,
 	            displayReason: skippedLeave.displayReason || action.displayReason || '',
 	            leave: skippedLeave,
-	            pendingExit: summarizePendingExit()
+	            pendingExit: ${summarizePendingExitCall('bot.pendingExit', { ...options, alias: 'Tick' })}
 	          };
 	          updateBotPanel(bot.lastDecision);
 	          if (cfg.once) bot.stop('once');
@@ -856,7 +860,7 @@ function tickSource(options = {}) {
       bot.lastDecision = {
         ...action,
         source,
-        pendingExit: summarizePendingExit(),
+        pendingExit: ${summarizePendingExitCall('bot.pendingExit', { ...options, alias: 'Tick' })},
         coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics) || bot.coinDiagnostics || null,
         self: {
           ...summarizeSelf(self),

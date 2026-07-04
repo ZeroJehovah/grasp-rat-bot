@@ -10,6 +10,10 @@ const {
 const {
   writePersistentPendingExitStateCall
 } = require('./pending-exit-persistence-call-source');
+const {
+  pendingExitSummaryPreludeSource,
+  summarizePendingExitCall
+} = require('./pending-exit-summary-call-source');
 
 function controlLoginSource(helpers = {}) {
   const {
@@ -17,7 +21,7 @@ function controlLoginSource(helpers = {}) {
     staminaExhaustedWindowLabel
   } = helpers;
   const holdPrelude = bundledRuntime
-    ? "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n"
+    ? "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('ControlLogin', { bundledRuntime })
     : '';
   const finalizeLeaveDisplayReasonCall = detail => bundledRuntime
     ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForControlLoginCore', 'leaveWaitDisplayForControlLoginCore')
@@ -104,7 +108,7 @@ function controlLoginSource(helpers = {}) {
 		        dx: 0,
 		        dy: 0,
 		        self: bot.lastSelf,
-		        pendingExit: summarizePendingExit(pending),
+		        pendingExit: ${summarizePendingExitCall('pending', { bundledRuntime, alias: 'ControlLogin' })},
 		        exitAuditFlush: blocked,
 		        displayReason: '等待退出日志发送完成，暂不刷新确认退出'
 		      });
@@ -142,7 +146,7 @@ function controlLoginSource(helpers = {}) {
 		    logStatus('leave confirmation reload: ' + reason, {
 		      kind: 'wait',
 		      reason: 'leave-success-refresh-confirmation',
-		      pendingExit: summarizePendingExit(pending),
+		      pendingExit: ${summarizePendingExitCall('pending', { bundledRuntime, alias: 'ControlLogin' })},
 		      reloadConfirmation,
 		      displayReason: 'leave接口已返回成功，刷新页面确认服务端在线状态'
 		    });
@@ -697,7 +701,7 @@ function controlLoginSource(helpers = {}) {
       snapshotSelf,
       reconnectChurn,
       wsOfflineish,
-      pendingExit: bot.pendingExit ? summarizePendingExit(bot.pendingExit) : null,
+      pendingExit: ${summarizePendingExitCall('bot.pendingExit', { bundledRuntime, alias: 'ControlLogin' })},
       suppressRemainingMs: Math.max(0, Math.round(suppressRemainingMs)),
       suppressReason,
       enemyHoldRemainingMs,

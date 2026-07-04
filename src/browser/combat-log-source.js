@@ -4,6 +4,10 @@ const {
   enemyReloginHoldRemainingMsBoundCall,
   offlineReloginHoldRemainingMsBoundCall
 } = require('./exit-relogin-hold-read-call-source');
+const {
+  pendingExitSummaryPreludeSource,
+  summarizePendingExitCall
+} = require('./pending-exit-summary-call-source');
 
 function combatLogSource(helpers = {}) {
   const {
@@ -11,7 +15,7 @@ function combatLogSource(helpers = {}) {
     combatLogExitSummaryFromDecision
   } = helpers;
   const holdPrelude = bundledRuntime
-    ? "      const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require('./src/browser/runtime/exit-relogin');\n"
+    ? "      const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('CombatLog', { bundledRuntime, indent: '      ' })
     : '';
   const enemyHoldRemainingMsCall = bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForCombatLogBoundCore')
@@ -429,7 +433,7 @@ function combatLogSource(helpers = {}) {
           pursuit: detail.pursuit || extra.pursuit || null,
           combat: detail.combat || extra.combat || null,
           offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
-	          pendingExit: summarizePendingExit(bot.pendingExit),
+	          pendingExit: ${summarizePendingExitCall('bot.pendingExit', { bundledRuntime, alias: 'CombatLog' })},
 	          loginSnapshotGate: snapshotLoginGateStatus(),
 	          request: extra.request || null,
           leave: {

@@ -12,6 +12,9 @@ const {
   writePersistentPendingExitStateCall
 } = require('./pending-exit-persistence-call-source');
 const {
+  summarizePendingExitCall
+} = require('./pending-exit-summary-call-source');
+const {
   pendingExitRetryMsCore,
   pendingExitDisplayReasonCore,
   summarizePendingExitCore
@@ -56,6 +59,11 @@ function pendingExitSource(options = {}) {
     ? `normalizePendingExitReloadConfirmationCore(${args})`
     : `normalizePendingExitReloadConfirmation(${args})`;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
+  const summarizePendingExitExpr = pending => summarizePendingExitCall(pending || 'bot.pendingExit', {
+    ...options,
+    retryCoreName: 'pendingExitRetryMsCore',
+    summaryCoreName: 'summarizePendingExitCore'
+  });
   const offlineSuppressCall = options.bundledRuntime
     ? `\t      setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });`
     : "\t      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);";
@@ -74,6 +82,17 @@ function pendingExitSource(options = {}) {
 
   function pendingExitDisplayReason(summary) {
     return pendingExitDisplayReasonCore(summary);
+  }
+
+  function summarizePendingExit(pending = bot.pendingExit) {
+    if (!pending) return null;
+    const t = Date.now();
+    const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t);
+    return summarizePendingExitCore(pending, {
+      nowMs: t,
+      retryMs: pendingExitRetryMs(pending),
+      reloadConfirmation
+    });
   }
 
 `;
@@ -118,17 +137,6 @@ ${pendingExitHelperSource}  function pendingExitRetryCoreOptions() {
 
 ${localPendingExitHelperWrappers}
 
-	  function summarizePendingExit(pending = bot.pendingExit) {
-	    if (!pending) return null;
-	    const t = Date.now();
-	    const reloadConfirmation = ${normalizePendingExitReloadConfirmationCall('pending.reloadConfirmation, pending, t')};
-	    return summarizePendingExitCore(pending, {
-	      nowMs: t,
-	      retryMs: ${pendingExitRetryMsCall('pending', options)},
-	      reloadConfirmation
-	    });
-  }
-
   function pendingExitSkipNewLeave(source, reason, extra = {}) {
     const pending = bot.pendingExit;
     if (!pending) return null;
@@ -143,7 +151,7 @@ ${localPendingExitHelperWrappers}
       skippedReason: reason || '',
       exitPending: true,
       exitConfirmed: false,
-      pendingExit: summarizePendingExit(pending),
+      pendingExit: ${summarizePendingExitExpr('pending')},
       summary,
       error: ''
     }`)};
@@ -155,7 +163,7 @@ ${localPendingExitHelperWrappers}
       source: source || '',
       skippedReason: reason || '',
       summary: detail?.summary || bot.pendingExit?.summary || '',
-      pendingExit: summarizePendingExit()
+      pendingExit: ${summarizePendingExitExpr('bot.pendingExit')}
     };
   }
 
@@ -204,7 +212,7 @@ ${localPendingExitHelperWrappers}
 	    bot.pendingExit = pending;
 	    detail.exitPending = true;
 	    detail.exitConfirmed = false;
-	    detail.pendingExit = summarizePendingExit(pending);
+	    detail.pendingExit = ${summarizePendingExitExpr('pending')};
 	    detail.displayReason = pending.displayReason;
 	    ${writePendingExit('pending')};
 	    if (leaveDetailSucceeded(detail) && !leaveDetailHasHttp403(detail)) {
@@ -416,7 +424,7 @@ ${localPendingExitHelperWrappers}
 	    detail.reloadConfirmation = reloadConfirmation;
 	    detail.exitPending = true;
 	    detail.exitConfirmed = false;
-	    detail.pendingExit = summarizePendingExit(pending);
+	    detail.pendingExit = ${summarizePendingExitExpr('pending')};
 	    ${writePendingExit('pending')};
 	    return reloadConfirmation;
 	  }
@@ -430,7 +438,7 @@ ${localPendingExitHelperWrappers}
 	    wait.reason = reason || wait.reason || pending?.reason || 'leave-success';
 	    wait.summary = wait.summary || pending?.summary || wait.reason || '';
 	    wait.displayReason = displayReason || wait.displayReason || 'leave接口已返回成功，刷新页面确认服务端在线状态';
-	    wait.pendingExit = summarizePendingExit(pending);
+	    wait.pendingExit = ${summarizePendingExitExpr('pending')};
 	    wait.exitConfirmation = state || null;
 	    return wait;
 	  }
@@ -686,7 +694,7 @@ ${enemyLeaveSuppressCall}
       combatCover: confirmed ? null : (cover || null),
       displayReason: leaveResult?.displayReason || activeDetail?.displayReason || pending.displayReason || '',
       leave: leaveResult,
-      pendingExit: summarizePendingExit(bot.pendingExit || pending),
+      pendingExit: ${summarizePendingExitExpr('bot.pendingExit || pending')},
       exitConfirmation: state || null,
       holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === 'offline' ? ${offlineHoldRemainingMsCall} : ${enemyHoldRemainingMsCall})
     };
@@ -721,7 +729,7 @@ ${enemyLeaveSuppressCall}
         displayReason: pending.displayReason || '',
         exitPending: true,
         exitConfirmed: false,
-        pendingExit: summarizePendingExit(pending),
+        pendingExit: ${summarizePendingExitExpr('pending')},
         exitConfirmation: state || null
       };
       return detail;
@@ -753,7 +761,7 @@ ${enemyLeaveSuppressCall}
       lastResult: cloneForPendingExit(detail)
     };
     ${writePendingExit('bot.pendingExit')};
-    detail.pendingExit = summarizePendingExit(bot.pendingExit);
+    detail.pendingExit = ${summarizePendingExitExpr('bot.pendingExit')};
     recordPendingExitResult(pending.source, detail, t);
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -768,7 +776,7 @@ ${enemyLeaveSuppressCall}
       };
       bot.pendingExit = next;
       ${writePendingExit('next')};
-      detail.pendingExit = summarizePendingExit(next);
+      detail.pendingExit = ${summarizePendingExitExpr('next')};
       detail.displayReason = detail.displayReason || pending.displayReason || ${pendingExitDisplayReasonCall('detail.summary || pending.summary || detail.reason', options)};
     }
     recordPendingExitResult(pending.source, detail, t);
@@ -805,7 +813,7 @@ ${enemyLeaveSuppressCall}
         const detail = cloneForPendingExit(lastDetail) || {};
         detail.exitPending = true;
         detail.exitConfirmed = false;
-        detail.pendingExit = summarizePendingExit(pending);
+        detail.pendingExit = ${summarizePendingExitExpr('pending')};
         detail.exitConfirmation = {
           ...state,
           source: bot.clashLeaveRescue.running ? 'leave-http-403-clash-rescue-running' : 'leave-http-403-clash-rescue-scheduled',

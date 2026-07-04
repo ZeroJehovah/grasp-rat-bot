@@ -3,13 +3,18 @@
 const {
   writePersistentPendingExitStateCall
 } = require('./pending-exit-persistence-call-source');
+const {
+  pendingExitSummaryPreludeSource,
+  summarizePendingExitCall
+} = require('./pending-exit-summary-call-source');
 
 function leaveCommandSource(options = {}) {
+  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand', options);
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   const pendingExitDisplayReason = summary => options.bundledRuntime
     ? `pendingExitDisplayReasonCore(${summary})`
     : `pendingExitDisplayReason(${summary})`;
-  return String.raw`  function waitWithTimeout(promise, timeoutMs, label) {
+  return String.raw`${runtimePrelude}  function waitWithTimeout(promise, timeoutMs, label) {
     const ms = Math.max(100, Number(timeoutMs) || 0);
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -259,7 +264,7 @@ function leaveCommandSource(options = {}) {
               lastResult: cloneForPendingExit(retryDetail)
             };
             ${writePendingExit('bot.pendingExit')};
-            retryDetail.pendingExit = summarizePendingExit(bot.pendingExit);
+            retryDetail.pendingExit = ${summarizePendingExitCall('bot.pendingExit', { ...options, alias: 'LeaveCommand' })};
           }
           recordPendingExitResult(pending?.source || detail.exitAuditSource || 'offline', retryDetail, retryAt);
           await issueLeaveCommand(retryDetail);

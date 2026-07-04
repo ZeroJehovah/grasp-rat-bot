@@ -4981,7 +4981,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.494" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.495" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5129,6 +5129,7 @@
     const { recordRuntimeDiagnosticsCore } = require_runtime_diagnostics();
     const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require_exit_motion2();
     const { readEnemyLeaveStreakBoundCore } = require_exit_relogin();
+    const { pendingExitRetryMsCore: pendingExitRetryMsForBotObjectCore, summarizePendingExitCore: summarizePendingExitForBotObjectCore } = require_pending_exit2();
     const bot = {
       running: true,
       version: cfg.version,
@@ -5601,7 +5602,23 @@
             lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
             lastResult: this.lastLoginResult
           },
-          pendingExit: summarizePendingExit(this.pendingExit),
+          pendingExit: (() => {
+            const pendingExitSummaryPending = this.pendingExit;
+            if (!pendingExitSummaryPending) return null;
+            const pendingExitSummaryNow = Date.now();
+            const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+            return summarizePendingExitForBotObjectCore(pendingExitSummaryPending, {
+              nowMs: pendingExitSummaryNow,
+              retryMs: pendingExitRetryMsForBotObjectCore(pendingExitSummaryPending, {
+                leaveRetryMinMs: cfg.leaveRetryMinMs,
+                leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+              }),
+              reloadConfirmation: pendingExitSummaryReload
+            });
+          })(),
           offlineLeave: {
             lastAt: this.lastOfflineLeaveAt || 0,
             lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
@@ -6757,6 +6774,7 @@
     const { arrayCount } = require_array_count();
     const { combatLogExitSummaryFromDecision } = require_exit_summary2();
     const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require_exit_relogin();
+    const { pendingExitRetryMsCore: pendingExitRetryMsForCombatLogCore, summarizePendingExitCore: summarizePendingExitForCombatLogCore } = require_pending_exit2();
     function combatLogEntryFailureKey(entry) {
       if (!entry || typeof entry !== "object") return "";
       return [
@@ -7119,7 +7137,23 @@
         pursuit: detail.pursuit || extra.pursuit || null,
         combat: detail.combat || extra.combat || null,
         offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
-        pendingExit: summarizePendingExit(bot.pendingExit),
+        pendingExit: (() => {
+          const pendingExitSummaryPending = bot.pendingExit;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitForCombatLogCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsForCombatLogCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })(),
         loginSnapshotGate: snapshotLoginGateStatus(),
         request: extra.request || null,
         leave: {
@@ -8330,6 +8364,7 @@
     }
     const { staminaExhaustedWindowLabel } = require_exit_summary2();
     const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require_exit_relogin();
+    const { pendingExitRetryMsCore: pendingExitRetryMsForControlLoginCore, summarizePendingExitCore: summarizePendingExitForControlLoginCore } = require_pending_exit2();
     function requestReload(reason) {
       if (cfg.dryRun || cfg.once) return;
       if (bot.reloadRequestedAt) return;
@@ -8393,7 +8428,23 @@
           dx: 0,
           dy: 0,
           self: bot.lastSelf,
-          pendingExit: summarizePendingExit(pending),
+          pendingExit: (() => {
+            const pendingExitSummaryPending = pending;
+            if (!pendingExitSummaryPending) return null;
+            const pendingExitSummaryNow = Date.now();
+            const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+            return summarizePendingExitForControlLoginCore(pendingExitSummaryPending, {
+              nowMs: pendingExitSummaryNow,
+              retryMs: pendingExitRetryMsForControlLoginCore(pendingExitSummaryPending, {
+                leaveRetryMinMs: cfg.leaveRetryMinMs,
+                leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+              }),
+              reloadConfirmation: pendingExitSummaryReload
+            });
+          })(),
           exitAuditFlush: blocked,
           displayReason: "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u786E\u8BA4\u9000\u51FA"
         });
@@ -8432,7 +8483,23 @@
       logStatus("leave confirmation reload: " + reason, {
         kind: "wait",
         reason: "leave-success-refresh-confirmation",
-        pendingExit: summarizePendingExit(pending),
+        pendingExit: (() => {
+          const pendingExitSummaryPending = pending;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitForControlLoginCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsForControlLoginCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })(),
         reloadConfirmation,
         displayReason: "leave\u63A5\u53E3\u5DF2\u8FD4\u56DE\u6210\u529F\uFF0C\u5237\u65B0\u9875\u9762\u786E\u8BA4\u670D\u52A1\u7AEF\u5728\u7EBF\u72B6\u6001"
       });
@@ -8919,7 +8986,23 @@
         snapshotSelf,
         reconnectChurn,
         wsOfflineish,
-        pendingExit: bot.pendingExit ? summarizePendingExit(bot.pendingExit) : null,
+        pendingExit: (() => {
+          const pendingExitSummaryPending = bot.pendingExit;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitForControlLoginCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsForControlLoginCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })(),
         suppressRemainingMs: Math.max(0, Math.round(suppressRemainingMs)),
         suppressReason,
         enemyHoldRemainingMs,
@@ -10532,16 +10615,6 @@
         pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
       };
     }
-    function summarizePendingExit(pending = bot.pendingExit) {
-      if (!pending) return null;
-      const t = Date.now();
-      const reloadConfirmation = normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending, t);
-      return summarizePendingExitCore(pending, {
-        nowMs: t,
-        retryMs: pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions()),
-        reloadConfirmation
-      });
-    }
     function pendingExitSkipNewLeave(source, reason, extra = {}) {
       const pending = bot.pendingExit;
       if (!pending) return null;
@@ -10556,7 +10629,23 @@
         skippedReason: reason || "",
         exitPending: true,
         exitConfirmed: false,
-        pendingExit: summarizePendingExit(pending),
+        pendingExit: (() => {
+          const pendingExitSummaryPending = pending;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })(),
         summary,
         error: ""
       }, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs));
@@ -10567,7 +10656,23 @@
         source: source || "",
         skippedReason: reason || "",
         summary: detail?.summary || bot.pendingExit?.summary || "",
-        pendingExit: summarizePendingExit()
+        pendingExit: (() => {
+          const pendingExitSummaryPending = bot.pendingExit;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })()
       };
     }
     function recordPendingExitResult(source, detail, t = Date.now()) {
@@ -10614,7 +10719,23 @@
       bot.pendingExit = pending;
       detail.exitPending = true;
       detail.exitConfirmed = false;
-      detail.pendingExit = summarizePendingExit(pending);
+      detail.pendingExit = (() => {
+        const pendingExitSummaryPending = pending;
+        if (!pendingExitSummaryPending) return null;
+        const pendingExitSummaryNow = Date.now();
+        const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+        return summarizePendingExitCore(pendingExitSummaryPending, {
+          nowMs: pendingExitSummaryNow,
+          retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+            leaveRetryMinMs: cfg.leaveRetryMinMs,
+            leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+            offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+            combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+            pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+          }),
+          reloadConfirmation: pendingExitSummaryReload
+        });
+      })();
       detail.displayReason = pending.displayReason;
       writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       if (leaveDetailSucceeded(detail) && !leaveDetailHasHttp403(detail)) {
@@ -10817,7 +10938,23 @@
       detail.reloadConfirmation = reloadConfirmation;
       detail.exitPending = true;
       detail.exitConfirmed = false;
-      detail.pendingExit = summarizePendingExit(pending);
+      detail.pendingExit = (() => {
+        const pendingExitSummaryPending = pending;
+        if (!pendingExitSummaryPending) return null;
+        const pendingExitSummaryNow = Date.now();
+        const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+        return summarizePendingExitCore(pendingExitSummaryPending, {
+          nowMs: pendingExitSummaryNow,
+          retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+            leaveRetryMinMs: cfg.leaveRetryMinMs,
+            leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+            offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+            combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+            pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+          }),
+          reloadConfirmation: pendingExitSummaryReload
+        });
+      })();
       writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       return reloadConfirmation;
     }
@@ -10830,7 +10967,23 @@
       wait.reason = reason || wait.reason || pending?.reason || "leave-success";
       wait.summary = wait.summary || pending?.summary || wait.reason || "";
       wait.displayReason = displayReason || wait.displayReason || "leave\u63A5\u53E3\u5DF2\u8FD4\u56DE\u6210\u529F\uFF0C\u5237\u65B0\u9875\u9762\u786E\u8BA4\u670D\u52A1\u7AEF\u5728\u7EBF\u72B6\u6001";
-      wait.pendingExit = summarizePendingExit(pending);
+      wait.pendingExit = (() => {
+        const pendingExitSummaryPending = pending;
+        if (!pendingExitSummaryPending) return null;
+        const pendingExitSummaryNow = Date.now();
+        const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+        return summarizePendingExitCore(pendingExitSummaryPending, {
+          nowMs: pendingExitSummaryNow,
+          retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+            leaveRetryMinMs: cfg.leaveRetryMinMs,
+            leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+            offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+            combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+            pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+          }),
+          reloadConfirmation: pendingExitSummaryReload
+        });
+      })();
       wait.exitConfirmation = state2 || null;
       return wait;
     }
@@ -11066,7 +11219,23 @@
         combatCover: confirmed ? null : cover || null,
         displayReason: leaveResult?.displayReason || activeDetail?.displayReason || pending.displayReason || "",
         leave: leaveResult,
-        pendingExit: summarizePendingExit(bot.pendingExit || pending),
+        pendingExit: (() => {
+          const pendingExitSummaryPending = bot.pendingExit || pending;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })(),
         exitConfirmation: state2 || null,
         holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending2) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending2 || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }))
       };
@@ -11099,7 +11268,23 @@
           displayReason: pending.displayReason || "",
           exitPending: true,
           exitConfirmed: false,
-          pendingExit: summarizePendingExit(pending),
+          pendingExit: (() => {
+            const pendingExitSummaryPending = pending;
+            if (!pendingExitSummaryPending) return null;
+            const pendingExitSummaryNow = Date.now();
+            const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+            return summarizePendingExitCore(pendingExitSummaryPending, {
+              nowMs: pendingExitSummaryNow,
+              retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+                leaveRetryMinMs: cfg.leaveRetryMinMs,
+                leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+              }),
+              reloadConfirmation: pendingExitSummaryReload
+            });
+          })(),
           exitConfirmation: state2 || null
         };
         return detail2;
@@ -11131,7 +11316,23 @@
         lastResult: cloneForPendingExit(detail)
       };
       writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
-      detail.pendingExit = summarizePendingExit(bot.pendingExit);
+      detail.pendingExit = (() => {
+        const pendingExitSummaryPending = bot.pendingExit;
+        if (!pendingExitSummaryPending) return null;
+        const pendingExitSummaryNow = Date.now();
+        const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+        return summarizePendingExitCore(pendingExitSummaryPending, {
+          nowMs: pendingExitSummaryNow,
+          retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+            leaveRetryMinMs: cfg.leaveRetryMinMs,
+            leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+            offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+            combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+            pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+          }),
+          reloadConfirmation: pendingExitSummaryReload
+        });
+      })();
       recordPendingExitResult(pending.source, detail, t);
       await issueLeaveCommand(detail);
       if (detail.attempted) {
@@ -11146,7 +11347,23 @@
         };
         bot.pendingExit = next;
         writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, next || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
-        detail.pendingExit = summarizePendingExit(next);
+        detail.pendingExit = (() => {
+          const pendingExitSummaryPending = next;
+          if (!pendingExitSummaryPending) return null;
+          const pendingExitSummaryNow = Date.now();
+          const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+          return summarizePendingExitCore(pendingExitSummaryPending, {
+            nowMs: pendingExitSummaryNow,
+            retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation: pendingExitSummaryReload
+          });
+        })();
         detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReasonCore(detail.summary || pending.summary || detail.reason);
       }
       recordPendingExitResult(pending.source, detail, t);
@@ -11179,7 +11396,23 @@
           const detail3 = cloneForPendingExit(lastDetail) || {};
           detail3.exitPending = true;
           detail3.exitConfirmed = false;
-          detail3.pendingExit = summarizePendingExit(pending);
+          detail3.pendingExit = (() => {
+            const pendingExitSummaryPending = pending;
+            if (!pendingExitSummaryPending) return null;
+            const pendingExitSummaryNow = Date.now();
+            const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+            return summarizePendingExitCore(pendingExitSummaryPending, {
+              nowMs: pendingExitSummaryNow,
+              retryMs: pendingExitRetryMsCore(pendingExitSummaryPending, {
+                leaveRetryMinMs: cfg.leaveRetryMinMs,
+                leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+              }),
+              reloadConfirmation: pendingExitSummaryReload
+            });
+          })();
           detail3.exitConfirmation = {
             ...state2,
             source: bot.clashLeaveRescue.running ? "leave-http-403-clash-rescue-running" : "leave-http-403-clash-rescue-scheduled",
@@ -11461,6 +11694,7 @@
       if (bot.lastSafety) bot.lastSafety.pursuit = summarizePursuit(bot.pursuit);
       return bot.pursuit;
     }
+    const { pendingExitRetryMsCore: pendingExitRetryMsForLeaveCommandCore, summarizePendingExitCore: summarizePendingExitForLeaveCommandCore } = require_pending_exit2();
     function waitWithTimeout(promise, timeoutMs, label) {
       const ms = Math.max(100, Number(timeoutMs) || 0);
       return new Promise((resolve, reject) => {
@@ -11694,7 +11928,23 @@
                 lastResult: cloneForPendingExit(retryDetail)
               };
               writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
-              retryDetail.pendingExit = summarizePendingExit(bot.pendingExit);
+              retryDetail.pendingExit = (() => {
+                const pendingExitSummaryPending = bot.pendingExit;
+                if (!pendingExitSummaryPending) return null;
+                const pendingExitSummaryNow = Date.now();
+                const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+                return summarizePendingExitForLeaveCommandCore(pendingExitSummaryPending, {
+                  nowMs: pendingExitSummaryNow,
+                  retryMs: pendingExitRetryMsForLeaveCommandCore(pendingExitSummaryPending, {
+                    leaveRetryMinMs: cfg.leaveRetryMinMs,
+                    leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                    offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                    combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                    pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+                  }),
+                  reloadConfirmation: pendingExitSummaryReload
+                });
+              })();
             }
             recordPendingExitResult(pending?.source || detail.exitAuditSource || "offline", retryDetail, retryAt);
             await issueLeaveCommand(retryDetail);
@@ -20853,6 +21103,7 @@
     }
     const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require_exit_motion2();
     const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
+    const { pendingExitRetryMsCore: pendingExitRetryMsForTickCore, summarizePendingExitCore: summarizePendingExitForTickCore } = require_pending_exit2();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -21434,7 +21685,23 @@
               offlineSafety,
               displayReason: skippedLeave.displayReason || action.displayReason || "",
               leave: skippedLeave,
-              pendingExit: summarizePendingExit()
+              pendingExit: (() => {
+                const pendingExitSummaryPending = bot.pendingExit;
+                if (!pendingExitSummaryPending) return null;
+                const pendingExitSummaryNow = Date.now();
+                const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+                return summarizePendingExitForTickCore(pendingExitSummaryPending, {
+                  nowMs: pendingExitSummaryNow,
+                  retryMs: pendingExitRetryMsForTickCore(pendingExitSummaryPending, {
+                    leaveRetryMinMs: cfg.leaveRetryMinMs,
+                    leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                    offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                    combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                    pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+                  }),
+                  reloadConfirmation: pendingExitSummaryReload
+                });
+              })()
             };
             updateBotPanel(bot.lastDecision);
             if (cfg.once) bot.stop("once");
@@ -21727,7 +21994,23 @@
         bot.lastDecision = {
           ...action,
           source,
-          pendingExit: summarizePendingExit(),
+          pendingExit: (() => {
+            const pendingExitSummaryPending = bot.pendingExit;
+            if (!pendingExitSummaryPending) return null;
+            const pendingExitSummaryNow = Date.now();
+            const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+            return summarizePendingExitForTickCore(pendingExitSummaryPending, {
+              nowMs: pendingExitSummaryNow,
+              retryMs: pendingExitRetryMsForTickCore(pendingExitSummaryPending, {
+                leaveRetryMinMs: cfg.leaveRetryMinMs,
+                leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+              }),
+              reloadConfirmation: pendingExitSummaryReload
+            });
+          })(),
           coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics) || bot.coinDiagnostics || null,
           self: {
             ...summarizeSelf(self),

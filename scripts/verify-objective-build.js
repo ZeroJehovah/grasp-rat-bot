@@ -386,6 +386,7 @@ function main() {
   const persistentClearSourceModule = readText('src/browser/persistent-clear-source.js');
   const pendingExitPersistenceSourceModule = readText('src/browser/pending-exit-persistence-source.js');
   const pendingExitPersistenceCallSourceModule = readText('src/browser/pending-exit-persistence-call-source.js');
+  const pendingExitSummaryCallSourceModule = readText('src/browser/pending-exit-summary-call-source.js');
   const refreshExitDetailSourceModule = readText('src/browser/refresh-exit-detail-source.js');
   const restoredCoinFailuresSourceModule = readText('src/browser/restored-coin-failures-source.js');
   const restoredRuntimeStateSourceModule = readText('src/browser/restored-runtime-state-source.js');
@@ -922,12 +923,13 @@ function main() {
         || generatedRuntimeSource.includes('clearOfflineReloginHoldBoundCore'),
       'generated runtime does not include offline relogin hold cleanup helper'
     );
-    assert(generatedRuntimeSource.includes('function summarizePendingExit'), 'generated runtime does not include pending-exit summary helper');
+    assert(generatedRuntimeSource.includes('summarizePendingExitCore'), 'generated runtime does not include pending-exit summary core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/pending-exit')"), 'generated runtime does not bind pending-exit runtime helper module');
     assert(generatedRuntimeSource.includes('pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions())'), 'generated runtime does not route pending-exit retry durations through core');
     assert(generatedRuntimeSource.includes('pendingExitDisplayReasonCore(summary)'), 'generated runtime does not route pending-exit display reasons through core');
     assert(!generatedRuntimeSource.includes('function pendingExitRetryMs('), 'generated runtime still keeps pendingExitRetryMs wrapper');
     assert(!generatedRuntimeSource.includes('function pendingExitDisplayReason('), 'generated runtime still keeps pendingExitDisplayReason wrapper');
+    assert(!generatedRuntimeSource.includes('function summarizePendingExit('), 'generated runtime still keeps summarizePendingExit wrapper');
     assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
     assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
     assert(generatedRuntimeSource.includes('function waitWithTimeout'), 'generated runtime does not include wait-with-timeout helper');
@@ -1283,7 +1285,7 @@ function main() {
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("setPaused(paused, reason = 'external')"), 'bot-object source factory does not preserve pause method');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('status()'), 'bot-object source factory does not preserve status method');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('summarizeNetworkQuality()'), 'bot-object source factory does not preserve network quality status');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('summarizePendingExit(this.pendingExit)'), 'bot-object source factory does not preserve pending exit status');
+    assert(botObjectSourceModule.includes("pendingExitSummaryPreludeSource('BotObject'") && botObjectSourceModule.includes("summarizePendingExitCall('this.pendingExit'"), 'bot-object source factory does not route pending exit status through direct summary core helper');
     assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
@@ -1501,6 +1503,7 @@ function main() {
     assert(!distSource.includes('function chooseInitialPendingExitState('), 'dist remote bot still keeps pending-exit initial-state chooser wrapper');
     assert(!distSource.includes('function pendingExitRetryMs('), 'dist remote bot still keeps pending-exit retry wrapper');
     assert(!distSource.includes('function pendingExitDisplayReason('), 'dist remote bot still keeps pending-exit display wrapper');
+    assert(!distSource.includes('function summarizePendingExit('), 'dist remote bot still keeps pending-exit summary wrapper');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
@@ -1969,10 +1972,12 @@ function main() {
     assert(pendingExitSourceModule.includes('function pendingExitSource(options = {}) {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function summarizePendingExit'), 'pending-exit source factory does not include summary helper');
+    assert(pendingExitSummaryCallSourceModule.includes('function summarizePendingExitCall') && pendingExitSummaryCallSourceModule.includes('summarizePendingExitCore') && pendingExitSummaryCallSourceModule.includes('pendingExitRetryCoreOptionsSource'), 'pending-exit summary call source does not generate direct summary core calls');
+    assert(pendingExitSourceModule.includes('const localPendingExitHelperWrappers = options.bundledRuntime ?') && pendingExitSourceModule.includes('function summarizePendingExit(pending = bot.pendingExit)'), 'pending-exit source does not preserve local summary fallback wrapper');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const summarizePendingExitExpr = pending => summarizePendingExitCall'), 'pending-exit source does not use summary direct-call helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("require('./src/browser/runtime/pending-exit')"), 'pending-exit source does not import retry/display/summary runtime cores for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function pendingExitRetryCoreOptions()'), 'pending-exit source does not bind retry core options');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('summarizePendingExitCore(pending'), 'pending-exit source does not route summary helper through core');
+    assert(pendingExitSourceModule.includes("summaryCoreName: 'summarizePendingExitCore'"), 'pending-exit source does not route summary helper through core');
     assert(pendingExitSourceModule.includes('pendingExitRetryMsCore(${pendingExpr}, pendingExitRetryCoreOptions())'), 'pending-exit source does not generate direct retry core calls');
     assert(pendingExitSourceModule.includes('pendingExitDisplayReasonCore(${summaryExpr})'), 'pending-exit source does not generate direct display core calls');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
@@ -3306,7 +3311,11 @@ function main() {
       const skipBody = functionBody(text, 'pendingExitSkipNewLeave');
       assert(skipBody.includes('if (!pending) return null'), 'pending-exit skip helper can run without pending exit');
       assert(skipBody.includes('skippedNewLeave: true'), 'pending-exit skip helper does not mark skipped new leave');
-      assert(skipBody.includes('pendingExit: summarizePendingExit(pending)'), 'pending-exit skip helper does not preserve pending exit summary');
+      assert(
+        skipBody.includes("pendingExit: ${summarizePendingExitExpr('pending')}")
+          || skipBody.includes('const pendingExitSummaryPending = pending;'),
+        'pending-exit skip helper does not preserve pending exit summary'
+      );
       const issueBody = functionBody(text, 'issueLeaveCommand');
       assert(issueBody.includes('bot.pendingExit && !detail?.pendingExitRetry'), 'leave command can send non-retry leave while pending exit is active');
       assert(issueBody.includes('pendingExitSkipNewLeave'), 'leave command does not delegate pending-exit skip result');
