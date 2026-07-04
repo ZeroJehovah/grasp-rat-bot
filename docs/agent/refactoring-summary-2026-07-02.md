@@ -1422,6 +1422,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 181. Removed bundled `exit-relogin` suppress writer wrapper by binding offline suppress delegation inside `setOfflineLeaveSuppressBoundCore()`: integrated in `bootstrap-0.4.453`
 182. Removed bundled `exit-relogin` enemy-leave streak wrappers by binding status reads and suppress-writer streak updates through runtime bound cores: integrated in `bootstrap-0.4.454`
 183. Removed bundled `exit-relogin` clear relogin hold wrappers by routing tick recovery and stale offline hold cleanup directly through runtime bound cores: integrated in `bootstrap-0.4.455`
+184. Removed unused bundled `exit-relogin` actor wrappers after streak/suppress paths moved actor resolution into runtime bound cores: integrated in `bootstrap-0.4.456`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.455" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.456" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10332,20 +10332,6 @@
     }
     function finalizeLeaveDisplayReason(detail) {
       return finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay);
-    }
-    const {
-      normalizeEnemyActorCore,
-      enemyActorFromLeaveDetailCore,
-      enemyRepeatDelayMsForCountCore
-    } = require_exit_relogin();
-    function normalizeEnemyActor(actor) {
-      return normalizeEnemyActorCore(actor);
-    }
-    function enemyActorFromLeaveDetail(detail) {
-      return enemyActorFromLeaveDetailCore(detail, normalizeEnemyActor);
-    }
-    function enemyRepeatDelayMsForCount(count) {
-      return enemyRepeatDelayMsForCountCore(count, cfg);
     }
     const {
       combatExitSummaryCore,

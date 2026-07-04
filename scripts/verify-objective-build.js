@@ -1552,10 +1552,11 @@ function main() {
     assert(exitReloginActorInlineBody.includes('actor.user_id ?? actor.id ?? actor.targetId'), 'exit-relogin actor inline source does not preserve id fallback');
     assert(exitReloginActorInlineBody.includes('enemyReloginRepeatThirdMaxMs'), 'exit-relogin actor inline source does not preserve third repeat delay');
     const exitReloginActorBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginActorSource');
-    assert(exitReloginActorBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin actor bundled source does not hand actor helpers to the bundler');
-    assert(exitReloginActorBundledBody.includes('normalizeEnemyActorCore(actor)'), 'exit-relogin actor bundled source does not bind actor normalizer');
-    assert(exitReloginActorBundledBody.includes('enemyActorFromLeaveDetailCore(detail, normalizeEnemyActor)'), 'exit-relogin actor bundled source does not bind actor resolver');
-    assert(exitReloginActorBundledBody.includes('enemyRepeatDelayMsForCountCore(count, cfg)'), 'exit-relogin actor bundled source does not bind cfg repeat delays');
+    assert(exitReloginActorBundledBody.includes("return '';"), 'exit-relogin actor bundled source should be empty after bound-core handoff');
+    assert(!exitReloginActorBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin actor bundled source should not keep unused runtime import');
+    assert(!exitReloginActorBundledBody.includes('function normalizeEnemyActor'), 'exit-relogin actor bundled source should not keep normalizer wrapper');
+    assert(!exitReloginActorBundledBody.includes('function enemyActorFromLeaveDetail'), 'exit-relogin actor bundled source should not keep actor resolver wrapper');
+    assert(!exitReloginActorBundledBody.includes('function enemyRepeatDelayMsForCount'), 'exit-relogin actor bundled source should not keep repeat-delay wrapper');
     const exitReloginStreakInlineBody = functionBody(exitReloginSourceModule, 'exitReloginStreakInlineSource');
     assert(exitReloginStreakInlineBody.includes('function readEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak reader');
     assert(exitReloginStreakInlineBody.includes('function writeEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak writer');
