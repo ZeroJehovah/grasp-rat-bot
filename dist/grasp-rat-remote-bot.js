@@ -1862,36 +1862,6 @@
     }
   });
 
-  // src/browser/runtime/restored-coin-failures.js
-  var require_restored_coin_failures = __commonJS({
-    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
-      "use strict";
-      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
-        const options = cfg && typeof cfg === "object" ? cfg : {};
-        return (preservedCoinFailures || []).map(([id, item]) => {
-          const next = { ...item || {} };
-          const count = Number(next.count || 0);
-          const lastAt = Number(next.lastAt || 0);
-          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
-          let ignoreUntil = Number(next.ignoreUntil || 0);
-          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
-            return null;
-          }
-          if (!staleFailure) {
-            if (count >= options.coinFailureSevereIgnoreCount) {
-              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
-            } else if (count >= options.coinFailureHardIgnoreCount) {
-              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
-            }
-          }
-          next.ignoreUntil = ignoreUntil;
-          return [String(id), next];
-        }).filter(Boolean);
-      }
-      module.exports = { restoredCoinFailuresCore };
-    }
-  });
-
   // src/browser/runtime/restored-runtime-state.js
   var require_restored_runtime_state = __commonJS({
     "src/browser/runtime/restored-runtime-state.js"(exports, module) {
@@ -1919,6 +1889,36 @@
         };
       }
       module.exports = { restoreRuntimeStateCore };
+    }
+  });
+
+  // src/browser/runtime/restored-coin-failures.js
+  var require_restored_coin_failures = __commonJS({
+    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
+      "use strict";
+      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
+        const options = cfg && typeof cfg === "object" ? cfg : {};
+        return (preservedCoinFailures || []).map(([id, item]) => {
+          const next = { ...item || {} };
+          const count = Number(next.count || 0);
+          const lastAt = Number(next.lastAt || 0);
+          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
+          let ignoreUntil = Number(next.ignoreUntil || 0);
+          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
+            return null;
+          }
+          if (!staleFailure) {
+            if (count >= options.coinFailureSevereIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
+            } else if (count >= options.coinFailureHardIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
+            }
+          }
+          next.ignoreUntil = ignoreUntil;
+          return [String(id), next];
+        }).filter(Boolean);
+      }
+      module.exports = { restoredCoinFailuresCore };
     }
   });
 
@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.471" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.472" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4904,17 +4904,14 @@
         t
       );
     }
-    const { restoredCoinFailuresCore } = require_restored_coin_failures();
-    function restoredCoinFailures() {
-      return restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now());
-    }
     const { restoreRuntimeStateCore } = require_restored_runtime_state();
+    const { restoredCoinFailuresCore: restoredCoinFailuresForRestoredRuntimeStateCore } = require_restored_coin_failures();
     const {
       readPersistedPendingExitStateCore: readPersistedPendingExitStateForRestoredRuntimeStateCore,
       chooseInitialPendingExitStateCore: chooseInitialPendingExitStateForRestoredRuntimeStateCore
     } = require_pending_exit_persistence();
     const restoredRuntimeState = restoreRuntimeStateCore(preserved, previousBot, {
-      restoredCoinFailures,
+      restoredCoinFailures: () => restoredCoinFailuresForRestoredRuntimeStateCore(preserved.coinFailures, cfg, performance.now()),
       readPersistentExitState,
       readPersistedPendingExitState: (t, options) => readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers()),
       chooseInitialPendingExitState: (memoryState, storedState, t, options) => chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers()),

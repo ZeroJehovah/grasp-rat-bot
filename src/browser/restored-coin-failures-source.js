@@ -27,11 +27,7 @@ function restoredCoinFailuresInlineSource() {
 }
 
 function bundledRestoredCoinFailuresSource() {
-  return `const { restoredCoinFailuresCore } = require('./src/browser/runtime/restored-coin-failures');
-
-	  function restoredCoinFailures() {
-	    return restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now());
-	  }`;
+  return '';
 }
 
 function restoredCoinFailuresSource(options = {}) {

@@ -752,8 +752,10 @@ function main() {
     assert(restoredRuntimeStateInlineBody.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state inline source does not choose initial pending exit state');
     const restoredRuntimeStateBundledBody = functionBody(restoredRuntimeStateSourceModule, 'bundledRestoredRuntimeStateSource');
     assert(restoredRuntimeStateBundledBody.includes("require('./src/browser/runtime/restored-runtime-state')"), 'restored runtime state bundled source does not hand restore helper to the bundler');
+    assert(restoredRuntimeStateBundledBody.includes("require('./src/browser/runtime/restored-coin-failures')"), 'restored runtime state bundled source does not hand coin-failure restore helper to the bundler');
     assert(restoredRuntimeStateBundledBody.includes('restoreRuntimeStateCore(preserved, previousBot'), 'restored runtime state bundled source does not bind preserved/previousBot state');
     assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailures') && restoredRuntimeStateBundledBody.includes('readPersistentExitState'), 'restored runtime state bundled source does not bind runtime restore dependencies');
+    assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailuresForRestoredRuntimeStateCore(preserved.coinFailures, cfg, performance.now())'), 'restored runtime state bundled source does not bind coin-failure restore core directly');
     assert(restoredRuntimeStateBundledBody.includes('readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY') && restoredRuntimeStateBundledBody.includes('chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options'), 'restored runtime state bundled source does not bind pending-exit restore cores directly');
     assert(restoredRuntimeStateBundledBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind enemy leave key');
     assert(restoredRuntimeStateBundledBody.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind offline leave key');
@@ -1482,8 +1484,8 @@ function main() {
     assert(restoredCoinFailuresInlineBody.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures inline source factory does not restore severe ignore windows');
     assert(restoredCoinFailuresInlineBody.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures inline source factory does not restore hard ignore windows');
     const restoredCoinFailuresBundledBody = functionBody(restoredCoinFailuresSourceModule, 'bundledRestoredCoinFailuresSource');
-    assert(restoredCoinFailuresBundledBody.includes("require('./src/browser/runtime/restored-coin-failures')"), 'restored-coin-failures bundled source does not hand restore helper to the bundler');
-    assert(restoredCoinFailuresBundledBody.includes('restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now())'), 'restored-coin-failures bundled source does not bind runtime preserved/cfg state');
+    assert(restoredCoinFailuresBundledBody.includes("return '';"), 'restored-coin-failures bundled source should be empty after direct runtime-state core binding');
+    assert(!restoredCoinFailuresBundledBody.includes('function restoredCoinFailures('), 'restored-coin-failures bundled source still keeps restore wrapper');
     assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('options.bundledRuntime'), 'restored-coin-failures source selector does not switch on bundled runtime mode');
     assert(restoredCoinFailuresRuntimeModule.includes('function restoredCoinFailuresCore(preservedCoinFailures, cfg, t)'), 'restored-coin-failures runtime core not found');
     assert(restoredCoinFailuresRuntimeModule.includes('preservedCoinFailures || []'), 'restored-coin-failures runtime core does not read provided failures');
@@ -1498,6 +1500,7 @@ function main() {
     assert(restoredRuntimeStateRuntimeModule.includes('const restoreOptions = { markReloaded: !previousBot };'), 'restored runtime state runtime core does not preserve first-load reload marker');
     assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistedPendingExitState(nowMs(), restoreOptions)'), 'restored runtime state runtime core does not restore persisted pending exit state');
     assert(restoredRuntimeStateRuntimeModule.includes('helpers.chooseInitialPendingExitState('), 'restored runtime state runtime core does not choose initial pending exit state');
+    assert(!distSource.includes('function restoredCoinFailures('), 'dist remote bot still keeps restored coin failures wrapper');
     assert(restoredRuntimeStateRuntimeModule.includes('module.exports = { restoreRuntimeStateCore }'), 'restored runtime state runtime core export not found');
     assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateInlineSource() {'), 'login-snapshot-gate inline source factory not found');
     assert(loginSnapshotGateSourceModule.includes('function bundledLoginSnapshotGateSource() {'), 'login-snapshot-gate bundled source factory not found');
