@@ -5216,7 +5216,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.503" };
+    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.504" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);

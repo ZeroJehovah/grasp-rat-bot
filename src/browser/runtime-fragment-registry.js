@@ -70,9 +70,6 @@ const { runtimeSummarySource } = require('./runtime-summary-source');
 
 function browserRuntimeFragmentEntries(config) {
   return [
-    ['runtime-iife-open',
-    `
-(() => {`],
     ['runtime-bootstrap', () => runtimeBootstrapSource(config)],
     ['persistent-last-self', () => persistentLastSelfSource(config)],
     ['separator-after-persistent-last-self',
@@ -262,12 +259,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['startup', startupSource],
-    ['runtime-iife-close',
-    `
-	})()
-`
-    ]
+    ['startup', startupSource]
   ];
 }
 
