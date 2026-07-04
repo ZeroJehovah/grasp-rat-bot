@@ -646,7 +646,6 @@ function bundledExitReloginHoldReadSource() {
   return `	  const {
 \t    enemyReloginHoldRemainingMsBoundCore,
 \t    offlineReloginHoldRemainingMsBoundCore,
-\t    clearLoginSuppressMatchingBoundCore,
 \t    clearOfflineReloginHoldBoundCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
@@ -679,13 +678,6 @@ function bundledExitReloginHoldReadSource() {
       now: Date.now
     });
   }
-
-\t  function clearLoginSuppressMatching(pattern) {
-\t    return clearLoginSuppressMatchingBoundCore(localStorage, pattern, {
-\t      loginSuppressKey: LOGIN_SUPPRESS_KEY,
-\t      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY
-\t    });
-\t  }
 `;
 }
 
