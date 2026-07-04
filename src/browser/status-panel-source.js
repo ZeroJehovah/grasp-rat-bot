@@ -1,13 +1,6 @@
 'use strict';
 
-function statusPanelSource(helpers = {}) {
-  const {
-    escapeHtml,
-    formatDistance,
-    formatDurationMs,
-    actorLabel,
-    hpDisplay
-  } = helpers;
+function statusPanelSource() {
   return [
     String.raw`
 	  function ensureBotPanel() {
@@ -47,11 +40,6 @@ function statusPanelSource(helpers = {}) {
 	    if (panel) panel.remove();
 	  }
 `,
-    typeof escapeHtml === 'function' ? escapeHtml.toString() : '',
-    typeof formatDistance === 'function' ? formatDistance.toString() : '',
-    typeof formatDurationMs === 'function' ? formatDurationMs.toString() : '',
-    typeof actorLabel === 'function' ? actorLabel.toString() : '',
-    typeof hpDisplay === 'function' ? hpDisplay.toString() : '',
     String.raw`
   function formatStaminaDisplay(self) {
     if (!self) return '-';
