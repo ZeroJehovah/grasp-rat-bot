@@ -1460,6 +1460,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 219. Removed grouped production bundled opportunity-candidate wrappers by routing route coin de-duplication, best coin score comparison, and enemy candidate filtering directly through strategy/runtime cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.491`
 220. Removed grouped production bundled coin-runtime wrappers by routing coin movement direction, coin-progress state transitions, native coin snapshots, tracked visibility, pickup session accounting, snapshot pruning, and snapshot memory refresh through direct strategy/runtime core snippets while preserving local/CDP fallback: integrated in `bootstrap-0.4.492`
 221. Removed grouped production pending-exit leave helper wrappers by routing leave HTTP 403 detection, leave success detection, leave-success reload-confirmation construction/satisfaction, and wait-reason selection through `src/strategy/pending-exit.js` / `src/browser/runtime/pending-exit.js` cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.496`
+222. Removed grouped production leave-command and Clash rescue wrappers by routing result summaries, failed-detail detection, stage selection, retry-detail construction, retry summaries, and round reset through `src/strategy/leave-command.js` / `src/browser/runtime/leave-command.js` cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.497`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
@@ -1534,3 +1535,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/strategy/pending-exit.js` now owns leave HTTP 403 detection, leave success detection, leave-success reload-confirmation construction/satisfaction, and pending-exit wait-reason selection.
 - `src/browser/pending-exit-source.js` and `src/browser/leave-command-source.js` generate direct bundled calls to those cores, with explicit reload-normalization dependency injection where needed.
 - Final production dist no longer declares the removed pending-exit leave helper wrappers, and verifier rejects those wrapper declarations in generated/final output.
+
+`bootstrap-0.4.497` continues the grouped direct-call migration through leave-command and Clash rescue helpers:
+
+- `src/strategy/leave-command.js` now owns leave-command failure/result summaries, Clash rescue failure detection, ordered retry stage selection, retry detail construction, result summary formatting, and per-round reset decisions.
+- `src/browser/runtime/leave-command.js` exposes those cores to bundled browser builds; `src/browser/leave-command-source.js` and `src/browser/pending-exit-source.js` call them directly in production while keeping local CDP fallback wrappers.
+- Strategy self-tests add seven leave-command cases, raising the strategy suite to 107 passing cases.
+- Final production dist no longer declares the removed leave-command/Clash rescue helper wrappers, and verifier rejects those wrapper declarations in generated/final output.

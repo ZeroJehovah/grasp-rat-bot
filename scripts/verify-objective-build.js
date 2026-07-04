@@ -282,6 +282,7 @@ function main() {
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
   const pendingExitPersistenceRuntimeModule = readText('src/browser/runtime/pending-exit-persistence.js');
   const pendingExitRuntimeModule = readText('src/browser/runtime/pending-exit.js');
+  const leaveCommandRuntimeModule = readText('src/browser/runtime/leave-command.js');
   const refreshExitDetailRuntimeModule = readText('src/browser/runtime/refresh-exit-detail.js');
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
   const restoredRuntimeStateRuntimeModule = readText('src/browser/runtime/restored-runtime-state.js');
@@ -314,6 +315,7 @@ function main() {
   const strategyAttackWorthSource = readText('src/strategy/attack-worth.js');
   const strategyExitMotionSource = readText('src/strategy/exit-motion.js');
   const strategyPendingExitSource = readText('src/strategy/pending-exit.js');
+  const strategyLeaveCommandSource = readText('src/strategy/leave-command.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
   const strategyCoinTargetSource = readText('src/strategy/coin-target.js');
@@ -421,6 +423,8 @@ function main() {
     persistentLastSelfRuntimeModule,
     persistentClearRuntimeModule,
     pendingExitPersistenceRuntimeModule,
+    pendingExitRuntimeModule,
+    leaveCommandRuntimeModule,
     refreshExitDetailRuntimeModule,
     restoredCoinFailuresRuntimeModule,
     restoredRuntimeStateRuntimeModule,
@@ -459,6 +463,8 @@ function main() {
     tickSafetySourceModule,
     importantLogSourceModule,
     combatHistorySourceModule,
+    strategyPendingExitSource,
+    strategyLeaveCommandSource,
     strategyDropMatchedKillSource,
     entityRefreshSourceModule,
     classifySourceModule,
@@ -942,8 +948,22 @@ function main() {
     assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
     assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
     assert(generatedRuntimeSource.includes('function waitWithTimeout'), 'generated runtime does not include wait-with-timeout helper');
-    assert(generatedRuntimeSource.includes('function leaveCommandFailureMessage'), 'generated runtime does not include leave command failure helper');
-    assert(generatedRuntimeSource.includes('function summarizeLeaveCommandResult'), 'generated runtime does not include leave command result summary helper');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/leave-command')"), 'generated runtime does not bind leave-command runtime helper module');
+    assert(generatedRuntimeSource.includes('leaveCommandFailureMessageCore(rawResult)'), 'generated runtime does not route leave command failure checks through core');
+    assert(generatedRuntimeSource.includes('summarizeLeaveCommandResultCore(rawResult)'), 'generated runtime does not route leave command result summaries through core');
+    assert(generatedRuntimeSource.includes('nextClashLeaveRescueStageCore(detail)'), 'generated runtime does not route Clash rescue stage selection through core');
+    [
+      'leaveCommandFailureMessage',
+      'summarizeLeaveCommandResult',
+      'leaveDetailFailedForClashRescue',
+      'clashLeaveRescueAttempts',
+      'nextClashLeaveRescueStage',
+      'summarizeClashLeaveRescueResult',
+      'clashLeaveRescueRetryDetail',
+      'resetClashLeaveRescueRound'
+    ].forEach(wrapperName => {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated runtime still keeps ${wrapperName} wrapper`);
+    });
     assert(generatedRuntimeSource.includes('function clashLeaveRescueHook'), 'generated runtime does not include Clash rescue hook helper');
     assert(generatedRuntimeSource.includes('function scheduleClashLeaveRescueRetry'), 'generated runtime does not include Clash rescue scheduler');
     assert(generatedRuntimeSource.includes('function completeLeaveRequest'), 'generated runtime does not include leave request completion helper');
@@ -1518,6 +1538,20 @@ function main() {
         && pendingExitRuntimeModule.includes('leaveSuccessReloadConfirmationForDetailCore,\n  leaveSuccessReloadConfirmationSatisfiedCore,\n  pendingExitWaitReasonCore'),
       'browser pending-exit runtime exports are incomplete'
     );
+    assert(
+      strategyLeaveCommandSource.includes('function leaveCommandFailureMessageCore')
+        && strategyLeaveCommandSource.includes('function summarizeLeaveCommandResultCore')
+        && strategyLeaveCommandSource.includes('function leaveDetailFailedForClashRescueCore')
+        && strategyLeaveCommandSource.includes('function clashLeaveRescueRetryDetailCore')
+        && strategyLeaveCommandSource.includes('function resetClashLeaveRescueRoundCore'),
+      'leave-command strategy module does not expose command/Clash rescue cores'
+    );
+    assert(leaveCommandRuntimeModule.includes("require('../../strategy/leave-command')"), 'browser leave-command runtime module does not reuse strategy leave-command helpers');
+    assert(
+      leaveCommandRuntimeModule.includes('leaveCommandFailureMessageCore,\n  summarizeLeaveCommandResultCore,\n  leaveDetailFailedForClashRescueCore')
+        && leaveCommandRuntimeModule.includes('clashLeaveRescueRetryDetailCore,\n  resetClashLeaveRescueRoundCore'),
+      'browser leave-command runtime exports are incomplete'
+    );
     assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
     assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
     assert(!distSource.includes('function readPersistedPendingExitState('), 'dist remote bot still keeps pending-exit storage-reader wrapper');
@@ -1532,6 +1566,18 @@ function main() {
     assert(!distSource.includes('function leaveSuccessReloadConfirmationForDetail('), 'dist remote bot still keeps leaveSuccessReloadConfirmationForDetail wrapper');
     assert(!distSource.includes('function leaveSuccessReloadConfirmationSatisfied('), 'dist remote bot still keeps leaveSuccessReloadConfirmationSatisfied wrapper');
     assert(!distSource.includes('function pendingExitWaitReason('), 'dist remote bot still keeps pendingExitWaitReason wrapper');
+    [
+      'leaveCommandFailureMessage',
+      'summarizeLeaveCommandResult',
+      'leaveDetailFailedForClashRescue',
+      'clashLeaveRescueAttempts',
+      'nextClashLeaveRescueStage',
+      'summarizeClashLeaveRescueResult',
+      'clashLeaveRescueRetryDetail',
+      'resetClashLeaveRescueRound'
+    ].forEach(wrapperName => {
+      assert(!distSource.includes(`function ${wrapperName}(`), `dist remote bot still keeps ${wrapperName} wrapper`);
+    });
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
@@ -2032,6 +2078,8 @@ function main() {
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('String.raw`'), 'leave-command source factory does not return raw browser source');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function waitWithTimeout'), 'leave-command source factory does not include timeout helper');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes("require('./src/browser/runtime/leave-command')"), 'leave-command source does not import runtime command cores for bundled builds');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('const localLeaveCommandHelperWrappers = options.bundledRuntime ?'), 'leave-command source does not preserve local helper fallback wrappers');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function leaveCommandFailureMessage'), 'leave-command source factory does not include failure helper');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function summarizeLeaveCommandResult'), 'leave-command source factory does not include result summary helper');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function clashLeaveRescueHook'), 'leave-command source factory does not include Clash rescue hook helper');
@@ -2990,7 +3038,12 @@ function main() {
         completeBody.includes('const http403 =') && completeBody.includes('leaveDetailHasHttp403'),
         'leave completion does not isolate HTTP 403 state'
       );
-      assert(completeBody.includes('const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail))'), 'leave completion does not suppress 403 session-end logging while Clash rescue is pending');
+      assert(
+        completeBody.includes('const clashRescuePending = http403 &&')
+          && completeBody.includes('leaveDetailFailedForClashRescue')
+          && completeBody.includes('nextClashLeaveRescueStage'),
+        'leave completion does not suppress 403 session-end logging while Clash rescue is pending'
+      );
       assert(completeBody.includes('if (http403 && !clashRescuePending)'), 'leave completion can still close the session before exhausting Clash 403 rescue');
       assert(!completeBody.includes("noteImportantSessionExit((leaveDetailHasHttp403(detail) ? 'leave-http-403:' : 'leave-success:')"), 'normal leave success still writes session-end important log before reload confirmation');
       assert(completeBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'async leave completion does not request confirmation reload');
@@ -3367,35 +3420,45 @@ function main() {
     check(`${file} rescues leave HTTP 403 before risk-control fallback`, () => {
       const leave403DetectorSource = `${strategyPendingExitSource}\n${text}\n${finalRuntimeText}`;
       assert(leave403DetectorSource.includes('function leaveRequestHasHttp403Core') && leave403DetectorSource.includes('status === 403'), 'leave 403 status detector not found');
-      const rescueBody = functionBody(text, 'leaveDetailFailedForClashRescue');
-      assert(!/leaveDetailSucceeded\(detail\)\s*\|\|\s*leaveDetailHasHttp403\(detail\)/.test(rescueBody), 'Clash leave rescue still excludes HTTP 403 after success check');
-      assert(!/if\s*\(\s*leaveDetailHasHttp403\(detail\)\s*\)\s*return false/.test(rescueBody), 'Clash leave rescue still returns false for HTTP 403');
-      assert(rescueBody.includes('const http403 =') && rescueBody.includes('leaveDetailHasHttp403'), 'Clash leave rescue does not detect HTTP 403 as a first-class failure');
-      assert(rescueBody.includes('if (!detail.error && !http403) return false'), 'Clash leave rescue still requires a generic error even for HTTP 403');
-      assert(rescueBody.includes('if (') && rescueBody.includes('leaveDetailSucceeded') && rescueBody.includes('return false'), 'Clash leave rescue does not reject successful leaves');
+      const rescueCoreBody = functionBody(`${strategyLeaveCommandSource}\n${finalRuntimeText}`, 'leaveDetailFailedForClashRescueCore');
+      assert(!/leaveDetailSucceeded\(detail\)\s*\|\|\s*leaveDetailHasHttp403\(detail\)/.test(rescueCoreBody), 'Clash leave rescue still excludes HTTP 403 after success check');
+      assert(!/if\s*\(\s*leaveDetailHasHttp403\(detail\)\s*\)\s*return false/.test(rescueCoreBody), 'Clash leave rescue still returns false for HTTP 403');
+      assert(rescueCoreBody.includes('hasHttp403') && rescueCoreBody.includes('leaveDetailHasHttp403Core'), 'Clash leave rescue does not detect HTTP 403 as a first-class failure');
+      assert(rescueCoreBody.includes('if (!detail.error && !hasHttp403) return false'), 'Clash leave rescue still requires a generic error even for HTTP 403');
+      assert(rescueCoreBody.includes('leaveDetailSucceededCore') && rescueCoreBody.includes('if (succeeded) return false'), 'Clash leave rescue does not reject successful leaves');
       const rescueHookBody = functionBody(text, 'clashLeaveRescueHook');
       assert(rescueHookBody.includes('readPageGlobal') && rescueHookBody.includes('__graspRatBotClashLeaveRescue'), 'Clash rescue hook is not read through page-global adapter');
       assert(!rescueHookBody.includes('window.__graspRatBotClashLeaveRescue'), 'Clash rescue hook still reads directly from window');
-      assert(text.includes("const CLASH_LEAVE_RESCUE_STAGE_ORDER = ['auto', 'direct', 'manual']"), 'Clash leave rescue order is not auto -> direct -> manual');
-      const nextStageBody = functionBody(text, 'nextClashLeaveRescueStage');
-      assert(nextStageBody.includes('CLASH_LEAVE_RESCUE_STAGE_ORDER'), 'Clash leave rescue stage selection does not use the ordered stage list');
+      assert(
+        strategyLeaveCommandSource.includes("Object.freeze(['auto', 'direct', 'manual'])")
+          || finalRuntimeText.includes('"auto", "direct", "manual"')
+          || finalRuntimeText.includes("'auto', 'direct', 'manual'"),
+        'Clash leave rescue order is not auto -> direct -> manual'
+      );
+      const nextStageCoreBody = functionBody(`${strategyLeaveCommandSource}\n${finalRuntimeText}`, 'nextClashLeaveRescueStageCore');
+      assert(nextStageCoreBody.includes("'auto', 'direct', 'manual'") || nextStageCoreBody.includes('"auto", "direct", "manual"'), 'Clash leave rescue stage selection does not use the ordered stage list');
       const defaultProxyBody = functionBody(text, 'prepareDefaultClashLeaveProxy');
       assert(defaultProxyBody.includes("const stage = 'auto'"), 'default leave proxy preparation does not start with auto');
       assert(defaultProxyBody.includes('appendClashLeaveRescueAttempt(detail, attempt)'), 'default leave proxy preparation does not persist the auto stage attempt');
-      const retryDetailBody = functionBody(text, 'clashLeaveRescueRetryDetail');
-      assert(retryDetailBody.includes('retryDetail.leaveRequests = []'), 'Clash rescue retry does not clear stale 403 leave history before retrying');
+      const retryDetailCoreBody = functionBody(`${strategyLeaveCommandSource}\n${finalRuntimeText}`, 'clashLeaveRescueRetryDetailCore');
+      assert(retryDetailCoreBody.includes('retryDetail.leaveRequests = []'), 'Clash rescue retry does not clear stale 403 leave history before retrying');
       const pendingRetryBody = functionBody(text, 'retryPendingExit');
-      assert(pendingRetryBody.includes('resetClashLeaveRescueRound(detail)'), 'pending exit retry does not restart the Clash rescue order from auto');
+      assert(pendingRetryBody.includes('resetClashLeaveRescueRound') || pendingRetryBody.includes('resetClashLeaveRescueRoundForPendingExitCore'), 'pending exit retry does not restart the Clash rescue order from auto');
       const rescueRunBody = functionBody(text, 'runClashLeaveRescueRetry');
       assert(rescueRunBody.includes('await issueLeaveCommand(retryDetail)'), 'Clash rescue does not retry leave after switching proxy');
       assert(rescueRunBody.includes('updatePendingExitLastResult(detail)'), 'Clash rescue stage attempts are not persisted before fallback/next stage');
-      assert(rescueRunBody.includes('nextClashLeaveRescueStage(retryDetail)'), 'Clash rescue does not continue to the next proxy stage after synchronous retry failure');
+      assert(
+        rescueRunBody.includes('nextClashLeaveRescueStage(retryDetail)')
+          || rescueRunBody.includes('nextClashLeaveRescueStageCore(retryDetail)')
+          || rescueRunBody.includes("nextClashLeaveRescueStageCall('retryDetail')"),
+        'Clash rescue does not continue to the next proxy stage after synchronous retry failure'
+      );
       const issueBody = functionBody(text, 'issueLeaveCommand');
       assert(issueBody.includes('await prepareDefaultClashLeaveProxy(detail)'), 'leave command does not switch to the default auto proxy before the first request in a round');
       const completeBody = functionBody(text, 'completeLeaveRequest');
       assert(completeBody.includes('const rescueScheduled = scheduleClashLeaveRescueRetry(detail)'), 'completed failed leave does not schedule Clash rescue');
       assert(completeBody.includes('if (!rescueScheduled) maybeConfirmPendingExitFromLeaveDetail(detail)'), 'completed failed leave can confirm before Clash rescue scheduling');
-      assert(completeBody.includes('const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail))'), 'HTTP 403 leave completion is not gated by Clash rescue availability');
+      assert(completeBody.includes('const clashRescuePending = http403 &&') && completeBody.includes('leaveDetailFailedForClashRescue') && completeBody.includes('nextClashLeaveRescueStage'), 'HTTP 403 leave completion is not gated by Clash rescue availability');
       const maybeBody = functionBody(text, 'maybeConfirmPendingExitFromLeaveDetail');
       assert(
         maybeBody.indexOf('scheduleClashLeaveRescueRetry(detail)') >= 0

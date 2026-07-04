@@ -10,6 +10,7 @@ import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
 import pendingExitPersistence from '../browser/runtime/pending-exit-persistence.js';
 import pendingExit from '../browser/runtime/pending-exit.js';
+import leaveCommand from '../browser/runtime/leave-command.js';
 import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import restoredRuntimeState from '../browser/runtime/restored-runtime-state.js';
@@ -513,6 +514,39 @@ function helperStatus(config = {}) {
     scope: 'enemy',
     source: 'pursuit'
   }, false);
+  const leaveCommandFailureMessage = leaveCommand.leaveCommandFailureMessageCore({ status: 403, statusText: 'Forbidden' });
+  const leaveCommandResultSummary = leaveCommand.summarizeLeaveCommandResultCore({ success: false, statusCode: 403, error: 'denied' });
+  const leaveCommandClashFailed = leaveCommand.leaveDetailFailedForClashRescueCore({
+    attempted: true,
+    error: 'timeout'
+  }, {
+    clashLeaveRescueEnabled: true,
+    hasClashLeaveRescueHook: true
+  });
+  const leaveCommandNextClashStage = leaveCommand.nextClashLeaveRescueStageCore({
+    clashLeaveRescueAttempts: [{ stage: 'auto' }]
+  });
+  const leaveCommandClashSummary = leaveCommand.summarizeClashLeaveRescueResultCore({
+    target: 'proxy',
+    switched: { status: 200 }
+  }, 'direct', '', { nowMs: 2400 });
+  const leaveCommandRetryDetail = leaveCommand.clashLeaveRescueRetryDetailCore({
+    attempted: true,
+    method: 'leave',
+    reason: 'leave-http-403',
+    leaveRequestPending: true,
+    leaveRequests: [{ requestId: 'old' }],
+    clashLeaveRescueAttempts: [{ stage: 'auto' }]
+  }, 'direct', {
+    nowMs: 2500,
+    pendingExitDisplayReason: summary => 'display:' + summary
+  });
+  const leaveCommandResetDetail = leaveCommand.resetClashLeaveRescueRoundCore({
+    clashLeaveRescueAttempts: [{ stage: 'auto' }],
+    clashLeaveRescue: { stage: 'auto' },
+    clashLeaveRescueStage: 'auto',
+    clashLeaveRescueRetry: true
+  });
   const refreshedExitDetail = refreshExitDetail.refreshExitDetailCore({
     reason: '',
     reloginUntil: 2400,
@@ -1236,6 +1270,15 @@ function helperStatus(config = {}) {
     pendingExitCoreReloadRequestId: pendingExitCoreReloadConfirmation.requestId,
     pendingExitCoreReloadSatisfied,
     pendingExitCoreWaitReason,
+    leaveCommandFailureMessage,
+    leaveCommandResultStatus: leaveCommandResultSummary.status,
+    leaveCommandClashFailed,
+    leaveCommandNextClashStage,
+    leaveCommandClashSummaryAt: leaveCommandClashSummary.at,
+    leaveCommandRetryStage: leaveCommandRetryDetail.clashLeaveRescueStage,
+    leaveCommandRetryPending: leaveCommandRetryDetail.leaveRequestPending,
+    leaveCommandResetCleared: leaveCommandResetDetail.clashLeaveRescueAttempts.length === 0
+      && leaveCommandResetDetail.clashLeaveRescue === null,
     refreshExitHoldRemainingMs: refreshedExitDetail.holdRemainingMs,
     refreshExitSummary: refreshedExitDetail.summary,
     refreshExitDisplayReason: refreshedExitDetail.displayReason,
