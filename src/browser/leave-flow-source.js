@@ -2,7 +2,7 @@
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingUnsafeExitLoginSuppressBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
@@ -10,6 +10,9 @@ function leaveFlowSource(options = {}) {
   const pendingUnsafeSuppressCall = (storageReason, reason, detail, selfLike) => options.bundledRuntime
     ? `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now })`
     : `primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`;
+  const startExitAuditCall = (detail, meta) => options.bundledRuntime
+    ? `startExitAuditBoundCore(${detail}, ${meta}, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now })`
+    : `startExitAudit(${detail}, ${meta})`;
   return String.raw`${runtimeExitReloginPrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
@@ -45,7 +48,7 @@ function leaveFlowSource(options = {}) {
       summary: offlineLeaveSummary(reason, offlineSafety),
       error: ''
     };
-    startExitAudit(detail, { scope: 'offline', source: 'offline', reason, self: selfSummary, offlineSafety });
+    ${startExitAuditCall('detail', "{ scope: 'offline', source: 'offline', reason, self: selfSummary, offlineSafety }")};
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -90,7 +93,7 @@ function leaveFlowSource(options = {}) {
       summary: injuryLeaveSummary(injury),
       error: ''
     };
-    startExitAudit(detail, { scope: 'enemy', source: 'injury', reason: detail.reason, self: injury?.self || injury, injury });
+    ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'injury', reason: detail.reason, self: injury?.self || injury, injury }")};
     bot.lastInjuryLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -135,7 +138,7 @@ function leaveFlowSource(options = {}) {
       summary: pursuitLeaveSummary(pursuitSummary),
       error: ''
     };
-    startExitAudit(detail, { scope: 'enemy', source: 'pursuit', reason: detail.reason, self: selfSummary, pursuit: pursuitSummary });
+    ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'pursuit', reason: detail.reason, self: selfSummary, pursuit: pursuitSummary }")};
     bot.lastPursuitLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -195,7 +198,7 @@ function leaveFlowSource(options = {}) {
       summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {}),
       error: ''
     };
-    startExitAudit(detail, { scope: 'enemy', source: 'combat', reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null });
+    ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'combat', reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null }")};
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
@@ -244,7 +247,7 @@ function leaveFlowSource(options = {}) {
       reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0,
 	      error: ''
 	    };
-    startExitAudit(detail, { scope: 'enemy', source: 'enemy-hold-retry', reason });
+    ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'enemy-hold-retry', reason }")};
     bot.lastEnemyLeaveRetryAt = t;
     await issueLeaveCommand(detail);
 	    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;

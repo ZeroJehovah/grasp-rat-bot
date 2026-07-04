@@ -1598,8 +1598,8 @@ function main() {
     assert(!exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore,'), 'exit-relogin hold bundled source should not import unused pending suppress helper');
     assert(!exitReloginHoldBundledBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold bundled source should not keep unused unsafe minimum wrapper');
     assert(!exitReloginHoldBundledBody.includes('function pendingExitSuppressReason'), 'exit-relogin hold bundled source should not keep unused pending suppress wrapper');
-    assert(exitReloginHoldBundledBody.includes('startExitAuditBoundCore(detail, meta, bot'), 'exit-relogin hold bundled source does not bind start exit audit through bound core');
-    assert(exitReloginHoldBundledBody.includes('resetLoginSnapshotGate') && exitReloginHoldBundledBody.includes('loginPointSafetyExitSelfForDetail') && exitReloginHoldBundledBody.includes('recordExitAuditEvent'), 'exit-relogin hold bundled source does not pass required exit audit bindings');
+    assert(!exitReloginHoldBundledBody.includes('startExitAuditBoundCore'), 'exit-relogin hold bundled source should not keep unused start exit audit bound core import');
+    assert(!exitReloginHoldBundledBody.includes('function startExitAudit'), 'exit-relogin hold bundled source should not keep unused start exit audit wrapper');
     assert(!exitReloginHoldBundledBody.includes('lastSelf: bot.lastSelf'), 'exit-relogin hold bundled source should not bind lastSelf outside the runtime bound core');
     assert(!exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'exit-relogin hold bundled source should not keep unused pending unsafe suppress bound core import');
     assert(!exitReloginHoldBundledBody.includes('function primePendingUnsafeExitLoginSuppress'), 'exit-relogin hold bundled source should not keep unused pending unsafe suppress wrapper');
@@ -1868,6 +1868,9 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending unsafe suppress bound core for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now'), 'leave-flow source does not bind pending unsafe suppress helpers for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('`primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`'), 'leave-flow source does not preserve inline pending unsafe suppress wrapper call template');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('startExitAuditBoundCore'), 'leave-flow source does not import runtime start exit audit bound core for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now'), 'leave-flow source does not bind start exit audit helpers for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('`startExitAudit(${detail}, ${meta})`'), 'leave-flow source does not preserve inline start exit audit wrapper call template');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
@@ -3188,9 +3191,12 @@ function main() {
       assert(functionBody(text, 'blockNativeLoginEventIfNeeded').includes('event?.isTrusted'), 'trusted native manual login events can still be blocked');
       assert(functionBody(text, 'installStartLinuxDoLoginGate').includes('manualLoginBypassActive()'), 'startLinuxDoLogin gate does not honor manual login bypass');
       assert(text.includes('installNativeLoginGateInterceptors();'), 'remote bot does not install native login gate interceptors on startup');
+      const startExitAuditWrapperBody = text.includes('function startExitAudit')
+        ? functionBody(text, 'startExitAudit')
+        : '';
       const triggerSource = finalRuntimeText.includes('function startExitAuditCore')
-        ? `${functionBody(text, 'startExitAudit')}\n${functionBody(finalRuntimeText, 'startExitAuditCore')}`
-        : `${functionBody(text, 'startExitAudit')}\n${exitReloginRuntimeModule}`;
+        ? `${startExitAuditWrapperBody}\n${functionBody(finalRuntimeText, 'startExitAuditCore')}`
+        : `${startExitAuditWrapperBody}\n${exitReloginRuntimeModule}`;
       const triggerBody = triggerSource;
       assert(triggerBody.includes('resetLoginSnapshotGate') && triggerBody.includes('exit-trigger:'), 'exit trigger does not reset login snapshot gate');
       assert(

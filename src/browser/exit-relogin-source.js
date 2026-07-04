@@ -611,7 +611,6 @@ function exitReloginHoldInlineSource() {
 function bundledExitReloginHoldSource() {
   return `	  const {
 \t    isExitLoginSuppressReasonCore,
-\t    startExitAuditBoundCore,
 \t    setExitReloginSuppressCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
@@ -629,16 +628,6 @@ function bundledExitReloginHoldSource() {
       finalizeLeaveDisplayReason,
       writePersistentExitState,
       setLoginSuppress,
-      now: Date.now
-    });
-  }
-
-\t  function startExitAudit(detail, meta = {}) {
-    return startExitAuditBoundCore(detail, meta, bot, {
-      resetLoginSnapshotGate,
-      loginPointSafetyExitSelfForDetail,
-      ensureExitAuditDetail,
-      recordExitAuditEvent,
       now: Date.now
     });
   }

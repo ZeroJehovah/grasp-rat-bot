@@ -1415,6 +1415,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 174. Removed bundled `exit-relogin` offline unsafe predicate wrapper by routing `leave-flow` directly to the runtime core: integrated in `bootstrap-0.4.446`
 175. Removed bundled `exit-relogin` stamina hold selector wrapper after suppress/pending-stamina paths moved to runtime-bound cores: integrated in `bootstrap-0.4.447`
 176. Removed bundled `exit-relogin` pending unsafe suppress wrapper by routing `leave-flow` directly to the runtime-bound core: integrated in `bootstrap-0.4.448`
+177. Removed bundled `exit-relogin` start-exit-audit wrapper by routing `leave-flow` directly to the runtime-bound core: integrated in `bootstrap-0.4.449`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
