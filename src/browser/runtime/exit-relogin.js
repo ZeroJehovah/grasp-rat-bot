@@ -633,6 +633,18 @@ function primePendingStaminaExitLoginSuppressCore(detail, helpers) {
   return until;
 }
 
+function primePendingStaminaExitLoginSuppressBoundCore(detail, helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return primePendingStaminaExitLoginSuppressCore(detail, {
+    now: nowFn(),
+    staminaExitHoldUntilForDetail: holdDetail => staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn(), {
+      staminaBudgetReloginDelayMs: helpers.staminaBudgetReloginDelayMs,
+      staminaResetHoldUntil: helpers.staminaResetHoldUntil
+    }),
+    setLoginSuppress: helpers.setLoginSuppress
+  });
+}
+
 function clearEnemyReloginHoldCore(bot, reason = 'online self restored', helpers) {
   const t = Number(helpers.now || 0) || 0;
   const details = [
@@ -713,6 +725,7 @@ module.exports = {
   setOfflineLeaveSuppressCore,
   setOfflineLeaveSuppressBoundCore,
   primePendingStaminaExitLoginSuppressCore,
+  primePendingStaminaExitLoginSuppressBoundCore,
   clearEnemyReloginHoldCore,
   clearOfflineReloginHoldCore
 };

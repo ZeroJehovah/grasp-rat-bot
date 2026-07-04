@@ -954,17 +954,15 @@ function helperStatus(config = {}) {
       offlineLeaveStateKey: 'offline-state'
     }
   );
-  const exitReloginPendingStaminaDetail = {};
-  const exitReloginPendingStaminaUntil = exitRelogin.primePendingStaminaExitLoginSuppressCore(
+  const exitReloginPendingStaminaDetail = {
+    offlineSafety: { staminaBudgetExit: { coin: { id: 'stamina-spike' } } }
+  };
+  const exitReloginPendingStaminaUntil = exitRelogin.primePendingStaminaExitLoginSuppressBoundCore(
     exitReloginPendingStaminaDetail,
     {
-      now: 1000,
-      staminaExitHoldUntilForDetail: () => ({
-        until: 6000,
-        fixed: false,
-        reason: 'stamina reset',
-        staminaBudgetExit: { coin: { id: 'stamina-spike' } }
-      }),
+      now: () => 1000,
+      staminaBudgetReloginDelayMs: () => 5000,
+      staminaResetHoldUntil: () => null,
       setLoginSuppress: (reason, delayMs) => {
         exitReloginOfflineSuppressEvents.push(['set-login-suppress', reason, delayMs]);
         return 1000 + delayMs;
