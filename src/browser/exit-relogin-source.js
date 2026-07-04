@@ -795,19 +795,7 @@ function exitReloginRemainderPrefixInlineSource() {
 }
 
 function bundledExitReloginRemainderPrefixSource() {
-  return `	  const {
-	    primePendingStaminaExitLoginSuppressBoundCore
-	  } = require('./src/browser/runtime/exit-relogin');
-
-\t  function primePendingStaminaExitLoginSuppress(detail) {
-\t    return primePendingStaminaExitLoginSuppressBoundCore(detail, {
-\t      now: Date.now,
-\t      staminaBudgetReloginDelayMs,
-\t      staminaResetHoldUntil,
-\t      setLoginSuppress
-\t    });
-\t  }
-`;
+  return '';
 }
 
 function exitReloginClearInlineSource() {

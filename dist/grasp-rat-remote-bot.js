@@ -4742,7 +4742,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.450" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.451" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10364,17 +10364,6 @@
       });
     }
     const {
-      primePendingStaminaExitLoginSuppressBoundCore
-    } = require_exit_relogin();
-    function primePendingStaminaExitLoginSuppress(detail) {
-      return primePendingStaminaExitLoginSuppressBoundCore(detail, {
-        now: Date.now,
-        staminaBudgetReloginDelayMs,
-        staminaResetHoldUntil,
-        setLoginSuppress
-      });
-    }
-    const {
       enemyReloginHoldRemainingMsBoundCore,
       offlineReloginHoldRemainingMsBoundCore,
       clearLoginSuppressMatchingBoundCore
@@ -12094,6 +12083,7 @@
     }
     const {
       offlineExitRequiresUnsafeReloginDelayCore,
+      primePendingStaminaExitLoginSuppressBoundCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
       startExitAuditBoundCore
     } = require_exit_relogin();
@@ -12136,7 +12126,7 @@
       bot.lastOfflineLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
-        const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
+        const staminaSuppress = primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress });
         if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)) {
           primePendingUnsafeExitLoginSuppressBoundCore("offline leave", reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now });
         }
