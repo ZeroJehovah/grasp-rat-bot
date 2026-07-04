@@ -600,6 +600,22 @@ function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, optio
   });
 }
 
+function setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options, {
+    now: nowFn(),
+    staminaExitHoldUntilForDetail: holdDetail => staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn(), {
+      staminaBudgetReloginDelayMs: helpers.staminaBudgetReloginDelayMs,
+      staminaResetHoldUntil: helpers.staminaResetHoldUntil
+    }),
+    offlineExitRequiresUnsafeReloginDelay: offlineExitRequiresUnsafeReloginDelayCore,
+    finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
+    writePersistentExitState: helpers.writePersistentExitState,
+    setExitReloginSuppress: helpers.setExitReloginSuppress,
+    offlineLeaveStateKey: helpers.offlineLeaveStateKey
+  });
+}
+
 function primePendingStaminaExitLoginSuppressCore(detail, helpers) {
   const now = Number(helpers.now || 0) || 0;
   const hold = helpers.staminaExitHoldUntilForDetail(detail);
@@ -695,6 +711,7 @@ module.exports = {
   offlineReloginHoldRemainingMsCore,
   clearLoginSuppressMatchingCore,
   setOfflineLeaveSuppressCore,
+  setOfflineLeaveSuppressBoundCore,
   primePendingStaminaExitLoginSuppressCore,
   clearEnemyReloginHoldCore,
   clearOfflineReloginHoldCore
