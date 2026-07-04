@@ -1638,3 +1638,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - Runtime bootstrap/page-global behavior is unchanged because production, local eval, and helper-entry builds now bundle the executable page-global adapter functions directly.
 - Static verification now rejects reintroducing the page-global source builder and continues to verify resolver/reader/installer/localStorage behavior through executable module use.
 - The `.507` manifest records bundled SHA-256 `9ef57025ea51635b96a51f017dc1edce93b956d68ace0dc99ad3fc6c8419cbd3` and pre-bundle remote direct SHA-256 `3a25dfcf0dc474a4de5b48173ca7420b3781fe8241cf1ec2f2da0915d6e8d5b4`.
+
+`bootstrap-0.4.508` removes another inline-helper compatibility path:
+
+- `src/browser/status-panel-source.js` now exposes `statusPanelSource()` without a `helpers` parameter and no longer appends display helper source via `.toString()`.
+- `src/browser/status-panel-runtime-source.js` remains the single bundled status-panel entry and exposes display helpers through `require('./src/browser/runtime/display-format')`.
+- Static verification now rejects the old helper-object fallback and function-text display helper injection.
+- The `.508` manifest records bundled SHA-256 `3b2f718fd5aaf6fcd23617e8500ebbbbad3fdcc2b08a215cf62921a420fd4e51` and pre-bundle remote direct SHA-256 `62dbdc4255a8ae49de08dbab413a08ddc73706be3168a698476adb2c0864bb9f`.
