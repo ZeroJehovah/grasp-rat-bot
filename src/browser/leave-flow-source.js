@@ -2,7 +2,7 @@
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
@@ -19,6 +19,9 @@ function leaveFlowSource(options = {}) {
   const startExitAuditCall = (detail, meta) => options.bundledRuntime
     ? `startExitAuditBoundCore(${detail}, ${meta}, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now })`
     : `startExitAudit(${detail}, ${meta})`;
+  const offlineLeaveSummaryCall = (reason, offlineSafety) => options.bundledRuntime
+    ? `offlineLeaveSummaryForLeaveFlowCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`
+    : `offlineLeaveSummary(${reason}, ${offlineSafety})`;
   const injuryLeaveSummaryCall = injury => options.bundledRuntime
     ? `injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })`
     : `injuryLeaveSummary(${injury})`;
@@ -31,13 +34,13 @@ function leaveFlowSource(options = {}) {
     const skipped = pendingExitSkipNewLeave('offline', reason, {
       self: selfSummary,
       offlineSafety,
-      summary: offlineLeaveSummary(reason, offlineSafety)
+      summary: ${offlineLeaveSummaryCall('reason', 'offlineSafety')}
     });
     if (skipped) return skipped;
     const retryMs = Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1000));
     if (t - Number(bot.lastOfflineLeaveAt || 0) < retryMs) {
       const active = activeOfflineLeaveDetail(t);
-      const summary = offlineLeaveSummary(reason, offlineSafety);
+      const summary = ${offlineLeaveSummaryCall('reason', 'offlineSafety')};
       const detail = {
         attempted: false,
         reason: 'cooldown',
@@ -57,7 +60,7 @@ function leaveFlowSource(options = {}) {
       userId: getCurrentUserId() || null,
       self: selfSummary,
       offlineSafety,
-      summary: offlineLeaveSummary(reason, offlineSafety),
+      summary: ${offlineLeaveSummaryCall('reason', 'offlineSafety')},
       error: ''
     };
     ${startExitAuditCall('detail', "{ scope: 'offline', source: 'offline', reason, self: selfSummary, offlineSafety }")};

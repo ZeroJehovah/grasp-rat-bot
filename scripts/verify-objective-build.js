@@ -1189,7 +1189,9 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore'), 'tick source factory does not import bundled relogin hold cleanup bound cores');
     assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldForTickBoundCore(bot, localStorage') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldForTickBoundCore(bot, localStorage'), 'tick source factory does not bind bundled relogin hold cleanup through runtime bound cores');
     assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore'), 'tick source factory does not import bundled offline display core alias');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })'), 'tick source factory does not bind bundled offline display core directly');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) })'), 'tick source factory does not bind bundled offline display core directly');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore'), 'tick source factory does not import bundled offline summary core alias');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('offlineLeaveSummaryForTickCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'tick source factory does not bind bundled offline summary core directly');
     assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore'), 'tick source factory does not import bundled injury summary core alias');
     assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })'), 'tick source factory does not bind bundled injury summary core directly');
     assert(functionBody(tickSourceModule, 'tickSource').includes('pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore'), 'tick source factory does not import bundled pursuit summary core alias');
@@ -1429,7 +1431,8 @@ function main() {
     assert(refreshExitDetailInlineBody.includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail inline source factory does not finalize display reason');
     const refreshExitDetailBundledBody = functionBody(refreshExitDetailSourceModule, 'bundledRefreshExitDetailSource');
     assert(refreshExitDetailBundledBody.includes("require('./src/browser/runtime/refresh-exit-detail')"), 'refresh-exit-detail bundled source does not hand refresh helper to the bundler');
-    assert(refreshExitDetailBundledBody.includes('refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t)'), 'refresh-exit-detail bundled source does not bind runtime summary/finalizer helpers');
+    assert(refreshExitDetailBundledBody.includes('offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import offline summary core alias');
+    assert(refreshExitDetailBundledBody.includes('offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'refresh-exit-detail bundled source does not bind runtime offline summary core directly');
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('options.bundledRuntime'), 'refresh-exit-detail source selector does not switch on bundled runtime mode');
     assert(refreshExitDetailRuntimeModule.includes('function refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason'), 'refresh-exit-detail runtime core not found');
     assert(refreshExitDetailRuntimeModule.includes('detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));'), 'refresh-exit-detail runtime core does not refresh relogin hold remaining time');
@@ -1599,7 +1602,7 @@ function main() {
     assert(exitReloginSummaryBundledBody.includes('combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp })'), 'exit-relogin summary bundled source does not bind combat leave action helpers');
     assert(!exitReloginSummaryBundledBody.includes('function pursuitLeaveSummary'), 'exit-relogin summary bundled source still keeps pursuit summary wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function injuryLeaveSummary'), 'exit-relogin summary bundled source still keeps injury summary wrapper');
-    assert(exitReloginSummaryBundledBody.includes('offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'exit-relogin summary bundled source does not bind offline summary helpers');
+    assert(!exitReloginSummaryBundledBody.includes('function offlineLeaveSummary'), 'exit-relogin summary bundled source still keeps offline summary wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary bundled source still keeps offline display wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function reloginDelayForHp'), 'exit-relogin summary bundled source still keeps HP relogin delay wrapper');
     const exitReloginHoldInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldInlineSource');
@@ -1913,6 +1916,8 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled injury summary core alias');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })'), 'leave-flow source does not bind bundled injury summary core directly');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled offline summary core alias');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineLeaveSummaryForLeaveFlowCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'leave-flow source does not bind bundled offline summary core directly');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled pursuit summary core alias');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pursuitLeaveSummaryForLeaveFlowCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })'), 'leave-flow source does not bind bundled pursuit summary core directly');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
@@ -2272,12 +2277,25 @@ function main() {
       assert(text.includes('combatTickGap: this.lastCombatTickGap || null'), 'status does not expose combat tick gap state');
       assert(text.includes('lastTickGapMs: this.lastTickGapMs'), 'status does not expose last tick gap');
       assert(text.includes('lastTickReentryGapAt: this.lastTickReentryGapAt || 0'), 'status does not expose tick reentry gap timestamp');
-      const offlineSummarySource = functionBody(text, 'offlineLeaveSummary') + '\n' + finalRuntimeText;
+      const offlineSummarySource = finalRuntimeText.includes('function offlineLeaveSummaryCore')
+        ? finalRuntimeText
+        : `${functionBody(text, 'offlineLeaveSummary')}\n${finalRuntimeText}`;
       assert(offlineSummarySource.includes('offlineSafety?.samplingOutage'), 'runtime offline leave summary does not mention sampling outage');
       assert(offlineSummarySource.includes('offlineSafety?.combatTickGap'), 'runtime offline leave summary does not mention combat tick gap');
       assert(offlineSummarySource.includes('offlineSafety?.actionSettlementStall'), 'runtime offline leave summary does not mention action settlement stall');
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(!text.includes('function offlineLeaveSummary('), 'dist remote bot still keeps offlineLeaveSummary wrapper');
+      }
       const leaveOfflineBody = functionBody(text, 'leaveOffline');
-      assert(leaveOfflineBody.includes('const summary = offlineLeaveSummary(reason, offlineSafety);'), 'offline leave retry cooldown does not compute the current offline summary');
+      assert(
+        leaveOfflineBody.includes('const summary =')
+          && (
+            leaveOfflineBody.includes('offlineLeaveSummary(reason, offlineSafety)')
+              || leaveOfflineBody.includes('offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })')
+              || leaveOfflineBody.includes("offlineLeaveSummaryCall('reason', 'offlineSafety')")
+          ),
+        'offline leave retry cooldown does not compute the current offline summary'
+      );
       assert(leaveOfflineBody.includes('summary: summary || active?.summary'), 'offline leave retry cooldown can still prefer a stale active summary over the current reason');
       const offlineSuppressSource = finalRuntimeText.includes('function setOfflineLeaveSuppressCore')
         ? finalRuntimeText
