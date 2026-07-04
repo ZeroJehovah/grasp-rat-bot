@@ -17,6 +17,10 @@ function browserRuntimeConfig(options = {}) {
 }
 
 function browserRuntimeSource(options = {}) {
+  return wrapBrowserRuntimeIife(browserRuntimeBodySource(options));
+}
+
+function browserRuntimeBodySource(options = {}) {
   return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));
 }
 
@@ -32,11 +36,20 @@ function remoteBrowserRuntimeSource(options = {}) {
 
 module.exports = {
   browserRuntimeConfig,
+  browserRuntimeBodySource,
   browserRuntimeSource,
   remoteBrowserRuntimeSource,
   renderRuntimeFragment,
-  renderRuntimeFragments
+  renderRuntimeFragments,
+  wrapBrowserRuntimeIife
 };
+
+function wrapBrowserRuntimeIife(source) {
+  return `
+(() => {${source}
+	})()
+`;
+}
 
 function renderRuntimeFragment(fragment) {
   if (!fragment || typeof fragment !== 'object' || typeof fragment.name !== 'string' || !fragment.name || !Object.prototype.hasOwnProperty.call(fragment, 'source')) {
