@@ -299,6 +299,7 @@ async function main() {
   const restoredRuntimeStateRuntimeModule = readText('src/browser/runtime/restored-runtime-state.js');
   const loginSnapshotGateRuntimeModule = readText('src/browser/runtime/login-snapshot-gate.js');
   const runtimeDiagnosticsRuntimeModule = readText('src/browser/runtime/runtime-diagnostics.js');
+  const runtimeStateBindingsRuntimeModule = readText('src/browser/runtime/runtime-state-bindings.js');
   const exitReloginRuntimeModule = readText('src/browser/runtime/exit-relogin.js');
   const runtimeDefaultsRuntimeModule = readText('src/browser/runtime/runtime-defaults.js');
   const actionPriorityRuntimeModule = readText('src/browser/runtime/action-priority.js');
@@ -394,17 +395,9 @@ async function main() {
   const staminaRuntimeSourceModule = readText('src/browser/stamina-runtime-source.js');
   const attackWorthSourceModule = readText('src/browser/attack-worth-source.js');
   const exitMotionSourceModule = readText('src/browser/exit-motion-source.js');
-  const persistentLastSelfSourceModule = readText('src/browser/persistent-last-self-source.js');
-  const persistentExitSourceModule = readText('src/browser/persistent-exit-source.js');
-  const persistentClearSourceModule = readText('src/browser/persistent-clear-source.js');
-  const pendingExitPersistenceSourceModule = readText('src/browser/pending-exit-persistence-source.js');
+  const runtimeStateBindingsSourceModule = readText('src/browser/runtime-state-bindings-source.js');
   const pendingExitPersistenceCallSourceModule = readText('src/browser/pending-exit-persistence-call-source.js');
   const pendingExitSummaryCallSourceModule = readText('src/browser/pending-exit-summary-call-source.js');
-  const refreshExitDetailSourceModule = readText('src/browser/refresh-exit-detail-source.js');
-  const restoredCoinFailuresSourceModule = readText('src/browser/restored-coin-failures-source.js');
-  const restoredRuntimeStateSourceModule = readText('src/browser/restored-runtime-state-source.js');
-  const loginSnapshotGateSourceModule = readText('src/browser/login-snapshot-gate-source.js');
-  const runtimeDiagnosticsSourceModule = readText('src/browser/runtime-diagnostics-source.js');
   const exitReloginSourceModule = readText('src/browser/exit-relogin-source.js');
   const pendingExitSourceModule = readText('src/browser/pending-exit-source.js');
   const leaveCommandSourceModule = readText('src/browser/leave-command-source.js');
@@ -516,15 +509,7 @@ async function main() {
     staminaRuntimeSourceModule,
     attackWorthSourceModule,
     exitMotionSourceModule,
-    persistentLastSelfSourceModule,
-    persistentExitSourceModule,
-    persistentClearSourceModule,
-    pendingExitPersistenceSourceModule,
-    refreshExitDetailSourceModule,
-    restoredCoinFailuresSourceModule,
-    restoredRuntimeStateSourceModule,
-    loginSnapshotGateSourceModule,
-    runtimeDiagnosticsSourceModule,
+    runtimeStateBindingsSourceModule,
     exitReloginSourceModule,
     pendingExitSourceModule,
     leaveCommandSourceModule,
@@ -607,6 +592,7 @@ async function main() {
     assert(distSource.includes('var require_restored_runtime_state = __commonJS'), 'bundled production dist does not bundle the restored-runtime-state runtime module through esbuild');
     assert(distSource.includes('var require_login_snapshot_gate = __commonJS'), 'bundled production dist does not bundle the login-snapshot-gate runtime module through esbuild');
     assert(distSource.includes('var require_runtime_diagnostics = __commonJS'), 'bundled production dist does not bundle the runtime-diagnostics runtime module through esbuild');
+    assert(distSource.includes('var require_runtime_state_bindings = __commonJS'), 'bundled production dist does not bundle the runtime-state-bindings module through esbuild');
     assert(distSource.includes('var require_exit_relogin = __commonJS'), 'bundled production dist does not bundle the exit-relogin runtime module through esbuild');
     assert(distSource.includes('var require_action_priority = __commonJS'), 'bundled production dist does not bundle the action-priority runtime module through esbuild');
     assert(distSource.includes('var require_action_arbitration = __commonJS'), 'bundled production dist does not bundle the action-arbitration runtime module through esbuild');
@@ -736,13 +722,21 @@ async function main() {
     assert(runtimeFragmentRegistryModule.includes("require('./combat-fire-source')"), 'combat-fire source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./combat-leave-cover-source')"), 'combat-leave-cover source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./combat-action-source')"), 'combat-action source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("['persistent-last-self', () => persistentLastSelfSource(config)]"), 'persistent-last-self source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("['persistent-exit', () => persistentExitSource(config)]"), 'persistent-exit source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("['persistent-clear', () => persistentClearSource(config)]"), 'persistent-clear source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("['pending-exit-persistence', () => pendingExitPersistenceSource(config)]"), 'pending-exit-persistence source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("['refresh-exit-detail', () => refreshExitDetailSource(config)]"), 'refresh-exit-detail source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("['restored-coin-failures', () => restoredCoinFailuresSource(config)]"), 'restored-coin-failures source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("['login-snapshot-gate', () => loginSnapshotGateSource(config)]"), 'login-snapshot-gate source is not invoked with runtime config');
+    assert(runtimeFragmentRegistryModule.includes("require('./runtime-state-bindings-source')"), 'runtime-state-bindings source module import not found');
+    assert(runtimeFragmentRegistryModule.includes("['runtime-state-bindings', () => runtimeStateBindingsSource(config)]"), 'runtime-state-bindings source is not invoked with runtime config');
+    for (const obsoleteStateFactory of [
+      'persistentLastSelfSource',
+      'persistentExitSource',
+      'persistentClearSource',
+      'pendingExitPersistenceSource',
+      'refreshExitDetailSource',
+      'restoredCoinFailuresSource',
+      'restoredRuntimeStateSource',
+      'loginSnapshotGateSource',
+      'runtimeDiagnosticsSource'
+    ]) {
+      assert(!runtimeFragmentRegistryModule.includes(obsoleteStateFactory), `runtime fragment registry still references obsolete state source factory ${obsoleteStateFactory}`);
+    }
     assert(runtimeFragmentRegistryModule.includes("['combat-action', () => combatActionSource(config)]"), 'combat-action source is not invoked with runtime config');
     assert(runtimeFragmentRegistryModule.includes("['attack-worth', () => attackWorthSource(config)]"), 'attack-worth source is not invoked with runtime config');
     assert(runtimeFragmentRegistryModule.includes("['exit-motion', () => exitMotionSource(config)]"), 'exit-motion source is not invoked with runtime config');
@@ -768,13 +762,10 @@ async function main() {
     assert(runtimeFragmentRegistryModule.includes("require('./entity-activity-source')"), 'entity-activity source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./stamina-runtime-source')"), 'stamina-runtime source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./exit-motion-source')"), 'exit-motion source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("require('./persistent-last-self-source')"), 'persistent-last-self source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("require('./persistent-exit-source')"), 'persistent-exit source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
     assert(runtimeFragmentRegistryModule.includes("['pending-exit', () => pendingExitSource(config)]"), 'pending-exit source is not invoked with runtime config');
     assert(runtimeFragmentRegistryModule.includes("['leave-command', () => leaveCommandSource(config)]"), 'leave-command source is not invoked with runtime config');
-    assert(runtimeFragmentRegistryModule.includes("require('./restored-runtime-state-source')"), 'restored runtime state source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
     assert(runtimeFragmentRegistryModule.includes("['action-arbitration', () => actionArbitrationSource(config)]"), 'action-arbitration source is not invoked with runtime config');
@@ -818,8 +809,7 @@ async function main() {
     assert(fragmentEntriesBody.includes("['coin-target-runtime', () => coinTargetRuntimeSource(config)]"), 'coin-target-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-progress-runtime', () => coinProgressRuntimeSource(config)]"), 'coin-progress-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-safety', () => coinSafetySource(config)]"), 'coin-safety fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['restored-runtime-state', () => restoredRuntimeStateSource(config)]"), 'restored-runtime-state fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['runtime-diagnostics', () => runtimeDiagnosticsSource(config)]"), 'runtime-diagnostics fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['runtime-state-bindings', () => runtimeStateBindingsSource(config)]"), 'runtime-state-bindings fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['tick-safety', () => tickSafetySource(config)]"), 'tick-safety fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['page-native-snapshot', () => pageNativeSnapshotSource(config)]"), 'page-native-snapshot fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['entity-refresh', () => entityRefreshSource(config)]"), 'entity-refresh fragment is not config-aware for bundled runtime migration');
@@ -854,7 +844,7 @@ async function main() {
       ['control-login', controlLoginSourceModule],
       ['coin-motion-runtime', coinMotionRuntimeSourceModule],
       ['tick-safety', tickSafetySourceModule],
-      ['pending-exit-persistence', pendingExitPersistenceSourceModule],
+      ['runtime-state-bindings', runtimeStateBindingsSourceModule],
       ['exit-relogin', exitReloginSourceModule],
       ['pending-exit', pendingExitSourceModule],
       ['leave-command', leaveCommandSourceModule],
@@ -863,19 +853,26 @@ async function main() {
       ['action-arbitration', actionArbitrationSourceModule],
       ['coin-progress-runtime', coinProgressRuntimeSourceModule]
     ].forEach(([label, text]) => assertBundledOnlySourceModule(text, label));
-    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');
-    assert(!restoredRuntimeStateSourceModule.includes('restoredRuntimeStateInlineSource'), 'restored runtime state inline source factory should be removed');
-    assert(!restoredRuntimeStateSourceModule.includes('bundledRestoredRuntimeStateSource'), 'restored runtime state bundled selector wrapper should be removed');
-    assert(restoredRuntimeStateSourceModule.includes('module.exports = {\n  restoredRuntimeStateSource\n}'), 'restored runtime state source module export not found');
-    const restoredRuntimeStateSourceBody = functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource');
-    assert(restoredRuntimeStateSourceBody.includes("require('./src/browser/runtime/restored-runtime-state')"), 'restored runtime state source does not hand restore helper to the bundler');
-    assert(restoredRuntimeStateSourceBody.includes("require('./src/browser/runtime/restored-coin-failures')"), 'restored runtime state source does not hand coin-failure restore helper to the bundler');
-    assert(restoredRuntimeStateSourceBody.includes('restoreRuntimeStateCore(preserved, previousBot'), 'restored runtime state source does not bind preserved/previousBot state');
-    assert(restoredRuntimeStateSourceBody.includes('restoredCoinFailures') && restoredRuntimeStateSourceBody.includes('readPersistentExitState'), 'restored runtime state source does not bind runtime restore dependencies');
-    assert(restoredRuntimeStateSourceBody.includes('restoredCoinFailuresForRestoredRuntimeStateCore(preserved.coinFailures, cfg, performance.now())'), 'restored runtime state source does not bind coin-failure restore core directly');
-    assert(restoredRuntimeStateSourceBody.includes('readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY') && restoredRuntimeStateSourceBody.includes('chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options'), 'restored runtime state source does not bind pending-exit restore cores directly');
-    assert(restoredRuntimeStateSourceBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'restored runtime state source does not bind enemy leave key');
-    assert(restoredRuntimeStateSourceBody.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'restored runtime state source does not bind offline leave key');
+    assert(runtimeStateBindingsSourceModule.includes('function runtimeStateBindingsSource()'), 'runtime-state-bindings source factory not found');
+    assert(runtimeStateBindingsSourceModule.includes("require('./src/browser/runtime/runtime-state-bindings')"), 'runtime-state-bindings source does not hand state binding helper to the bundler');
+    assert(runtimeStateBindingsSourceModule.includes('createRuntimeStateBindings({'), 'runtime-state-bindings source does not create runtime bindings');
+    assert(runtimeStateBindingsSourceModule.includes('lastSelfStateKey: LAST_SELF_STATE_KEY'), 'runtime-state-bindings source does not bind last-self state key');
+    assert(runtimeStateBindingsSourceModule.includes('pendingExitStateKey: PENDING_EXIT_STATE_KEY'), 'runtime-state-bindings source does not bind pending-exit state key');
+    assert(runtimeStateBindingsSourceModule.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'runtime-state-bindings source does not bind enemy leave key');
+    assert(runtimeStateBindingsSourceModule.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'runtime-state-bindings source does not bind offline leave key');
+    assert(runtimeStateBindingsSourceModule.includes('module.exports = {\n  runtimeStateBindingsSource\n}'), 'runtime-state-bindings source module export not found');
+    assert(runtimeStateBindingsRuntimeModule.includes('function createRuntimeStateBindings(runtime = {})'), 'runtime-state-bindings helper factory not found');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./persistent-last-self')"), 'runtime-state-bindings helper does not import persistent-last-self runtime module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./persistent-exit')"), 'runtime-state-bindings helper does not import persistent-exit runtime module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./pending-exit-persistence')"), 'runtime-state-bindings helper does not import pending-exit-persistence runtime module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./restored-runtime-state')"), 'runtime-state-bindings helper does not import restored-runtime-state runtime module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./runtime-diagnostics')"), 'runtime-state-bindings helper does not import runtime-diagnostics runtime module');
+    assert(runtimeStateBindingsRuntimeModule.includes('restoreRuntimeStateCore(runtime.preserved, runtime.previousBot'), 'runtime-state-bindings helper does not restore preserved/previous bot state');
+    assert(runtimeStateBindingsRuntimeModule.includes('readPersistedPendingExitStateCore(storage, keys.pendingExitStateKey'), 'runtime-state-bindings helper does not bind pending-exit storage read core');
+    assert(runtimeStateBindingsRuntimeModule.includes('chooseInitialPendingExitStateCore(memoryState, storedState, t, options'), 'runtime-state-bindings helper does not bind pending-exit initial-state core');
+    assert(bundlerSpikeEntrySource.includes("from './runtime/runtime-state-bindings.js'"), 'runtime helper entry does not import runtime-state-bindings helper');
+    assert(bundlerSpikeEntrySource.includes('runtimeStateBindings.createRuntimeStateBindings('), 'runtime helper entry does not execute runtime-state-bindings helper');
+    assert(bundlerSpikeBuildSource.includes("status.runtimeStateLastSelfId === 'state-binding-self'"), 'runtime helper entry self-test does not assert runtime-state last-self binding');
     assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel runtime source factory not found');
     assert(!statusPanelRuntimeSourceModule.includes('bundledStatusPanelRuntimeSource'), 'status-panel runtime bundled selector wrapper should be removed');
     assert(!statusPanelRuntimeSourceModule.includes("require('./runtime/display-format')"), 'status-panel runtime should not import display helpers for inline injection');
@@ -961,15 +958,7 @@ async function main() {
       'staminaRuntimeSource',
       'attackWorthSource',
       'exitMotionSource',
-      'persistentLastSelfSource',
-      'persistentExitSource',
-      'persistentClearSource',
-      'pendingExitPersistenceSource',
-      'refreshExitDetailSource',
-      'restoredCoinFailuresSource',
-      'restoredRuntimeStateSource',
-      'loginSnapshotGateSource',
-      'runtimeDiagnosticsSource',
+      'runtimeStateBindingsSource',
       'exitReloginSource',
       'pendingExitSource',
       'leaveCommandSource',
@@ -1128,15 +1117,7 @@ async function main() {
       ['stamina-runtime', staminaRuntimeSourceModule, 'staminaRuntimeSource'],
       ['attack-worth', attackWorthSourceModule, 'attackWorthSource'],
       ['exit-motion', exitMotionSourceModule, 'exitMotionSource'],
-      ['persistent-last-self', persistentLastSelfSourceModule, 'persistentLastSelfSource'],
-      ['persistent-exit', persistentExitSourceModule, 'persistentExitSource'],
-      ['persistent-clear', persistentClearSourceModule, 'persistentClearSource'],
-      ['pending-exit-persistence', pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource'],
-      ['refresh-exit-detail', refreshExitDetailSourceModule, 'refreshExitDetailSource'],
-      ['restored-coin-failures', restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource'],
-      ['restored-runtime-state', restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource'],
-      ['login-snapshot-gate', loginSnapshotGateSourceModule, 'loginSnapshotGateSource'],
-      ['runtime-diagnostics', runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource'],
+      ['runtime-state-bindings', runtimeStateBindingsSourceModule, 'runtimeStateBindingsSource'],
       ['exit-relogin', exitReloginSourceModule, 'exitReloginSource'],
       ['pending-exit', pendingExitSourceModule, 'pendingExitSource'],
       ['leave-command', leaveCommandSourceModule, 'leaveCommandSource'],
@@ -1177,10 +1158,7 @@ async function main() {
       [coinMotionRuntimeSourceModule, "require('./src/browser/runtime/coin-motion')", 'coin motion'],
       [attackWorthSourceModule, "require('./src/browser/runtime/attack-worth')", 'attack worth'],
       [exitMotionSourceModule, "require('./src/browser/runtime/exit-motion')", 'exit motion'],
-      [persistentLastSelfSourceModule, "require('./src/browser/runtime/persistent-last-self')", 'persistent last self'],
-      [persistentExitSourceModule, "require('./src/browser/runtime/persistent-exit')", 'persistent exit'],
-      [persistentClearSourceModule, "require('./src/browser/runtime/persistent-clear')", 'persistent clear'],
-      [pendingExitPersistenceSourceModule, "require('./src/browser/runtime/pending-exit-persistence')", 'pending exit persistence'],
+      [runtimeStateBindingsSourceModule, "require('./src/browser/runtime/runtime-state-bindings')", 'runtime state bindings'],
       [pendingExitSourceModule, "require('./src/browser/runtime/pending-exit')", 'pending exit'],
       [leaveCommandSourceModule, "require('./src/browser/runtime/leave-command')", 'leave command'],
       [leaveFlowSourceModule, "require('./src/browser/runtime/exit-relogin')", 'leave-flow exit relogin'],
@@ -3458,19 +3436,19 @@ async function main() {
     assert(persistentExitRuntimeModule.includes('storage.setItem(key, JSON.stringify(state))'), 'persistent-exit write helper does not write storage JSON');
     assert(persistentExitRuntimeModule.includes('return refreshExitDetail({ ...state, restored: true }, t);'), 'persistent-exit read helper does not refresh restored state');
     assert(persistentExitRuntimeModule.includes('module.exports = {\n  readPersistentExitStateCore,\n  persistentExitStateFromDetail,\n  writePersistentExitStateCore\n}'), 'persistent-exit runtime helper export not found');
-    assert(persistentExitSourceModule.includes("require('./src/browser/runtime/persistent-exit')"), 'persistent-exit bundled source does not require the browser runtime helper module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./persistent-exit')"), 'runtime-state-bindings helper does not require the persistent-exit runtime helper module');
     assert(bundlerSpikeEntrySource.includes("from './runtime/persistent-exit.js'"), 'bundler spike does not import persistent-exit runtime adapter');
     assert(bundlerSpikeEntrySource.includes('persistentExit.readPersistentExitStateCore('), 'bundler spike does not execute persistent-exit read helper');
     assert(bundlerSpikeEntrySource.includes('persistentExit.writePersistentExitStateCore('), 'bundler spike does not execute persistent-exit write helper');
     assert(bundlerSpikeBuildSource.includes('status.persistentExitReadRestored === true'), 'bundler spike self-test does not assert persistent-exit read execution');
     assert(bundlerSpikeBuildSource.includes('status.persistentExitWrite === true'), 'bundler spike self-test does not assert persistent-exit write execution');
-    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/persistent-exit')"), 'generated remote runtime does not hand persistent-exit helpers to the bundler');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-state-bindings')"), 'generated remote runtime does not hand runtime-state bindings to the bundler');
     assert(!generatedRuntimeSource.includes('function readPersistentExitStateCore'), 'generated remote runtime still inlines persistent-exit read helper before bundling');
     assert(!generatedRuntimeSource.includes('function writePersistentExitStateCore'), 'generated remote runtime still inlines persistent-exit write helper before bundling');
     assert(distSource.includes('function readPersistentExitStateCore'), 'bundled dist does not contain persistent-exit read helper');
     assert(distSource.includes('function writePersistentExitStateCore'), 'bundled dist does not contain persistent-exit write helper');
-    assert(distSource.includes('readPersistentExitStateCore(localStorage, key, refreshExitDetail, t)'), 'bundled dist persistent-exit read wrapper does not call runtime core');
-    assert(distSource.includes('writePersistentExitStateCore(localStorage, key, detail, refreshExitDetail)'), 'bundled dist persistent-exit write wrapper does not call runtime core');
+    assert(distSource.includes('readPersistentExitStateCore(storage, key, refreshExitDetail, t)'), 'bundled dist persistent-exit read binding does not call runtime core');
+    assert(distSource.includes('writePersistentExitStateCore(storage, key, detail, refreshExitDetail)'), 'bundled dist persistent-exit write binding does not call runtime core');
   });
 
   check('persistent last self uses browser runtime adapter', () => {
@@ -3479,34 +3457,34 @@ async function main() {
     assert(persistentLastSelfRuntimeModule.includes('JSON.parse(storage.getItem(key)'), 'persistent-last-self read helper does not read storage JSON');
     assert(persistentLastSelfRuntimeModule.includes('storage.setItem(key, JSON.stringify({'), 'persistent-last-self write helper does not write storage JSON');
     assert(persistentLastSelfRuntimeModule.includes('module.exports = {\n  readPersistentLastSelfStateCore,\n  writePersistentLastSelfStateCore\n}'), 'persistent-last-self runtime helper export not found');
-    assert(persistentLastSelfSourceModule.includes("require('./src/browser/runtime/persistent-last-self')"), 'persistent-last-self bundled source does not require the browser runtime helper module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./persistent-last-self')"), 'runtime-state-bindings helper does not require the persistent-last-self runtime helper module');
     assert(bundlerSpikeEntrySource.includes("from './runtime/persistent-last-self.js'"), 'bundler spike does not import persistent-last-self runtime adapter');
     assert(bundlerSpikeEntrySource.includes('persistentLastSelf.readPersistentLastSelfStateCore('), 'bundler spike does not execute persistent-last-self read helper');
     assert(bundlerSpikeEntrySource.includes('persistentLastSelf.writePersistentLastSelfStateCore('), 'bundler spike does not execute persistent-last-self write helper');
     assert(bundlerSpikeBuildSource.includes("status.persistentLastSelfId === 'last-self-spike'"), 'bundler spike self-test does not assert persistent-last-self read execution');
     assert(bundlerSpikeBuildSource.includes('status.persistentLastSelfWrite === true'), 'bundler spike self-test does not assert persistent-last-self write execution');
-    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/persistent-last-self')"), 'generated remote runtime does not hand persistent-last-self helpers to the bundler');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-state-bindings')"), 'generated remote runtime does not hand runtime-state bindings to the bundler');
     assert(!generatedRuntimeSource.includes('function readPersistentLastSelfStateCore'), 'generated remote runtime still inlines persistent-last-self read helper before bundling');
     assert(!generatedRuntimeSource.includes('function writePersistentLastSelfStateCore'), 'generated remote runtime still inlines persistent-last-self write helper before bundling');
     assert(distSource.includes('function readPersistentLastSelfStateCore'), 'bundled dist does not contain persistent-last-self read helper');
     assert(distSource.includes('function writePersistentLastSelfStateCore'), 'bundled dist does not contain persistent-last-self write helper');
-    assert(distSource.includes('readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t)'), 'bundled dist persistent-last-self read wrapper does not call runtime core');
-    assert(distSource.includes('writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t)'), 'bundled dist persistent-last-self write wrapper does not call runtime core');
+    assert(distSource.includes('readPersistentLastSelfStateCore(storage, keys.lastSelfStateKey, cfg.lastSelfPersistMaxMs, t)'), 'bundled dist persistent-last-self read binding does not call runtime core');
+    assert(distSource.includes('writePersistentLastSelfStateCore(storage, keys.lastSelfStateKey, selfSummary, t)'), 'bundled dist persistent-last-self write binding does not call runtime core');
   });
 
   check('persistent clear uses browser runtime adapter', () => {
     assert(persistentClearRuntimeModule.includes('function clearPersistentStorageKey'), 'persistent-clear runtime helper not found');
     assert(persistentClearRuntimeModule.includes('localStorage.removeItem(key)'), 'persistent-clear runtime helper does not remove storage keys');
     assert(persistentClearRuntimeModule.includes('module.exports = {\n  clearPersistentStorageKey\n}'), 'persistent-clear runtime helper export not found');
-    assert(persistentClearSourceModule.includes("require('./src/browser/runtime/persistent-clear')"), 'persistent-clear bundled source does not require the browser runtime helper module');
+    assert(runtimeStateBindingsRuntimeModule.includes("require('./persistent-clear')"), 'runtime-state-bindings helper does not require the persistent-clear runtime helper module');
     assert(bundlerSpikeEntrySource.includes("from './runtime/persistent-clear.js'"), 'bundler spike does not import persistent-clear runtime adapter');
     assert(bundlerSpikeEntrySource.includes("persistentClear.clearPersistentStorageKey('persistent-clear-spike')"), 'bundler spike does not execute persistent-clear helper');
     assert(bundlerSpikeBuildSource.includes('status.persistentClearRemoved === true'), 'bundler spike self-test does not assert persistent-clear execution');
-    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/persistent-clear')"), 'generated remote runtime does not hand persistent-clear helper to the bundler');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-state-bindings')"), 'generated remote runtime does not hand runtime-state bindings to the bundler');
     assert(!generatedRuntimeSource.includes('function clearPersistentStorageKey'), 'generated remote runtime still inlines persistent-clear helper before bundling');
     assert(distSource.includes('function clearPersistentStorageKey'), 'bundled dist does not contain persistent-clear helper');
     assert(distSource.includes('clearPersistentStorageKey(key)'), 'bundled dist persistent clear wrapper does not clear provided exit key');
-    assert(distSource.includes('clearPersistentStorageKey(PENDING_EXIT_STATE_KEY)'), 'bundled dist persistent clear wrapper does not clear pending-exit storage key');
+    assert(distSource.includes('clearPersistentStorageKey(keys.pendingExitStateKey)'), 'bundled dist persistent clear binding does not clear pending-exit storage key');
   });
 
   check('opportunity clear uses strategy module core', () => {

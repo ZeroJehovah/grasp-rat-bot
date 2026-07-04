@@ -118,6 +118,7 @@ async function selfTest() {
   assert(source.includes('function restoreRuntimeStateCore'), 'restored runtime state helper was not bundled');
   assert(source.includes('function normalizeLoginSnapshotGateStateCore'), 'login snapshot gate helper was not bundled');
   assert(source.includes('function recordRuntimeDiagnosticsCore'), 'runtime diagnostics helper was not bundled');
+  assert(source.includes('function createRuntimeStateBindings'), 'runtime-state-bindings helper was not bundled');
   assert(source.includes('function leaveWaitDisplayCore'), 'exit-relogin display helper was not bundled');
   assert(source.includes('function normalizeEnemyActorCore'), 'exit-relogin actor helper was not bundled');
   assert(source.includes('function readEnemyLeaveStreakCore'), 'exit-relogin streak helper was not bundled');
@@ -269,6 +270,14 @@ async function selfTest() {
   assert(status.loginSnapshotResetReason === 'spike-reset', 'spike did not preserve login snapshot reset reason');
   assert(status.runtimeDiagnosticsTickMs === 12.3, 'spike did not merge runtime diagnostics values');
   assert(status.runtimeDiagnosticsSource === 'runtime-helper-entry', 'spike did not preserve runtime diagnostics source');
+  assert(status.runtimeStateLastSelfId === 'state-binding-self', 'spike did not execute runtime-state last-self binding');
+  assert(status.runtimeStateLastSelfWritten === true, 'spike did not execute runtime-state last-self write binding');
+  assert(status.runtimeStateRestoredFailureCount === 1, 'spike did not execute runtime-state restored failures binding');
+  assert(status.runtimeStateRestoredEnemyReason === 'state-binding-enemy', 'spike did not execute runtime-state enemy restore binding');
+  assert(status.runtimeStateRestoredEnemyHold === 500, 'spike did not refresh runtime-state enemy hold');
+  assert(status.runtimeStateInitialPendingReason === 'state-binding-pending', 'spike did not choose runtime-state pending exit');
+  assert(status.runtimeStatePendingWrittenReason === 'state-binding-written-pending', 'spike did not execute runtime-state pending write binding');
+  assert(status.runtimeStateDiagnosticsSource === 'runtime-state-bindings', 'spike did not execute runtime-state diagnostics binding');
   assert(status.exitReloginDisplay === '离线退出，等待3秒', 'spike did not append exit relogin wait display');
   assert(status.exitReloginSummary === '离线退出', 'spike did not preserve exit relogin summary');
   assert(status.exitReloginDisplayReason === '离线退出，等待2秒', 'spike did not finalize exit relogin display reason');

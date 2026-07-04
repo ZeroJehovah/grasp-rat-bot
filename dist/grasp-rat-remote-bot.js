@@ -1214,6 +1214,108 @@
     }
   });
 
+  // src/browser/runtime/restored-coin-failures.js
+  var require_restored_coin_failures = __commonJS({
+    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
+      "use strict";
+      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
+        const options = cfg && typeof cfg === "object" ? cfg : {};
+        return (preservedCoinFailures || []).map(([id, item]) => {
+          const next = { ...item || {} };
+          const count = Number(next.count || 0);
+          const lastAt = Number(next.lastAt || 0);
+          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
+          let ignoreUntil = Number(next.ignoreUntil || 0);
+          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
+            return null;
+          }
+          if (!staleFailure) {
+            if (count >= options.coinFailureSevereIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
+            } else if (count >= options.coinFailureHardIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
+            }
+          }
+          next.ignoreUntil = ignoreUntil;
+          return [String(id), next];
+        }).filter(Boolean);
+      }
+      module.exports = { restoredCoinFailuresCore };
+    }
+  });
+
+  // src/browser/runtime/restored-runtime-state.js
+  var require_restored_runtime_state = __commonJS({
+    "src/browser/runtime/restored-runtime-state.js"(exports, module) {
+      "use strict";
+      function restoreRuntimeStateCore(preserved, previousBot, helpers = {}) {
+        const state2 = preserved && typeof preserved === "object" ? preserved : {};
+        const nowMs = typeof helpers.nowMs === "function" ? helpers.nowMs : Date.now;
+        const restoredFailures = helpers.restoredCoinFailures();
+        const restoredEnemyLeaveState = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
+        const restoredOfflineLeaveState = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
+        const restoreOptions = { markReloaded: !previousBot };
+        const restoredPendingExitState = helpers.readPersistedPendingExitState(nowMs(), restoreOptions);
+        const initialPendingExitState = helpers.chooseInitialPendingExitState(
+          state2.pendingExit,
+          restoredPendingExitState,
+          nowMs(),
+          restoreOptions
+        );
+        return {
+          restoredFailures,
+          restoredEnemyLeaveState,
+          restoredOfflineLeaveState,
+          restoredPendingExitState,
+          initialPendingExitState
+        };
+      }
+      module.exports = { restoreRuntimeStateCore };
+    }
+  });
+
+  // src/browser/runtime/login-snapshot-gate.js
+  var require_login_snapshot_gate = __commonJS({
+    "src/browser/runtime/login-snapshot-gate.js"(exports, module) {
+      "use strict";
+      function loginSnapshotSuccessRequiredCore() {
+        return 0;
+      }
+      function normalizeLoginSnapshotGateStateCore(state2 = null, required = loginSnapshotSuccessRequiredCore()) {
+        return {
+          streak: Math.max(0, Math.round(Number(state2?.streak || 0) || 0)),
+          required,
+          lastOkAt: Number(state2?.lastOkAt || 0) || 0,
+          lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
+          lastSampleAt: Number(state2?.lastSampleAt || state2?.lastOkAt || state2?.lastErrorAt || 0) || 0,
+          lastError: String(state2?.lastError || ""),
+          lastTick: Number(state2?.lastTick || 0) || 0,
+          resetAt: Number(state2?.resetAt || 0) || 0,
+          resetReason: String(state2?.resetReason || "")
+        };
+      }
+      module.exports = {
+        loginSnapshotSuccessRequiredCore,
+        normalizeLoginSnapshotGateStateCore
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-diagnostics.js
+  var require_runtime_diagnostics = __commonJS({
+    "src/browser/runtime/runtime-diagnostics.js"(exports, module) {
+      "use strict";
+      function recordRuntimeDiagnosticsCore(bot, values = {}) {
+        try {
+          if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== "object") bot.runtimeDiagnostics = {};
+          Object.assign(bot.runtimeDiagnostics, values);
+        } catch (_) {
+        }
+      }
+      module.exports = { recordRuntimeDiagnosticsCore };
+    }
+  });
+
   // src/browser/runtime/exit-relogin.js
   var require_exit_relogin = __commonJS({
     "src/browser/runtime/exit-relogin.js"(exports, module) {
@@ -2033,194 +2135,6 @@
     }
   });
 
-  // src/browser/runtime/restored-runtime-state.js
-  var require_restored_runtime_state = __commonJS({
-    "src/browser/runtime/restored-runtime-state.js"(exports, module) {
-      "use strict";
-      function restoreRuntimeStateCore(preserved, previousBot, helpers = {}) {
-        const state2 = preserved && typeof preserved === "object" ? preserved : {};
-        const nowMs = typeof helpers.nowMs === "function" ? helpers.nowMs : Date.now;
-        const restoredFailures = helpers.restoredCoinFailures();
-        const restoredEnemyLeaveState = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
-        const restoredOfflineLeaveState = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
-        const restoreOptions = { markReloaded: !previousBot };
-        const restoredPendingExitState = helpers.readPersistedPendingExitState(nowMs(), restoreOptions);
-        const initialPendingExitState = helpers.chooseInitialPendingExitState(
-          state2.pendingExit,
-          restoredPendingExitState,
-          nowMs(),
-          restoreOptions
-        );
-        return {
-          restoredFailures,
-          restoredEnemyLeaveState,
-          restoredOfflineLeaveState,
-          restoredPendingExitState,
-          initialPendingExitState
-        };
-      }
-      module.exports = { restoreRuntimeStateCore };
-    }
-  });
-
-  // src/browser/runtime/restored-coin-failures.js
-  var require_restored_coin_failures = __commonJS({
-    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
-      "use strict";
-      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
-        const options = cfg && typeof cfg === "object" ? cfg : {};
-        return (preservedCoinFailures || []).map(([id, item]) => {
-          const next = { ...item || {} };
-          const count = Number(next.count || 0);
-          const lastAt = Number(next.lastAt || 0);
-          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
-          let ignoreUntil = Number(next.ignoreUntil || 0);
-          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
-            return null;
-          }
-          if (!staleFailure) {
-            if (count >= options.coinFailureSevereIgnoreCount) {
-              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
-            } else if (count >= options.coinFailureHardIgnoreCount) {
-              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
-            }
-          }
-          next.ignoreUntil = ignoreUntil;
-          return [String(id), next];
-        }).filter(Boolean);
-      }
-      module.exports = { restoredCoinFailuresCore };
-    }
-  });
-
-  // src/browser/runtime/login-snapshot-gate.js
-  var require_login_snapshot_gate = __commonJS({
-    "src/browser/runtime/login-snapshot-gate.js"(exports, module) {
-      "use strict";
-      function loginSnapshotSuccessRequiredCore() {
-        return 0;
-      }
-      function normalizeLoginSnapshotGateStateCore(state2 = null, required = loginSnapshotSuccessRequiredCore()) {
-        return {
-          streak: Math.max(0, Math.round(Number(state2?.streak || 0) || 0)),
-          required,
-          lastOkAt: Number(state2?.lastOkAt || 0) || 0,
-          lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
-          lastSampleAt: Number(state2?.lastSampleAt || state2?.lastOkAt || state2?.lastErrorAt || 0) || 0,
-          lastError: String(state2?.lastError || ""),
-          lastTick: Number(state2?.lastTick || 0) || 0,
-          resetAt: Number(state2?.resetAt || 0) || 0,
-          resetReason: String(state2?.resetReason || "")
-        };
-      }
-      module.exports = {
-        loginSnapshotSuccessRequiredCore,
-        normalizeLoginSnapshotGateStateCore
-      };
-    }
-  });
-
-  // src/browser/runtime/runtime-diagnostics.js
-  var require_runtime_diagnostics = __commonJS({
-    "src/browser/runtime/runtime-diagnostics.js"(exports, module) {
-      "use strict";
-      function recordRuntimeDiagnosticsCore(bot, values = {}) {
-        try {
-          if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== "object") bot.runtimeDiagnostics = {};
-          Object.assign(bot.runtimeDiagnostics, values);
-        } catch (_) {
-        }
-      }
-      module.exports = { recordRuntimeDiagnosticsCore };
-    }
-  });
-
-  // src/strategy/exit-motion.js
-  var require_exit_motion = __commonJS({
-    "src/strategy/exit-motion.js"(exports, module) {
-      "use strict";
-      function exitMotionStopLockRemainingMsCore(stoppedAtValue, lockMsValue, t = Date.now()) {
-        const stoppedAt = Number(stoppedAtValue || 0);
-        if (!stoppedAt) return 0;
-        const lockMs = Math.max(0, Number(lockMsValue || 0) || 0);
-        return Math.max(0, Math.round(stoppedAt + lockMs - t));
-      }
-      function postExitDecisionWithoutTargetCore(decision, reason = "", options = {}) {
-        const previous = decision && typeof decision === "object" ? decision : {};
-        const lockRemaining = typeof options.exitMotionLockRemainingMs === "function" ? options.exitMotionLockRemainingMs() : Number(options.exitMotionLockRemainingMs || 0);
-        return {
-          ...previous,
-          kind: "wait",
-          reason: reason || previous.reason || "exit-motion-stopped",
-          dx: 0,
-          dy: 0,
-          target: null,
-          aimTarget: null,
-          opportunisticShot: null,
-          combat: false,
-          shoot: false,
-          forceShoot: false,
-          combatCover: null,
-          exitMotionStopped: true,
-          exitMotionStopReason: reason || options.lastExitMotionStopReason || "",
-          exitMotionLockRemainingMs: lockRemaining
-        };
-      }
-      module.exports = {
-        exitMotionStopLockRemainingMsCore,
-        postExitDecisionWithoutTargetCore
-      };
-    }
-  });
-
-  // src/browser/runtime/exit-motion.js
-  var require_exit_motion2 = __commonJS({
-    "src/browser/runtime/exit-motion.js"(exports, module) {
-      "use strict";
-      var {
-        exitMotionStopLockRemainingMsCore,
-        postExitDecisionWithoutTargetCore
-      } = require_exit_motion();
-      module.exports = {
-        exitMotionStopLockRemainingMsCore,
-        postExitDecisionWithoutTargetCore
-      };
-    }
-  });
-
-  // src/strategy/attack-worth.js
-  var require_attack_worth = __commonJS({
-    "src/strategy/attack-worth.js"(exports, module) {
-      "use strict";
-      function attackWorthTakingCore(self, target, options = {}) {
-        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
-        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
-        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
-        if (isWhitelistedTarget(target)) return false;
-        const targetDrop = dropValue(target);
-        if (isAfkProfitTarget(target)) {
-          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
-        }
-        const ownDrop = dropValue(self);
-        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
-      }
-      module.exports = { attackWorthTakingCore };
-    }
-  });
-
-  // src/browser/runtime/attack-worth.js
-  var require_attack_worth2 = __commonJS({
-    "src/browser/runtime/attack-worth.js"(exports, module) {
-      "use strict";
-      var {
-        attackWorthTakingCore
-      } = require_attack_worth();
-      module.exports = {
-        attackWorthTakingCore
-      };
-    }
-  });
-
   // src/shared/display-format.js
   var require_display_format = __commonJS({
     "src/shared/display-format.js"(exports, module) {
@@ -2348,6 +2262,257 @@
         safeStringify,
         safeJsonClone,
         sanitizeCombatLogIdPart
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-state-bindings.js
+  var require_runtime_state_bindings = __commonJS({
+    "src/browser/runtime/runtime-state-bindings.js"(exports, module) {
+      "use strict";
+      var {
+        readPersistentLastSelfStateCore,
+        writePersistentLastSelfStateCore
+      } = require_persistent_last_self();
+      var {
+        readPersistentExitStateCore,
+        writePersistentExitStateCore
+      } = require_persistent_exit();
+      var {
+        clearPersistentStorageKey
+      } = require_persistent_clear();
+      var {
+        normalizePendingExitReloadConfirmationCore,
+        readPersistedPendingExitStateCore,
+        writePersistentPendingExitStateCore,
+        chooseInitialPendingExitStateCore
+      } = require_pending_exit_persistence();
+      var {
+        pendingExitDisplayReasonCore,
+        pendingExitRetryMsCore
+      } = require_pending_exit2();
+      var {
+        refreshExitDetailCore
+      } = require_refresh_exit_detail();
+      var {
+        restoredCoinFailuresCore
+      } = require_restored_coin_failures();
+      var {
+        restoreRuntimeStateCore
+      } = require_restored_runtime_state();
+      var {
+        loginSnapshotSuccessRequiredCore,
+        normalizeLoginSnapshotGateStateCore
+      } = require_login_snapshot_gate();
+      var {
+        recordRuntimeDiagnosticsCore
+      } = require_runtime_diagnostics();
+      var {
+        leaveWaitDisplayCore,
+        finalizeLeaveDisplayReasonCore,
+        offlineLeaveSummaryCore
+      } = require_exit_relogin();
+      var {
+        formatDistance,
+        formatDurationMs
+      } = require_display_format2();
+      var {
+        safeJsonClone,
+        safeStringify
+      } = require_runtime_utils2();
+      var {
+        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2
+      } = require_exit_summary2();
+      function fallbackNow() {
+        return Date.now();
+      }
+      function fallbackPerformanceNow() {
+        return fallbackNow();
+      }
+      function cloneForPendingExitBinding(value) {
+        if (!value || typeof value !== "object") return value || null;
+        return safeJsonClone(value) || { ...value };
+      }
+      function staminaBudgetCoinLeaveSummaryForRuntimeState(staminaBudgetExit) {
+        const detail = staminaBudgetExit || {};
+        return "\u4E00\u5C0F\u65F6\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u6700\u8FD1\u91D1\u5E01\u8DDD\u79BB" + formatDistance(detail.distance) + "\uFF0C\u9884\u7B97" + formatDurationMs(detail.budgetMs) + "\uFF0C\u9700\u8981" + formatDurationMs(detail.requiredMs) + "\uFF0C\u5DEE" + formatDurationMs(detail.shortageMs) + "\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
+      }
+      function createRuntimeStateBindings(runtime = {}) {
+        const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
+        const storage = runtime.storage || localStorage;
+        const keys = runtime.keys && typeof runtime.keys === "object" ? runtime.keys : {};
+        const now = typeof runtime.now === "function" ? runtime.now : fallbackNow;
+        const performanceNow = typeof runtime.performanceNow === "function" ? runtime.performanceNow : fallbackPerformanceNow;
+        function refreshExitDetail(detail, t = now()) {
+          return refreshExitDetailCore(
+            detail,
+            (summaryReason, summarySafety) => offlineLeaveSummaryCore(summaryReason, summarySafety, {
+              staminaBudgetCoinLeaveSummary: staminaBudgetCoinLeaveSummaryForRuntimeState,
+              staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2
+            }),
+            (value) => finalizeLeaveDisplayReasonCore(value, (base, detailValue) => leaveWaitDisplayCore(base, detailValue, formatDurationMs)),
+            t
+          );
+        }
+        function readPersistentLastSelfState(t = now()) {
+          return readPersistentLastSelfStateCore(storage, keys.lastSelfStateKey, cfg.lastSelfPersistMaxMs, t);
+        }
+        function writePersistentLastSelfState(selfSummary, t = now()) {
+          writePersistentLastSelfStateCore(storage, keys.lastSelfStateKey, selfSummary, t);
+        }
+        function readPersistentExitState(key, t = now()) {
+          return readPersistentExitStateCore(storage, key, refreshExitDetail, t);
+        }
+        function writePersistentExitState(key, detail) {
+          writePersistentExitStateCore(storage, key, detail, refreshExitDetail);
+        }
+        function clearPersistentExitState(key) {
+          clearPersistentStorageKey(key);
+        }
+        function clearPersistentPendingExitState() {
+          clearPersistentStorageKey(keys.pendingExitStateKey);
+        }
+        function pendingExitRetryCoreOptionsForPersistence() {
+          return {
+            leaveRetryMinMs: cfg.leaveRetryMinMs,
+            leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+            offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+            combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+            pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+          };
+        }
+        function pendingExitPersistenceCoreHelpers() {
+          return {
+            pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs,
+            cloneForPendingExit: cloneForPendingExitBinding,
+            pendingExitDisplayReason: (summary) => pendingExitDisplayReasonCore(summary),
+            pendingExitRetryMs: (pending) => pendingExitRetryMsCore(pending, pendingExitRetryCoreOptionsForPersistence()),
+            stringify: safeStringify,
+            clearPersistentPendingExitState
+          };
+        }
+        const restoredRuntimeState = restoreRuntimeStateCore(runtime.preserved, runtime.previousBot, {
+          restoredCoinFailures: () => restoredCoinFailuresCore(runtime.preserved?.coinFailures, cfg, performanceNow()),
+          readPersistentExitState,
+          readPersistedPendingExitState: (t, options) => readPersistedPendingExitStateCore(storage, keys.pendingExitStateKey, t, options, pendingExitPersistenceCoreHelpers()),
+          chooseInitialPendingExitState: (memoryState, storedState, t, options) => chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers()),
+          enemyLeaveStateKey: keys.enemyLeaveStateKey,
+          offlineLeaveStateKey: keys.offlineLeaveStateKey,
+          nowMs: now
+        });
+        return {
+          readPersistentLastSelfState,
+          writePersistentLastSelfState,
+          refreshExitDetail,
+          readPersistentExitState,
+          writePersistentExitState,
+          clearPersistentExitState,
+          clearPersistentPendingExitState,
+          pendingExitRetryCoreOptionsForPersistence,
+          pendingExitPersistenceCoreHelpers,
+          normalizePendingExitReloadConfirmationCore,
+          writePersistentPendingExitStateCore,
+          restoredRuntimeState,
+          restoredFailures: restoredRuntimeState.restoredFailures,
+          restoredEnemyLeaveState: restoredRuntimeState.restoredEnemyLeaveState,
+          restoredOfflineLeaveState: restoredRuntimeState.restoredOfflineLeaveState,
+          restoredPendingExitState: restoredRuntimeState.restoredPendingExitState,
+          initialPendingExitState: restoredRuntimeState.initialPendingExitState,
+          loginSnapshotSuccessRequiredCore,
+          normalizeLoginSnapshotGateStateCore,
+          recordRuntimeDiagnosticsCore
+        };
+      }
+      module.exports = {
+        cloneForPendingExitBinding,
+        createRuntimeStateBindings,
+        staminaBudgetCoinLeaveSummaryForRuntimeState
+      };
+    }
+  });
+
+  // src/strategy/exit-motion.js
+  var require_exit_motion = __commonJS({
+    "src/strategy/exit-motion.js"(exports, module) {
+      "use strict";
+      function exitMotionStopLockRemainingMsCore(stoppedAtValue, lockMsValue, t = Date.now()) {
+        const stoppedAt = Number(stoppedAtValue || 0);
+        if (!stoppedAt) return 0;
+        const lockMs = Math.max(0, Number(lockMsValue || 0) || 0);
+        return Math.max(0, Math.round(stoppedAt + lockMs - t));
+      }
+      function postExitDecisionWithoutTargetCore(decision, reason = "", options = {}) {
+        const previous = decision && typeof decision === "object" ? decision : {};
+        const lockRemaining = typeof options.exitMotionLockRemainingMs === "function" ? options.exitMotionLockRemainingMs() : Number(options.exitMotionLockRemainingMs || 0);
+        return {
+          ...previous,
+          kind: "wait",
+          reason: reason || previous.reason || "exit-motion-stopped",
+          dx: 0,
+          dy: 0,
+          target: null,
+          aimTarget: null,
+          opportunisticShot: null,
+          combat: false,
+          shoot: false,
+          forceShoot: false,
+          combatCover: null,
+          exitMotionStopped: true,
+          exitMotionStopReason: reason || options.lastExitMotionStopReason || "",
+          exitMotionLockRemainingMs: lockRemaining
+        };
+      }
+      module.exports = {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
+  // src/browser/runtime/exit-motion.js
+  var require_exit_motion2 = __commonJS({
+    "src/browser/runtime/exit-motion.js"(exports, module) {
+      "use strict";
+      var {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      } = require_exit_motion();
+      module.exports = {
+        exitMotionStopLockRemainingMsCore,
+        postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
+  // src/strategy/attack-worth.js
+  var require_attack_worth = __commonJS({
+    "src/strategy/attack-worth.js"(exports, module) {
+      "use strict";
+      function attackWorthTakingCore(self, target, options = {}) {
+        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
+        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
+        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
+        if (isWhitelistedTarget(target)) return false;
+        const targetDrop = dropValue(target);
+        if (isAfkProfitTarget(target)) {
+          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
+        }
+        const ownDrop = dropValue(self);
+        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
+      }
+      module.exports = { attackWorthTakingCore };
+    }
+  });
+
+  // src/browser/runtime/attack-worth.js
+  var require_attack_worth2 = __commonJS({
+    "src/browser/runtime/attack-worth.js"(exports, module) {
+      "use strict";
+      var {
+        attackWorthTakingCore
+      } = require_attack_worth();
+      module.exports = {
+        attackWorthTakingCore
       };
     }
   });
@@ -5216,7 +5381,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.504" };
+    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.505" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5269,99 +5434,43 @@
       lastError: "",
       lastReason: preservedTargetWhitelistNames.length ? "preserved" : "empty"
     };
-    const {
-      readPersistentLastSelfStateCore,
-      writePersistentLastSelfStateCore
-    } = require_persistent_last_self();
-    function readPersistentLastSelfState(t = Date.now()) {
-      return readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t);
-    }
-    function writePersistentLastSelfState(selfSummary, t = Date.now()) {
-      writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t);
-    }
-    const {
-      readPersistentExitStateCore,
-      writePersistentExitStateCore
-    } = require_persistent_exit();
-    function readPersistentExitState(key, t = Date.now()) {
-      return readPersistentExitStateCore(localStorage, key, refreshExitDetail, t);
-    }
-    function writePersistentExitState(key, detail) {
-      writePersistentExitStateCore(localStorage, key, detail, refreshExitDetail);
-    }
-    const { clearPersistentStorageKey } = require_persistent_clear();
-    function clearPersistentExitState(key) {
-      clearPersistentStorageKey(key);
-    }
-    function clearPersistentPendingExitState() {
-      clearPersistentStorageKey(PENDING_EXIT_STATE_KEY);
-    }
-    const {
-      normalizePendingExitReloadConfirmationCore,
-      writePersistentPendingExitStateCore
-    } = require_pending_exit_persistence();
-    const {
-      pendingExitDisplayReasonCore: pendingExitDisplayReasonForPersistenceCore,
-      pendingExitRetryMsCore: pendingExitRetryMsForPersistenceCore
-    } = require_pending_exit2();
-    function pendingExitRetryCoreOptionsForPersistence() {
-      return {
-        leaveRetryMinMs: cfg.leaveRetryMinMs,
-        leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
-        offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
-        combatLeaveRetryMs: cfg.combatLeaveRetryMs,
-        pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
-      };
-    }
-    function pendingExitPersistenceCoreHelpers() {
-      return {
-        pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs,
-        cloneForPendingExit,
-        pendingExitDisplayReason: (summary) => pendingExitDisplayReasonForPersistenceCore(summary),
-        pendingExitRetryMs: (pending) => pendingExitRetryMsForPersistenceCore(pending, pendingExitRetryCoreOptionsForPersistence()),
-        stringify: safeStringify,
-        clearPersistentPendingExitState
-      };
-    }
-    const { refreshExitDetailCore } = require_refresh_exit_detail();
-    const {
-      finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForRefreshExitDetailCore,
-      leaveWaitDisplayCore: leaveWaitDisplayForRefreshExitDetailCore,
-      offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore
-    } = require_exit_relogin();
-    function refreshExitDetail(detail, t = Date.now()) {
-      return refreshExitDetailCore(
-        detail,
-        (summaryReason, summarySafety) => offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
-        (value) => finalizeLeaveDisplayReasonForRefreshExitDetailCore(value, (base, value2) => leaveWaitDisplayForRefreshExitDetailCore(base, value2, formatDurationMs)),
-        t
-      );
-    }
-    const { restoreRuntimeStateCore } = require_restored_runtime_state();
-    const { restoredCoinFailuresCore: restoredCoinFailuresForRestoredRuntimeStateCore } = require_restored_coin_failures();
-    const {
-      readPersistedPendingExitStateCore: readPersistedPendingExitStateForRestoredRuntimeStateCore,
-      chooseInitialPendingExitStateCore: chooseInitialPendingExitStateForRestoredRuntimeStateCore
-    } = require_pending_exit_persistence();
-    const restoredRuntimeState = restoreRuntimeStateCore(preserved, previousBot, {
-      restoredCoinFailures: () => restoredCoinFailuresForRestoredRuntimeStateCore(preserved.coinFailures, cfg, performance.now()),
-      readPersistentExitState,
-      readPersistedPendingExitState: (t, options) => readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers()),
-      chooseInitialPendingExitState: (memoryState, storedState, t, options) => chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers()),
-      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-      nowMs: () => Date.now()
+    const { createRuntimeStateBindings } = require_runtime_state_bindings();
+    const runtimeStateBindings = createRuntimeStateBindings({
+      storage: localStorage,
+      cfg,
+      keys: {
+        lastSelfStateKey: LAST_SELF_STATE_KEY,
+        pendingExitStateKey: PENDING_EXIT_STATE_KEY,
+        enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
+      },
+      preserved,
+      previousBot,
+      now: Date.now,
+      performanceNow: () => performance.now()
     });
-    const restoredFailures = restoredRuntimeState.restoredFailures;
-    const restoredEnemyLeaveState = restoredRuntimeState.restoredEnemyLeaveState;
-    const restoredOfflineLeaveState = restoredRuntimeState.restoredOfflineLeaveState;
-    const restoredPendingExitState = restoredRuntimeState.restoredPendingExitState;
-    const initialPendingExitState = restoredRuntimeState.initialPendingExitState;
     const {
+      readPersistentLastSelfState,
+      writePersistentLastSelfState,
+      refreshExitDetail,
+      readPersistentExitState,
+      writePersistentExitState,
+      clearPersistentExitState,
+      clearPersistentPendingExitState,
+      pendingExitRetryCoreOptionsForPersistence,
+      pendingExitPersistenceCoreHelpers,
+      normalizePendingExitReloadConfirmationCore,
+      writePersistentPendingExitStateCore,
+      restoredRuntimeState,
+      restoredFailures,
+      restoredEnemyLeaveState,
+      restoredOfflineLeaveState,
+      restoredPendingExitState,
+      initialPendingExitState,
       loginSnapshotSuccessRequiredCore,
-      normalizeLoginSnapshotGateStateCore
-    } = require_login_snapshot_gate();
-    const { recordRuntimeDiagnosticsCore } = require_runtime_diagnostics();
+      normalizeLoginSnapshotGateStateCore,
+      recordRuntimeDiagnosticsCore
+    } = runtimeStateBindings;
     const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require_exit_motion2();
     const { readEnemyLeaveStreakBoundCore } = require_exit_relogin();
     const { pendingExitRetryMsCore: pendingExitRetryMsForBotObjectCore, summarizePendingExitCore: summarizePendingExitForBotObjectCore } = require_pending_exit2();

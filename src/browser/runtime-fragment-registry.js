@@ -47,15 +47,7 @@ const { entityActivitySource } = require('./entity-activity-source');
 const { staminaRuntimeSource } = require('./stamina-runtime-source');
 const { attackWorthSource } = require('./attack-worth-source');
 const { exitMotionSource } = require('./exit-motion-source');
-const { persistentLastSelfSource } = require('./persistent-last-self-source');
-const { persistentExitSource } = require('./persistent-exit-source');
-const { persistentClearSource } = require('./persistent-clear-source');
-const { pendingExitPersistenceSource } = require('./pending-exit-persistence-source');
-const { refreshExitDetailSource } = require('./refresh-exit-detail-source');
-const { restoredCoinFailuresSource } = require('./restored-coin-failures-source');
-const { restoredRuntimeStateSource } = require('./restored-runtime-state-source');
-const { loginSnapshotGateSource } = require('./login-snapshot-gate-source');
-const { runtimeDiagnosticsSource } = require('./runtime-diagnostics-source');
+const { runtimeStateBindingsSource } = require('./runtime-state-bindings-source');
 const { exitReloginSource } = require('./exit-relogin-source');
 const { pendingExitSource } = require('./pending-exit-source');
 const { leaveCommandSource } = require('./leave-command-source');
@@ -71,34 +63,8 @@ const { runtimeSummarySource } = require('./runtime-summary-source');
 function browserRuntimeFragmentEntries(config) {
   return [
     ['runtime-bootstrap', () => runtimeBootstrapSource(config)],
-    ['persistent-last-self', () => persistentLastSelfSource(config)],
-    ['separator-after-persistent-last-self',
-    `
-`],
-    ['persistent-exit', () => persistentExitSource(config)],
-    ['separator-after-persistent-exit',
-    `
-`],
-    ['persistent-clear', () => persistentClearSource(config)],
-    ['separator-after-persistent-clear',
-    `
-`],
-    ['pending-exit-persistence', () => pendingExitPersistenceSource(config)],
-    ['separator-after-pending-exit-persistence',
-    `
-`],
-    ['refresh-exit-detail', () => refreshExitDetailSource(config)],
-    ['separator-after-refresh-exit-detail',
-    `
-`],
-    ['restored-coin-failures', () => restoredCoinFailuresSource(config)],
-    ['restored-runtime-state', () => restoredRuntimeStateSource(config)],
-    ['login-snapshot-gate', () => loginSnapshotGateSource(config)],
-    ['separator-after-login-snapshot-gate',
-    `
-`],
-    ['runtime-diagnostics', () => runtimeDiagnosticsSource(config)],
-    ['separator-after-runtime-diagnostics',
+    ['runtime-state-bindings', () => runtimeStateBindingsSource(config)],
+    ['separator-after-runtime-state-bindings',
     `
 
 `],

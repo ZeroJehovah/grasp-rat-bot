@@ -16,6 +16,7 @@ import restoredCoinFailures from './runtime/restored-coin-failures.js';
 import restoredRuntimeState from './runtime/restored-runtime-state.js';
 import loginSnapshotGate from './runtime/login-snapshot-gate.js';
 import runtimeDiagnostics from './runtime/runtime-diagnostics.js';
+import runtimeStateBindings from './runtime/runtime-state-bindings.js';
 import exitRelogin from './runtime/exit-relogin.js';
 import runtimeDefaults from './runtime/runtime-defaults.js';
 import actionPriority from './runtime/action-priority.js';
@@ -612,6 +613,85 @@ function helperStatus(config = {}) {
     lastTickSource: 'runtime-helper-entry'
   });
   runtimeDiagnostics.recordRuntimeDiagnosticsCore(null, { ignored: true });
+  const runtimeStateStorage = {
+    values: new Map([
+      ['state-last-self', JSON.stringify({ at: 1000, self: { id: 'state-binding-self', hp: 91 } })],
+      ['state-enemy', JSON.stringify({
+        at: 1000,
+        reason: 'state-binding-enemy',
+        summary: 'state binding enemy',
+        reloginUntil: 2500,
+        reloginDelayMs: 500
+      })],
+      ['state-pending', JSON.stringify({
+        at: 1000,
+        updatedAt: 1700,
+        reason: 'state-binding-pending',
+        summary: 'state binding pending',
+        retryCount: 1
+      })]
+    ]),
+    getItem(key) {
+      return this.values.get(key) || null;
+    },
+    setItem(key, value) {
+      this.values.set(key, value);
+      this.writtenKey = key;
+      this.writtenValue = JSON.parse(value);
+    },
+    removeItem(key) {
+      this.values.delete(key);
+      this.removedKey = key;
+    }
+  };
+  const runtimeStateBinding = runtimeStateBindings.createRuntimeStateBindings({
+    storage: runtimeStateStorage,
+    cfg: {
+      lastSelfPersistMaxMs: 10000,
+      pendingExitPersistMaxMs: 10000,
+      leaveRetryMinMs: 1000,
+      offlineLeaveRetryMs: 3000,
+      combatLeaveRetryMs: 2000,
+      pursuitLeaveRetryMs: 2500
+    },
+    keys: {
+      lastSelfStateKey: 'state-last-self',
+      pendingExitStateKey: 'state-pending',
+      enemyLeaveStateKey: 'state-enemy',
+      offlineLeaveStateKey: 'state-offline'
+    },
+    preserved: {
+      coinFailures: [['state-coin', { count: 3, reason: 'progress', lastAt: 1700 }]],
+      pendingExit: {
+        at: 1000,
+        updatedAt: 1200,
+        reason: 'memory-state-binding',
+        summary: 'memory state binding'
+      }
+    },
+    previousBot: null,
+    now: () => 2000,
+    performanceNow: () => 2000
+  });
+  const runtimeStateLastSelf = runtimeStateBinding.readPersistentLastSelfState(2000);
+  runtimeStateBinding.writePersistentLastSelfState({ id: 'state-binding-written' }, 2100);
+  const runtimeStatePendingWritten = runtimeStateBinding.writePersistentPendingExitStateCore(
+    runtimeStateStorage,
+    'state-pending',
+    {
+      at: 1900,
+      updatedAt: 1950,
+      reason: 'state-binding-written-pending',
+      summary: 'state binding written pending',
+      retryCount: 2
+    },
+    2000,
+    runtimeStateBinding.pendingExitPersistenceCoreHelpers()
+  );
+  const runtimeStateDiagnosticsBot = { runtimeDiagnostics: null };
+  runtimeStateBinding.recordRuntimeDiagnosticsCore(runtimeStateDiagnosticsBot, {
+    lastTickSource: 'runtime-state-bindings'
+  });
   const exitReloginDisplay = exitRelogin.leaveWaitDisplayCore(
     '离线退出',
     { holdRemainingMs: 2500 },
@@ -1298,6 +1378,14 @@ function helperStatus(config = {}) {
     loginSnapshotResetReason: loginSnapshotGateState.resetReason,
     runtimeDiagnosticsTickMs: runtimeDiagnosticsBot.runtimeDiagnostics?.lastTickDurationMs,
     runtimeDiagnosticsSource: runtimeDiagnosticsBot.runtimeDiagnostics?.lastTickSource,
+    runtimeStateLastSelfId: runtimeStateLastSelf?.id,
+    runtimeStateLastSelfWritten: JSON.parse(runtimeStateStorage.values.get('state-last-self') || '{}')?.self?.id === 'state-binding-written',
+    runtimeStateRestoredFailureCount: arrayCountRuntime.arrayCount(runtimeStateBinding.restoredFailures),
+    runtimeStateRestoredEnemyReason: runtimeStateBinding.restoredEnemyLeaveState?.reason,
+    runtimeStateRestoredEnemyHold: runtimeStateBinding.restoredEnemyLeaveState?.holdRemainingMs,
+    runtimeStateInitialPendingReason: runtimeStateBinding.initialPendingExitState?.reason,
+    runtimeStatePendingWrittenReason: runtimeStatePendingWritten?.reason,
+    runtimeStateDiagnosticsSource: runtimeStateDiagnosticsBot.runtimeDiagnostics?.lastTickSource,
     exitReloginDisplay,
     exitReloginSummary: exitReloginDetail.summary,
     exitReloginDisplayReason: exitReloginDetail.displayReason,
