@@ -2,7 +2,7 @@
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const clearEnemyOnlineRestore = options.bundledRuntime
     ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
@@ -16,6 +16,9 @@ function tickSource(options = {}) {
   const injuryLeaveSummaryCall = injury => options.bundledRuntime
     ? `injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })`
     : `injuryLeaveSummary(${injury})`;
+  const pursuitLeaveSummaryCall = pursuit => options.bundledRuntime
+    ? `pursuitLeaveSummaryForTickCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`
+    : `pursuitLeaveSummary(${pursuit})`;
   return String.raw`${clearPrelude}  async function tick(source = 'timer') {
     if (!bot.running) return;
     if (bot.ticking) {
@@ -739,7 +742,7 @@ function tickSource(options = {}) {
 	        const skippedLeave = pendingExitSkipNewLeave('pursuit', 'sustained pursuit', {
 	          self: currentSummary,
 	          pursuit: pursuitSummary,
-	          summary: pursuitLeaveSummary(pursuitSummary)
+	          summary: ${pursuitLeaveSummaryCall('pursuitSummary')}
 	        });
 	        if (skippedLeave) {
 	          action = {

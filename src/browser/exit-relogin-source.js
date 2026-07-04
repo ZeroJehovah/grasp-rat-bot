@@ -307,7 +307,6 @@ function bundledExitReloginSummarySource() {
   return `	  const {
 \t    combatExitSummaryCore,
 \t    combatLeaveActionCore,
-\t    pursuitLeaveSummaryCore,
 \t    offlineLeaveSummaryCore,
 \t    reloginDelayForHpCore
 \t  } = require('./src/browser/runtime/exit-relogin');
@@ -318,10 +317,6 @@ function bundledExitReloginSummarySource() {
 
 \t  function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
 \t    return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
-\t  }
-
-\t  function pursuitLeaveSummary(pursuit) {
-\t    return pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance });
 \t  }
 
 \t  function offlineLeaveSummary(reason, offlineSafety) {
