@@ -1192,6 +1192,8 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })'), 'tick source factory does not bind bundled offline display core directly');
     assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore'), 'tick source factory does not import bundled injury summary core alias');
     assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })'), 'tick source factory does not bind bundled injury summary core directly');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore'), 'tick source factory does not import bundled pursuit summary core alias');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('pursuitLeaveSummaryForTickCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })'), 'tick source factory does not bind bundled pursuit summary core directly');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['combat-state', () => combatStateSource(config)]"), 'runtime fragment registry does not pass config into combat-state source');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['tick', () => tickSource(config)]"), 'runtime fragment registry does not pass config into tick source');
     assert(functionBody(tickSourceModule, 'tickSource').includes("async function tick(source = 'timer')"), 'tick source factory does not include tick');
@@ -1595,7 +1597,7 @@ function main() {
     assert(exitReloginSummaryBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin summary bundled source does not hand summary helpers to the bundler');
     assert(exitReloginSummaryBundledBody.includes('combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'exit-relogin summary bundled source does not bind combat summary helpers');
     assert(exitReloginSummaryBundledBody.includes('combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp })'), 'exit-relogin summary bundled source does not bind combat leave action helpers');
-    assert(exitReloginSummaryBundledBody.includes('pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance })'), 'exit-relogin summary bundled source does not bind pursuit summary helpers');
+    assert(!exitReloginSummaryBundledBody.includes('function pursuitLeaveSummary'), 'exit-relogin summary bundled source still keeps pursuit summary wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function injuryLeaveSummary'), 'exit-relogin summary bundled source still keeps injury summary wrapper');
     assert(exitReloginSummaryBundledBody.includes('offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'exit-relogin summary bundled source does not bind offline summary helpers');
     assert(!exitReloginSummaryBundledBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary bundled source still keeps offline display wrapper');
@@ -1911,6 +1913,8 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled injury summary core alias');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })'), 'leave-flow source does not bind bundled injury summary core directly');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled pursuit summary core alias');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pursuitLeaveSummaryForLeaveFlowCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })'), 'leave-flow source does not bind bundled pursuit summary core directly');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)'), 'leave-flow source does not preserve inline offline unsafe predicate wrapper call');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingStaminaExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending stamina suppress bound core for bundled builds');
@@ -2159,11 +2163,16 @@ function main() {
       }
       const staminaSummaryBody = functionBody(text, 'staminaBudgetCoinLeaveSummary');
       assert(staminaSummaryBody.includes("最近金币距离' + formatDistance(detail.distance)"), 'stamina budget leave summary does not use meter distance formatting');
-      const pursuitSummarySource = functionBody(text, 'pursuitLeaveSummary') + '\n' + finalRuntimeText;
+      const pursuitSummarySource = file === 'dist/grasp-rat-remote-bot.js'
+        ? `${text}\n${finalRuntimeText}`
+        : `${functionBody(text, 'pursuitLeaveSummary')}\n${finalRuntimeText}`;
       assert(
         pursuitSummarySource.includes("'，距离' + formatDistance(distance)") || pursuitSummarySource.includes('helpers.formatDistance(distance)'),
         'pursuit leave summary does not use meter distance formatting'
       );
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(!text.includes('function pursuitLeaveSummary('), 'dist remote bot still keeps pursuitLeaveSummary wrapper');
+      }
     });
     check(`${file} displays relogin wait using remaining hold before original delay`, () => {
       const reloginDisplaySource = file === 'dist/grasp-rat-remote-bot.js'

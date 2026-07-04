@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.461" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.462" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10333,7 +10333,6 @@
     const {
       combatExitSummaryCore,
       combatLeaveActionCore,
-      pursuitLeaveSummaryCore,
       offlineLeaveSummaryCore,
       reloginDelayForHpCore
     } = require_exit_relogin();
@@ -10342,9 +10341,6 @@
     }
     function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
       return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
-    }
-    function pursuitLeaveSummary(pursuit) {
-      return pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance });
     }
     function offlineLeaveSummary(reason, offlineSafety) {
       return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
@@ -12048,6 +12044,7 @@
       offlineExitRequiresUnsafeReloginDelayCore,
       primePendingStaminaExitLoginSuppressBoundCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
+      pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,
       startExitAuditBoundCore
     } = require_exit_relogin();
     async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
@@ -12149,7 +12146,7 @@
       const skipped = pendingExitSkipNewLeave("pursuit", "sustained pursuit", {
         self: selfSummary,
         pursuit: pursuitSummary,
-        summary: pursuitLeaveSummary(pursuitSummary)
+        summary: pursuitLeaveSummaryForLeaveFlowCore(pursuitSummary, { actorLabel, formatDurationMs, formatDistance })
       });
       if (skipped) return skipped;
       if (t - Number(bot.lastPursuitLeaveAt || 0) < cfg.pursuitLeaveRetryMs) {
@@ -12158,7 +12155,7 @@
           reason: "cooldown",
           cooldownRemainingMs: Math.max(0, Math.round(cfg.pursuitLeaveRetryMs - (t - Number(bot.lastPursuitLeaveAt || 0)))),
           pursuit: pursuitSummary,
-          summary: pursuitLeaveSummary(pursuitSummary)
+          summary: pursuitLeaveSummaryForLeaveFlowCore(pursuitSummary, { actorLabel, formatDurationMs, formatDistance })
         };
         return finalizeLeaveDisplayReason(detail2);
       }
@@ -12170,7 +12167,7 @@
         userId: getCurrentUserId() || null,
         self: selfSummary,
         pursuit: pursuitSummary,
-        summary: pursuitLeaveSummary(pursuitSummary),
+        summary: pursuitLeaveSummaryForLeaveFlowCore(pursuitSummary, { actorLabel, formatDurationMs, formatDistance }),
         error: ""
       };
       startExitAuditBoundCore(detail, { scope: "enemy", source: "pursuit", reason: detail.reason, self: selfSummary, pursuit: pursuitSummary }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
@@ -20858,7 +20855,7 @@
         }
       };
     }
-    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore } = require_exit_relogin();
+    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -21510,7 +21507,7 @@
           const skippedLeave = pendingExitSkipNewLeave("pursuit", "sustained pursuit", {
             self: currentSummary,
             pursuit: pursuitSummary,
-            summary: pursuitLeaveSummary(pursuitSummary)
+            summary: pursuitLeaveSummaryForTickCore(pursuitSummary, { actorLabel, formatDurationMs, formatDistance })
           });
           if (skippedLeave) {
             action = {

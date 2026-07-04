@@ -2,7 +2,7 @@
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
@@ -22,6 +22,9 @@ function leaveFlowSource(options = {}) {
   const injuryLeaveSummaryCall = injury => options.bundledRuntime
     ? `injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })`
     : `injuryLeaveSummary(${injury})`;
+  const pursuitLeaveSummaryCall = pursuit => options.bundledRuntime
+    ? `pursuitLeaveSummaryForLeaveFlowCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`
+    : `pursuitLeaveSummary(${pursuit})`;
   return String.raw`${runtimeExitReloginPrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
@@ -123,7 +126,7 @@ function leaveFlowSource(options = {}) {
     const skipped = pendingExitSkipNewLeave('pursuit', 'sustained pursuit', {
       self: selfSummary,
       pursuit: pursuitSummary,
-      summary: pursuitLeaveSummary(pursuitSummary)
+      summary: ${pursuitLeaveSummaryCall('pursuitSummary')}
     });
     if (skipped) return skipped;
     if (t - Number(bot.lastPursuitLeaveAt || 0) < cfg.pursuitLeaveRetryMs) {
@@ -132,7 +135,7 @@ function leaveFlowSource(options = {}) {
         reason: 'cooldown',
         cooldownRemainingMs: Math.max(0, Math.round(cfg.pursuitLeaveRetryMs - (t - Number(bot.lastPursuitLeaveAt || 0)))),
         pursuit: pursuitSummary,
-        summary: pursuitLeaveSummary(pursuitSummary)
+        summary: ${pursuitLeaveSummaryCall('pursuitSummary')}
       };
       return finalizeLeaveDisplayReason(detail);
     }
@@ -144,7 +147,7 @@ function leaveFlowSource(options = {}) {
       userId: getCurrentUserId() || null,
       self: selfSummary,
       pursuit: pursuitSummary,
-      summary: pursuitLeaveSummary(pursuitSummary),
+      summary: ${pursuitLeaveSummaryCall('pursuitSummary')},
       error: ''
     };
     ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'pursuit', reason: detail.reason, self: selfSummary, pursuit: pursuitSummary }")};
