@@ -4,7 +4,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const esbuild = require('esbuild');
-const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source');
+const {
+  remoteRuntimeEntrySource,
+  runtimeEvalEntrySource
+} = require('../src/browser/runtime-entry-source');
 
 const ROOT = path.resolve(__dirname, '..');
 const VIRTUAL_ENTRY_NAMESPACE = 'grasp-rat-virtual-entry';
@@ -35,7 +38,7 @@ function sha256Hex(text) {
 }
 
 function remoteSourceFor(options) {
-  return remoteBrowserRuntimeSource(options);
+  return remoteRuntimeEntrySource(options);
 }
 
 function escapeRegExp(text) {
@@ -86,18 +89,14 @@ async function bundleRemoteSource(directSource) {
   return bundleVirtualEntry(REMOTE_RUNTIME_ENTRY, directSource);
 }
 
-async function bundleRuntimeEvalSource(directSource) {
+async function bundleRuntimeEvalSource(entrySource) {
   const globalName = '__graspRatBotRuntimeEvalBundle';
-  const output = await bundleVirtualEntry(RUNTIME_EVAL_ENTRY, `export default ${directSource};`, { globalName });
+  const output = await bundleVirtualEntry(RUNTIME_EVAL_ENTRY, entrySource, { globalName });
   return `(() => {\n${output}\nreturn ${globalName}.default;\n})()`;
 }
 
 async function browserRuntimeEvalSourceFor(options = {}) {
-  const directSource = require('../src/browser/runtime-source').browserRuntimeSource({
-    ...options,
-    bundledRuntime: true
-  });
-  return bundleRuntimeEvalSource(directSource);
+  return bundleRuntimeEvalSource(runtimeEvalEntrySource(options));
 }
 
 async function bundledRemoteSourceFor(options) {
@@ -125,7 +124,7 @@ function remoteManifestFor(options, bundle, manifestOptions = {}) {
     production: Boolean(manifestOptions.production),
     bundler: {
       ...BUNDLER_INFO,
-      mode: manifestOptions.mode || 'production-full-generated-remote',
+      mode: manifestOptions.mode || 'production-runtime-entry-source',
       directSha256: bundle.directSha256
     },
     config: {}

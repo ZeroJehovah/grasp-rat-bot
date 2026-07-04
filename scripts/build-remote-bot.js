@@ -60,7 +60,7 @@ async function main() {
     statusEvery: options.statusEvery
   }, {
     production: true,
-    mode: 'production-full-generated-remote'
+    mode: 'production-runtime-entry-source'
   });
   console.log(JSON.stringify({
     scriptPath,
