@@ -1683,3 +1683,11 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-fragment-registry.js` keeps the stable `control-login-runtime` fragment name, but imports `controlLoginSource` directly and calls `controlLoginSource(config)`.
 - Static verification rejects reintroducing the deleted wrapper, requires the direct registry import, and continues checking the underlying control-login source factory shape.
 - The `.513` manifest records bundled SHA-256 `bf752fe3697efcc7e73eb8e6b15ce3c34a151e3a071d72b5dad778460b4a0b7a` and pre-bundle remote direct SHA-256 `df1ef6c9391ce64c06460b3a6510096819267c4df38b3d7fd1ee7263bdc7f792`.
+
+`bootstrap-0.4.514` removes separator-only registry fragments:
+
+- All `separator-*` pseudo-fragments are removed from `src/browser/runtime-fragment-registry.js`.
+- `src/browser/runtime-source.js` now centralizes fragment spacing by joining rendered named fragments with a uniform double newline.
+- The provider registry now contains only executable/source-producing runtime fragments, which makes the graph easier to audit before further bundler migration.
+- Static verification rejects separator-only entries in the registry and checks that renderer-owned spacing is the only fragment spacing path.
+- The `.514` manifest records bundled SHA-256 `5244e185b7ce0927b3b05743e391cccbc2c86229843143b28954c2c8924a9425` and pre-bundle remote direct SHA-256 `533621d2d526473229dc33a150752a525edfdb6c26b80531652b4bc7eefe0292`.
