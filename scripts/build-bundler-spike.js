@@ -120,6 +120,7 @@ async function selfTest() {
   assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
   assert(source.includes('function setEnemyLeaveSuppressCore'), 'exit-relogin enemy suppress helper was not bundled');
   assert(source.includes('function staminaExitHoldUntilForDetailBoundCore'), 'exit-relogin stamina hold bound helper was not bundled');
+  assert(source.includes('function setOfflineLeaveSuppressBoundCore'), 'exit-relogin offline suppress bound helper was not bundled');
   assert(source.includes('function enemyReloginHoldRemainingMsCore'), 'exit-relogin hold read helper was not bundled');
   assert(source.includes('function setOfflineLeaveSuppressCore'), 'exit-relogin offline suppress helper was not bundled');
   assert(source.includes('function clearEnemyReloginHoldCore'), 'exit-relogin hold clear helper was not bundled');
@@ -304,6 +305,10 @@ async function selfTest() {
   assert(status.exitReloginOfflineSuppressSafe === false, 'spike did not mark unsafe zero-hold offline suppress');
   assert(status.exitReloginOfflineSuppressSkipped === true, 'spike did not preserve defensive delay skipped marker');
   assert(status.exitReloginOfflineSuppressFinalized === true, 'spike did not finalize zero-hold offline suppress detail');
+  assert(status.exitReloginOfflineSuppressBoundReturn === 4000, 'spike did not execute bound offline suppress stamina hold');
+  assert(status.exitReloginOfflineSuppressBoundReason === 'offline leave', 'spike did not route bound offline suppress through offline reason');
+  assert(status.exitReloginOfflineSuppressBoundCoin === 'bound-budget-coin', 'spike did not attach bound offline suppress stamina budget hold');
+  assert(status.exitReloginOfflineSuppressBoundFixed === 3000, 'spike did not preserve bound offline suppress fixed delay');
   assert(status.exitReloginPendingStaminaUntil === 6000, 'spike did not prime pending stamina login suppress');
   assert(status.exitReloginPendingStaminaDelay === 5000, 'spike did not preserve pending stamina delay');
   assert(status.exitReloginPendingStaminaBudgetCoin === 'stamina-spike', 'spike did not attach pending stamina budget hold');

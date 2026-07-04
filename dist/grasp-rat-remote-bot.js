@@ -1930,6 +1930,21 @@
           fixedDelayMs: staminaHold?.fixed ? staminaHold.fixedDelayMs : 0
         });
       }
+      function setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options, {
+          now: nowFn(),
+          staminaExitHoldUntilForDetail: (holdDetail) => staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn(), {
+            staminaBudgetReloginDelayMs: helpers.staminaBudgetReloginDelayMs,
+            staminaResetHoldUntil: helpers.staminaResetHoldUntil
+          }),
+          offlineExitRequiresUnsafeReloginDelay: offlineExitRequiresUnsafeReloginDelayCore,
+          finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
+          writePersistentExitState: helpers.writePersistentExitState,
+          setExitReloginSuppress: helpers.setExitReloginSuppress,
+          offlineLeaveStateKey: helpers.offlineLeaveStateKey
+        });
+      }
       function primePendingStaminaExitLoginSuppressCore(detail, helpers) {
         const now = Number(helpers.now || 0) || 0;
         const hold = helpers.staminaExitHoldUntilForDetail(detail);
@@ -2020,6 +2035,7 @@
         offlineReloginHoldRemainingMsCore,
         clearLoginSuppressMatchingCore,
         setOfflineLeaveSuppressCore,
+        setOfflineLeaveSuppressBoundCore,
         primePendingStaminaExitLoginSuppressCore,
         clearEnemyReloginHoldCore,
         clearOfflineReloginHoldCore
@@ -4629,7 +4645,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.435" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.436" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10307,13 +10323,14 @@
     }
     const {
       setOfflineLeaveSuppressCore,
+      setOfflineLeaveSuppressBoundCore,
       primePendingStaminaExitLoginSuppressCore
     } = require_exit_relogin();
     function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-      return setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options, {
-        now: Date.now(),
-        staminaExitHoldUntilForDetail,
-        offlineExitRequiresUnsafeReloginDelay,
+      return setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike, options, {
+        now: Date.now,
+        staminaBudgetReloginDelayMs,
+        staminaResetHoldUntil,
         finalizeLeaveDisplayReason,
         writePersistentExitState,
         setExitReloginSuppress,

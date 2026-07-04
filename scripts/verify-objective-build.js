@@ -1617,9 +1617,9 @@ function main() {
     assert(exitReloginRemainderPrefixInlineBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix inline source does not preserve unsafe offline predicate call');
     const exitReloginRemainderPrefixBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginRemainderPrefixSource');
     assert(exitReloginRemainderPrefixBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin remainder prefix bundled source does not hand helpers to the bundler');
-    assert(exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options'), 'exit-relogin remainder prefix bundled source does not bind offline suppress core');
+    assert(exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike, options'), 'exit-relogin remainder prefix bundled source does not bind offline suppress bound core');
     assert(exitReloginRemainderPrefixBundledBody.includes('primePendingStaminaExitLoginSuppressCore(detail'), 'exit-relogin remainder prefix bundled source does not bind pending stamina suppress core');
-    assert(exitReloginRemainderPrefixBundledBody.includes('staminaExitHoldUntilForDetail') && exitReloginRemainderPrefixBundledBody.includes('offlineExitRequiresUnsafeReloginDelay') && exitReloginRemainderPrefixBundledBody.includes('writePersistentExitState'), 'exit-relogin remainder prefix bundled source does not pass required offline suppress bindings');
+    assert(exitReloginRemainderPrefixBundledBody.includes('staminaBudgetReloginDelayMs') && exitReloginRemainderPrefixBundledBody.includes('staminaResetHoldUntil') && exitReloginRemainderPrefixBundledBody.includes('writePersistentExitState'), 'exit-relogin remainder prefix bundled source does not pass required offline suppress bindings');
     const exitReloginHoldReadInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldReadInlineSource');
     assert(exitReloginHoldReadInlineBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include enemy hold reader');
     assert(exitReloginHoldReadInlineBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include offline hold reader');
@@ -1739,6 +1739,8 @@ function main() {
     assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);'), 'exit-relogin prefix runtime offline suppress core does not persist zero-hold detail');
     assert(exitReloginRuntimeModule.includes("return helpers.setExitReloginSuppress('offline leave', reason, detail, selfLike"), 'exit-relogin prefix runtime offline suppress core does not call suppress writer');
     assert(exitReloginRuntimeModule.includes('minimumUntil: Math.max(Number(options.minimumUntil || 0) || 0, staminaHold?.until || 0)'), 'exit-relogin prefix runtime offline suppress core does not preserve minimumUntil selection');
+    assert(exitReloginRuntimeModule.includes('function setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin prefix runtime offline suppress bound core not found');
+    assert(exitReloginRuntimeModule.includes('staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn()') && exitReloginRuntimeModule.includes('offlineExitRequiresUnsafeReloginDelay: offlineExitRequiresUnsafeReloginDelayCore'), 'exit-relogin prefix runtime offline suppress bound core does not preserve helper binding');
     assert(exitReloginRuntimeModule.includes('function primePendingStaminaExitLoginSuppressCore(detail, helpers)'), 'exit-relogin prefix runtime pending stamina core not found');
     assert(exitReloginRuntimeModule.includes("const until = helpers.setLoginSuppress('stamina leave pending', delayMs);"), 'exit-relogin prefix runtime pending stamina core does not set login suppress');
     assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));'), 'exit-relogin prefix runtime pending stamina core does not preserve pending delay');
@@ -1785,6 +1787,7 @@ function main() {
       'offlineReloginHoldRemainingMsCore',
       'clearLoginSuppressMatchingCore',
       'setOfflineLeaveSuppressCore',
+      'setOfflineLeaveSuppressBoundCore',
       'primePendingStaminaExitLoginSuppressCore',
       'clearEnemyReloginHoldCore',
       'clearOfflineReloginHoldCore'
@@ -1927,6 +1930,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setExitReloginSuppressCore('), 'bundler spike does not execute the exit-relogin suppress writer core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setEnemyLeaveSuppressCore('), 'bundler spike does not execute the exit-relogin enemy suppress core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.staminaExitHoldUntilForDetailBoundCore('), 'bundler spike does not execute the exit-relogin bound stamina hold selector core');
+    assert(bundlerSpikeEntrySource.includes('exitRelogin.setOfflineLeaveSuppressBoundCore('), 'bundler spike does not execute the exit-relogin bound offline suppress core');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');
     assert(bundlerSpikeEntrySource.includes("const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__'"), 'bundler spike config key not found');
     assert(bundlerSpikeEntrySource.includes('pageAdapter.installPageGlobal(SPIKE_KEY, installed);'), 'bundler spike does not install through the page-global adapter');
@@ -1964,6 +1968,7 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressEventCount === 6'), 'bundler spike self-test does not assert suppress writer side-effect count');
     assert(bundlerSpikeBuildSource.includes("status.exitReloginEnemySuppressReason === 'enemy leave'"), 'bundler spike self-test does not assert enemy suppress fixed reason');
     assert(bundlerSpikeBuildSource.includes("status.exitReloginStaminaHoldBoundReason === 'stamina reset'"), 'bundler spike self-test does not assert bound stamina hold selector execution');
+    assert(bundlerSpikeBuildSource.includes('status.exitReloginOfflineSuppressBoundReturn === 4000'), 'bundler spike self-test does not assert bound offline suppress execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');
     assert(bundlerSpikeBuildSource.includes('context => context.window'), 'bundler spike self-test does not read installed window global');
     assert(bundlerSpikeBuildSource.includes("storageProbe?.scope === 'globalThis'"), 'bundler spike self-test does not cover globalThis localStorage');

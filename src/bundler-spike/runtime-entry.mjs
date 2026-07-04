@@ -928,6 +928,32 @@ function helperStatus(config = {}) {
       offlineLeaveStateKey: 'offline-state'
     }
   );
+  const exitReloginOfflineSuppressBoundCalls = [];
+  const exitReloginOfflineSuppressBoundDetail = {
+    offlineSafety: { staminaBudgetExit: { coin: { id: 'bound-budget-coin' } } },
+    summary: 'offline suppress bound spike'
+  };
+  const exitReloginOfflineSuppressBoundReturn = exitRelogin.setOfflineLeaveSuppressBoundCore(
+    { offlineReloginUntil: 0, lastOfflineLeaveWaitMs: 0 },
+    'stamina budget spike',
+    exitReloginOfflineSuppressBoundDetail,
+    { hp: 90 },
+    {},
+    {
+      now: () => 1000,
+      staminaBudgetReloginDelayMs: () => 3000,
+      staminaResetHoldUntil: () => null,
+      finalizeLeaveDisplayReason: detail => detail,
+      writePersistentExitState: () => {
+        throw new Error('unexpected persistent write for bound stamina hold spike');
+      },
+      setExitReloginSuppress: (storageReason, reason, detail, selfLike, options) => {
+        exitReloginOfflineSuppressBoundCalls.push([storageReason, reason, detail.staminaBudgetHold?.staminaBudgetExit?.coin?.id, selfLike.hp, options.minimumUntil, options.fixedDelayMs]);
+        return options.minimumUntil;
+      },
+      offlineLeaveStateKey: 'offline-state'
+    }
+  );
   const exitReloginPendingStaminaDetail = {};
   const exitReloginPendingStaminaUntil = exitRelogin.primePendingStaminaExitLoginSuppressCore(
     exitReloginPendingStaminaDetail,
@@ -1142,6 +1168,10 @@ function helperStatus(config = {}) {
     exitReloginOfflineSuppressSafe: exitReloginOfflineSuppressDetail.safeReloginAllowed,
     exitReloginOfflineSuppressSkipped: exitReloginOfflineSuppressDetail.defensiveReloginDelaySkipped,
     exitReloginOfflineSuppressFinalized: exitReloginOfflineSuppressDetail.finalized,
+    exitReloginOfflineSuppressBoundReturn,
+    exitReloginOfflineSuppressBoundReason: exitReloginOfflineSuppressBoundCalls[0]?.[0],
+    exitReloginOfflineSuppressBoundCoin: exitReloginOfflineSuppressBoundCalls[0]?.[2],
+    exitReloginOfflineSuppressBoundFixed: exitReloginOfflineSuppressBoundCalls[0]?.[5],
     exitReloginPendingStaminaUntil,
     exitReloginPendingStaminaDelay: exitReloginPendingStaminaDetail.pendingLoginSuppressDelayMs,
     exitReloginPendingStaminaBudgetCoin: exitReloginPendingStaminaDetail.staminaBudgetHold?.staminaBudgetExit?.coin?.id,
