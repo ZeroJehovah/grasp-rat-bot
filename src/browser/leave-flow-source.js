@@ -2,7 +2,7 @@
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
@@ -22,6 +22,9 @@ function leaveFlowSource(options = {}) {
   const offlineLeaveSummaryCall = (reason, offlineSafety) => options.bundledRuntime
     ? `offlineLeaveSummaryForLeaveFlowCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`
     : `offlineLeaveSummary(${reason}, ${offlineSafety})`;
+  const combatExitSummaryCall = (reason, target, combatState) => options.bundledRuntime
+    ? `combatExitSummaryForLeaveFlowCore(${reason}, ${target}, ${combatState}, { cfg, actorLabel, hpDisplay, formatDurationMs })`
+    : `combatExitSummary(${reason}, ${target}, ${combatState})`;
   const injuryLeaveSummaryCall = injury => options.bundledRuntime
     ? `injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })`
     : `injuryLeaveSummary(${injury})`;
@@ -183,7 +186,7 @@ function leaveFlowSource(options = {}) {
       target: action?.target || null,
       combat: action?.combatState || null,
       combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
-      summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {})
+      summary: action?.exitSummary || ${combatExitSummaryCall("action?.reason || 'combat-low-hp-leave'", 'action?.target || null', 'action?.combatState || {}')}
     });
     if (skipped) return skipped;
     if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
@@ -194,7 +197,7 @@ function leaveFlowSource(options = {}) {
         combat: action?.combatState || null,
         combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
         target: action?.target || null,
-        summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {})
+        summary: action?.exitSummary || ${combatExitSummaryCall("action?.reason || 'combat-low-hp-leave'", 'action?.target || null', 'action?.combatState || {}')}
       };
       finalizeLeaveDisplayReason(detail);
       rememberPendingCombatLeave(action, selfSummary, detail);
@@ -210,7 +213,7 @@ function leaveFlowSource(options = {}) {
       target: action?.target || null,
       combat: action?.combatState || null,
       combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
-      summary: action?.exitSummary || combatExitSummary(action?.reason || 'combat-low-hp-leave', action?.target || null, action?.combatState || {}),
+      summary: action?.exitSummary || ${combatExitSummaryCall("action?.reason || 'combat-low-hp-leave'", 'action?.target || null', 'action?.combatState || {}')},
       error: ''
     };
     ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'combat', reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null }")};
