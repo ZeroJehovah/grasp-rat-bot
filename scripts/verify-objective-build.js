@@ -694,6 +694,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./persistent-exit-source')"), 'persistent-exit source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
+    assert(runtimeFragmentsSourceModule.includes("['pending-exit', () => pendingExitSource(config)]"), 'pending-exit source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./restored-runtime-state-source')"), 'restored runtime state source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
@@ -1600,8 +1601,7 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('resetLoginSnapshotGate') && exitReloginHoldBundledBody.includes('loginPointSafetyExitSelfForDetail') && exitReloginHoldBundledBody.includes('recordExitAuditEvent'), 'exit-relogin hold bundled source does not pass required exit audit bindings');
     assert(!exitReloginHoldBundledBody.includes('lastSelf: bot.lastSelf'), 'exit-relogin hold bundled source should not bind lastSelf outside the runtime bound core');
     assert(exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind pending unsafe suppress through bound core');
-    assert(exitReloginHoldBundledBody.includes('setEnemyLeaveSuppressCore(reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind enemy suppress core');
-    assert(exitReloginHoldBundledBody.includes('setExitReloginSuppress'), 'exit-relogin hold bundled source does not pass enemy suppress delegate binding');
+    assert(!exitReloginHoldBundledBody.includes('setEnemyLeaveSuppressCore'), 'exit-relogin hold bundled source should not keep unused enemy suppress wrapper core');
     assert(exitReloginHoldBundledBody.includes('hpInfoForRelogin') && exitReloginHoldBundledBody.includes('reloginDelayForHp') && exitReloginHoldBundledBody.includes('setLoginSuppress'), 'exit-relogin hold bundled source does not pass required pending unsafe suppress bindings');
     assert(!exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore,'), 'exit-relogin hold bundled source should not import unused stamina budget wrapper helper');
     assert(!exitReloginHoldBundledBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold bundled source should not keep unused stamina budget wrapper');
@@ -1725,8 +1725,7 @@ function main() {
     assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve HP delay metadata');
     assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress bound core not found');
     assert(exitReloginRuntimeModule.includes('return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {') && exitReloginRuntimeModule.includes('unsafeExitReloginMinDelayMs: () => unsafeExitReloginMinDelayMsCore(helpers.cfg)') && exitReloginRuntimeModule.includes('pendingExitSuppressReason: pendingExitSuppressReasonCore'), 'exit-relogin hold runtime pending unsafe suppress bound core does not preserve helper binding');
-    assert(exitReloginRuntimeModule.includes('function setEnemyLeaveSuppressCore(reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime enemy suppress core not found');
-    assert(exitReloginRuntimeModule.includes("helpers.setExitReloginSuppress('enemy leave', reason, detail, selfLike, options);"), 'exit-relogin hold runtime enemy suppress core does not preserve fixed reason delegation');
+    assert(!exitReloginRuntimeModule.includes('function setEnemyLeaveSuppressCore'), 'exit-relogin hold runtime should not keep unused enemy suppress core');
     assert(exitReloginRuntimeModule.includes('function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs)'), 'exit-relogin hold runtime stamina budget core not found');
     assert(exitReloginRuntimeModule.includes("reason: 'stamina budget'"), 'exit-relogin hold runtime stamina budget core does not preserve reason');
     assert(exitReloginRuntimeModule.includes('function staminaExitHoldUntilForDetailCore(detail, t, helpers)'), 'exit-relogin hold runtime stamina selector core not found');
@@ -1802,7 +1801,6 @@ function main() {
       'setExitReloginSuppressCore',
       'primePendingUnsafeExitLoginSuppressCore',
       'primePendingUnsafeExitLoginSuppressBoundCore',
-      'setEnemyLeaveSuppressCore',
       'staminaBudgetExitHoldUntilCore',
       'staminaExitHoldUntilForDetailCore',
       'staminaExitHoldUntilForDetailBoundCore',
@@ -1824,12 +1822,15 @@ function main() {
     ]) {
       assert(exitReloginRuntimeModule.includes(`  ${exportedName}`), `exit-relogin runtime module does not export ${exportedName}`);
     }
-    assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
+    assert(pendingExitSourceModule.includes('function pendingExitSource(options = {}) {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function summarizePendingExit'), 'pending-exit source factory does not include summary helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("options.bundledRuntime"), 'pending-exit source does not select bundled enemy suppress call from runtime config');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppress('enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through fixed reason writer');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
     assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('String.raw`'), 'leave-command source factory does not return raw browser source');
@@ -1958,7 +1959,6 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute the stamina budget helper module');
     assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute the opportunity constants helper module');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setExitReloginSuppressCore('), 'bundler spike does not execute the exit-relogin suppress writer core');
-    assert(bundlerSpikeEntrySource.includes('exitRelogin.setEnemyLeaveSuppressCore('), 'bundler spike does not execute the exit-relogin enemy suppress core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.primePendingUnsafeExitLoginSuppressBoundCore('), 'bundler spike does not execute the exit-relogin bound pending unsafe suppress core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.startExitAuditBoundCore('), 'bundler spike does not execute the exit-relogin bound start audit core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.staminaExitHoldUntilForDetailBoundCore('), 'bundler spike does not execute the exit-relogin bound stamina hold selector core');
@@ -2004,7 +2004,6 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressZeroSkipped === true'), 'bundler spike self-test does not assert suppress zero-delay execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressNewUntil === 7000'), 'bundler spike self-test does not assert suppress new-hold execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressEventCount === 6'), 'bundler spike self-test does not assert suppress writer side-effect count');
-    assert(bundlerSpikeBuildSource.includes("status.exitReloginEnemySuppressReason === 'enemy leave'"), 'bundler spike self-test does not assert enemy suppress fixed reason');
     assert(bundlerSpikeBuildSource.includes("status.exitReloginStaminaHoldBoundReason === 'stamina reset'"), 'bundler spike self-test does not assert bound stamina hold selector execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginOfflineSuppressBoundReturn === 4000'), 'bundler spike self-test does not assert bound offline suppress execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');

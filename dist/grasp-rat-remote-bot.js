@@ -1816,9 +1816,6 @@
           now: nowFn
         });
       }
-      function setEnemyLeaveSuppressCore(reason, detail, selfLike = null, options = {}, helpers) {
-        return helpers.setExitReloginSuppress("enemy leave", reason, detail, selfLike, options);
-      }
       function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs) {
         if (!staminaBudgetExit) return null;
         const delayMs = staminaBudgetReloginDelayMs();
@@ -2121,7 +2118,6 @@
         setExitReloginSuppressCore,
         primePendingUnsafeExitLoginSuppressCore,
         primePendingUnsafeExitLoginSuppressBoundCore,
-        setEnemyLeaveSuppressCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
         staminaExitHoldUntilForDetailBoundCore,
@@ -4746,7 +4742,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.444" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.445" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10351,7 +10347,6 @@
       startExitAuditBoundCore,
       setExitReloginSuppressCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
-      setEnemyLeaveSuppressCore,
       staminaExitHoldUntilForDetailCore,
       staminaExitHoldUntilForDetailBoundCore,
       offlineExitRequiresUnsafeReloginDelayCore
@@ -10389,11 +10384,6 @@
         cfg,
         setLoginSuppress,
         now: Date.now
-      });
-    }
-    function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-      return setEnemyLeaveSuppressCore(reason, detail, selfLike, options, {
-        setExitReloginSuppress
       });
     }
     function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
@@ -11048,7 +11038,7 @@
       if (pending.scope === "offline") {
         setOfflineLeaveSuppress(detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions);
       } else {
-        setEnemyLeaveSuppress(detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
+        setExitReloginSuppress("enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
         if (pending.source === "combat") bot.lastCombatLeaveResult = detail;
         if (pending.source === "pursuit") bot.lastPursuitLeaveResult = detail;
         if (pending.source === "injury") bot.lastInjuryLeaveResult = detail;

@@ -119,7 +119,6 @@ async function selfTest() {
   assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
   assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
   assert(source.includes('function startExitAuditBoundCore'), 'exit-relogin start audit bound helper was not bundled');
-  assert(source.includes('function setEnemyLeaveSuppressCore'), 'exit-relogin enemy suppress helper was not bundled');
   assert(source.includes('function staminaExitHoldUntilForDetailBoundCore'), 'exit-relogin stamina hold bound helper was not bundled');
   assert(source.includes('function setOfflineLeaveSuppressBoundCore'), 'exit-relogin offline suppress bound helper was not bundled');
   assert(source.includes('function primePendingStaminaExitLoginSuppressBoundCore'), 'exit-relogin pending stamina suppress bound helper was not bundled');
@@ -296,8 +295,6 @@ async function selfTest() {
   assert(status.exitReloginSuppressNewStreaked === true, 'spike did not update enemy leave streak before new hold');
   assert(status.exitReloginSuppressNewPersisted === true, 'spike did not persist new suppress detail');
   assert(status.exitReloginSuppressEventCount === 6, 'spike did not execute all suppress core side effects');
-  assert(status.exitReloginEnemySuppressReason === 'enemy leave', 'spike did not route enemy suppress through fixed reason');
-  assert(status.exitReloginEnemySuppressReturn === 12345, 'spike did not return enemy suppress delegate result');
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
   assert(status.exitReloginStaminaHoldBoundReason === 'stamina reset', 'spike did not execute exit relogin bound stamina hold selector');

@@ -180,7 +180,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-exit-relogin',
     `
 `],
-    ['pending-exit', pendingExitSource],
+    ['pending-exit', () => pendingExitSource(config)],
     ['leave-command', leaveCommandSource],
     ['auto-login', autoLoginSource],
     ['leave-flow', leaveFlowSource],
