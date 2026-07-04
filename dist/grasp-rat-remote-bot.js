@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.476" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.477" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -14730,7 +14730,7 @@
       const reward = Math.max(0, Math.round(Number(amount || 0)));
       const targetDrop = Math.max(0, Math.round(Number(postAttackTarget.drop || 0)));
       if (!reward || !targetDrop || reward !== targetDrop) return null;
-      const coinKey = coinTargetKey(target) || "xy:" + Math.round(Number(target.x) || 0) + ":" + Math.round(Number(target.y) || 0) + ":" + reward;
+      const coinKey = coinTargetKeyCore(target) || "xy:" + Math.round(Number(target.x) || 0) + ":" + Math.round(Number(target.y) || 0) + ":" + reward;
       const targetKey = postAttackTarget.id !== void 0 && postAttackTarget.id !== null && postAttackTarget.id !== "" ? "id:" + String(postAttackTarget.id) : "name:" + String(postAttackTarget.name || "");
       const seenKey = "drop-coin-match|" + targetKey + "|" + coinKey + "|" + reward;
       if (bot.seenKillKeys.has(seenKey)) return null;
@@ -19884,7 +19884,7 @@
     function visibleCoinSourcesConfirmTargetMissing(target) {
       const visibleCoins = currentVisibleCoinListForMissingHold();
       if (!Array.isArray(visibleCoins)) return false;
-      return !visibleCoins.some((coin) => coinMatchesTrackedTarget(coin, target));
+      return !visibleCoins.some((coin) => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
     }
     function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
       return missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, opportunityChoiceCoreOptions({
@@ -20240,16 +20240,10 @@
         coinProgress: bot.coinProgress
       }, self, coinTargetCoreOptions());
     }
-    function coinTargetKey(target) {
-      return coinTargetKeyCore(target);
-    }
-    function coinMatchesTrackedTarget(coin, target) {
-      return coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions());
-    }
     function trackedCoinStillVisible(target) {
       const nativeCoinList = getNativeCoinList();
       if (!Array.isArray(nativeCoinList)) return null;
-      return nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean).some((coin) => coinMatchesTrackedTarget(coin, target));
+      return nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean).some((coin) => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
     }
     function nativeCoinSnapshot() {
       const nativeCoinList = getNativeCoinList();
@@ -20268,7 +20262,7 @@
       updateSessionStats(currentSummary);
       const session = bot.session || (bot.session = {});
       const t = Date.now();
-      const key = coinTargetKey(target);
+      const key = coinTargetKeyCore(target);
       if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
       session.coinPickupKeys = session.coinPickupKeys.filter((item) => item && t - Number(item.at || 0) <= 6e4).slice(-80);
       if (key && session.coinPickupKeys.some((item) => String(item.key || "") === key && t - Number(item.at || 0) <= 5e3)) {

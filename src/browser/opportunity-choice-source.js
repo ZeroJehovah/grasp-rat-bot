@@ -134,7 +134,7 @@ function opportunityChoiceInlineSource(helpers = {}) {
 			  function visibleCoinSourcesConfirmTargetMissing(target) {
 			    const visibleCoins = currentVisibleCoinListForMissingHold();
 			    if (!Array.isArray(visibleCoins)) return false;
-			    return !visibleCoins.some(coin => coinMatchesTrackedTarget(coin, target));
+			    return !visibleCoins.some(coin => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
 			  }
 
 			  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
