@@ -751,7 +751,8 @@ function main() {
     const restoredRuntimeStateBundledBody = functionBody(restoredRuntimeStateSourceModule, 'bundledRestoredRuntimeStateSource');
     assert(restoredRuntimeStateBundledBody.includes("require('./src/browser/runtime/restored-runtime-state')"), 'restored runtime state bundled source does not hand restore helper to the bundler');
     assert(restoredRuntimeStateBundledBody.includes('restoreRuntimeStateCore(preserved, previousBot'), 'restored runtime state bundled source does not bind preserved/previousBot state');
-    assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailures') && restoredRuntimeStateBundledBody.includes('readPersistentExitState') && restoredRuntimeStateBundledBody.includes('readPersistedPendingExitState') && restoredRuntimeStateBundledBody.includes('chooseInitialPendingExitState'), 'restored runtime state bundled source does not bind runtime restore dependencies');
+    assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailures') && restoredRuntimeStateBundledBody.includes('readPersistentExitState'), 'restored runtime state bundled source does not bind runtime restore dependencies');
+    assert(restoredRuntimeStateBundledBody.includes('readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY') && restoredRuntimeStateBundledBody.includes('chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options'), 'restored runtime state bundled source does not bind pending-exit restore cores directly');
     assert(restoredRuntimeStateBundledBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind enemy leave key');
     assert(restoredRuntimeStateBundledBody.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind offline leave key');
     assert(functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource').includes('options.bundledRuntime'), 'restored runtime state source selector does not switch on bundled runtime mode');
@@ -1414,10 +1415,11 @@ function main() {
     assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit-persistence')"), 'pending-exit persistence bundled source does not hand helpers to the bundler');
     assert(pendingExitPersistenceBundledBody.includes('pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs'), 'pending-exit persistence bundled source does not bind config max age');
     assert(pendingExitPersistenceBundledBody.includes('cloneForPendingExit') && pendingExitPersistenceBundledBody.includes('pendingExitDisplayReason') && pendingExitPersistenceBundledBody.includes('pendingExitRetryMs'), 'pending-exit persistence bundled source does not bind runtime helper dependencies');
-    assert(pendingExitPersistenceBundledBody.includes('readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY'), 'pending-exit persistence bundled source does not bind storage reader');
     assert(pendingExitPersistenceBundledBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit'), 'pending-exit persistence bundled source does not bind storage writer');
     assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitReloadConfirmation('), 'pending-exit persistence bundled source still keeps reload-confirmation wrapper');
     assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitStateForStorage('), 'pending-exit persistence bundled source still keeps storage-normalizer wrapper');
+    assert(!pendingExitPersistenceBundledBody.includes('function readPersistedPendingExitState('), 'pending-exit persistence bundled source still keeps storage-reader wrapper');
+    assert(!pendingExitPersistenceBundledBody.includes('function chooseInitialPendingExitState('), 'pending-exit persistence bundled source still keeps initial-state chooser wrapper');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(controlLoginSourceModule, 'controlLoginSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'control-login source does not route reload-confirmation normalization directly to core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'pending-exit source does not route reload-confirmation normalization directly to core for bundled builds');
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('options.bundledRuntime'), 'pending-exit persistence source selector does not switch on bundled runtime mode');
@@ -1433,6 +1435,8 @@ function main() {
     assert(pendingExitPersistenceRuntimeModule.includes('normalizePendingExitReloadConfirmationCore,\n  normalizePendingExitStateForStorageCore,\n  readPersistedPendingExitStateCore,\n  writePersistentPendingExitStateCore,\n  chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime exports are incomplete');
     assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
     assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
+    assert(!distSource.includes('function readPersistedPendingExitState('), 'dist remote bot still keeps pending-exit storage-reader wrapper');
+    assert(!distSource.includes('function chooseInitialPendingExitState('), 'dist remote bot still keeps pending-exit initial-state chooser wrapper');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
@@ -2770,7 +2774,7 @@ function main() {
       assert(text.includes("const PENDING_EXIT_STATE_KEY = 'graspRatPendingExitState'"), 'pending exit storage key not found');
       const pendingExitNormalizerSource = `${text}\n${finalRuntimeText}`;
       assert(pendingExitNormalizerSource.includes('function normalizePendingExitStateForStorage') || pendingExitNormalizerSource.includes('function normalizePendingExitStateForStorageCore'), 'pending exit storage normalizer not found');
-      assert(text.includes('function readPersistedPendingExitState'), 'pending exit storage reader not found');
+      assert(pendingExitNormalizerSource.includes('function readPersistedPendingExitState') || pendingExitNormalizerSource.includes('function readPersistedPendingExitStateCore'), 'pending exit storage reader not found');
       const pendingExitRestoreSource = `${text}\n${finalRuntimeText}`;
       const restoresPendingExitWithReloadMarker = pendingExitRestoreSource.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot })')
         || (

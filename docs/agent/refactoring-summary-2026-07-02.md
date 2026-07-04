@@ -1436,6 +1436,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 195. Removed the bundled `exit-relogin` display finalizer wrapper by routing refresh-exit-detail, pending-exit, leave-flow, and control-login directly through `finalizeLeaveDisplayReasonCore()` / `leaveWaitDisplayCore()`: integrated in `bootstrap-0.4.467`
 196. Removed the bundled pending-exit reload-confirmation wrapper by routing pending-exit and control-login directly through `normalizePendingExitReloadConfirmationCore()`: integrated in `bootstrap-0.4.468`
 197. Removed the bundled pending-exit storage-normalizer wrapper after reader, writer, and initial-state chooser paths moved fully through runtime core calls: integrated in `bootstrap-0.4.469`
+198. Removed the bundled pending-exit persistence reader and initial-state chooser wrappers by routing restored-runtime-state directly through `readPersistedPendingExitStateCore()` / `chooseInitialPendingExitStateCore()`: integrated in `bootstrap-0.4.470`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

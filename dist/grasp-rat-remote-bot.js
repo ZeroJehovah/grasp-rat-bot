@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.469" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.470" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4878,9 +4878,7 @@
     }
     const {
       normalizePendingExitReloadConfirmationCore,
-      readPersistedPendingExitStateCore,
-      writePersistentPendingExitStateCore,
-      chooseInitialPendingExitStateCore
+      writePersistentPendingExitStateCore
     } = require_pending_exit_persistence();
     function pendingExitPersistenceCoreHelpers() {
       return {
@@ -4892,14 +4890,8 @@
         clearPersistentPendingExitState
       };
     }
-    function readPersistedPendingExitState(t = Date.now(), options = {}) {
-      return readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers());
-    }
     function writePersistentPendingExitState(pending = null) {
       return writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
-    }
-    function chooseInitialPendingExitState(memoryState, storedState, t = Date.now(), options = {}) {
-      return chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers());
     }
     const { refreshExitDetailCore } = require_refresh_exit_detail();
     const {
@@ -4920,11 +4912,15 @@
       return restoredCoinFailuresCore(preserved.coinFailures, cfg, performance.now());
     }
     const { restoreRuntimeStateCore } = require_restored_runtime_state();
+    const {
+      readPersistedPendingExitStateCore: readPersistedPendingExitStateForRestoredRuntimeStateCore,
+      chooseInitialPendingExitStateCore: chooseInitialPendingExitStateForRestoredRuntimeStateCore
+    } = require_pending_exit_persistence();
     const restoredRuntimeState = restoreRuntimeStateCore(preserved, previousBot, {
       restoredCoinFailures,
       readPersistentExitState,
-      readPersistedPendingExitState,
-      chooseInitialPendingExitState,
+      readPersistedPendingExitState: (t, options) => readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers()),
+      chooseInitialPendingExitState: (memoryState, storedState, t, options) => chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers()),
       enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
       offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
       nowMs: () => Date.now()
