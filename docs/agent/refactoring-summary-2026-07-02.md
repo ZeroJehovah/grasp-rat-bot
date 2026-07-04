@@ -1631,3 +1631,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-helper-entry.mjs` and `scripts/build-runtime-helper-entry.js` now smoke-test the bootstrap binding path, including runtime config merge and preserved target-whitelist state.
 - `scripts/verify-objective-build.js` now treats `runtime-bootstrap-bindings.js` as the source of truth for page-global/config/default/whitelist helper wiring and verifies final bundled output through `require_runtime_bootstrap_bindings`.
 - The `.506` manifest records bundled SHA-256 `8417860cc4d3b71aa682edf08d3425dafe2ee6fccb5bf397f7601e067d333bdb` and pre-bundle remote direct SHA-256 `e8382d2412ff505f228bc322a38696df24431cad2fe5ca9b8a3b71351467a419`.
+
+`bootstrap-0.4.507` removes a now-dead source-generation adapter:
+
+- `src/browser/page-global-core.js` no longer exports `browserPageGlobalSource()` and no longer builds browser source by joining helper `.toString()` output.
+- Runtime bootstrap/page-global behavior is unchanged because production, local eval, and helper-entry builds now bundle the executable page-global adapter functions directly.
+- Static verification now rejects reintroducing the page-global source builder and continues to verify resolver/reader/installer/localStorage behavior through executable module use.
+- The `.507` manifest records bundled SHA-256 `9ef57025ea51635b96a51f017dc1edce93b956d68ace0dc99ad3fc6c8419cbd3` and pre-bundle remote direct SHA-256 `3a25dfcf0dc474a4de5b48173ca7420b3781fe8241cf1ec2f2da0915d6e8d5b4`.
