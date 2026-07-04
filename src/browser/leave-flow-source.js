@@ -2,11 +2,14 @@
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
     : 'offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)';
+  const pendingStaminaSuppressCall = options.bundledRuntime
+    ? 'primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress })'
+    : 'primePendingStaminaExitLoginSuppress(detail)';
   const pendingUnsafeSuppressCall = (storageReason, reason, detail, selfLike) => options.bundledRuntime
     ? `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now })`
     : `primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`;
@@ -52,7 +55,7 @@ function leaveFlowSource(options = {}) {
     bot.lastOfflineLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
-      const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
+      const staminaSuppress = ${pendingStaminaSuppressCall};
       if (!staminaSuppress && ${offlineUnsafePredicateCall}) {
         ${pendingUnsafeSuppressCall("'offline leave'", 'reason', 'detail', 'selfSummary')};
       }

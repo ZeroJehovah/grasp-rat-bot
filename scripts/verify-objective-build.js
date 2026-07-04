@@ -1623,12 +1623,13 @@ function main() {
     assert(exitReloginRemainderPrefixInlineBody.includes('staminaExitHoldUntilForDetail(detail)'), 'exit-relogin remainder prefix inline source does not preserve stamina hold lookup');
     assert(exitReloginRemainderPrefixInlineBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix inline source does not preserve unsafe offline predicate call');
     const exitReloginRemainderPrefixBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginRemainderPrefixSource');
-    assert(exitReloginRemainderPrefixBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin remainder prefix bundled source does not hand helpers to the bundler');
+    assert(exitReloginRemainderPrefixBundledBody.includes("return '';"), 'exit-relogin remainder prefix bundled source should be empty after wrapper handoff');
+    assert(!exitReloginRemainderPrefixBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin remainder prefix bundled source should not keep unused runtime import');
     assert(!exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressCore'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress core import');
     assert(!exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressBoundCore'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress bound core import');
     assert(!exitReloginRemainderPrefixBundledBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress wrapper');
-    assert(exitReloginRemainderPrefixBundledBody.includes('primePendingStaminaExitLoginSuppressBoundCore(detail'), 'exit-relogin remainder prefix bundled source does not bind pending stamina suppress bound core');
-    assert(exitReloginRemainderPrefixBundledBody.includes('setLoginSuppress'), 'exit-relogin remainder prefix bundled source does not pass required pending stamina suppress binding');
+    assert(!exitReloginRemainderPrefixBundledBody.includes('primePendingStaminaExitLoginSuppressBoundCore'), 'exit-relogin remainder prefix bundled source should not keep unused pending stamina suppress bound core import');
+    assert(!exitReloginRemainderPrefixBundledBody.includes('function primePendingStaminaExitLoginSuppress'), 'exit-relogin remainder prefix bundled source should not keep unused pending stamina suppress wrapper');
     const exitReloginHoldReadInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldReadInlineSource');
     assert(exitReloginHoldReadInlineBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include enemy hold reader');
     assert(exitReloginHoldReadInlineBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include offline hold reader');
@@ -1869,6 +1870,9 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)'), 'leave-flow source does not preserve inline offline unsafe predicate wrapper call');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingStaminaExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending stamina suppress bound core for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress })'), 'leave-flow source does not bind pending stamina suppress helpers for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("primePendingStaminaExitLoginSuppress(detail)'"), 'leave-flow source does not preserve inline pending stamina suppress wrapper call');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending unsafe suppress bound core for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now'), 'leave-flow source does not bind pending unsafe suppress helpers for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('`primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`'), 'leave-flow source does not preserve inline pending unsafe suppress wrapper call template');
