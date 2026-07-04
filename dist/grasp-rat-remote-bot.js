@@ -1959,6 +1959,17 @@
         }
         return until;
       }
+      function primePendingStaminaExitLoginSuppressBoundCore(detail, helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return primePendingStaminaExitLoginSuppressCore(detail, {
+          now: nowFn(),
+          staminaExitHoldUntilForDetail: (holdDetail) => staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn(), {
+            staminaBudgetReloginDelayMs: helpers.staminaBudgetReloginDelayMs,
+            staminaResetHoldUntil: helpers.staminaResetHoldUntil
+          }),
+          setLoginSuppress: helpers.setLoginSuppress
+        });
+      }
       function clearEnemyReloginHoldCore(bot, reason = "online self restored", helpers) {
         const t = Number(helpers.now || 0) || 0;
         const details = [
@@ -2037,6 +2048,7 @@
         setOfflineLeaveSuppressCore,
         setOfflineLeaveSuppressBoundCore,
         primePendingStaminaExitLoginSuppressCore,
+        primePendingStaminaExitLoginSuppressBoundCore,
         clearEnemyReloginHoldCore,
         clearOfflineReloginHoldCore
       };
@@ -4645,7 +4657,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.436" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.437" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10324,7 +10336,7 @@
     const {
       setOfflineLeaveSuppressCore,
       setOfflineLeaveSuppressBoundCore,
-      primePendingStaminaExitLoginSuppressCore
+      primePendingStaminaExitLoginSuppressBoundCore
     } = require_exit_relogin();
     function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
       return setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike, options, {
@@ -10338,9 +10350,10 @@
       });
     }
     function primePendingStaminaExitLoginSuppress(detail) {
-      return primePendingStaminaExitLoginSuppressCore(detail, {
-        now: Date.now(),
-        staminaExitHoldUntilForDetail,
+      return primePendingStaminaExitLoginSuppressBoundCore(detail, {
+        now: Date.now,
+        staminaBudgetReloginDelayMs,
+        staminaResetHoldUntil,
         setLoginSuppress
       });
     }

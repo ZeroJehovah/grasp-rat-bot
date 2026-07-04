@@ -121,6 +121,7 @@ async function selfTest() {
   assert(source.includes('function setEnemyLeaveSuppressCore'), 'exit-relogin enemy suppress helper was not bundled');
   assert(source.includes('function staminaExitHoldUntilForDetailBoundCore'), 'exit-relogin stamina hold bound helper was not bundled');
   assert(source.includes('function setOfflineLeaveSuppressBoundCore'), 'exit-relogin offline suppress bound helper was not bundled');
+  assert(source.includes('function primePendingStaminaExitLoginSuppressBoundCore'), 'exit-relogin pending stamina suppress bound helper was not bundled');
   assert(source.includes('function enemyReloginHoldRemainingMsCore'), 'exit-relogin hold read helper was not bundled');
   assert(source.includes('function setOfflineLeaveSuppressCore'), 'exit-relogin offline suppress helper was not bundled');
   assert(source.includes('function clearEnemyReloginHoldCore'), 'exit-relogin hold clear helper was not bundled');

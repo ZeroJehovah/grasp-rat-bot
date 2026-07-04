@@ -858,7 +858,7 @@ function bundledExitReloginRemainderPrefixSource() {
   return `	  const {
 	    setOfflineLeaveSuppressCore,
 	    setOfflineLeaveSuppressBoundCore,
-	    primePendingStaminaExitLoginSuppressCore
+	    primePendingStaminaExitLoginSuppressBoundCore
 	  } = require('./src/browser/runtime/exit-relogin');
 
 \t  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
@@ -874,9 +874,10 @@ function bundledExitReloginRemainderPrefixSource() {
 \t  }
 
 \t  function primePendingStaminaExitLoginSuppress(detail) {
-\t    return primePendingStaminaExitLoginSuppressCore(detail, {
-\t      now: Date.now(),
-\t      staminaExitHoldUntilForDetail,
+\t    return primePendingStaminaExitLoginSuppressBoundCore(detail, {
+\t      now: Date.now,
+\t      staminaBudgetReloginDelayMs,
+\t      staminaResetHoldUntil,
 \t      setLoginSuppress
 \t    });
 \t  }
