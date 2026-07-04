@@ -1425,6 +1425,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 184. Removed unused bundled `exit-relogin` actor wrappers after streak/suppress paths moved actor resolution into runtime bound cores: integrated in `bootstrap-0.4.456`
 185. Removed the bundled `exit-relogin` login-suppress clear wrapper by routing pending-exit suppress writers and 403 recovery directly through `clearLoginSuppressMatchingBoundCore()`: integrated in `bootstrap-0.4.457`
 186. Removed the bundled `exit-relogin` wait-display wrapper by binding `finalizeLeaveDisplayReasonCore()` directly to `leaveWaitDisplayCore()` for remote builds: integrated in `bootstrap-0.4.458`
+187. Removed the bundled `exit-relogin` HP relogin-delay wrapper by passing direct `reloginDelayForHpCore()` helper bindings into pending-exit and leave-flow runtime-bound suppress helpers: integrated in `bootstrap-0.4.459`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
