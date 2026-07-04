@@ -3,7 +3,7 @@
 
 const http = require('http');
 const fs = require('fs');
-const { browserRuntimeSource } = require('./src/browser/runtime-source');
+const { browserRuntimeEvalSourceFor } = require('./scripts/remote-bot-bundle');
 const { runSelfTest } = require('./src/node/run-self-test');
 
 const DEFAULT_CDP = process.env.CDP_URL || 'http://172.24.0.1:9224';
@@ -270,7 +270,7 @@ async function main() {
   }
 
   const result = await cdp.send('Runtime.evaluate', {
-    expression: browserRuntimeSource({
+    expression: browserRuntimeEvalSourceFor({
       dryRun: options.dryRun,
       once: options.once,
       statusEvery: options.statusEvery,
@@ -305,7 +305,7 @@ if (options.selfTest) {
 }
 
 if (options.printSource) {
-  writeStdoutSync(browserRuntimeSource({
+  writeStdoutSync(browserRuntimeEvalSourceFor({
     dryRun: options.dryRun,
     once: options.once,
     statusEvery: options.statusEvery,

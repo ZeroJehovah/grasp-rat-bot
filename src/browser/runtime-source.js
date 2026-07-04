@@ -4,11 +4,11 @@ const { browserRuntimeFragments } = require('./runtime-fragments-source');
 
 function browserRuntimeConfig(options = {}) {
   const config = {
+    bundledRuntime: true,
     dryRun: Boolean(options.dryRun),
     once: Boolean(options.once),
     statusEvery: options.statusEvery
   };
-  if (options.bundledRuntime) config.bundledRuntime = true;
   if (options.version !== undefined) config.version = options.version;
   if (options.overrides && typeof options.overrides === 'object') {
     Object.assign(config, options.overrides);
