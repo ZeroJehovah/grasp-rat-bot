@@ -457,6 +457,10 @@ function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, 
   return until;
 }
 
+function setEnemyLeaveSuppressCore(reason, detail, selfLike = null, options = {}, helpers) {
+  return helpers.setExitReloginSuppress('enemy leave', reason, detail, selfLike, options);
+}
+
 function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs) {
   if (!staminaBudgetExit) return null;
   const delayMs = staminaBudgetReloginDelayMs();
@@ -671,6 +675,7 @@ module.exports = {
   startExitAuditCore,
   setExitReloginSuppressCore,
   primePendingUnsafeExitLoginSuppressCore,
+  setEnemyLeaveSuppressCore,
   staminaBudgetExitHoldUntilCore,
   staminaExitHoldUntilForDetailCore,
   offlineExitRequiresUnsafeReloginDelayCore,

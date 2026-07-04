@@ -1794,6 +1794,9 @@
         if (reason) detail.enemyLeaveReason = detail.enemyLeaveReason || reason;
         return until;
       }
+      function setEnemyLeaveSuppressCore(reason, detail, selfLike = null, options = {}, helpers) {
+        return helpers.setExitReloginSuppress("enemy leave", reason, detail, selfLike, options);
+      }
       function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs) {
         if (!staminaBudgetExit) return null;
         const delayMs = staminaBudgetReloginDelayMs();
@@ -1998,6 +2001,7 @@
         startExitAuditCore,
         setExitReloginSuppressCore,
         primePendingUnsafeExitLoginSuppressCore,
+        setEnemyLeaveSuppressCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
         offlineExitRequiresUnsafeReloginDelayCore,
@@ -4614,7 +4618,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.433" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.434" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10221,6 +10225,7 @@
       startExitAuditCore,
       setExitReloginSuppressCore,
       primePendingUnsafeExitLoginSuppressCore,
+      setEnemyLeaveSuppressCore,
       staminaBudgetExitHoldUntilCore,
       staminaExitHoldUntilForDetailCore,
       offlineExitRequiresUnsafeReloginDelayCore
@@ -10272,7 +10277,9 @@
       });
     }
     function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-      return setExitReloginSuppress("enemy leave", reason, detail, selfLike, options);
+      return setEnemyLeaveSuppressCore(reason, detail, selfLike, options, {
+        setExitReloginSuppress
+      });
     }
     function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
       return staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs);

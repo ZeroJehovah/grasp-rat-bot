@@ -616,6 +616,7 @@ function bundledExitReloginHoldSource() {
 \t    startExitAuditCore,
 \t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressCore,
+\t    setEnemyLeaveSuppressCore,
 \t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
 \t    offlineExitRequiresUnsafeReloginDelayCore
@@ -674,7 +675,9 @@ function bundledExitReloginHoldSource() {
   }
 
   function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-    return setExitReloginSuppress('enemy leave', reason, detail, selfLike, options);
+    return setEnemyLeaveSuppressCore(reason, detail, selfLike, options, {
+      setExitReloginSuppress
+    });
   }
 
 \t  function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
