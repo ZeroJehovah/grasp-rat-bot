@@ -1,11 +1,27 @@
 'use strict';
 
+const {
+  enemyReloginHoldRemainingMsBoundCall,
+  offlineReloginHoldRemainingMsBoundCall
+} = require('./exit-relogin-hold-read-call-source');
+
 function controlLoginSource(helpers = {}) {
   const {
+    bundledRuntime = false,
     staminaExhaustedWindowLabel
   } = helpers;
+  const holdPrelude = bundledRuntime
+    ? "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n"
+    : '';
+  const enemyHoldRemainingMsCall = bundledRuntime
+    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore')
+    : 'enemyReloginHoldRemainingMs()';
+  const offlineHoldRemainingMsCall = bundledRuntime
+    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForControlLoginBoundCore', 'clearOfflineReloginHoldForControlLoginBoundCore')
+    : 'offlineReloginHoldRemainingMs()';
   return [
     typeof staminaExhaustedWindowLabel === 'function' ? staminaExhaustedWindowLabel.toString() : '',
+    holdPrelude,
     String.raw`  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
 	    if (bot.reloadRequestedAt) return;
@@ -610,8 +626,8 @@ function controlLoginSource(helpers = {}) {
       suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
     } catch (_) {}
     const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs(t);
-    const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
-    const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+    const enemyHoldRemainingMs = ${enemyHoldRemainingMsCall};
+    const offlineHoldRemainingMs = ${offlineHoldRemainingMsCall};
     const gate = snapshotLoginGateStatus(t);
     const resetReason = String(gate?.resetReason || '');
     const exitGateReset = Boolean(

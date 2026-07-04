@@ -366,6 +366,7 @@ function main() {
   const botObjectSourceModule = readText('src/browser/bot-object-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const controlLoginRuntimeSourceModule = readText('src/browser/control-login-runtime-source.js');
+  const exitReloginHoldReadCallSourceModule = readText('src/browser/exit-relogin-hold-read-call-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
   const coinMotionRuntimeSourceModule = readText('src/browser/coin-motion-runtime-source.js');
@@ -765,12 +766,14 @@ function main() {
     assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
     assert(combatLogRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCombatLogRuntimeSource();'), 'combat-log runtime source factory does not switch to bundler-owned source in remote builds');
     assert(combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime source does not bind exit-summary helper');
+    assert(combatLogRuntimeSourceModule.includes('combatLogSource({ bundledRuntime: true })'), 'combat-log bundled runtime source does not pass bundled-runtime mode into source factory');
     assert(controlLoginRuntimeSourceModule.includes('function bundledControlLoginRuntimeSource()'), 'bundled control-login runtime source factory not found');
     assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource(options = {})'), 'control-login runtime source factory not found');
     assert(controlLoginRuntimeSourceModule.includes('module.exports = {\n  bundledControlLoginRuntimeSource,\n  controlLoginRuntimeSource\n}'), 'control-login runtime source export not found');
     assert(controlLoginRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'control-login runtime source does not expose a bundler-owned exit-summary require');
     assert(controlLoginRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledControlLoginRuntimeSource();'), 'control-login runtime source factory does not switch to bundler-owned source in remote builds');
     assert(controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime source does not bind stamina helper');
+    assert(controlLoginRuntimeSourceModule.includes('controlLoginSource({ bundledRuntime: true })'), 'control-login bundled runtime source does not pass bundled-runtime mode into source factory');
     assert(runtimeBootstrapSourceModule.includes('function bundledRuntimeBootstrapHelperSource()'), 'bundled runtime-bootstrap helper source factory not found');
     assert(runtimeBootstrapSourceModule.includes('function inlineRuntimeBootstrapHelperSource()'), 'inline runtime-bootstrap helper source factory not found');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
@@ -1667,12 +1670,20 @@ function main() {
     assert(exitReloginHoldReadInlineBody.includes('staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)'), 'exit-relogin hold-read inline source does not preserve stale offline contradiction check');
     assert(exitReloginHoldReadInlineBody.includes('localStorage.removeItem(LOGIN_SUPPRESS_KEY)'), 'exit-relogin hold-read inline source does not clear login suppress key');
     const exitReloginHoldReadBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldReadSource');
-    assert(exitReloginHoldReadBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold-read bundled source does not hand helpers to the bundler');
-    assert(exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind enemy hold reader through bound core');
-    assert(exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind offline hold reader through bound core');
+    assert(exitReloginHoldReadBundledBody.includes("return '';"), 'exit-relogin hold-read bundled source should be empty after wrapper handoff');
+    assert(!exitReloginHoldReadBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold-read bundled source should not keep unused runtime import');
+    assert(!exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source should not keep enemy hold reader wrapper binding');
+    assert(!exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source should not keep offline hold reader wrapper binding');
+    assert(!exitReloginHoldReadBundledBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read bundled source still keeps enemy hold reader wrapper');
+    assert(!exitReloginHoldReadBundledBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read bundled source still keeps offline hold reader wrapper');
     assert(!exitReloginHoldReadBundledBody.includes('function clearLoginSuppressMatching'), 'exit-relogin hold-read bundled source should not keep suppress clear wrapper');
     assert(!exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingBoundCore'), 'exit-relogin hold-read bundled source should not keep unused suppress clear import');
-    assert(exitReloginHoldReadBundledBody.includes('readPersistentExitState') && exitReloginHoldReadBundledBody.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadBundledBody.includes('clearOfflineReloginHoldBoundCore(bot, localStorage, reason'), 'exit-relogin hold-read bundled source does not pass required runtime helper bindings');
+    assert(tickSourceModule.includes('enemyReloginHoldRemainingMsForTickBoundCore') && tickSourceModule.includes('offlineReloginHoldRemainingMsForTickBoundCore'), 'tick source does not bind hold readers directly in bundled mode');
+    assert(pendingExitSourceModule.includes('enemyReloginHoldRemainingMsForPendingExitBoundCore') && pendingExitSourceModule.includes('offlineReloginHoldRemainingMsForPendingExitBoundCore'), 'pending-exit source does not bind hold readers directly in bundled mode');
+    assert(leaveFlowSourceModule.includes('enemyReloginHoldRemainingMsForLeaveFlowBoundCore'), 'leave-flow source does not bind enemy hold reader directly in bundled mode');
+    assert(combatLogSourceModule.includes('enemyReloginHoldRemainingMsForCombatLogBoundCore') && combatLogSourceModule.includes('offlineReloginHoldRemainingMsForCombatLogBoundCore'), 'combat-log source does not bind hold readers directly in bundled mode');
+    assert(controlLoginSourceModule.includes('enemyReloginHoldRemainingMsForControlLoginBoundCore') && controlLoginSourceModule.includes('offlineReloginHoldRemainingMsForControlLoginBoundCore'), 'control-login source does not bind hold readers directly in bundled mode');
+    assert(exitReloginHoldReadCallSourceModule.includes('readPersistentExitState') && exitReloginHoldReadCallSourceModule.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadCallSourceModule.includes('clearOfflineReloginHold'), 'direct bundled hold reader calls do not pass required runtime helper bindings');
     const exitReloginClearInlineBody = functionBody(exitReloginSourceModule, 'exitReloginClearInlineSource');
     assert(exitReloginClearInlineBody.includes('function clearEnemyReloginHold'), 'exit-relogin clear inline source does not include enemy hold cleanup helper');
     assert(exitReloginClearInlineBody.includes('function clearOfflineReloginHold'), 'exit-relogin clear inline source does not include offline hold cleanup helper');
@@ -2193,6 +2204,8 @@ function main() {
       assert(reloginDisplaySource.includes('detail?.holdRemainingMs ?? detail?.reloginDelayMs'), 'leave wait display does not prefer remaining hold time');
       if (file === 'dist/grasp-rat-remote-bot.js') {
         assert(!text.includes('function leaveWaitDisplay('), 'dist remote bot still keeps leaveWaitDisplay wrapper');
+        assert(!text.includes('function enemyReloginHoldRemainingMs('), 'dist remote bot still keeps enemyReloginHoldRemainingMs wrapper');
+        assert(!text.includes('function offlineReloginHoldRemainingMs('), 'dist remote bot still keeps offlineReloginHoldRemainingMs wrapper');
       }
     });
     check(`${file} keeps shared runtime utility helpers available`, () => {
@@ -3337,7 +3350,11 @@ function main() {
       assert(takeoverBody.includes('exit-trigger:') && takeoverBody.includes('exit-confirmed:'), 'live session takeover does not block exit-reset snapshot gates');
       assert(takeoverBody.includes('noSelfExit?.reconnectChurn') && takeoverBody.includes('control?.nativeReconnectChurn'), 'live session takeover does not block reconnect churn');
       assert(takeoverBody.includes('noSelfExit?.wsOfflineish'), 'live session takeover does not block offline-ish websocket state');
-      assert(takeoverBody.includes('enemyReloginHoldRemainingMs()') && takeoverBody.includes('offlineReloginHoldRemainingMs()'), 'live session takeover does not block active relogin holds');
+      assert(
+        (takeoverBody.includes('enemyReloginHoldRemainingMs()') || takeoverBody.includes('enemyReloginHoldRemainingMsForControlLoginBoundCore') || takeoverBody.includes('${enemyHoldRemainingMsCall}'))
+          && (takeoverBody.includes('offlineReloginHoldRemainingMs()') || takeoverBody.includes('offlineReloginHoldRemainingMsForControlLoginBoundCore') || takeoverBody.includes('${offlineHoldRemainingMsCall}')),
+        'live session takeover does not block active relogin holds'
+      );
       assert(takeoverBody.includes('recentUnsafeExitContext(bot.lastOfflineLeaveResult'), 'live session takeover does not block recent unsafe offline exits');
       assert(text.includes('SESSION_MISMATCH_RECOVERY_KEY'), 'session mismatch recovery persistence key not found');
       assert(text.includes("'graspRatSessionMismatchRecovery'"), 'session mismatch recovery state is not stored under the expected localStorage key');

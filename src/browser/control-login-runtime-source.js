@@ -6,7 +6,7 @@ const { controlLoginSource } = require('./control-login-source');
 function bundledControlLoginRuntimeSource() {
   return `const { staminaExhaustedWindowLabel } = require('./src/browser/runtime/exit-summary');
 
-${controlLoginSource()}`;
+${controlLoginSource({ bundledRuntime: true })}`;
 }
 
 function controlLoginRuntimeSource(options = {}) {

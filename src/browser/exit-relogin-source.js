@@ -602,42 +602,7 @@ function exitReloginHoldReadInlineSource() {
 }
 
 function bundledExitReloginHoldReadSource() {
-  return `	  const {
-\t    enemyReloginHoldRemainingMsBoundCore,
-\t    offlineReloginHoldRemainingMsBoundCore,
-\t    clearOfflineReloginHoldBoundCore
-\t  } = require('./src/browser/runtime/exit-relogin');
-
-  function enemyReloginHoldRemainingMs() {
-    return enemyReloginHoldRemainingMsBoundCore(bot, localStorage, {
-      loginSuppressKey: LOGIN_SUPPRESS_KEY,
-      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-      readPersistentExitState,
-      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-      now: Date.now
-    });
-  }
-
-  function offlineReloginHoldRemainingMs() {
-    return offlineReloginHoldRemainingMsBoundCore(bot, localStorage, {
-      loginSuppressKey: LOGIN_SUPPRESS_KEY,
-      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-      readPersistentExitState,
-      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-      staleOfflineStaminaHoldContradicted,
-      clearOfflineReloginHold: reason => clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
-        now: Date.now,
-        writePersistentPendingExitState,
-        clearPersistentPendingExitState,
-        clearPersistentExitState,
-        loginSuppressKey: LOGIN_SUPPRESS_KEY,
-        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
-      }),
-      now: Date.now
-    });
-  }
-`;
+  return '';
 }
 
 function exitReloginRemainderPrefixInlineSource() {
