@@ -348,7 +348,6 @@ async function main() {
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
   const statusPanelRuntimeSourceModule = readText('src/browser/status-panel-runtime-source.js');
   const displayFormatRuntimeModule = readText('src/browser/runtime/display-format.js');
-  const arrayCountSourceModule = readText('src/browser/array-count-source.js');
   const arrayCountRuntimeModule = readText('src/browser/runtime/array-count.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
   const runtimeUtilsRuntimeModule = readText('src/browser/runtime/runtime-utils.js');
@@ -462,7 +461,6 @@ async function main() {
     statusPanelSourceModule,
     statusPanelRuntimeSourceModule,
     displayFormatRuntimeModule,
-    arrayCountSourceModule,
     arrayCountRuntimeModule,
     runtimeUtilsSourceModule,
     runtimeUtilsRuntimeModule,
@@ -803,7 +801,7 @@ async function main() {
     assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)]"), 'runtime-utility-prelude fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelRuntimeSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
+    assert(!fragmentEntriesBody.includes('array-count'), 'obsolete standalone array-count fragment is still registered');
     assert(!fragmentEntriesBody.includes('runtime-utility-clone'), 'obsolete empty runtime-utility-clone fragment is still registered');
     assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['combat-history', () => combatHistorySource(config)]"), 'combat-history fragment is not config-aware for bundled runtime migration');
@@ -827,7 +825,6 @@ async function main() {
       ['status-panel-runtime', statusPanelRuntimeSourceModule],
       ['combat-log-runtime', combatLogRuntimeSourceModule],
       ['control-login-runtime', controlLoginRuntimeSourceModule],
-      ['array-count', arrayCountSourceModule],
       ['combat-history', combatHistorySourceModule],
       ['entity-refresh', entityRefreshSourceModule],
       ['coin-safety', coinSafetySourceModule],
@@ -928,6 +925,7 @@ async function main() {
     assert(!runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility source still exposes empty clone fragment');
     assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource\n}'), 'runtime utility source module exports not found');
     assert(runtimeUtilsSourceModule.includes("require('./src/browser/runtime/runtime-utils')"), 'runtime utility source factory does not expose a bundler-owned runtime helper require');
+    assert(runtimeUtilsSourceModule.includes("require('./src/browser/runtime/array-count')"), 'runtime utility source factory does not expose a bundler-owned array-count require');
     assert(!runtimeUtilsSourceModule.includes('safeStringify.toString()'), 'runtime utility source still inlines shared helper text');
     assert(!runtimeBootstrapSourceModule.includes('buildBrowserPreservedState.toString()'), 'runtime-bootstrap source still inlines preserved-state helper text');
     assert(!runtimeBootstrapSourceModule.includes('buildRuntimeDefaults.toString()'), 'runtime-bootstrap source still inlines runtime-default helper text');
@@ -936,7 +934,6 @@ async function main() {
       'targetOverlaySource',
       'targetWhitelistSource',
       'statusPanelRuntimeSource',
-      'arrayCountSource',
       'runtimeUtilityPreludeSource',
       'combatLogRuntimeSource',
       'tickSafetySource',
@@ -1154,7 +1151,7 @@ async function main() {
       [statusPanelRuntimeSourceModule, "require('./src/browser/runtime/display-format')", 'status-panel display-format'],
       [combatLogRuntimeSourceModule, "require('./src/browser/runtime/exit-summary')", 'combat-log exit-summary'],
       [runtimeUtilsSourceModule, "require('./src/browser/runtime/runtime-utils')", 'runtime utils'],
-      [arrayCountSourceModule, "require('./src/browser/runtime/array-count')", 'array count'],
+      [runtimeUtilsSourceModule, "require('./src/browser/runtime/array-count')", 'array count'],
       [combatHistorySourceModule, "require('./src/browser/runtime/drop-matched-kill')", 'drop matched kill'],
       [coinSafetySourceModule, "require('./src/browser/runtime/coin-diagnostics')", 'coin diagnostics'],
       [combatStateSourceModule, "require('./src/browser/runtime/exit-relogin')", 'combat-state exit relogin'],
