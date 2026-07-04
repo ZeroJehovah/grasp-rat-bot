@@ -882,6 +882,9 @@ async function main() {
     assert(statusPanelRuntimeSourceModule.includes('module.exports = {\n  statusPanelRuntimeSource\n}'), 'status-panel runtime source export not found');
     assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
     assert(!statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime still keeps inline display helper binding');
+    assert(statusPanelSourceModule.includes('function statusPanelSource()'), 'status-panel source factory should not accept inline helper fallbacks');
+    assert(!statusPanelSourceModule.includes('helpers = {}'), 'status-panel source still accepts inline helper fallback object');
+    assert(!statusPanelSourceModule.includes('.toString()'), 'status-panel source still inlines display helpers from function text');
     assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
     assert(!combatLogRuntimeSourceModule.includes('bundledCombatLogRuntimeSource'), 'combat-log runtime bundled selector wrapper should be removed');
     assert(!combatLogRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'combat-log runtime should not import exit summary for inline injection');
