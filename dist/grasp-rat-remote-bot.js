@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.460" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.461" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10334,7 +10334,6 @@
       combatExitSummaryCore,
       combatLeaveActionCore,
       pursuitLeaveSummaryCore,
-      injuryLeaveSummaryCore,
       offlineLeaveSummaryCore,
       reloginDelayForHpCore
     } = require_exit_relogin();
@@ -10346,9 +10345,6 @@
     }
     function pursuitLeaveSummary(pursuit) {
       return pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance });
-    }
-    function injuryLeaveSummary(injury) {
-      return injuryLeaveSummaryCore(injury, { actorLabel, hpDisplay });
     }
     function offlineLeaveSummary(reason, offlineSafety) {
       return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
@@ -12048,6 +12044,7 @@
       return detail;
     }
     const {
+      injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
       offlineExitRequiresUnsafeReloginDelayCore,
       primePendingStaminaExitLoginSuppressBoundCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
@@ -12109,7 +12106,7 @@
       if (cfg.dryRun || cfg.once) return null;
       const skipped = pendingExitSkipNewLeave("injury", "injury hp drop", {
         injury,
-        summary: injuryLeaveSummary(injury)
+        summary: injuryLeaveSummaryForLeaveFlowCore(injury, { actorLabel, hpDisplay })
       });
       if (skipped) return skipped;
       if (t - Number(bot.lastInjuryLeaveAt || 0) < cfg.combatLeaveRetryMs) {
@@ -12118,7 +12115,7 @@
           reason: "cooldown",
           cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastInjuryLeaveAt || 0)))),
           injury,
-          summary: injuryLeaveSummary(injury)
+          summary: injuryLeaveSummaryForLeaveFlowCore(injury, { actorLabel, hpDisplay })
         };
         return finalizeLeaveDisplayReason(detail2);
       }
@@ -12129,7 +12126,7 @@
         at: t,
         userId: getCurrentUserId() || null,
         injury,
-        summary: injuryLeaveSummary(injury),
+        summary: injuryLeaveSummaryForLeaveFlowCore(injury, { actorLabel, hpDisplay }),
         error: ""
       };
       startExitAuditBoundCore(detail, { scope: "enemy", source: "injury", reason: detail.reason, self: injury?.self || injury, injury }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
@@ -20861,7 +20858,7 @@
         }
       };
     }
-    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore } = require_exit_relogin();
+    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -21474,7 +21471,7 @@
           bot.pendingInjuryLeave = null;
           const skippedLeave = pendingExitSkipNewLeave("injury", "injury hp drop", {
             injury,
-            summary: injuryLeaveSummary(injury)
+            summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
           });
           if (!skippedLeave) {
             Promise.resolve(leaveForInjury(injury)).catch((err) => recordUnhandledTickError("injury-leave", err));
@@ -21484,7 +21481,7 @@
             injury: skippedLeave ? { ...injury, suppressedByPendingExit: true } : injury,
             pendingExitIntent: skippedLeave ? pendingExitIntentForSkippedLeave("injury", "injury hp drop", skippedLeave) : {
               reason: "injury-leave",
-              summary: injuryLeaveSummary(injury)
+              summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
             }
           };
         }
