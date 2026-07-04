@@ -75,14 +75,6 @@ ${coinTargetHelperSource}
     };
   }
 
-  function trackedCoinTargetForCollection(self) {
-    return trackedCoinTargetForCollectionCore({
-      lastDecision: bot.lastDecision,
-      lastTarget: bot.lastTarget,
-      coinProgress: bot.coinProgress
-    }, self, coinTargetCoreOptions());
-  }
-
   function trackedCoinStillVisible(target) {
     const nativeCoinList = getNativeCoinList();
     if (!Array.isArray(nativeCoinList)) return null;
@@ -194,7 +186,11 @@ ${coinTargetHelperSource}
   }
 
   function markCoinCollected(self, currentSummary, previousCoins) {
-    const target = trackedCoinTargetForCollection(self);
+    const target = trackedCoinTargetForCollectionCore({
+      lastDecision: bot.lastDecision,
+      lastTarget: bot.lastTarget,
+      coinProgress: bot.coinProgress
+    }, self, coinTargetCoreOptions());
     if (!target) return false;
     const id = target.id === undefined || target.id === null ? '' : String(target.id);
     const distance = Number(target.distance);

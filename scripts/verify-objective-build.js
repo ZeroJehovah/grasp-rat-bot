@@ -3890,7 +3890,8 @@ function main() {
     assert(coinTargetRuntimeSourceModule.includes('coinTargetKeyCore') && coinTargetRuntimeSourceModule.includes('snapshotCoinNavigationReasonCore'), 'coin-target runtime source does not wire coin target helpers');
     assert(coinTargetRuntimeBody.includes('fn.toString()'), 'coin-target runtime source does not inline coin target helper text for local builds');
     assert(coinTargetRuntimeBody.includes('function coinTargetCoreOptions'), 'coin-target runtime wrapper options not found');
-    assert(coinTargetRuntimeBody.includes('trackedCoinTargetForCollectionCore({'), 'coin-target runtime tracked coin target wrapper does not call strategy core');
+    assert(!coinTargetRuntimeBody.includes('function trackedCoinTargetForCollection('), 'coin-target runtime source still keeps tracked target wrapper');
+    assert(coinTargetRuntimeBody.includes('const target = trackedCoinTargetForCollectionCore({'), 'coin-target runtime collection marker does not call tracked target core directly');
     assert(!coinTargetRuntimeBody.includes('function coinTargetKey('), 'coin-target runtime source still keeps coin target key wrapper');
     assert(!coinTargetRuntimeBody.includes('function coinMatchesTrackedTarget('), 'coin-target runtime source still keeps coin target matcher wrapper');
     assert(coinTargetRuntimeBody.includes('const key = coinTargetKeyCore(target);'), 'coin-target runtime recorder does not call coin target key core directly');
@@ -3899,6 +3900,7 @@ function main() {
     assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceInlineSource').includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'opportunity-choice source does not call coin target matcher core directly');
     assert(!distSource.includes('function coinTargetKey('), 'dist remote bot still keeps coin target key wrapper');
     assert(!distSource.includes('function coinMatchesTrackedTarget('), 'dist remote bot still keeps coin target matcher wrapper');
+    assert(!distSource.includes('function trackedCoinTargetForCollection('), 'dist remote bot still keeps tracked coin target wrapper');
     assert(coinTargetRuntimeBody.includes('return buildNativeCoinSnapshotCore(coins'), 'coin-target runtime native coin snapshot wrapper does not call strategy core');
     assert(coinTargetRuntimeBody.includes('pickIncidentalCoinPickupsCore('), 'coin-target runtime incidental pickup wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
