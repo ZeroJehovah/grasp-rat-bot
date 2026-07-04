@@ -1434,6 +1434,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 193. Removed the bundled `exit-relogin` combat leave-action wrapper by routing combat-action leave construction directly through `combatLeaveActionCore()`: integrated in `bootstrap-0.4.465`
 194. Removed the bundled `exit-relogin` enemy/offline relogin hold reader wrappers by routing tick, pending-exit, leave-flow, combat-log, and control-login directly through bound hold-reader cores: integrated in `bootstrap-0.4.466`
 195. Removed the bundled `exit-relogin` display finalizer wrapper by routing refresh-exit-detail, pending-exit, leave-flow, and control-login directly through `finalizeLeaveDisplayReasonCore()` / `leaveWaitDisplayCore()`: integrated in `bootstrap-0.4.467`
+196. Removed the bundled pending-exit reload-confirmation wrapper by routing pending-exit and control-login directly through `normalizePendingExitReloadConfirmationCore()`: integrated in `bootstrap-0.4.468`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

@@ -121,10 +121,6 @@ function bundledPendingExitPersistenceSource() {
 		    };
 		  }
 
-		  function normalizePendingExitReloadConfirmation(value, pending = null, t = Date.now(), options = {}) {
-		    return normalizePendingExitReloadConfirmationCore(value, pending, t, options);
-		  }
-
 		  function normalizePendingExitStateForStorage(value, t = Date.now(), options = {}) {
 		    return normalizePendingExitStateForStorageCore(value, t, options, pendingExitPersistenceCoreHelpers());
 		  }

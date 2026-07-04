@@ -34,6 +34,9 @@ function pendingExitSource(options = {}) {
   const finalizeLeaveDisplayReasonBinding = options.bundledRuntime
     ? finalizeLeaveDisplayReasonCoreBinding('finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore')
     : 'finalizeLeaveDisplayReason';
+  const normalizePendingExitReloadConfirmationCall = args => options.bundledRuntime
+    ? `normalizePendingExitReloadConfirmationCore(${args})`
+    : `normalizePendingExitReloadConfirmation(${args})`;
   const offlineSuppressCall = options.bundledRuntime
     ? `\t      setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });`
     : "\t      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);";
@@ -94,7 +97,7 @@ function pendingExitSource(options = {}) {
 	    const t = Date.now();
 	    const retryMs = pendingExitRetryMs(pending);
 	    const lastAttemptAt = Number(pending.lastAttemptAt || 0);
-	    const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t);
+	    const reloadConfirmation = ${normalizePendingExitReloadConfirmationCall('pending.reloadConfirmation, pending, t')};
 	    return {
 	      scope: pending.scope || '',
 	      source: pending.source || '',
@@ -386,8 +389,8 @@ function pendingExitSource(options = {}) {
 	  }
 
 	  function leaveSuccessReloadConfirmationForDetail(detail, pending = null, t = Date.now()) {
-	    if (!leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return normalizePendingExitReloadConfirmation(pending?.reloadConfirmation, pending, t);
-	    const existing = normalizePendingExitReloadConfirmation(detail.reloadConfirmation || pending?.reloadConfirmation, pending, t);
+	    if (!leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return ${normalizePendingExitReloadConfirmationCall('pending?.reloadConfirmation, pending, t')};
+	    const existing = ${normalizePendingExitReloadConfirmationCall('detail.reloadConfirmation || pending?.reloadConfirmation, pending, t')};
 	    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
 	    return {
 	      required: true,
@@ -825,7 +828,7 @@ ${enemyLeaveSuppressCall}
       return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
     }
     if (leaveDetailSucceeded(lastDetail)) {
-      const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, lastDetail) || normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending);
+      const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, lastDetail) || ${normalizePendingExitReloadConfirmationCall('pending.reloadConfirmation, pending')};
       if (!leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)) {
         requestLeaveConfirmationReload('leave-success', pending);
         const detail = pendingExitLeaveSuccessReloadWaitDetail(
