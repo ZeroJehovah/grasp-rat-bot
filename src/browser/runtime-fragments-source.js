@@ -183,7 +183,7 @@ function browserRuntimeFragmentEntries(config) {
     ['pending-exit', () => pendingExitSource(config)],
     ['leave-command', leaveCommandSource],
     ['auto-login', autoLoginSource],
-    ['leave-flow', leaveFlowSource],
+    ['leave-flow', () => leaveFlowSource(config)],
     ['native-state', nativeStateSource],
     ['separator-after-native-state',
     `
