@@ -611,7 +611,7 @@ function exitReloginHoldInlineSource() {
 function bundledExitReloginHoldSource() {
   return `	  const {
 \t    isExitLoginSuppressReasonCore,
-\t    startExitAuditCore,
+\t    startExitAuditBoundCore,
 \t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressBoundCore,
 \t    setEnemyLeaveSuppressCore,
@@ -644,12 +644,11 @@ function bundledExitReloginHoldSource() {
   }
 
 \t  function startExitAudit(detail, meta = {}) {
-    return startExitAuditCore(detail, meta, {
+    return startExitAuditBoundCore(detail, meta, bot, {
       resetLoginSnapshotGate,
       loginPointSafetyExitSelfForDetail,
       ensureExitAuditDetail,
       recordExitAuditEvent,
-      lastSelf: bot.lastSelf,
       now: Date.now
     });
   }

@@ -685,9 +685,10 @@ function helperStatus(config = {}) {
     reason: 'offline leave',
     exitTriggeredAt: 4321
   };
-  const exitReloginAuditId = exitRelogin.startExitAuditCore(
+  const exitReloginAuditId = exitRelogin.startExitAuditBoundCore(
     exitReloginAuditDetail,
     { reason: 'offline unsafe', source: 'spike' },
+    { lastSelf: { hp: 77 } },
     {
       resetLoginSnapshotGate: (reason, self) => {
         exitReloginAuditEvents.push(['reset', reason, self?.hp]);
@@ -703,7 +704,6 @@ function helperStatus(config = {}) {
       recordExitAuditEvent: (type, detail, event) => {
         exitReloginAuditEvents.push([type, detail.exitAuditId, event.at, event.source]);
       },
-      lastSelf: { hp: 77 },
       now: () => 5000
     }
   );
