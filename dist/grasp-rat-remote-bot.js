@@ -1028,120 +1028,18 @@
   var require_refresh_exit_detail = __commonJS({
     "src/browser/runtime/refresh-exit-detail.js"(exports, module) {
       "use strict";
-      function refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t = Date.now()) {
+      function refreshExitDetailCore(detail, offlineLeaveSummary2, finalizeLeaveDisplayReason, t = Date.now()) {
         if (!detail || typeof detail !== "object") return detail;
         const reloginUntil = Number(detail.reloginUntil || 0);
         if (reloginUntil) detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));
         if (detail.offlineSafety?.staminaBudgetExit) {
-          detail.summary = offlineLeaveSummary(detail.reason || "stamina budget coin leave", detail.offlineSafety);
+          detail.summary = offlineLeaveSummary2(detail.reason || "stamina budget coin leave", detail.offlineSafety);
         } else if (detail.offlineSafety?.staminaExhausted) {
-          detail.summary = offlineLeaveSummary(detail.reason || "stamina exhausted", detail.offlineSafety);
+          detail.summary = offlineLeaveSummary2(detail.reason || "stamina exhausted", detail.offlineSafety);
         }
         return finalizeLeaveDisplayReason(detail);
       }
       module.exports = { refreshExitDetailCore };
-    }
-  });
-
-  // src/browser/runtime/restored-coin-failures.js
-  var require_restored_coin_failures = __commonJS({
-    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
-      "use strict";
-      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
-        const options = cfg && typeof cfg === "object" ? cfg : {};
-        return (preservedCoinFailures || []).map(([id, item]) => {
-          const next = { ...item || {} };
-          const count = Number(next.count || 0);
-          const lastAt = Number(next.lastAt || 0);
-          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
-          let ignoreUntil = Number(next.ignoreUntil || 0);
-          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
-            return null;
-          }
-          if (!staleFailure) {
-            if (count >= options.coinFailureSevereIgnoreCount) {
-              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
-            } else if (count >= options.coinFailureHardIgnoreCount) {
-              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
-            }
-          }
-          next.ignoreUntil = ignoreUntil;
-          return [String(id), next];
-        }).filter(Boolean);
-      }
-      module.exports = { restoredCoinFailuresCore };
-    }
-  });
-
-  // src/browser/runtime/restored-runtime-state.js
-  var require_restored_runtime_state = __commonJS({
-    "src/browser/runtime/restored-runtime-state.js"(exports, module) {
-      "use strict";
-      function restoreRuntimeStateCore(preserved, previousBot, helpers = {}) {
-        const state2 = preserved && typeof preserved === "object" ? preserved : {};
-        const nowMs = typeof helpers.nowMs === "function" ? helpers.nowMs : Date.now;
-        const restoredFailures = helpers.restoredCoinFailures();
-        const restoredEnemyLeaveState = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
-        const restoredOfflineLeaveState = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
-        const restoreOptions = { markReloaded: !previousBot };
-        const restoredPendingExitState = helpers.readPersistedPendingExitState(nowMs(), restoreOptions);
-        const initialPendingExitState = helpers.chooseInitialPendingExitState(
-          state2.pendingExit,
-          restoredPendingExitState,
-          nowMs(),
-          restoreOptions
-        );
-        return {
-          restoredFailures,
-          restoredEnemyLeaveState,
-          restoredOfflineLeaveState,
-          restoredPendingExitState,
-          initialPendingExitState
-        };
-      }
-      module.exports = { restoreRuntimeStateCore };
-    }
-  });
-
-  // src/browser/runtime/login-snapshot-gate.js
-  var require_login_snapshot_gate = __commonJS({
-    "src/browser/runtime/login-snapshot-gate.js"(exports, module) {
-      "use strict";
-      function loginSnapshotSuccessRequiredCore() {
-        return 0;
-      }
-      function normalizeLoginSnapshotGateStateCore(state2 = null, required = loginSnapshotSuccessRequiredCore()) {
-        return {
-          streak: Math.max(0, Math.round(Number(state2?.streak || 0) || 0)),
-          required,
-          lastOkAt: Number(state2?.lastOkAt || 0) || 0,
-          lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
-          lastSampleAt: Number(state2?.lastSampleAt || state2?.lastOkAt || state2?.lastErrorAt || 0) || 0,
-          lastError: String(state2?.lastError || ""),
-          lastTick: Number(state2?.lastTick || 0) || 0,
-          resetAt: Number(state2?.resetAt || 0) || 0,
-          resetReason: String(state2?.resetReason || "")
-        };
-      }
-      module.exports = {
-        loginSnapshotSuccessRequiredCore,
-        normalizeLoginSnapshotGateStateCore
-      };
-    }
-  });
-
-  // src/browser/runtime/runtime-diagnostics.js
-  var require_runtime_diagnostics = __commonJS({
-    "src/browser/runtime/runtime-diagnostics.js"(exports, module) {
-      "use strict";
-      function recordRuntimeDiagnosticsCore(bot, values = {}) {
-        try {
-          if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== "object") bot.runtimeDiagnostics = {};
-          Object.assign(bot.runtimeDiagnostics, values);
-        } catch (_) {
-        }
-      }
-      module.exports = { recordRuntimeDiagnosticsCore };
     }
   });
 
@@ -1961,6 +1859,108 @@
         clearEnemyReloginHoldBoundCore,
         clearOfflineReloginHoldBoundCore
       };
+    }
+  });
+
+  // src/browser/runtime/restored-coin-failures.js
+  var require_restored_coin_failures = __commonJS({
+    "src/browser/runtime/restored-coin-failures.js"(exports, module) {
+      "use strict";
+      function restoredCoinFailuresCore(preservedCoinFailures, cfg, t) {
+        const options = cfg && typeof cfg === "object" ? cfg : {};
+        return (preservedCoinFailures || []).map(([id, item]) => {
+          const next = { ...item || {} };
+          const count = Number(next.count || 0);
+          const lastAt = Number(next.lastAt || 0);
+          const staleFailure = lastAt && t - lastAt > options.coinFailureDecayMs;
+          let ignoreUntil = Number(next.ignoreUntil || 0);
+          if ((next.reason === "near" || next.reason === "close") && count <= 1) {
+            return null;
+          }
+          if (!staleFailure) {
+            if (count >= options.coinFailureSevereIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureSevereIgnoreMs);
+            } else if (count >= options.coinFailureHardIgnoreCount) {
+              ignoreUntil = Math.max(ignoreUntil, t + options.coinFailureHardIgnoreMs);
+            }
+          }
+          next.ignoreUntil = ignoreUntil;
+          return [String(id), next];
+        }).filter(Boolean);
+      }
+      module.exports = { restoredCoinFailuresCore };
+    }
+  });
+
+  // src/browser/runtime/restored-runtime-state.js
+  var require_restored_runtime_state = __commonJS({
+    "src/browser/runtime/restored-runtime-state.js"(exports, module) {
+      "use strict";
+      function restoreRuntimeStateCore(preserved, previousBot, helpers = {}) {
+        const state2 = preserved && typeof preserved === "object" ? preserved : {};
+        const nowMs = typeof helpers.nowMs === "function" ? helpers.nowMs : Date.now;
+        const restoredFailures = helpers.restoredCoinFailures();
+        const restoredEnemyLeaveState = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
+        const restoredOfflineLeaveState = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
+        const restoreOptions = { markReloaded: !previousBot };
+        const restoredPendingExitState = helpers.readPersistedPendingExitState(nowMs(), restoreOptions);
+        const initialPendingExitState = helpers.chooseInitialPendingExitState(
+          state2.pendingExit,
+          restoredPendingExitState,
+          nowMs(),
+          restoreOptions
+        );
+        return {
+          restoredFailures,
+          restoredEnemyLeaveState,
+          restoredOfflineLeaveState,
+          restoredPendingExitState,
+          initialPendingExitState
+        };
+      }
+      module.exports = { restoreRuntimeStateCore };
+    }
+  });
+
+  // src/browser/runtime/login-snapshot-gate.js
+  var require_login_snapshot_gate = __commonJS({
+    "src/browser/runtime/login-snapshot-gate.js"(exports, module) {
+      "use strict";
+      function loginSnapshotSuccessRequiredCore() {
+        return 0;
+      }
+      function normalizeLoginSnapshotGateStateCore(state2 = null, required = loginSnapshotSuccessRequiredCore()) {
+        return {
+          streak: Math.max(0, Math.round(Number(state2?.streak || 0) || 0)),
+          required,
+          lastOkAt: Number(state2?.lastOkAt || 0) || 0,
+          lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
+          lastSampleAt: Number(state2?.lastSampleAt || state2?.lastOkAt || state2?.lastErrorAt || 0) || 0,
+          lastError: String(state2?.lastError || ""),
+          lastTick: Number(state2?.lastTick || 0) || 0,
+          resetAt: Number(state2?.resetAt || 0) || 0,
+          resetReason: String(state2?.resetReason || "")
+        };
+      }
+      module.exports = {
+        loginSnapshotSuccessRequiredCore,
+        normalizeLoginSnapshotGateStateCore
+      };
+    }
+  });
+
+  // src/browser/runtime/runtime-diagnostics.js
+  var require_runtime_diagnostics = __commonJS({
+    "src/browser/runtime/runtime-diagnostics.js"(exports, module) {
+      "use strict";
+      function recordRuntimeDiagnosticsCore(bot, values = {}) {
+        try {
+          if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== "object") bot.runtimeDiagnostics = {};
+          Object.assign(bot.runtimeDiagnostics, values);
+        } catch (_) {
+        }
+      }
+      module.exports = { recordRuntimeDiagnosticsCore };
     }
   });
 
@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.462" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.463" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4909,8 +4909,14 @@
       return chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers());
     }
     const { refreshExitDetailCore } = require_refresh_exit_detail();
+    const { offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore } = require_exit_relogin();
     function refreshExitDetail(detail, t = Date.now()) {
-      return refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t);
+      return refreshExitDetailCore(
+        detail,
+        (summaryReason, summarySafety) => offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
+        finalizeLeaveDisplayReason,
+        t
+      );
     }
     const { restoredCoinFailuresCore } = require_restored_coin_failures();
     function restoredCoinFailures() {
@@ -10333,7 +10339,6 @@
     const {
       combatExitSummaryCore,
       combatLeaveActionCore,
-      offlineLeaveSummaryCore,
       reloginDelayForHpCore
     } = require_exit_relogin();
     function combatExitSummary(reason, target, combatState = {}) {
@@ -10341,9 +10346,6 @@
     }
     function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
       return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
-    }
-    function offlineLeaveSummary(reason, offlineSafety) {
-      return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
     }
     const {
       enemyReloginHoldRemainingMsBoundCore,
@@ -12042,6 +12044,7 @@
     const {
       injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
       offlineExitRequiresUnsafeReloginDelayCore,
+      offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,
       primePendingStaminaExitLoginSuppressBoundCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
       pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,
@@ -12053,13 +12056,13 @@
       const skipped = pendingExitSkipNewLeave("offline", reason, {
         self: selfSummary,
         offlineSafety,
-        summary: offlineLeaveSummary(reason, offlineSafety)
+        summary: offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })
       });
       if (skipped) return skipped;
       const retryMs = Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1e3));
       if (t - Number(bot.lastOfflineLeaveAt || 0) < retryMs) {
         const active = activeOfflineLeaveDetail(t);
-        const summary = offlineLeaveSummary(reason, offlineSafety);
+        const summary = offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
         const detail2 = {
           attempted: false,
           reason: "cooldown",
@@ -12079,7 +12082,7 @@
         userId: getCurrentUserId() || null,
         self: selfSummary,
         offlineSafety,
-        summary: offlineLeaveSummary(reason, offlineSafety),
+        summary: offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
         error: ""
       };
       startExitAuditBoundCore(detail, { scope: "offline", source: "offline", reason, self: selfSummary, offlineSafety }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
@@ -20855,7 +20858,7 @@
         }
       };
     }
-    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
+    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -20996,7 +20999,7 @@
             currentUserId: getCurrentUserId(),
             control: offlineHoldControl,
             holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs(),
-            displayReason: offlineLeaveDetail?.displayReason || offlineLeaveSummary("offline leave wait", offlineSafety),
+            displayReason: offlineLeaveDetail?.displayReason || offlineLeaveSummaryForTickCore("offline leave wait", offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
             offlineSafety,
             leave: null,
             offlineLeave: {
@@ -21129,7 +21132,7 @@
               noSelfGameSession: noSelfExit,
               liveSessionTakeover,
               offlineSafety,
-              displayReason: currentOfflineDisplayReasonForTickCore(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason, { offlineLeaveSummary }),
+              displayReason: currentOfflineDisplayReasonForTickCore(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
               leave: leaveResult
             };
             updateBotPanel(bot.lastDecision);
@@ -21210,7 +21213,7 @@
             staminaExhausted: staminaState
           };
           bot.lastOfflineSafety = offlineSafety;
-          const staminaDisplayReason = offlineLeaveSummary("stamina exhausted", offlineSafety);
+          const staminaDisplayReason = offlineLeaveSummaryForTickCore("stamina exhausted", offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
           const leaveResult = await leaveOffline("stamina exhausted", currentSummary, offlineSafety);
           const offlineDetail = activeOfflineLeaveDetail();
           bot.lastDecision = {
@@ -21224,7 +21227,7 @@
             leaveDelayMs: 0,
             stamina: staminaState,
             offlineSafety,
-            displayReason: currentOfflineDisplayReasonForTickCore("stamina exhausted", offlineSafety, leaveResult, offlineDetail, staminaDisplayReason, { offlineLeaveSummary }),
+            displayReason: currentOfflineDisplayReasonForTickCore("stamina exhausted", offlineSafety, leaveResult, offlineDetail, staminaDisplayReason, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
             leave: leaveResult
           };
           updateBotPanel(bot.lastDecision);
@@ -21309,7 +21312,7 @@
             serverPositionStall,
             samplingOutage,
             combatTickGap,
-            displayReason: currentOfflineDisplayReasonForTickCore(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, samplingOutage ? "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6B63\u5728\u9000\u51FA" : combatTickGap ? "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA" : actionSettlementStallOffline ? "\u52A8\u4F5C\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6B63\u5728\u9000\u51FA" : reconnectChurn ? "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u6B63\u5728\u9000\u51FA" : "", { offlineLeaveSummary }),
+            displayReason: currentOfflineDisplayReasonForTickCore(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, samplingOutage ? "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6B63\u5728\u9000\u51FA" : combatTickGap ? "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA" : actionSettlementStallOffline ? "\u52A8\u4F5C\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6B63\u5728\u9000\u51FA" : reconnectChurn ? "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u6B63\u5728\u9000\u51FA" : "", { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
             leave: leaveResult
           };
           updateBotPanel(bot.lastDecision);
@@ -21412,7 +21415,7 @@
           const skippedLeave = pendingExitSkipNewLeave("offline", action.reason || "stamina budget coin leave", {
             self: currentSummary,
             offlineSafety,
-            summary: action.displayReason || offlineLeaveSummary(action.reason || "stamina budget coin leave", offlineSafety)
+            summary: action.displayReason || offlineLeaveSummaryForTickCore(action.reason || "stamina budget coin leave", offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })
           });
           if (skippedLeave) {
             bot.lastDecision = {
@@ -21449,7 +21452,7 @@
             control: summarizeControl(),
             self: currentSummary,
             offlineSafety,
-            displayReason: currentOfflineDisplayReasonForTickCore(action.reason || "stamina budget coin leave", offlineSafety, leaveResult, offlineDetail, action.displayReason || "", { offlineLeaveSummary }),
+            displayReason: currentOfflineDisplayReasonForTickCore(action.reason || "stamina budget coin leave", offlineSafety, leaveResult, offlineDetail, action.displayReason || "", { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
             leave: leaveResult,
             holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
           };

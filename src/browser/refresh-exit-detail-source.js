@@ -17,9 +17,15 @@ function refreshExitDetailInlineSource() {
 
 function bundledRefreshExitDetailSource() {
   return `const { refreshExitDetailCore } = require('./src/browser/runtime/refresh-exit-detail');
+const { offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore } = require('./src/browser/runtime/exit-relogin');
 
 		  function refreshExitDetail(detail, t = Date.now()) {
-	    return refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason, t);
+	    return refreshExitDetailCore(
+	      detail,
+	      (summaryReason, summarySafety) => offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
+	      finalizeLeaveDisplayReason,
+	      t
+	    );
 	  }`;
 }
 

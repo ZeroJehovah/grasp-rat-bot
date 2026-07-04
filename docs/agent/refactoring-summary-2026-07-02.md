@@ -1429,6 +1429,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 188. Removed the bundled `exit-relogin` offline display-reason wrapper by routing tick and combat-state display construction directly through `currentOfflineDisplayReasonCore()`: integrated in `bootstrap-0.4.460`
 189. Removed the bundled `exit-relogin` injury summary wrapper by routing tick pending-injury and leave-flow injury summaries directly through `injuryLeaveSummaryCore()`: integrated in `bootstrap-0.4.461`
 190. Removed the bundled `exit-relogin` pursuit summary wrapper by routing tick pending-pursuit and leave-flow pursuit summaries directly through `pursuitLeaveSummaryCore()`: integrated in `bootstrap-0.4.462`
+191. Removed the bundled `exit-relogin` offline summary wrapper by routing tick, leave-flow, and refresh-exit-detail summaries directly through `offlineLeaveSummaryCore()`: integrated in `bootstrap-0.4.463`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

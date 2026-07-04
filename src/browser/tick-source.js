@@ -2,7 +2,7 @@
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const clearEnemyOnlineRestore = options.bundledRuntime
     ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
@@ -11,8 +11,11 @@ function tickSource(options = {}) {
     ? "clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })"
     : "clearOfflineReloginHold('online self restored during offline hold')";
   const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
-    ? `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })`
+    ? `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) })`
     : `currentOfflineDisplayReason(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback})`;
+  const offlineLeaveSummaryCall = (reason, offlineSafety) => options.bundledRuntime
+    ? `offlineLeaveSummaryForTickCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`
+    : `offlineLeaveSummary(${reason}, ${offlineSafety})`;
   const injuryLeaveSummaryCall = injury => options.bundledRuntime
     ? `injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })`
     : `injuryLeaveSummary(${injury})`;
@@ -159,7 +162,7 @@ function tickSource(options = {}) {
           currentUserId: getCurrentUserId(),
 	          control: offlineHoldControl,
 	          holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs(),
-	          displayReason: offlineLeaveDetail?.displayReason || offlineLeaveSummary('offline leave wait', offlineSafety),
+	          displayReason: offlineLeaveDetail?.displayReason || ${offlineLeaveSummaryCall("'offline leave wait'", 'offlineSafety')},
 	          offlineSafety,
 	          leave: null,
 	          offlineLeave: {
@@ -419,7 +422,7 @@ function tickSource(options = {}) {
           staminaExhausted: staminaState
         };
         bot.lastOfflineSafety = offlineSafety;
-        const staminaDisplayReason = offlineLeaveSummary('stamina exhausted', offlineSafety);
+        const staminaDisplayReason = ${offlineLeaveSummaryCall("'stamina exhausted'", 'offlineSafety')};
         const leaveResult = await leaveOffline('stamina exhausted', currentSummary, offlineSafety);
         const offlineDetail = activeOfflineLeaveDetail();
         bot.lastDecision = {
@@ -645,7 +648,7 @@ function tickSource(options = {}) {
 	        const skippedLeave = pendingExitSkipNewLeave('offline', action.reason || 'stamina budget coin leave', {
 	          self: currentSummary,
 	          offlineSafety,
-	          summary: action.displayReason || offlineLeaveSummary(action.reason || 'stamina budget coin leave', offlineSafety)
+	          summary: action.displayReason || ${offlineLeaveSummaryCall("action.reason || 'stamina budget coin leave'", 'offlineSafety')}
 	        });
 	        if (skippedLeave) {
 	          bot.lastDecision = {
