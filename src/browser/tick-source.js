@@ -4,6 +4,9 @@ const {
   enemyReloginHoldRemainingMsBoundCall,
   offlineReloginHoldRemainingMsBoundCall
 } = require('./exit-relogin-hold-read-call-source');
+const {
+  writePersistentPendingExitStateCallback
+} = require('./pending-exit-persistence-call-source');
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
@@ -16,10 +19,10 @@ function tickSource(options = {}) {
     ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForTickBoundCore', 'clearOfflineReloginHoldForTickBoundCore')
     : 'offlineReloginHoldRemainingMs()';
   const clearEnemyOnlineRestore = options.bundledRuntime
-    ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
+    ? `clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState: ${writePersistentPendingExitStateCallback(options)}, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })`
     : "clearEnemyReloginHold('online self restored during enemy hold')";
   const clearOfflineOnlineRestore = options.bundledRuntime
-    ? "clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })"
+    ? `clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState: ${writePersistentPendingExitStateCallback(options)}, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })`
     : "clearOfflineReloginHold('online self restored during offline hold')";
   const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
     ? `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) })`

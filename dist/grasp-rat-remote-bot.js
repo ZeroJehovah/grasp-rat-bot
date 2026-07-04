@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.470" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.471" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4889,9 +4889,6 @@
         stringify: safeStringify,
         clearPersistentPendingExitState
       };
-    }
-    function writePersistentPendingExitState(pending = null) {
-      return writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
     }
     const { refreshExitDetailCore } = require_refresh_exit_detail();
     const {
@@ -7468,7 +7465,7 @@
         enemyHoldUntil: Number(bot.pursuitReloginUntil || 0),
         enemyHoldRemainingMs: enemyReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }),
         offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
-        offlineHoldRemainingMs: offlineReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForCombatLogBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
+        offlineHoldRemainingMs: offlineReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForCombatLogBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
         snapshotGate: snapshotLoginGateStatus(),
         lastLoginAt: Number(bot.lastLoginAt || 0),
         lastLogin: combatLogLoginResultSummary(bot.lastLoginResult),
@@ -8214,7 +8211,7 @@
           reloadConfirmation2.lastBlocked = blocked;
           pending.reloadConfirmation = reloadConfirmation2;
           if (pending.lastResult && typeof pending.lastResult === "object") pending.lastResult.reloadConfirmation = reloadConfirmation2;
-          writePersistentPendingExitState(pending);
+          writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
         }
         flushCombatLogs(true);
         logStatus("leave confirmation reload blocked until exit audit logs flush: " + (reason || ""), {
@@ -8257,7 +8254,7 @@
         pending.lastResult.exitPending = true;
         pending.lastResult.exitConfirmed = false;
       }
-      writePersistentPendingExitState(pending);
+      writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       bot.reloadRequestedAt = t;
       logStatus("leave confirmation reload: " + reason, {
         kind: "wait",
@@ -8701,7 +8698,7 @@
       }
       const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs(t);
       const enemyHoldRemainingMs = enemyReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
-      const offlineHoldRemainingMs = offlineReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForControlLoginBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
+      const offlineHoldRemainingMs = offlineReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForControlLoginBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
       const gate = snapshotLoginGateStatus(t);
       const resetReason = String(gate?.resetReason || "");
       const exitGateReset = Boolean(
@@ -10483,7 +10480,7 @@
       detail.exitConfirmed = false;
       detail.pendingExit = summarizePendingExit(pending);
       detail.displayReason = pending.displayReason;
-      writePersistentPendingExitState(pending);
+      writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       if (leaveDetailSucceeded(detail) && !leaveDetailHasHttp403(detail)) {
         requestPendingExitLeaveSuccessReload(detail, "leave-success");
       }
@@ -10685,7 +10682,7 @@
       detail.exitPending = true;
       detail.exitConfirmed = false;
       detail.pendingExit = summarizePendingExit(pending);
-      writePersistentPendingExitState(pending);
+      writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       return reloadConfirmation;
     }
     function pendingExitLeaveSuccessReloadWaitDetail(pending, detail, state2, reason, displayReason) {
@@ -10935,7 +10932,7 @@
         leave: leaveResult,
         pendingExit: summarizePendingExit(bot.pendingExit || pending),
         exitConfirmation: state2 || null,
-        holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }))
+        holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending2) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending2 || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }))
       };
     }
     function applyCombatExitCover(pending, self = null) {
@@ -10997,7 +10994,7 @@
         lastAttemptAt: t,
         lastResult: cloneForPendingExit(detail)
       };
-      writePersistentPendingExitState(bot.pendingExit);
+      writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
       detail.pendingExit = summarizePendingExit(bot.pendingExit);
       recordPendingExitResult(pending.source, detail, t);
       await issueLeaveCommand(detail);
@@ -11012,7 +11009,7 @@
           lastResult: cloneForPendingExit(detail)
         };
         bot.pendingExit = next;
-        writePersistentPendingExitState(next);
+        writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, next || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
         detail.pendingExit = summarizePendingExit(next);
         detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReason(detail.summary || pending.summary || detail.reason);
       }
@@ -11031,7 +11028,7 @@
     async function handlePendingExit(self) {
       const pending = bot.pendingExit;
       if (!pending) return null;
-      const existingHoldMs = pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
+      const existingHoldMs = pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending2) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending2 || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
       if (existingHoldMs > 0) {
         bot.pendingExit = null;
         clearPersistentPendingExitState();
@@ -11560,7 +11557,7 @@
                 retryCount: Number(pending.retryCount || 0) + 1,
                 lastResult: cloneForPendingExit(retryDetail)
               };
-              writePersistentPendingExitState(bot.pendingExit);
+              writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
               retryDetail.pendingExit = summarizePendingExit(bot.pendingExit);
             }
             recordPendingExitResult(pending?.source || detail.exitAuditSource || "offline", retryDetail, retryAt);
@@ -11598,7 +11595,7 @@
         lastAttemptAt: Number(detail.at || detail.lastLeaveRequest?.sentAt || pending.lastAttemptAt || Date.now()),
         lastResult: cloneForPendingExit(detail)
       };
-      writePersistentPendingExitState(bot.pendingExit);
+      writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
     }
     function maybeConfirmPendingExitFromLeaveDetail(detail) {
       const pending = bot.pendingExit;
@@ -20891,7 +20888,7 @@
         const enemyHoldControl = summarizeControl();
         let enemyHoldRemainingMs = enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
         if (enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen) {
-          clearEnemyReloginHoldForTickBoundCore(bot, localStorage, "online self restored during enemy hold", { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY });
+          clearEnemyReloginHoldForTickBoundCore(bot, localStorage, "online self restored during enemy hold", { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY });
           enemyHoldRemainingMs = 0;
         }
         if (enemyHoldRemainingMs > 0) {
@@ -20928,9 +20925,9 @@
           return;
         }
         const offlineHoldControl = summarizeControl();
-        let offlineHoldRemainingMs = offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
+        let offlineHoldRemainingMs = offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
         if (offlineHoldRemainingMs > 0 && self && isAlive(self) && offlineHoldControl.wsOpen) {
-          clearOfflineReloginHoldForTickBoundCore(bot, localStorage, "online self restored during offline hold", { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });
+          clearOfflineReloginHoldForTickBoundCore(bot, localStorage, "online self restored during offline hold", { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });
           offlineHoldRemainingMs = 0;
         }
         if (offlineHoldRemainingMs > 0) {
@@ -20950,7 +20947,7 @@
             self: currentSummary2,
             currentUserId: getCurrentUserId(),
             control: offlineHoldControl,
-            holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
+            holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
             displayReason: offlineLeaveDetail?.displayReason || offlineLeaveSummaryForTickCore("offline leave wait", offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
             offlineSafety,
             leave: null,
@@ -21406,7 +21403,7 @@
             offlineSafety,
             displayReason: currentOfflineDisplayReasonForTickCore(action.reason || "stamina budget coin leave", offlineSafety, leaveResult, offlineDetail, action.displayReason || "", { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
             leave: leaveResult,
-            holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now })
+            holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now })
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop("once");

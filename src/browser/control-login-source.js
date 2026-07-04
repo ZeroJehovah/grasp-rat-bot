@@ -7,6 +7,9 @@ const {
 const {
   finalizeLeaveDisplayReasonCoreCall
 } = require('./exit-relogin-display-call-source');
+const {
+  writePersistentPendingExitStateCall
+} = require('./pending-exit-persistence-call-source');
 
 function controlLoginSource(helpers = {}) {
   const {
@@ -22,6 +25,7 @@ function controlLoginSource(helpers = {}) {
   const normalizePendingExitReloadConfirmationCall = args => bundledRuntime
     ? `normalizePendingExitReloadConfirmationCore(${args})`
     : `normalizePendingExitReloadConfirmation(${args})`;
+  const writePendingExit = pending => writePersistentPendingExitStateCall(pending, { bundledRuntime });
   const enemyHoldRemainingMsCall = bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore')
     : 'enemyReloginHoldRemainingMs()';
@@ -85,7 +89,7 @@ function controlLoginSource(helpers = {}) {
 		        reloadConfirmation.lastBlocked = blocked;
 		        pending.reloadConfirmation = reloadConfirmation;
 		        if (pending.lastResult && typeof pending.lastResult === 'object') pending.lastResult.reloadConfirmation = reloadConfirmation;
-		        writePersistentPendingExitState(pending);
+		        ${writePendingExit('pending')};
 		      }
 		      flushCombatLogs(true);
 		      logStatus('leave confirmation reload blocked until exit audit logs flush: ' + (reason || ''), {
@@ -127,7 +131,7 @@ function controlLoginSource(helpers = {}) {
 		      pending.lastResult.exitPending = true;
 		      pending.lastResult.exitConfirmed = false;
 		    }
-		    writePersistentPendingExitState(pending);
+		    ${writePendingExit('pending')};
 		    bot.reloadRequestedAt = t;
 		    logStatus('leave confirmation reload: ' + reason, {
 		      kind: 'wait',
