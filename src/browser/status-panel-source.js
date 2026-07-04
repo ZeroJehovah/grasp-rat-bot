@@ -2,6 +2,7 @@
 
 function statusPanelSource() {
   return [
+    String.raw`const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require('./src/browser/runtime/display-format');`,
     String.raw`
 	  function ensureBotPanel() {
 	    return null;
