@@ -366,6 +366,7 @@ function main() {
   const botObjectSourceModule = readText('src/browser/bot-object-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
   const controlLoginRuntimeSourceModule = readText('src/browser/control-login-runtime-source.js');
+  const exitReloginDisplayCallSourceModule = readText('src/browser/exit-relogin-display-call-source.js');
   const exitReloginHoldReadCallSourceModule = readText('src/browser/exit-relogin-hold-read-call-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
   const nativeControlSourceModule = readText('src/browser/native-control-source.js');
@@ -1438,8 +1439,11 @@ function main() {
     assert(refreshExitDetailInlineBody.includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail inline source factory does not finalize display reason');
     const refreshExitDetailBundledBody = functionBody(refreshExitDetailSourceModule, 'bundledRefreshExitDetailSource');
     assert(refreshExitDetailBundledBody.includes("require('./src/browser/runtime/refresh-exit-detail')"), 'refresh-exit-detail bundled source does not hand refresh helper to the bundler');
+    assert(refreshExitDetailBundledBody.includes('finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import display finalizer core alias');
+    assert(refreshExitDetailBundledBody.includes('leaveWaitDisplayCore: leaveWaitDisplayForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import wait-display core alias');
     assert(refreshExitDetailBundledBody.includes('offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import offline summary core alias');
     assert(refreshExitDetailBundledBody.includes('offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'refresh-exit-detail bundled source does not bind runtime offline summary core directly');
+    assert(refreshExitDetailBundledBody.includes("value => ${finalizeLeaveDisplayReasonCoreCall('value', 'finalizeLeaveDisplayReasonForRefreshExitDetailCore', 'leaveWaitDisplayForRefreshExitDetailCore')}"), 'refresh-exit-detail bundled source does not bind display finalizer core directly');
     assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('options.bundledRuntime'), 'refresh-exit-detail source selector does not switch on bundled runtime mode');
     assert(refreshExitDetailRuntimeModule.includes('function refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason'), 'refresh-exit-detail runtime core not found');
     assert(refreshExitDetailRuntimeModule.includes('detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));'), 'refresh-exit-detail runtime core does not refresh relogin hold remaining time');
@@ -1561,10 +1565,15 @@ function main() {
     assert(exitReloginDisplayInlineBody.includes('function finalizeLeaveDisplayReason'), 'exit-relogin display inline source does not include display finalizer');
     assert(exitReloginDisplayInlineBody.includes('formatDurationMs(waitMs)'), 'exit-relogin display inline source does not preserve wait duration formatting');
     const exitReloginDisplayBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginDisplaySource');
-    assert(exitReloginDisplayBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin display bundled source does not hand display helpers to the bundler');
+    assert(exitReloginDisplayBundledBody.includes("return '';"), 'exit-relogin display bundled source should be empty after finalizer handoff');
+    assert(!exitReloginDisplayBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin display bundled source should not keep unused runtime import');
     assert(!exitReloginDisplayBundledBody.includes('function leaveWaitDisplay'), 'exit-relogin display bundled source still keeps wait-display wrapper');
-    assert(exitReloginDisplayBundledBody.includes('(base, value) => leaveWaitDisplayCore(base, value, formatDurationMs)'), 'exit-relogin display bundled source does not bind formatDurationMs directly');
-    assert(exitReloginDisplayBundledBody.includes('finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs))'), 'exit-relogin display bundled source does not bind display finalizer directly');
+    assert(!exitReloginDisplayBundledBody.includes('function finalizeLeaveDisplayReason'), 'exit-relogin display bundled source still keeps display finalizer wrapper');
+    assert(exitReloginDisplayCallSourceModule.includes('finalizeLeaveDisplayReasonCoreCall') && exitReloginDisplayCallSourceModule.includes('${waitName}(base, value, formatDurationMs)'), 'display call source does not bind formatDurationMs directly');
+    assert(refreshExitDetailSourceModule.includes('finalizeLeaveDisplayReasonForRefreshExitDetailCore'), 'refresh-exit-detail source does not bind display finalizer directly in bundled mode');
+    assert(pendingExitSourceModule.includes('finalizeLeaveDisplayReasonForPendingExitCore'), 'pending-exit source does not bind display finalizer directly in bundled mode');
+    assert(leaveFlowSourceModule.includes('finalizeLeaveDisplayReasonForLeaveFlowCore'), 'leave-flow source does not bind display finalizer directly in bundled mode');
+    assert(controlLoginSourceModule.includes('finalizeLeaveDisplayReasonForControlLoginCore'), 'control-login source does not bind display finalizer directly in bundled mode');
     const exitReloginActorInlineBody = functionBody(exitReloginSourceModule, 'exitReloginActorInlineSource');
     assert(exitReloginActorInlineBody.includes('function normalizeEnemyActor'), 'exit-relogin actor inline source does not include actor normalizer');
     assert(exitReloginActorInlineBody.includes('function enemyActorFromLeaveDetail'), 'exit-relogin actor inline source does not include detail actor resolver');
@@ -1894,11 +1903,13 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const reloginDelayForHpBinding') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'), 'pending-exit source does not bind HP relogin delay through runtime core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${clearLoginSuppressMatchingBinding}'), 'pending-exit source does not pass bound suppress cleanup into bundled suppress writers');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${reloginDelayForHpBinding}'), 'pending-exit source does not pass runtime HP relogin delay binding into bundled suppress writers');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const finalizeLeaveDisplayReasonBinding = options.bundledRuntime'), 'pending-exit source does not select display finalizer binding for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("finalizeLeaveDisplayReasonCoreBinding('finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore')"), 'pending-exit source does not bind display finalizer through direct runtime core');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppress(detail.reason || 'websocket offline'"), 'pending-exit source does not preserve inline offline suppress wrapper call');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through bound runtime writer');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
     assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
@@ -2204,6 +2215,7 @@ function main() {
       assert(reloginDisplaySource.includes('detail?.holdRemainingMs ?? detail?.reloginDelayMs'), 'leave wait display does not prefer remaining hold time');
       if (file === 'dist/grasp-rat-remote-bot.js') {
         assert(!text.includes('function leaveWaitDisplay('), 'dist remote bot still keeps leaveWaitDisplay wrapper');
+        assert(!text.includes('function finalizeLeaveDisplayReason('), 'dist remote bot still keeps finalizeLeaveDisplayReason wrapper');
         assert(!text.includes('function enemyReloginHoldRemainingMs('), 'dist remote bot still keeps enemyReloginHoldRemainingMs wrapper');
         assert(!text.includes('function offlineReloginHoldRemainingMs('), 'dist remote bot still keeps offlineReloginHoldRemainingMs wrapper');
       }

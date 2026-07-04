@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.466" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.467" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4909,12 +4909,16 @@
       return chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers());
     }
     const { refreshExitDetailCore } = require_refresh_exit_detail();
-    const { offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore } = require_exit_relogin();
+    const {
+      finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForRefreshExitDetailCore,
+      leaveWaitDisplayCore: leaveWaitDisplayForRefreshExitDetailCore,
+      offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore
+    } = require_exit_relogin();
     function refreshExitDetail(detail, t = Date.now()) {
       return refreshExitDetailCore(
         detail,
         (summaryReason, summarySafety) => offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
-        finalizeLeaveDisplayReason,
+        (value) => finalizeLeaveDisplayReasonForRefreshExitDetailCore(value, (base, value2) => leaveWaitDisplayForRefreshExitDetailCore(base, value2, formatDurationMs)),
         t
       );
     }
@@ -8166,7 +8170,7 @@
       };
     }
     const { staminaExhaustedWindowLabel } = require_exit_summary2();
-    const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require_exit_relogin();
+    const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require_exit_relogin();
     function requestReload(reason) {
       if (cfg.dryRun || cfg.once) return;
       if (bot.reloadRequestedAt) return;
@@ -10082,7 +10086,7 @@
       detail.reloginDelayMs = 0;
       detail.reloginHpDelayMs = 0;
       detail.reloginMinimumDelayMs = 0;
-      finalizeLeaveDisplayReason(detail);
+      finalizeLeaveDisplayReasonForControlLoginCore(detail, (base, value) => leaveWaitDisplayForControlLoginCore(base, value, formatDurationMs));
       return detail;
     }
     function clearCurrentReloginHold(reason = "manual force login") {
@@ -10331,14 +10335,7 @@
         };
       }
     }
-    const {
-      leaveWaitDisplayCore,
-      finalizeLeaveDisplayReasonCore
-    } = require_exit_relogin();
-    function finalizeLeaveDisplayReason(detail) {
-      return finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs));
-    }
-    const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
+    const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
     function summarizePursuit(pursuit = bot.pursuit) {
       if (!pursuit) return null;
       const t = now();
@@ -10427,7 +10424,7 @@
       const pending = bot.pendingExit;
       if (!pending) return null;
       const summary = pending.summary || extra.summary || String(reason || "").trim() || "\u9000\u51FA\u8BF7\u6C42\u5DF2\u53D1\u9001";
-      return finalizeLeaveDisplayReason({
+      return finalizeLeaveDisplayReasonForPendingExitCore({
         ...extra,
         attempted: false,
         method: "",
@@ -10440,7 +10437,7 @@
         pendingExit: summarizePendingExit(pending),
         summary,
         error: ""
-      });
+      }, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs));
     }
     function pendingExitIntentForSkippedLeave(source, reason, detail = null) {
       return {
@@ -10776,7 +10773,7 @@
       detail.reloginMinimumDelayMs = 0;
       detail.reloginMinimumUntil = 0;
       detail.reloginMinimumReason = "";
-      finalizeLeaveDisplayReason(detail);
+      finalizeLeaveDisplayReasonForPendingExitCore(detail, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs));
       return true;
     }
     function clearLeave403RiskHolds(reason = "snapshot success streak") {
@@ -10899,9 +10896,9 @@
       if (bot.lastSafety) bot.lastSafety.pursuit = null;
       clearCombatEngagement("exit-confirmed");
       if (pending.scope === "offline") {
-        setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });
+        setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason: (detail2) => finalizeLeaveDisplayReasonForPendingExitCore(detail2, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs)), writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });
       } else {
-        setExitReloginSuppressBoundCore(bot, localStorage, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now });
+        setExitReloginSuppressBoundCore(bot, localStorage, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason: (detail2) => finalizeLeaveDisplayReasonForPendingExitCore(detail2, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs)), writePersistentExitState, setLoginSuppress, now: Date.now });
         if (pending.source === "combat") bot.lastCombatLeaveResult = detail;
         if (pending.source === "pursuit") bot.lastPursuitLeaveResult = detail;
         if (pending.source === "injury") bot.lastInjuryLeaveResult = detail;
@@ -12002,7 +11999,9 @@
     const {
       combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,
       enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,
+      finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForLeaveFlowCore,
       injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
+      leaveWaitDisplayCore: leaveWaitDisplayForLeaveFlowCore,
       offlineExitRequiresUnsafeReloginDelayCore,
       offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,
       primePendingStaminaExitLoginSuppressBoundCore,
@@ -12032,7 +12031,7 @@
           reloginUntil: active?.reloginUntil || bot.offlineReloginUntil || 0,
           reloginDelayMs: active?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || 0
         };
-        return finalizeLeaveDisplayReason(detail2);
+        return finalizeLeaveDisplayReasonForLeaveFlowCore(detail2, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
       }
       const detail = {
         attempted: false,
@@ -12057,7 +12056,7 @@
       if (detail.attempted || detail.exitAuditId) {
         rememberPendingExit("offline", "offline", detail, selfSummary);
       }
-      finalizeLeaveDisplayReason(detail);
+      finalizeLeaveDisplayReasonForLeaveFlowCore(detail, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
       bot.lastOfflineLeaveResult = detail;
       return detail;
     }
@@ -12077,7 +12076,7 @@
           injury,
           summary: injuryLeaveSummaryForLeaveFlowCore(injury, { actorLabel, hpDisplay })
         };
-        return finalizeLeaveDisplayReason(detail2);
+        return finalizeLeaveDisplayReasonForLeaveFlowCore(detail2, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
       }
       const detail = {
         attempted: false,
@@ -12120,7 +12119,7 @@
           pursuit: pursuitSummary,
           summary: pursuitLeaveSummaryForLeaveFlowCore(pursuitSummary, { actorLabel, formatDurationMs, formatDistance })
         };
-        return finalizeLeaveDisplayReason(detail2);
+        return finalizeLeaveDisplayReasonForLeaveFlowCore(detail2, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
       }
       const detail = {
         attempted: false,
@@ -12169,7 +12168,7 @@
           target: action?.target || null,
           summary: action?.exitSummary || combatExitSummaryForLeaveFlowCore(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {}, { cfg, actorLabel, hpDisplay, formatDurationMs })
         };
-        finalizeLeaveDisplayReason(detail2);
+        finalizeLeaveDisplayReasonForLeaveFlowCore(detail2, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
         rememberPendingCombatLeave(action, selfSummary, detail2);
         return detail2;
       }
@@ -12220,7 +12219,7 @@
           reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
           reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0
         };
-        return finalizeLeaveDisplayReason(detail2);
+        return finalizeLeaveDisplayReasonForLeaveFlowCore(detail2, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
       }
       const detail = {
         attempted: false,
@@ -12239,7 +12238,7 @@
       await issueLeaveCommand(detail);
       if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
       detail.holdRemainingMs = enemyReloginHoldRemainingMsForLeaveFlowBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
-      finalizeLeaveDisplayReason(detail);
+      finalizeLeaveDisplayReasonForLeaveFlowCore(detail, (base, value) => leaveWaitDisplayForLeaveFlowCore(base, value, formatDurationMs));
       bot.lastEnemyLeaveRetryResult = detail;
       return detail;
     }

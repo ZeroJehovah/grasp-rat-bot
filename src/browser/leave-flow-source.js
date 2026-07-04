@@ -3,11 +3,17 @@
 const {
   enemyReloginHoldRemainingMsBoundCall
 } = require('./exit-relogin-hold-read-call-source');
+const {
+  finalizeLeaveDisplayReasonCoreCall
+} = require('./exit-relogin-display-call-source');
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,\n    enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,\n    enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,\n    finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForLeaveFlowCore,\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    leaveWaitDisplayCore: leaveWaitDisplayForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
+  const finalizeLeaveDisplayReasonCall = detail => options.bundledRuntime
+    ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForLeaveFlowCore', 'leaveWaitDisplayForLeaveFlowCore')
+    : `finalizeLeaveDisplayReason(${detail})`;
   const enemyHoldRemainingMsCall = options.bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForLeaveFlowBoundCore')
     : 'enemyReloginHoldRemainingMs()';
@@ -60,7 +66,7 @@ function leaveFlowSource(options = {}) {
         reloginUntil: active?.reloginUntil || bot.offlineReloginUntil || 0,
         reloginDelayMs: active?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || 0
       };
-      return finalizeLeaveDisplayReason(detail);
+      return ${finalizeLeaveDisplayReasonCall('detail')};
     }
     const detail = {
       attempted: false,
@@ -85,7 +91,7 @@ function leaveFlowSource(options = {}) {
     if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('offline', 'offline', detail, selfSummary);
     }
-    finalizeLeaveDisplayReason(detail);
+    ${finalizeLeaveDisplayReasonCall('detail')};
     bot.lastOfflineLeaveResult = detail;
     return detail;
   }
@@ -106,7 +112,7 @@ function leaveFlowSource(options = {}) {
         injury,
         summary: ${injuryLeaveSummaryCall('injury')}
       };
-      return finalizeLeaveDisplayReason(detail);
+      return ${finalizeLeaveDisplayReasonCall('detail')};
     }
     const detail = {
       attempted: false,
@@ -150,7 +156,7 @@ function leaveFlowSource(options = {}) {
         pursuit: pursuitSummary,
         summary: ${pursuitLeaveSummaryCall('pursuitSummary')}
       };
-      return finalizeLeaveDisplayReason(detail);
+      return ${finalizeLeaveDisplayReasonCall('detail')};
     }
     const detail = {
       attempted: false,
@@ -206,7 +212,7 @@ function leaveFlowSource(options = {}) {
         target: action?.target || null,
         summary: action?.exitSummary || ${combatExitSummaryCall("action?.reason || 'combat-low-hp-leave'", 'action?.target || null', 'action?.combatState || {}')}
       };
-      finalizeLeaveDisplayReason(detail);
+      ${finalizeLeaveDisplayReasonCall('detail')};
       rememberPendingCombatLeave(action, selfSummary, detail);
       return detail;
     }
@@ -258,7 +264,7 @@ function leaveFlowSource(options = {}) {
         reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
         reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0
 	      };
-      return finalizeLeaveDisplayReason(detail);
+      return ${finalizeLeaveDisplayReasonCall('detail')};
 	    }
 		    const detail = {
 		      attempted: false,
@@ -277,7 +283,7 @@ function leaveFlowSource(options = {}) {
     await issueLeaveCommand(detail);
 	    if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
 	    detail.holdRemainingMs = ${enemyHoldRemainingMsCall};
-    finalizeLeaveDisplayReason(detail);
+    ${finalizeLeaveDisplayReasonCall('detail')};
 	    bot.lastEnemyLeaveRetryResult = detail;
     return detail;
   }

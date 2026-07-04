@@ -4,6 +4,9 @@ const {
   enemyReloginHoldRemainingMsBoundCall,
   offlineReloginHoldRemainingMsBoundCall
 } = require('./exit-relogin-hold-read-call-source');
+const {
+  finalizeLeaveDisplayReasonCoreCall
+} = require('./exit-relogin-display-call-source');
 
 function controlLoginSource(helpers = {}) {
   const {
@@ -11,8 +14,11 @@ function controlLoginSource(helpers = {}) {
     staminaExhaustedWindowLabel
   } = helpers;
   const holdPrelude = bundledRuntime
-    ? "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n"
+    ? "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n"
     : '';
+  const finalizeLeaveDisplayReasonCall = detail => bundledRuntime
+    ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForControlLoginCore', 'leaveWaitDisplayForControlLoginCore')
+    : `finalizeLeaveDisplayReason(${detail})`;
   const enemyHoldRemainingMsCall = bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore')
     : 'enemyReloginHoldRemainingMs()';
@@ -2126,7 +2132,7 @@ function controlLoginSource(helpers = {}) {
     detail.reloginDelayMs = 0;
     detail.reloginHpDelayMs = 0;
     detail.reloginMinimumDelayMs = 0;
-    finalizeLeaveDisplayReason(detail);
+    ${finalizeLeaveDisplayReasonCall('detail')};
     return detail;
   }
 

@@ -20,15 +20,7 @@ function exitReloginDisplayInlineSource() {
 }
 
 function bundledExitReloginDisplaySource() {
-  return `	  const {
-	    leaveWaitDisplayCore,
-	    finalizeLeaveDisplayReasonCore
-	  } = require('./src/browser/runtime/exit-relogin');
-
-	  function finalizeLeaveDisplayReason(detail) {
-	    return finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs));
-	  }
-`;
+  return '';
 }
 
 function exitReloginActorInlineSource() {
