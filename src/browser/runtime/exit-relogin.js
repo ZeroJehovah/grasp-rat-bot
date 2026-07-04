@@ -671,7 +671,7 @@ function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, optio
   });
 }
 
-function setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
+function setOfflineLeaveSuppressBoundCore(bot, storage, reason, detail, selfLike = null, options = {}, helpers) {
   const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
   return setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options, {
     now: nowFn(),
@@ -682,7 +682,16 @@ function setOfflineLeaveSuppressBoundCore(bot, reason, detail, selfLike = null, 
     offlineExitRequiresUnsafeReloginDelay: offlineExitRequiresUnsafeReloginDelayCore,
     finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
     writePersistentExitState: helpers.writePersistentExitState,
-    setExitReloginSuppress: helpers.setExitReloginSuppress,
+    setExitReloginSuppress: (storageReason, suppressReason, suppressDetail, suppressSelfLike, suppressOptions) => setExitReloginSuppressBoundCore(
+      bot,
+      storage,
+      storageReason,
+      suppressReason,
+      suppressDetail,
+      suppressSelfLike,
+      suppressOptions,
+      helpers
+    ),
     offlineLeaveStateKey: helpers.offlineLeaveStateKey
   });
 }
