@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.477" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.478" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -20233,13 +20233,6 @@
         ...extra
       };
     }
-    function trackedCoinTargetForCollection(self) {
-      return trackedCoinTargetForCollectionCore({
-        lastDecision: bot.lastDecision,
-        lastTarget: bot.lastTarget,
-        coinProgress: bot.coinProgress
-      }, self, coinTargetCoreOptions());
-    }
     function trackedCoinStillVisible(target) {
       const nativeCoinList = getNativeCoinList();
       if (!Array.isArray(nativeCoinList)) return null;
@@ -20338,7 +20331,11 @@
       return before - arrayCount(bot.globalState.coinDrops);
     }
     function markCoinCollected(self, currentSummary, previousCoins) {
-      const target = trackedCoinTargetForCollection(self);
+      const target = trackedCoinTargetForCollectionCore({
+        lastDecision: bot.lastDecision,
+        lastTarget: bot.lastTarget,
+        coinProgress: bot.coinProgress
+      }, self, coinTargetCoreOptions());
       if (!target) return false;
       const id = target.id === void 0 || target.id === null ? "" : String(target.id);
       const distance = Number(target.distance);
