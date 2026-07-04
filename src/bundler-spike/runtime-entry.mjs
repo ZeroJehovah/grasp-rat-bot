@@ -935,23 +935,35 @@ function helperStatus(config = {}) {
   };
   const exitReloginOfflineSuppressBoundReturn = exitRelogin.setOfflineLeaveSuppressBoundCore(
     { offlineReloginUntil: 0, lastOfflineLeaveWaitMs: 0 },
+    {
+      getItem: () => null
+    },
     'stamina budget spike',
     exitReloginOfflineSuppressBoundDetail,
     { hp: 90 },
     {},
     {
+      loginSuppressKey: 'suppress',
+      loginSuppressReasonKey: 'suppressReason',
+      enemyLeaveStateKey: 'enemy-state',
+      offlineLeaveStateKey: 'offline-state',
       now: () => 1000,
       staminaBudgetReloginDelayMs: () => 3000,
       staminaResetHoldUntil: () => null,
+      hpInfoForRelogin: selfLike => ({ hp: selfLike?.hp }),
+      reloginDelayForHp: () => {
+        throw new Error('unexpected variable delay for bound stamina hold spike');
+      },
+      updateEnemyLeaveStreak: () => {},
+      clearLoginSuppressMatching: () => {},
       finalizeLeaveDisplayReason: detail => detail,
-      writePersistentExitState: () => {
-        throw new Error('unexpected persistent write for bound stamina hold spike');
+      writePersistentExitState: (key, detail) => {
+        exitReloginOfflineSuppressBoundCalls.push(['write-exit', key, detail.loginSuppressReason, detail.staminaBudgetHold?.staminaBudgetExit?.coin?.id]);
       },
-      setExitReloginSuppress: (storageReason, reason, detail, selfLike, options) => {
-        exitReloginOfflineSuppressBoundCalls.push([storageReason, reason, detail.staminaBudgetHold?.staminaBudgetExit?.coin?.id, selfLike.hp, options.minimumUntil, options.fixedDelayMs]);
-        return options.minimumUntil;
-      },
-      offlineLeaveStateKey: 'offline-state'
+      setLoginSuppress: (storageReason, delayMs) => {
+        exitReloginOfflineSuppressBoundCalls.push(['set-suppress', storageReason, delayMs]);
+        return 1000 + delayMs;
+      }
     }
   );
   const exitReloginPendingStaminaDetail = {
@@ -1200,9 +1212,9 @@ function helperStatus(config = {}) {
     exitReloginOfflineSuppressSkipped: exitReloginOfflineSuppressDetail.defensiveReloginDelaySkipped,
     exitReloginOfflineSuppressFinalized: exitReloginOfflineSuppressDetail.finalized,
     exitReloginOfflineSuppressBoundReturn,
-    exitReloginOfflineSuppressBoundReason: exitReloginOfflineSuppressBoundCalls[0]?.[0],
-    exitReloginOfflineSuppressBoundCoin: exitReloginOfflineSuppressBoundCalls[0]?.[2],
-    exitReloginOfflineSuppressBoundFixed: exitReloginOfflineSuppressBoundCalls[0]?.[5],
+    exitReloginOfflineSuppressBoundReason: exitReloginOfflineSuppressBoundCalls.find(call => call[0] === 'set-suppress')?.[1],
+    exitReloginOfflineSuppressBoundCoin: exitReloginOfflineSuppressBoundCalls.find(call => call[0] === 'write-exit')?.[3],
+    exitReloginOfflineSuppressBoundFixed: exitReloginOfflineSuppressBoundCalls.find(call => call[0] === 'set-suppress')?.[2],
     exitReloginPendingStaminaUntil,
     exitReloginPendingStaminaDelay: exitReloginPendingStaminaDetail.pendingLoginSuppressDelayMs,
     exitReloginPendingStaminaBudgetCoin: exitReloginPendingStaminaDetail.staminaBudgetHold?.staminaBudgetExit?.coin?.id,

@@ -1419,6 +1419,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 178. Removed bundled `exit-relogin` offline suppress wrapper by routing `pending-exit` directly to the runtime-bound core: integrated in `bootstrap-0.4.450`
 179. Removed bundled `exit-relogin` pending stamina suppress wrapper by routing `leave-flow` directly to the runtime-bound core: integrated in `bootstrap-0.4.451`
 180. Added a runtime-bound `exit-relogin` suppress writer and routed bundled `pending-exit` enemy suppress calls directly to it: integrated in `bootstrap-0.4.452`
+181. Removed bundled `exit-relogin` suppress writer wrapper by binding offline suppress delegation inside `setOfflineLeaveSuppressBoundCore()`: integrated in `bootstrap-0.4.453`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

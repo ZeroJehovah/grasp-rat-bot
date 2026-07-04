@@ -609,30 +609,7 @@ function exitReloginHoldInlineSource() {
 }
 
 function bundledExitReloginHoldSource() {
-  return `	  const {
-\t    isExitLoginSuppressReasonCore,
-\t    setExitReloginSuppressCore
-\t  } = require('./src/browser/runtime/exit-relogin');
-
-  function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
-    return setExitReloginSuppressCore(bot, localStorage, storageReason, reason, detail, selfLike, options, {
-      loginSuppressKey: LOGIN_SUPPRESS_KEY,
-      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-      isExitLoginSuppressReason: isExitLoginSuppressReasonCore,
-      hpInfoForRelogin,
-      reloginDelayForHp,
-      updateEnemyLeaveStreak,
-      clearLoginSuppressMatching,
-      finalizeLeaveDisplayReason,
-      writePersistentExitState,
-      setLoginSuppress,
-      now: Date.now
-    });
-  }
-
-`;
+  return '';
 }
 
 function exitReloginHoldReadInlineSource() {
