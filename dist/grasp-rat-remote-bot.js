@@ -4742,7 +4742,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.447" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.448" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10345,8 +10345,7 @@
     const {
       isExitLoginSuppressReasonCore,
       startExitAuditBoundCore,
-      setExitReloginSuppressCore,
-      primePendingUnsafeExitLoginSuppressBoundCore
+      setExitReloginSuppressCore
     } = require_exit_relogin();
     function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
       return setExitReloginSuppressCore(bot, localStorage, storageReason, reason, detail, selfLike, options, {
@@ -10371,15 +10370,6 @@
         loginPointSafetyExitSelfForDetail,
         ensureExitAuditDetail,
         recordExitAuditEvent,
-        now: Date.now
-      });
-    }
-    function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
-      return primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options, {
-        hpInfoForRelogin,
-        reloginDelayForHp,
-        cfg,
-        setLoginSuppress,
         now: Date.now
       });
     }
@@ -12124,7 +12114,10 @@
       setTimeout(() => triggerNativeTick("manual-login", false), 0);
       return detail;
     }
-    const { offlineExitRequiresUnsafeReloginDelayCore } = require_exit_relogin();
+    const {
+      offlineExitRequiresUnsafeReloginDelayCore,
+      primePendingUnsafeExitLoginSuppressBoundCore
+    } = require_exit_relogin();
     async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
       const t = Date.now();
       if (cfg.dryRun || cfg.once) return null;
@@ -12166,7 +12159,7 @@
       if (detail.attempted) {
         const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
         if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)) {
-          primePendingUnsafeExitLoginSuppress("offline leave", reason, detail, selfSummary);
+          primePendingUnsafeExitLoginSuppressBoundCore("offline leave", reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now });
         }
       }
       if (detail.attempted || detail.exitAuditId) {
@@ -12208,7 +12201,7 @@
       bot.lastInjuryLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
-        primePendingUnsafeExitLoginSuppress("enemy leave", detail.reason, detail, injury?.self || injury);
+        primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, injury?.self || injury, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now });
       }
       if (detail.attempted || detail.exitAuditId) {
         rememberPendingExit("enemy", "injury", detail, injury?.self || injury);
@@ -12252,7 +12245,7 @@
       bot.lastPursuitLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
-        primePendingUnsafeExitLoginSuppress("enemy leave", detail.reason, detail, selfSummary);
+        primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now });
       }
       if (detail.attempted || detail.exitAuditId) {
         rememberPendingExit("enemy", "pursuit", detail, selfSummary);
@@ -12305,7 +12298,7 @@
       bot.lastCombatLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
-        primePendingUnsafeExitLoginSuppress("enemy leave", detail.reason, detail, selfSummary);
+        primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now });
       }
       if (detail.attempted || detail.exitAuditId) {
         rememberPendingExit("enemy", "combat", detail, selfSummary);

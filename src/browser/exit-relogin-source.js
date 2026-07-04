@@ -612,8 +612,7 @@ function bundledExitReloginHoldSource() {
   return `	  const {
 \t    isExitLoginSuppressReasonCore,
 \t    startExitAuditBoundCore,
-\t    setExitReloginSuppressCore,
-\t    primePendingUnsafeExitLoginSuppressBoundCore
+\t    setExitReloginSuppressCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
   function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
@@ -640,16 +639,6 @@ function bundledExitReloginHoldSource() {
       loginPointSafetyExitSelfForDetail,
       ensureExitAuditDetail,
       recordExitAuditEvent,
-      now: Date.now
-    });
-  }
-
-  function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
-    return primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options, {
-      hpInfoForRelogin,
-      reloginDelayForHp,
-      cfg,
-      setLoginSuppress,
       now: Date.now
     });
   }
