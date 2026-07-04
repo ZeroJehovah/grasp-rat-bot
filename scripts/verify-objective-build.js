@@ -927,9 +927,18 @@ function main() {
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/pending-exit')"), 'generated runtime does not bind pending-exit runtime helper module');
     assert(generatedRuntimeSource.includes('pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions())'), 'generated runtime does not route pending-exit retry durations through core');
     assert(generatedRuntimeSource.includes('pendingExitDisplayReasonCore(summary)'), 'generated runtime does not route pending-exit display reasons through core');
+    assert(generatedRuntimeSource.includes('leaveDetailHasHttp403Core(lastDetail)'), 'generated runtime does not route pending-exit 403 detection through core');
+    assert(generatedRuntimeSource.includes('leaveSuccessReloadConfirmationForDetailCore(detail, pending, t, { normalizeReloadConfirmation: normalizePendingExitReloadConfirmationCore })'), 'generated runtime does not route leave-success reload confirmation through core');
+    assert(generatedRuntimeSource.includes('pendingExitWaitReasonCore(pending, confirmed)'), 'generated runtime does not route pending-exit wait reason through core');
     assert(!generatedRuntimeSource.includes('function pendingExitRetryMs('), 'generated runtime still keeps pendingExitRetryMs wrapper');
     assert(!generatedRuntimeSource.includes('function pendingExitDisplayReason('), 'generated runtime still keeps pendingExitDisplayReason wrapper');
     assert(!generatedRuntimeSource.includes('function summarizePendingExit('), 'generated runtime still keeps summarizePendingExit wrapper');
+    assert(!generatedRuntimeSource.includes('function leaveRequestHasHttp403('), 'generated runtime still keeps leaveRequestHasHttp403 wrapper');
+    assert(!generatedRuntimeSource.includes('function leaveDetailHasHttp403('), 'generated runtime still keeps leaveDetailHasHttp403 wrapper');
+    assert(!generatedRuntimeSource.includes('function leaveDetailSucceeded('), 'generated runtime still keeps leaveDetailSucceeded wrapper');
+    assert(!generatedRuntimeSource.includes('function leaveSuccessReloadConfirmationForDetail('), 'generated runtime still keeps leaveSuccessReloadConfirmationForDetail wrapper');
+    assert(!generatedRuntimeSource.includes('function leaveSuccessReloadConfirmationSatisfied('), 'generated runtime still keeps leaveSuccessReloadConfirmationSatisfied wrapper');
+    assert(!generatedRuntimeSource.includes('function pendingExitWaitReason('), 'generated runtime still keeps pendingExitWaitReason wrapper');
     assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
     assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
     assert(generatedRuntimeSource.includes('function waitWithTimeout'), 'generated runtime does not include wait-with-timeout helper');
@@ -1493,9 +1502,22 @@ function main() {
     assert(pendingExitPersistenceRuntimeModule.includes('storage.setItem(key, resolved.stringify(normalized))'), 'pending-exit persistence runtime core does not write normalized state');
     assert(pendingExitPersistenceRuntimeModule.includes('return storedStamp > memoryStamp ? stored : memory;'), 'pending-exit persistence runtime core does not choose newest state');
     assert(pendingExitPersistenceRuntimeModule.includes('normalizePendingExitReloadConfirmationCore,\n  normalizePendingExitStateForStorageCore,\n  readPersistedPendingExitStateCore,\n  writePersistentPendingExitStateCore,\n  chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime exports are incomplete');
-    assert(strategyPendingExitSource.includes('function pendingExitRetryMsCore') && strategyPendingExitSource.includes('function pendingExitDisplayReasonCore') && strategyPendingExitSource.includes('function summarizePendingExitCore'), 'pending-exit strategy module does not expose retry/display/summary cores');
+    assert(
+      strategyPendingExitSource.includes('function pendingExitRetryMsCore')
+        && strategyPendingExitSource.includes('function pendingExitDisplayReasonCore')
+        && strategyPendingExitSource.includes('function summarizePendingExitCore')
+        && strategyPendingExitSource.includes('function leaveRequestHasHttp403Core')
+        && strategyPendingExitSource.includes('function leaveSuccessReloadConfirmationForDetailCore')
+        && strategyPendingExitSource.includes('function pendingExitWaitReasonCore'),
+      'pending-exit strategy module does not expose retry/display/summary/leave cores'
+    );
     assert(pendingExitRuntimeModule.includes("require('../../strategy/pending-exit')"), 'browser pending-exit runtime module does not reuse the strategy pending-exit helpers');
-    assert(pendingExitRuntimeModule.includes('pendingExitRetryMsCore,\n  pendingExitDisplayReasonCore,\n  summarizePendingExitCore'), 'browser pending-exit runtime exports are incomplete');
+    assert(
+      pendingExitRuntimeModule.includes('pendingExitRetryMsCore,\n  pendingExitDisplayReasonCore,\n  summarizePendingExitCore')
+        && pendingExitRuntimeModule.includes('leaveRequestHasHttp403Core,\n  leaveDetailHasHttp403Core,\n  leaveDetailSucceededCore')
+        && pendingExitRuntimeModule.includes('leaveSuccessReloadConfirmationForDetailCore,\n  leaveSuccessReloadConfirmationSatisfiedCore,\n  pendingExitWaitReasonCore'),
+      'browser pending-exit runtime exports are incomplete'
+    );
     assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
     assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
     assert(!distSource.includes('function readPersistedPendingExitState('), 'dist remote bot still keeps pending-exit storage-reader wrapper');
@@ -1504,6 +1526,12 @@ function main() {
     assert(!distSource.includes('function pendingExitRetryMs('), 'dist remote bot still keeps pending-exit retry wrapper');
     assert(!distSource.includes('function pendingExitDisplayReason('), 'dist remote bot still keeps pending-exit display wrapper');
     assert(!distSource.includes('function summarizePendingExit('), 'dist remote bot still keeps pending-exit summary wrapper');
+    assert(!distSource.includes('function leaveRequestHasHttp403('), 'dist remote bot still keeps leaveRequestHasHttp403 wrapper');
+    assert(!distSource.includes('function leaveDetailHasHttp403('), 'dist remote bot still keeps leaveDetailHasHttp403 wrapper');
+    assert(!distSource.includes('function leaveDetailSucceeded('), 'dist remote bot still keeps leaveDetailSucceeded wrapper');
+    assert(!distSource.includes('function leaveSuccessReloadConfirmationForDetail('), 'dist remote bot still keeps leaveSuccessReloadConfirmationForDetail wrapper');
+    assert(!distSource.includes('function leaveSuccessReloadConfirmationSatisfied('), 'dist remote bot still keeps leaveSuccessReloadConfirmationSatisfied wrapper');
+    assert(!distSource.includes('function pendingExitWaitReason('), 'dist remote bot still keeps pendingExitWaitReason wrapper');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
@@ -2943,7 +2971,12 @@ function main() {
       );
       assert(reloadBody.includes("reason: 'leave-success-refresh-confirmation'"), 'leave-success confirmation reload reason not exposed');
       const pendingBody = functionBody(text, 'handlePendingExit');
-      assert(pendingBody.includes('leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)'), 'pending exit handler does not require leave-success reload marker');
+      assert(
+        pendingBody.includes('leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)')
+          || pendingBody.includes('leaveSuccessReloadConfirmationSatisfiedCore(reloadConfirmation)')
+          || pendingBody.includes("leaveSuccessReloadConfirmationSatisfiedCall('reloadConfirmation')"),
+        'pending exit handler does not require leave-success reload marker'
+      );
       assert(pendingBody.includes("requestLeaveConfirmationReload('leave-success', pending)"), 'pending exit handler does not request confirmation reload for successful leave');
       assert(pendingBody.includes("source: 'leave-success-refresh-confirmed'"), 'pending exit handler does not confirm from refreshed offline state');
       assert(pendingBody.includes("source: 'leave-success-refresh-still-online'"), 'pending exit handler does not retry when refreshed state is still online');
@@ -2953,7 +2986,10 @@ function main() {
       assert(maybeBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'leave success completion does not route to confirmation reload');
       assert(!/leaveDetailSucceeded\(detail\)[\s\S]{0,180}confirmPendingExit/.test(maybeBody), 'leave success completion still directly confirms pending exit');
       const completeBody = functionBody(text, 'completeLeaveRequest');
-      assert(completeBody.includes('const http403 = leaveDetailHasHttp403(detail)'), 'leave completion does not isolate HTTP 403 state');
+      assert(
+        completeBody.includes('const http403 =') && completeBody.includes('leaveDetailHasHttp403'),
+        'leave completion does not isolate HTTP 403 state'
+      );
       assert(completeBody.includes('const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail))'), 'leave completion does not suppress 403 session-end logging while Clash rescue is pending');
       assert(completeBody.includes('if (http403 && !clashRescuePending)'), 'leave completion can still close the session before exhausting Clash 403 rescue');
       assert(!completeBody.includes("noteImportantSessionExit((leaveDetailHasHttp403(detail) ? 'leave-http-403:' : 'leave-success:')"), 'normal leave success still writes session-end important log before reload confirmation');
@@ -3329,14 +3365,14 @@ function main() {
       assert(text.includes("pendingExitIntentForSkippedLeave('pursuit'"), 'pursuit skip intent is not logged on normal action');
     });
     check(`${file} rescues leave HTTP 403 before risk-control fallback`, () => {
-      const requestBody = functionBody(text, 'leaveRequestHasHttp403');
-      assert(requestBody.includes('status === 403'), 'leave 403 status detector not found');
+      const leave403DetectorSource = `${strategyPendingExitSource}\n${text}\n${finalRuntimeText}`;
+      assert(leave403DetectorSource.includes('function leaveRequestHasHttp403Core') && leave403DetectorSource.includes('status === 403'), 'leave 403 status detector not found');
       const rescueBody = functionBody(text, 'leaveDetailFailedForClashRescue');
       assert(!/leaveDetailSucceeded\(detail\)\s*\|\|\s*leaveDetailHasHttp403\(detail\)/.test(rescueBody), 'Clash leave rescue still excludes HTTP 403 after success check');
       assert(!/if\s*\(\s*leaveDetailHasHttp403\(detail\)\s*\)\s*return false/.test(rescueBody), 'Clash leave rescue still returns false for HTTP 403');
-      assert(rescueBody.includes('const http403 = leaveDetailHasHttp403(detail)'), 'Clash leave rescue does not detect HTTP 403 as a first-class failure');
+      assert(rescueBody.includes('const http403 =') && rescueBody.includes('leaveDetailHasHttp403'), 'Clash leave rescue does not detect HTTP 403 as a first-class failure');
       assert(rescueBody.includes('if (!detail.error && !http403) return false'), 'Clash leave rescue still requires a generic error even for HTTP 403');
-      assert(rescueBody.includes('if (leaveDetailSucceeded(detail)) return false'), 'Clash leave rescue does not reject successful leaves');
+      assert(rescueBody.includes('if (') && rescueBody.includes('leaveDetailSucceeded') && rescueBody.includes('return false'), 'Clash leave rescue does not reject successful leaves');
       const rescueHookBody = functionBody(text, 'clashLeaveRescueHook');
       assert(rescueHookBody.includes('readPageGlobal') && rescueHookBody.includes('__graspRatBotClashLeaveRescue'), 'Clash rescue hook is not read through page-global adapter');
       assert(!rescueHookBody.includes('window.__graspRatBotClashLeaveRescue'), 'Clash rescue hook still reads directly from window');

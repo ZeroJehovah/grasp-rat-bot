@@ -479,6 +479,40 @@ function helperStatus(config = {}) {
     nowMs: 2000,
     retryMs: 1000
   });
+  const pendingExitCoreHttp403 = pendingExit.leaveRequestHasHttp403Core({ message: 'HTTP 403 Forbidden' });
+  const pendingExitCoreDetailHttp403 = pendingExit.leaveDetailHasHttp403Core({
+    leaveRequests: [{ status: 500 }, { statusCode: 403 }]
+  });
+  const pendingExitCoreLeaveSucceeded = pendingExit.leaveDetailSucceededCore({
+    attempted: true,
+    method: 'leave',
+    lastLeaveRequest: {
+      completedAt: 2100,
+      requestId: 'spike-leave'
+    }
+  });
+  const pendingExitCoreReloadConfirmation = pendingExit.leaveSuccessReloadConfirmationForDetailCore({
+    attempted: true,
+    method: 'leave',
+    at: 2000,
+    lastLeaveRequest: {
+      completedAt: 2100,
+      requestId: 'spike-leave'
+    }
+  }, {
+    reloadConfirmation: {
+      required: true,
+      requestedAt: 2200,
+      restoredAfterReload: true
+    }
+  }, 2300, {
+    normalizeReloadConfirmation: pendingExitPersistence.normalizePendingExitReloadConfirmationCore
+  });
+  const pendingExitCoreReloadSatisfied = pendingExit.leaveSuccessReloadConfirmationSatisfiedCore(pendingExitCoreReloadConfirmation);
+  const pendingExitCoreWaitReason = pendingExit.pendingExitWaitReasonCore({
+    scope: 'enemy',
+    source: 'pursuit'
+  }, false);
   const refreshedExitDetail = refreshExitDetail.refreshExitDetailCore({
     reason: '',
     reloginUntil: 2400,
@@ -1196,6 +1230,12 @@ function helperStatus(config = {}) {
     pendingExitCoreDisplayReason,
     pendingExitCoreRetryRemainingMs: pendingExitCoreSummary.retryRemainingMs,
     pendingExitCoreCombatDx: pendingExitCoreSummary.combatCover?.dx,
+    pendingExitCoreHttp403,
+    pendingExitCoreDetailHttp403,
+    pendingExitCoreLeaveSucceeded,
+    pendingExitCoreReloadRequestId: pendingExitCoreReloadConfirmation.requestId,
+    pendingExitCoreReloadSatisfied,
+    pendingExitCoreWaitReason,
     refreshExitHoldRemainingMs: refreshedExitDetail.holdRemainingMs,
     refreshExitSummary: refreshedExitDetail.summary,
     refreshExitDisplayReason: refreshedExitDetail.displayReason,
