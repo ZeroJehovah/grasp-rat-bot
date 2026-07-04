@@ -663,7 +663,7 @@ function helperStatus(config = {}) {
   const exitReloginPendingReason = exitRelogin.pendingExitSuppressReasonCore('enemy leave');
   const exitReloginPendingUnsafeEvents = [];
   const exitReloginPendingUnsafeDetail = { attempted: true };
-  const exitReloginPendingUnsafeUntil = exitRelogin.primePendingUnsafeExitLoginSuppressCore(
+  const exitReloginPendingUnsafeUntil = exitRelogin.primePendingUnsafeExitLoginSuppressBoundCore(
     'enemy leave',
     'combat leave',
     exitReloginPendingUnsafeDetail,
@@ -672,8 +672,7 @@ function helperStatus(config = {}) {
     {
       hpInfoForRelogin: selfLike => ({ hp: selfLike?.hp, ratio: 0.65 }),
       reloginDelayForHp: () => ({ delayMs: 2000, hpDelayMs: 2000, hp: { hp: 65, ratio: 0.65 } }),
-      unsafeExitReloginMinDelayMs: () => 1234,
-      pendingExitSuppressReason: exitRelogin.pendingExitSuppressReasonCore,
+      cfg: { unsafeExitReloginMinDelayMs: 1234 },
       setLoginSuppress: (reason, delayMs) => {
         exitReloginPendingUnsafeEvents.push(['set-login-suppress', reason, delayMs]);
         return 5000 + delayMs;

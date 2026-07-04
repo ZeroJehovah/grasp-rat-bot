@@ -615,7 +615,7 @@ function bundledExitReloginHoldSource() {
 \t    pendingExitSuppressReasonCore,
 \t    startExitAuditCore,
 \t    setExitReloginSuppressCore,
-\t    primePendingUnsafeExitLoginSuppressCore,
+\t    primePendingUnsafeExitLoginSuppressBoundCore,
 \t    setEnemyLeaveSuppressCore,
 \t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
@@ -665,11 +665,10 @@ function bundledExitReloginHoldSource() {
   }
 
   function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
-    return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
+    return primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options, {
       hpInfoForRelogin,
       reloginDelayForHp,
-      unsafeExitReloginMinDelayMs,
-      pendingExitSuppressReason,
+      cfg,
       setLoginSuppress,
       now: Date.now
     });
