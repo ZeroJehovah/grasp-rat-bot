@@ -1,5 +1,14 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-05 Follow-up: Virtual Entry Bundler Migration
+
+`bootstrap-0.4.500` moves the shared remote bundler to esbuild virtual entry modules:
+
+- `scripts/remote-bot-bundle.js` now defines named remote/eval virtual entries and loads generated source through an esbuild plugin with repo-root `resolveDir`, instead of using `stdin`.
+- Because esbuild plugins require the async API, `writeRemoteBotBundle()`, `bundledRemoteSourceFor()`, `browserRuntimeEvalSourceFor()`, and the production/local callers now await bundle generation.
+- `scripts/verify-objective-build.js` checks the virtual entry namespace, plugin `onResolve` / `onLoad`, explicit `entryPoints`, absence of `stdin:`, async local eval generation, and the generated/dist hash match.
+- The production dist records manifest SHA-256 `7f3bd8603c5a483036b56a4bc6e0fcd03d0dc6c62afef8e11ad0751b7dc8d3b4` with direct source SHA-256 `7843254be429d5f18d6dab19a84e2fe3891772210d7f4cf0bcb6c04a2b242403`.
+
 ## 2026-07-04 Follow-up: Bundled-Only Browser Source Migration
 
 `bootstrap-0.4.499` completes the aggressive browser-source-generation cleanup after the esbuild migration:
