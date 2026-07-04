@@ -1438,6 +1438,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 197. Removed the bundled pending-exit storage-normalizer wrapper after reader, writer, and initial-state chooser paths moved fully through runtime core calls: integrated in `bootstrap-0.4.469`
 198. Removed the bundled pending-exit persistence reader and initial-state chooser wrappers by routing restored-runtime-state directly through `readPersistedPendingExitStateCore()` / `chooseInitialPendingExitStateCore()`: integrated in `bootstrap-0.4.470`
 199. Removed the bundled pending-exit persistence writer wrapper by routing control-login, pending-exit, leave-command, and relogin-hold cleanup paths through direct `writePersistentPendingExitStateCore()` call helpers: integrated in `bootstrap-0.4.471`
+200. Removed the bundled restored coin-failures wrapper by routing restored-runtime-state directly through `restoredCoinFailuresCore()`: integrated in `bootstrap-0.4.472`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
