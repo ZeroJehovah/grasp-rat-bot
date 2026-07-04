@@ -11,11 +11,7 @@ function runtimeDiagnosticsInlineSource() {
 }
 
 function bundledRuntimeDiagnosticsSource() {
-  return `const { recordRuntimeDiagnosticsCore } = require('./src/browser/runtime/runtime-diagnostics');
-
-  function recordRuntimeDiagnostics(values = {}) {
-    return recordRuntimeDiagnosticsCore(bot, values);
-  }`;
+  return "const { recordRuntimeDiagnosticsCore } = require('./src/browser/runtime/runtime-diagnostics');";
 }
 
 function runtimeDiagnosticsSource(options = {}) {

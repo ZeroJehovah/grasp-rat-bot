@@ -161,7 +161,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-combat-log-runtime',
     `
 `],
-    ['tick-safety', tickSafetySource],
+    ['tick-safety', () => tickSafetySource(config)],
     ['separator-before-control-login-runtime',
     `
 
@@ -171,7 +171,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['page-native-snapshot', pageNativeSnapshotSource],
+    ['page-native-snapshot', () => pageNativeSnapshotSource(config)],
     ['separator-after-page-native-snapshot',
     `
 
@@ -212,7 +212,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-combat-history',
     `
 `],
-    ['entity-refresh', entityRefreshSource],
+    ['entity-refresh', () => entityRefreshSource(config)],
     ['native-control', nativeControlSource],
     ['separator-after-native-control',
     `

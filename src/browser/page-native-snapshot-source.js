@@ -1,6 +1,9 @@
 'use strict';
 
-function pageNativeSnapshotSource() {
+function pageNativeSnapshotSource(options = {}) {
+  const recordRuntimeDiagnosticsCall = values => options.bundledRuntime
+    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
+    : `recordRuntimeDiagnostics(${values})`;
   return String.raw`
 	  function pageNativeSnapshotUrl(input) {
 	    try {
@@ -41,7 +44,7 @@ function pageNativeSnapshotSource() {
 	      source: bot.globalState.passiveSnapshotSource,
 	      passive: true
 	    });
-	    recordRuntimeDiagnostics({
+	    ${recordRuntimeDiagnosticsCall(`{
 	      lastPassiveSnapshot: {
 	        at: bot.globalState.snapshotRefreshedAt,
 	        source: bot.globalState.passiveSnapshotSource,
@@ -49,7 +52,7 @@ function pageNativeSnapshotSource() {
 	        entities: arrayCount(bot.globalState.entities),
 	        tick: bot.globalState.tick
 	      }
-	    });
+	    }`)};
 	  }
 
 	  function pageNativeSnapshotError(err, meta = {}) {

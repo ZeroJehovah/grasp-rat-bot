@@ -19,6 +19,9 @@ function combatLogSource(helpers = {}) {
   const offlineHoldRemainingMsCall = bundledRuntime
     ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForCombatLogBoundCore', 'clearOfflineReloginHoldForCombatLogBoundCore')
     : 'offlineReloginHoldRemainingMs()';
+  const recordRuntimeDiagnosticsCall = values => bundledRuntime
+    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
+    : `recordRuntimeDiagnostics(${values})`;
   const combatLogExitSummarySource = typeof combatLogExitSummaryFromDecision === 'function'
     ? `      const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};`
     : '';
@@ -1143,11 +1146,11 @@ function combatLogSource(helpers = {}) {
         try {
           return buildCombatLogEntry(source, decision);
         } finally {
-          recordRuntimeDiagnostics({
+          ${recordRuntimeDiagnosticsCall(`{
             lastCombatLogBuildAt: Date.now(),
             lastCombatLogBuildStartedAt: buildStartedAt,
             lastCombatLogBuildMs: Math.max(0, Math.round(now() - buildStartedPerf))
-          });
+          }`)};
         }
       }
 
@@ -1701,11 +1704,11 @@ ${combatLogExitSummarySource}
         }
         flushCombatLogs(false);
         } finally {
-          recordRuntimeDiagnostics({
+          ${recordRuntimeDiagnosticsCall(`{
             lastCombatLogRecordAt: Date.now(),
             lastCombatLogRecordStartedAt: recordStartedAt,
             lastCombatLogRecordMs: Math.max(0, Math.round(now() - recordStartedPerf))
-          });
+          }`)};
         }
       }
 `;
