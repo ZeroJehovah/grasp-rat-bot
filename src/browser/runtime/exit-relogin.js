@@ -457,6 +457,18 @@ function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, 
   return until;
 }
 
+function primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
+    hpInfoForRelogin: helpers.hpInfoForRelogin,
+    reloginDelayForHp: helpers.reloginDelayForHp,
+    unsafeExitReloginMinDelayMs: () => unsafeExitReloginMinDelayMsCore(helpers.cfg),
+    pendingExitSuppressReason: pendingExitSuppressReasonCore,
+    setLoginSuppress: helpers.setLoginSuppress,
+    now: nowFn
+  });
+}
+
 function setEnemyLeaveSuppressCore(reason, detail, selfLike = null, options = {}, helpers) {
   return helpers.setExitReloginSuppress('enemy leave', reason, detail, selfLike, options);
 }
@@ -779,6 +791,7 @@ module.exports = {
   startExitAuditCore,
   setExitReloginSuppressCore,
   primePendingUnsafeExitLoginSuppressCore,
+  primePendingUnsafeExitLoginSuppressBoundCore,
   setEnemyLeaveSuppressCore,
   staminaBudgetExitHoldUntilCore,
   staminaExitHoldUntilForDetailCore,

@@ -1794,6 +1794,17 @@
         if (reason) detail.enemyLeaveReason = detail.enemyLeaveReason || reason;
         return until;
       }
+      function primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
+          hpInfoForRelogin: helpers.hpInfoForRelogin,
+          reloginDelayForHp: helpers.reloginDelayForHp,
+          unsafeExitReloginMinDelayMs: () => unsafeExitReloginMinDelayMsCore(helpers.cfg),
+          pendingExitSuppressReason: pendingExitSuppressReasonCore,
+          setLoginSuppress: helpers.setLoginSuppress,
+          now: nowFn
+        });
+      }
       function setEnemyLeaveSuppressCore(reason, detail, selfLike = null, options = {}, helpers) {
         return helpers.setExitReloginSuppress("enemy leave", reason, detail, selfLike, options);
       }
@@ -2097,6 +2108,7 @@
         startExitAuditCore,
         setExitReloginSuppressCore,
         primePendingUnsafeExitLoginSuppressCore,
+        primePendingUnsafeExitLoginSuppressBoundCore,
         setEnemyLeaveSuppressCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
@@ -4722,7 +4734,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.439" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.440" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10328,7 +10340,7 @@
       pendingExitSuppressReasonCore,
       startExitAuditCore,
       setExitReloginSuppressCore,
-      primePendingUnsafeExitLoginSuppressCore,
+      primePendingUnsafeExitLoginSuppressBoundCore,
       setEnemyLeaveSuppressCore,
       staminaBudgetExitHoldUntilCore,
       staminaExitHoldUntilForDetailCore,
@@ -10372,11 +10384,10 @@
       });
     }
     function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
-      return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
+      return primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options, {
         hpInfoForRelogin,
         reloginDelayForHp,
-        unsafeExitReloginMinDelayMs,
-        pendingExitSuppressReason,
+        cfg,
         setLoginSuppress,
         now: Date.now
       });
