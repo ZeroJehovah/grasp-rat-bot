@@ -57,13 +57,6 @@ function bundledExitMotionSource() {
     return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
   }
 
-  function postExitDecisionWithoutTarget(decision, reason = '') {
-    return postExitDecisionWithoutTargetCore(decision, reason, {
-      lastExitMotionStopReason: bot.lastExitMotionStopReason,
-      exitMotionLockRemainingMs
-    });
-  }
-
   function clearPostExitTargetState(reason = 'exit-confirmed') {
     bot.lastTarget = null;
     bot.lastTargetAt = 0;
