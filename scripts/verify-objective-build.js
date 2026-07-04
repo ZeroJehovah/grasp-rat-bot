@@ -1237,6 +1237,7 @@ function main() {
     assert(botObjectSourceModule.includes('module.exports = { botObjectSource }'), 'bot-object source module export not found');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('String.raw`'), 'bot-object source factory does not return raw browser source');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now()') && functionBody(botObjectSourceModule, 'botObjectSource').includes('enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'bot-object source factory does not bind bundled enemy streak status through runtime bound core');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('normalizeLoginSnapshotGateStateCore(${state}, loginSnapshotSuccessRequired())'), 'bot-object source factory does not route bundled login snapshot normalization through core');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['bot-object', () => botObjectSource(config)]"), 'runtime fragment registry does not pass config into bot-object source');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('const bot = {'), 'bot-object source factory does not include bot object');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('pendingExit: initialPendingExitState'), 'bot-object source factory does not preserve pending exit initialization');
@@ -1252,6 +1253,7 @@ function main() {
     assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('typeof staminaExhaustedWindowLabel === \'function\' ? staminaExhaustedWindowLabel.toString() : \'\''), 'control-login source factory does not inline stamina window helper');
+    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('normalizeLoginSnapshotGateStateCore(${state}, loginSnapshotSuccessRequired())'), 'control-login source does not route bundled login snapshot normalization through core');
     assert(controlLoginSourceModule.includes('function currentBotIsInstalled()'), 'control-login source does not expose current bot helper');
     assert(controlLoginSourceModule.includes('readPageGlobal(BOT_KEY, null, pageGlobal) === bot'), 'control-login source does not read bot identity through page-global adapter');
     assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatBotPauseReason', '', pageGlobal)"), 'control-login source does not read pause reason through page-global adapter');
@@ -1515,7 +1517,8 @@ function main() {
     const loginSnapshotGateBundledBody = functionBody(loginSnapshotGateSourceModule, 'bundledLoginSnapshotGateSource');
     assert(loginSnapshotGateBundledBody.includes("require('./src/browser/runtime/login-snapshot-gate')"), 'login-snapshot-gate bundled source does not hand gate helpers to the bundler');
     assert(loginSnapshotGateBundledBody.includes('loginSnapshotSuccessRequiredCore()'), 'login-snapshot-gate bundled source does not bind required-count helper');
-    assert(loginSnapshotGateBundledBody.includes('normalizeLoginSnapshotGateStateCore(state, loginSnapshotSuccessRequired())'), 'login-snapshot-gate bundled source does not bind state normalizer helper');
+    assert(!loginSnapshotGateBundledBody.includes('function normalizeLoginSnapshotGateState('), 'login-snapshot-gate bundled source still keeps state normalizer wrapper');
+    assert(!distSource.includes('function normalizeLoginSnapshotGateState('), 'dist remote bot still keeps login snapshot state normalizer wrapper');
     assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('options.bundledRuntime'), 'login-snapshot-gate source selector does not switch on bundled runtime mode');
     assert(loginSnapshotGateRuntimeModule.includes('function loginSnapshotSuccessRequiredCore()'), 'login-snapshot-gate runtime required-count core not found');
     assert(loginSnapshotGateRuntimeModule.includes('function normalizeLoginSnapshotGateStateCore(state = null'), 'login-snapshot-gate runtime state normalizer core not found');
