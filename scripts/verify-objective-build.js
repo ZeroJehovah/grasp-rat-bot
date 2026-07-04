@@ -1194,7 +1194,7 @@ function main() {
     assert(coinTargetRuntimeSourceModule.includes('function bundledCoinTargetRuntimeSource()'), 'bundled coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource(options = {})'), 'coin-target runtime source factory not found');
-    assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  bundledCoinTargetRuntimeSource,\n  coinTargetRuntimeInlineSource,\n  coinTargetRuntimeSource\n}'), 'coin-target runtime module export not found');
+    assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  bundledCoinTargetRuntimeSource,\n  coinTargetRuntimeInlineSource,\n  coinTargetRuntimeSource,\n  rememberNativeCoinSnapshotCall\n}'), 'coin-target runtime module export not found');
     assert(coinTargetRuntimeSourceModule.includes("require('./src/browser/runtime/coin-target')"), 'coin-target runtime source does not expose a bundler-owned coin-target require');
     assert(coinTargetRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCoinTargetRuntimeSource();'), 'coin-target runtime source factory does not switch to bundler-owned source in remote builds');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('String.raw`'), 'coin-target inline runtime source factory does not return raw browser source');
@@ -1232,7 +1232,7 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('maybeStartAutoLogin'), 'tick source factory does not preserve login handling');
     assert(functionBody(tickSourceModule, 'tickSource').includes('leaveOffline'), 'tick source factory does not preserve offline leave handling');
     assert(functionBody(tickSourceModule, 'tickSource').includes('chooseAction(self)'), 'tick source factory does not preserve action selection');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('trackCoinProgress(action, self)'), 'tick source factory does not preserve coin progress tracking');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("trackCoinProgressCall('action', 'self', options)"), 'tick source factory does not preserve coin progress tracking');
     assert(functionBody(tickSourceModule, 'tickSource').includes('applyFinalActionArbitration(action, source)'), 'tick source factory does not preserve final action arbitration');
     assert(functionBody(tickSourceModule, 'tickSource').includes('recordImportantCombatTick(source, bot.lastDecision)'), 'tick source factory does not preserve important combat tick logging');
     assert(functionBody(tickSourceModule, 'tickSource').includes('recordCombatLogTick(source, bot.lastDecision)'), 'tick source factory does not preserve combat-log tick logging');
@@ -1304,9 +1304,9 @@ function main() {
     assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function sendNativeShoot'), 'native-control source factory does not include native shoot helper');
     assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function shootAt'), 'native-control source factory does not include shoot cadence wrapper');
     assert(coinMotionRuntimeSourceModule.includes('function bundledCoinMotionRuntimeSource()'), 'bundled coin-motion runtime source factory not found');
-    assert(coinMotionRuntimeSourceModule.includes('function coinMotionRuntimeInlineSource(helpers = {})'), 'inline coin-motion runtime source factory not found');
+    assert(coinMotionRuntimeSourceModule.includes('function coinMotionRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-motion runtime source factory not found');
     assert(coinMotionRuntimeSourceModule.includes('function coinMotionRuntimeSource(options = {})'), 'coin-motion runtime source factory not found');
-    assert(coinMotionRuntimeSourceModule.includes('module.exports = {\n  bundledCoinMotionRuntimeSource,\n  coinMotionRuntimeInlineSource,\n  coinMotionRuntimeSource\n}'), 'coin-motion runtime module export not found');
+    assert(coinMotionRuntimeSourceModule.includes('module.exports = {\n  bundledCoinMotionRuntimeSource,\n  coinDirectionToCall,\n  coinMotionRuntimeInlineSource,\n  coinMotionRuntimeSource\n}'), 'coin-motion runtime module export not found');
     assert(coinMotionRuntimeSourceModule.includes("require('./src/browser/runtime/coin-motion')"), 'coin-motion runtime source does not expose a bundler-owned coin-motion require');
     assert(coinMotionRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCoinMotionRuntimeSource();'), 'coin-motion runtime source factory does not switch to bundler-owned source in remote builds');
     assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource').includes('String.raw`'), 'coin-motion inline runtime source factory does not return raw browser source');
@@ -2437,22 +2437,23 @@ function main() {
     });
     check(`${file} records incidental native coin pickups in session stats`, () => {
       assert(text.includes('lastNativeCoinSnapshot'), 'native coin pickup snapshot state not found');
-      assert(text.includes('function nativeCoinSnapshot'), 'native coin snapshot helper not found');
+      assert(text.includes('function nativeCoinSnapshot') || text.includes('buildNativeCoinSnapshotCore'), 'native coin snapshot helper/core not found');
       assert(text.includes('function recordIncidentalCoinPickups'), 'incidental coin pickup recorder not found');
       const incidentalBody = functionBody(text, 'recordIncidentalCoinPickups');
-      assert(incidentalBody.includes('nativeCoinSnapshot()'), 'incidental pickup recorder does not read native coin state');
+      assert(incidentalBody.includes('nativeCoinSnapshot()') || incidentalBody.includes('buildNativeCoinSnapshotCore(') || incidentalBody.includes('nativeCoinSnapshotCall(options)'), 'incidental pickup recorder does not read native coin state');
       assert(incidentalBody.includes('pickIncidentalCoinPickupsCore('), 'incidental pickup recorder does not use strategy core');
       assert(incidentalBody.includes('previousSnapshot') && incidentalBody.includes('currentSnapshot'), 'incidental pickup recorder does not compare disappeared coins');
       assert(text.includes('pointToSegmentDistanceCore'), 'incidental pickup movement path core not found');
       assert(incidentalBody.includes("'incidental-coin-disappeared'"), 'incidental pickup reason not recorded');
-      assert(incidentalBody.includes('rememberNativeCoinSnapshot(currentSnapshot)'), 'incidental pickup recorder does not refresh native snapshot');
-      assert(functionBody(text, 'markCoinCollected').includes('rememberNativeCoinSnapshot();'), 'tracked pickup path does not refresh native snapshot');
+      assert(incidentalBody.includes('rememberNativeCoinSnapshot(currentSnapshot)') || incidentalBody.includes('const rememberedSnapshot = currentSnapshot') || incidentalBody.includes("rememberNativeCoinSnapshotCall('currentSnapshot'"), 'incidental pickup recorder does not refresh native snapshot');
+      const markCoinBody = functionBody(text, 'markCoinCollected');
+      assert(markCoinBody.includes('rememberNativeCoinSnapshot();') || markCoinBody.includes('const rememberedSnapshot = null') || markCoinBody.includes("rememberNativeCoinSnapshotCall('null'"), 'tracked pickup path does not refresh native snapshot');
       const preservedBody = functionBody(file === 'grasp-rat-bot.js' ? sharedPreservedStateSource : finalRuntimeText, 'buildBrowserPreservedState');
       assert(preservedBody.includes('lastNativeCoinSnapshot'), 'preserved-state helper does not preserve native coin snapshots');
       const tickBody = functionBody(text, 'tick');
       assert(tickBody.includes('coinMarked = markCoinCollected(self, currentSummary, previousCoins)'), 'tick does not record tracked coin pickups first');
       assert(tickBody.includes('coinMarked = recordIncidentalCoinPickups(self, currentSummary, bot.lastSelf, previousCoins)'), 'tick does not record incidental coin pickups');
-      assert(tickBody.includes('rememberNativeCoinSnapshot();'), 'tick does not seed native coin snapshots without previous self');
+      assert(tickBody.includes('rememberNativeCoinSnapshot();') || tickBody.includes('const rememberedSnapshot = null') || tickBody.includes("rememberNativeCoinSnapshotCall('null'"), 'tick does not seed native coin snapshots without previous self');
     });
     check(`${file} limits ordinary profit to realtime/native visible state`, () => {
       const classifyBody = functionBody(text, 'classify');
@@ -2835,7 +2836,7 @@ function main() {
       assert(text.includes('!importantCombatHasActualEngagement(record)'), 'empty combat summaries are not discarded');
       assert(text.includes("exitReason = 'session-interrupted-before-next-login'"), 'next-login interrupted sessions are not explicitly marked');
       assert(text.includes('recordDropMatchedKill(candidate') && text.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards');
-      assert(text.includes('recordDropMatchedKill(target, value'), 'picked post-attack drop coins are not attributed as kill rewards');
+      assert(text.includes('recordDropMatchedKill(target, value') || text.includes('recordDropMatchedKill(sessionTarget, sessionValue'), 'picked post-attack drop coins are not attributed as kill rewards');
       assert(text.includes('dropMatched') && text.includes('chatConfirmed'), 'kill summaries do not include attribution/confirmation flags');
       assert(functionBody(text, 'updateKillHistory').includes('rewardCoins: existingRewardConfirmed') && functionBody(text, 'updateKillHistory').includes('reportedRewardCoins: targetDrop'), 'chat-confirmed kills still treat target Drop as confirmed reward');
       assert(text.includes('function findLiveKillVictim') && functionBody(text, 'updateKillHistory').includes('findLiveKillVictim') && text.includes('victim-still-alive'), 'chat-confirmed kills are not blocked while the victim is still alive');
@@ -3915,6 +3916,7 @@ function main() {
     assert(strategyCoinMotionSource.includes('function coinAxisLockShouldHoldCore'), 'strategy coin axis lock core not found');
     assert(strategyCoinMotionSource.includes('function coinMotionMetaCore'), 'strategy coin motion metadata core not found');
     const coinMotionRuntimeBody = functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource');
+    const coinDirectionToCallBody = functionBody(coinMotionRuntimeSourceModule, 'coinDirectionToCall');
     assert(coinMotionRuntimeSourceModule.includes("require('./runtime/coin-motion')"), 'coin-motion runtime source does not import coin motion through the browser runtime helper module');
     assert(!coinMotionRuntimeSourceModule.includes("require('../strategy/coin-motion')"), 'coin-motion runtime source still imports coin motion directly from strategy');
     assert(coinMotionRuntimeModule.includes("require('../../strategy/coin-motion')"), 'browser coin motion helper module does not reuse the strategy coin motion helpers');
@@ -3925,6 +3927,12 @@ function main() {
     assert(coinMotionRuntimeBody.includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime coin approach lock wrapper not found');
     assert(coinMotionRuntimeBody.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'coin-motion runtime coin direction wrapper does not call strategy core');
     assert(coinMotionRuntimeBody.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'coin-motion runtime coin direction wrapper does not apply lock updates');
+    assert(coinMotionRuntimeBody.includes("options.bundledRuntime ? ''"), 'coin-motion bundled runtime does not suppress the local coin direction wrapper');
+    assert(coinDirectionToCallBody.includes('coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions'), 'coin direction direct-call helper does not call strategy core directly');
+    assert(coinDirectionToCallBody.includes('applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate)'), 'coin direction direct-call helper does not apply lock updates');
+    assert(opportunityActionsSourceModule.includes("coinDirectionToCall('self', 'coin'"), 'opportunity action source does not use direct coin direction call generator');
+    assert(postAttackSourceModule.includes("coinDirectionToCall('self', 'target', 'cfg.patrolPrecisionTolerance'"), 'post-attack source does not use direct coin direction call generator');
+    assert(chooseActionSourceModule.includes("coinDirectionToCall('self', 'nearCoin'") && chooseActionSourceModule.includes("coinDirectionToCall('self', 'distantCoin'"), 'choose-action source does not use direct coin direction call generator');
     assert(!coinMotionRuntimeBody.includes('function coinMotionMeta('), 'coin-motion runtime source still keeps metadata wrapper');
     assert(!distSource.includes('function coinMotionMeta('), 'dist remote bot still keeps coin motion metadata wrapper');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-motion')"), 'generated remote runtime does not hand coin motion helpers to the bundler');
@@ -3932,6 +3940,8 @@ function main() {
     assert(distSource.includes('function coinPickupPrecisionPulseMsCore'), 'bundled dist does not contain coin pickup pulse core');
     assert(distSource.includes('function coinMotionCoreOptions'), 'bundled dist coin motion wrapper options not found');
     assert(distSource.includes('function applyCoinApproachLockUpdate'), 'bundled dist coin approach lock wrapper not found');
+    assert(!generatedRuntimeSource.includes('function coinDirectionTo('), 'generated remote runtime still keeps coin direction wrapper');
+    assert(!distSource.includes('function coinDirectionTo('), 'dist remote bot still keeps coin direction wrapper');
   });
 
   check('coin target identity uses strategy module core', () => {
@@ -3962,6 +3972,10 @@ function main() {
     assert(!distSource.includes('function coinTargetKey('), 'dist remote bot still keeps coin target key wrapper');
     assert(!distSource.includes('function coinMatchesTrackedTarget('), 'dist remote bot still keeps coin target matcher wrapper');
     assert(!distSource.includes('function trackedCoinTargetForCollection('), 'dist remote bot still keeps tracked coin target wrapper');
+    for (const wrapperName of ['trackedCoinStillVisible', 'nativeCoinSnapshot', 'rememberNativeCoinSnapshot', 'recordSessionCoinPickup', 'pruneCollectedSnapshotCoin']) {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still keeps ${wrapperName} wrapper`);
+      assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still keeps ${wrapperName} wrapper`);
+    }
     assert(coinTargetRuntimeBody.includes('return buildNativeCoinSnapshotCore(coins'), 'coin-target runtime native coin snapshot wrapper does not call strategy core');
     assert(coinTargetRuntimeBody.includes('pickIncidentalCoinPickupsCore('), 'coin-target runtime incidental pickup wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
@@ -3998,7 +4012,7 @@ function main() {
     assert(coinProgressRuntimeSourceModule.includes('function bundledCoinProgressRuntimeSource()'), 'bundled coin-progress runtime source factory not found');
     assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-progress runtime source factory not found');
     assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeSource(options = {})'), 'coin-progress runtime source factory not found');
-    assert(coinProgressRuntimeSourceModule.includes('module.exports = {\n  bundledCoinProgressRuntimeSource,\n  coinProgressRuntimeInlineSource,\n  coinProgressRuntimeSource\n}'), 'coin-progress runtime source module export not found');
+    assert(coinProgressRuntimeSourceModule.includes('module.exports = {\n  bundledCoinProgressRuntimeSource,\n  coinProgressRuntimeInlineSource,\n  coinProgressRuntimeSource,\n  trackCoinProgressCall\n}'), 'coin-progress runtime source module export not found');
     assert(coinProgressRuntimeSourceModule.includes("require('./src/browser/runtime/coin-progress')"), 'coin-progress runtime source does not expose a bundler-owned coin-progress require');
     assert(coinProgressRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCoinProgressRuntimeSource();'), 'coin-progress runtime source factory does not switch to bundler-owned source in remote builds');
     assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeInlineSource').includes('String.raw`'), 'coin-progress inline runtime source factory does not return raw browser source');
@@ -4010,8 +4024,14 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('coinProgress.coinFailureIgnoreCore('), 'bundler spike does not execute coin progress failure helper');
     assert(bundlerSpikeBuildSource.includes('status.coinProgressIgnoreMs === 800'), 'bundler spike self-test does not assert coin progress failure execution');
     const coinProgressRuntimeBody = functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeInlineSource');
+    const trackCoinProgressCallBody = functionBody(coinProgressRuntimeSourceModule, 'trackCoinProgressCall');
     assert(coinProgressRuntimeBody.includes('fn.toString()'), 'coin-progress runtime source does not inline coin progress helper text for local builds');
     assert(coinProgressRuntimeBody.includes('function trackCoinProgress'), 'coin-progress runtime source factory does not include trackCoinProgress wrapper');
+    assert(coinProgressRuntimeBody.includes("options.bundledRuntime ? ''"), 'coin-progress bundled runtime does not suppress local progress wrappers');
+    assert(trackCoinProgressCallBody.includes('coinProgressIntentCore(progressAction)'), 'coin-progress direct-call helper does not call progress intent core');
+    assert(trackCoinProgressCallBody.includes('coinFailureIgnoreCore(bot.coinFailures.get(progressId)'), 'coin-progress direct-call helper does not call failure ignore core');
+    assert(trackCoinProgressCallBody.includes('staleCoinEscapeDirectionCore(progressAction, progressSelf'), 'coin-progress direct-call helper does not call stale escape core');
+    assert(trackCoinProgressCallBody.includes('coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, progressId)'), 'coin-progress direct-call helper does not call cleanup core');
     assert(coinProgressRuntimeSourceModule.includes('coinFailureIgnoreCore'), 'coin-progress source does not wire coin failure ignore core');
     assert(coinProgressRuntimeSourceModule.includes('staleCoinEscapeDirectionCore'), 'coin-progress source does not wire stale coin escape core');
     assert(coinProgressRuntimeSourceModule.includes('coinProgressIntentCore'), 'coin-progress source does not wire coin progress intent core');
@@ -4048,6 +4068,14 @@ function main() {
     assert(distSource.includes('function buildIgnoredCoinProgressCore'), 'bundled dist does not contain ignored coin progress core');
     assert(distSource.includes('function buildIgnoredCoinPatrolActionCore'), 'bundled dist does not contain ignored coin patrol action core');
     assert(distSource.includes('function coinIgnoreCleanupIntentCore'), 'bundled dist does not contain coin ignore cleanup intent core');
+    assert(!generatedRuntimeSource.includes('function coinFailureIgnore('), 'generated remote runtime still keeps coin failure wrapper');
+    assert(!generatedRuntimeSource.includes('function staleCoinEscapeDirection('), 'generated remote runtime still keeps stale coin escape wrapper');
+    assert(!generatedRuntimeSource.includes('function clearIgnoredCoinRuntimeState('), 'generated remote runtime still keeps ignored coin cleanup wrapper');
+    assert(!generatedRuntimeSource.includes('function trackCoinProgress('), 'generated remote runtime still keeps coin progress wrapper');
+    assert(!distSource.includes('function coinFailureIgnore('), 'dist remote bot still keeps coin failure wrapper');
+    assert(!distSource.includes('function staleCoinEscapeDirection('), 'dist remote bot still keeps stale coin escape wrapper');
+    assert(!distSource.includes('function clearIgnoredCoinRuntimeState('), 'dist remote bot still keeps ignored coin cleanup wrapper');
+    assert(!distSource.includes('function trackCoinProgress('), 'dist remote bot still keeps coin progress wrapper');
   });
 
   check('coin route planner uses strategy module core', () => {
@@ -4313,14 +4341,14 @@ function main() {
     assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'enemy', postAttackWaitTarget.id)"), 'generated choose-action post-attack wait path does not clear opportunity choice through core directly');
     assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', null)"), 'generated runtime does not clear all coin opportunity choices through core directly');
     assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', idText || null)"), 'generated opportunity-choice visible-missing path does not clear opportunity choice through core directly');
-    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', id)"), 'generated coin-progress ignored-coin path does not clear opportunity choice through core directly');
+    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', progressId)"), 'generated coin-progress ignored-coin path does not clear opportunity choice through core directly');
     assert(distSource.includes('function shouldClearOpportunityChoiceCore'), 'bundled dist does not contain opportunity clear core');
     assert(!distSource.includes('function clearOpportunityChoiceFor('), 'bundled dist still declares opportunity clear wrapper');
     assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", postAttackCoin.postAttackTarget?.id)'), 'bundled dist choose-action post-attack coin path does not clear opportunity choice through core directly');
     assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", postAttackWaitTarget.id)'), 'bundled dist choose-action post-attack wait path does not clear opportunity choice through core directly');
     assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", null)'), 'bundled dist does not clear all coin opportunity choices through core directly');
     assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", idText || null)'), 'bundled dist opportunity-choice visible-missing path does not clear opportunity choice through core directly');
-    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", id)'), 'bundled dist coin-progress ignored-coin path does not clear opportunity choice through core directly');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", progressId)'), 'bundled dist coin-progress ignored-coin path does not clear opportunity choice through core directly');
   });
 
   check('opportunity candidate construction uses strategy module core', () => {

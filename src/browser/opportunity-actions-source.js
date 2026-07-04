@@ -1,5 +1,7 @@
 'use strict';
 
+const { coinDirectionToCall } = require('./coin-motion-runtime-source');
+
 function opportunityActionsSource(options = {}) {
   const localEnemyOpportunityCandidatesSource = options.bundledRuntime ? '' : String.raw`  function enemyOpportunityCandidates(self, targets, activeThreats) {
     const byId = new Map();
@@ -33,7 +35,7 @@ function opportunityActionsSource(options = {}) {
 
 `;
   return String.raw`${localEnemyOpportunityCandidatesSource}  function buildCoinAction(self, coin, reason, kind = null) {
-    const dir = coinDirectionTo(self, coin);
+    const dir = ${coinDirectionToCall('self', 'coin', 'cfg.coinPrecisionTolerance', options)};
     const staminaCost = opportunityCoinStaminaCost(coin);
     const routeMeta = coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance);
     return {

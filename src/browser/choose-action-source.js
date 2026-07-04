@@ -1,5 +1,6 @@
 'use strict';
 
+const { coinDirectionToCall } = require('./coin-motion-runtime-source');
 const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
 
 function chooseActionSource(options = {}) {
@@ -452,7 +453,7 @@ function chooseActionSource(options = {}) {
 
 	    if (recovery && nearCoin) {
 	      bot.fleeLock = null;
-	      const dir = coinDirectionTo(self, nearCoin);
+	      const dir = ${coinDirectionToCall('self', 'nearCoin', 'cfg.coinPrecisionTolerance', options)};
       return {
         kind: 'coin',
         reason: 'recovery-foot-coin',
@@ -481,7 +482,7 @@ function chooseActionSource(options = {}) {
 	    if (!fullHp && cautionThreats.length) {
 	      if (footCoin) {
 	        bot.fleeLock = null;
-	        const dir = coinDirectionTo(self, footCoin);
+	        const dir = ${coinDirectionToCall('self', 'footCoin', 'cfg.coinPrecisionTolerance', options)};
         return {
           kind: 'coin',
           reason: 'foot-coin-before-active-caution',
@@ -504,7 +505,7 @@ function chooseActionSource(options = {}) {
 
 			    if (footCoin) {
 	      bot.fleeLock = null;
-	      const dir = coinDirectionTo(self, footCoin);
+	      const dir = ${coinDirectionToCall('self', 'footCoin', 'cfg.coinPrecisionTolerance', options)};
       return attachOpportunisticShot({
         kind: 'coin',
         reason: 'foot-coin-priority',
@@ -576,7 +577,7 @@ function chooseActionSource(options = {}) {
     const distantCoin = pickDistantCoin(self, realtimeCoins, coinThreats);
     if (distantCoin) {
       bot.fleeLock = null;
-      const dir = coinDirectionTo(self, distantCoin);
+      const dir = ${coinDirectionToCall('self', 'distantCoin', 'cfg.coinPrecisionTolerance', options)};
       return attachOpportunisticShot({
         kind: 'seek-coin',
         reason: 'safe-distant-coin',
