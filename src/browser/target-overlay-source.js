@@ -8,7 +8,7 @@ function targetOverlaySource() {
   }
 
   function targetOverlaySuppressedAfterExit(decision) {
-    if (exitMotionStopActive()) return true;
+    if (exitMotionStopLockRemainingMs() > 0) return true;
     if (decision?.exitMotionStopped) return true;
     if (decision?.leave?.exitConfirmed) return true;
     const reason = String(decision?.reason || '');
