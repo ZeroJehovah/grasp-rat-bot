@@ -6,8 +6,7 @@ const { targetWhitelistSource } = require('./target-whitelist-source');
 const { statusPanelRuntimeSource } = require('./status-panel-runtime-source');
 const { arrayCountSource } = require('./array-count-source');
 const {
-  runtimeUtilityPreludeSource,
-  runtimeUtilityCloneSource
+  runtimeUtilityPreludeSource
 } = require('./runtime-utils-source');
 const { combatLogRuntimeSource } = require('./combat-log-runtime-source');
 const { tickSafetySource } = require('./tick-safety-source');
@@ -102,7 +101,6 @@ function browserRuntimeFragmentEntries(config) {
     ['status-panel-runtime', () => statusPanelRuntimeSource(config)],
     ['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)],
     ['array-count', () => arrayCountSource(config)],
-    ['runtime-utility-clone', () => runtimeUtilityCloneSource(config)],
     ['combat-log-runtime', () => combatLogRuntimeSource(config)],
     ['separator-after-combat-log-runtime',
     `

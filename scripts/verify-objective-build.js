@@ -804,7 +804,7 @@ async function main() {
     assert(fragmentEntriesBody.includes("['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)]"), 'runtime-utility-prelude fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelRuntimeSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['runtime-utility-clone', () => runtimeUtilityCloneSource(config)]"), 'runtime-utility-clone fragment is not config-aware for bundled runtime migration');
+    assert(!fragmentEntriesBody.includes('runtime-utility-clone'), 'obsolete empty runtime-utility-clone fragment is still registered');
     assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['combat-history', () => combatHistorySource(config)]"), 'combat-history fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['control-login-runtime', () => controlLoginRuntimeSource(config)]"), 'control-login-runtime fragment is not config-aware for bundled runtime migration');
@@ -925,8 +925,8 @@ async function main() {
     assert(!browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global core still exposes obsolete source builder');
     assert(!browserPageGlobalCoreSource.includes('.toString()'), 'page-global core still builds browser source from function text');
     assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource()'), 'runtime utility prelude source factory not found');
-    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility clone source factory not found');
-    assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource,\n  runtimeUtilityCloneSource\n}'), 'runtime utility source module exports not found');
+    assert(!runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility source still exposes empty clone fragment');
+    assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource\n}'), 'runtime utility source module exports not found');
     assert(runtimeUtilsSourceModule.includes("require('./src/browser/runtime/runtime-utils')"), 'runtime utility source factory does not expose a bundler-owned runtime helper require');
     assert(!runtimeUtilsSourceModule.includes('safeStringify.toString()'), 'runtime utility source still inlines shared helper text');
     assert(!runtimeBootstrapSourceModule.includes('buildBrowserPreservedState.toString()'), 'runtime-bootstrap source still inlines preserved-state helper text');
@@ -938,7 +938,6 @@ async function main() {
       'statusPanelRuntimeSource',
       'arrayCountSource',
       'runtimeUtilityPreludeSource',
-      'runtimeUtilityCloneSource',
       'combatLogRuntimeSource',
       'tickSafetySource',
       'importantLogSource',
