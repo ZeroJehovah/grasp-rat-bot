@@ -1,6 +1,9 @@
 'use strict';
 
-function pendingExitSource() {
+function pendingExitSource(options = {}) {
+  const enemyLeaveSuppressCall = options.bundledRuntime
+    ? "\t      setExitReloginSuppress('enemy leave', detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);"
+    : "\t      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);";
   return String.raw`	  function summarizePursuit(pursuit = bot.pursuit) {
 	    if (!pursuit) return null;
 	    const t = now();
@@ -599,7 +602,7 @@ function pendingExitSource() {
 	    if (pending.scope === 'offline') {
 	      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);
 	    } else {
-	      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
+${enemyLeaveSuppressCall}
 	      if (pending.source === 'combat') bot.lastCombatLeaveResult = detail;
 	      if (pending.source === 'pursuit') bot.lastPursuitLeaveResult = detail;
 	      if (pending.source === 'injury') bot.lastInjuryLeaveResult = detail;

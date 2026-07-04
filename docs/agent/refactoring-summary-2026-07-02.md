@@ -1411,6 +1411,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 170. Bundler-owned `exit-relogin` start-exit-audit bound helper for remote builds: integrated in `bootstrap-0.4.442`
 171. Bundled `exit-relogin` stamina budget hold wrapper cleanup for remote builds: integrated in `bootstrap-0.4.443`
 172. Bundled `exit-relogin` suppress reason wrapper cleanup for remote builds: integrated in `bootstrap-0.4.444`
+173. Removed `exit-relogin` enemy suppress fixed-reason wrapper in favor of direct suppress writer calls: integrated in `bootstrap-0.4.445`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

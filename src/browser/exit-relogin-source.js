@@ -614,7 +614,6 @@ function bundledExitReloginHoldSource() {
 \t    startExitAuditBoundCore,
 \t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressBoundCore,
-\t    setEnemyLeaveSuppressCore,
 \t    staminaExitHoldUntilForDetailCore,
 \t    staminaExitHoldUntilForDetailBoundCore,
 \t    offlineExitRequiresUnsafeReloginDelayCore
@@ -655,12 +654,6 @@ function bundledExitReloginHoldSource() {
       cfg,
       setLoginSuppress,
       now: Date.now
-    });
-  }
-
-  function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-    return setEnemyLeaveSuppressCore(reason, detail, selfLike, options, {
-      setExitReloginSuppress
     });
   }
 
