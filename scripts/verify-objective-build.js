@@ -351,7 +351,6 @@ async function main() {
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
   const runtimeUtilsRuntimeModule = readText('src/browser/runtime/runtime-utils.js');
   const combatLogSourceModule = readText('src/browser/combat-log-source.js');
-  const combatLogRuntimeSourceModule = readText('src/browser/combat-log-runtime-source.js');
   const tickSafetySourceModule = readText('src/browser/tick-safety-source.js');
   const importantLogSourceModule = readText('src/browser/important-log-source.js');
   const combatHistorySourceModule = readText('src/browser/combat-history-source.js');
@@ -463,7 +462,6 @@ async function main() {
     runtimeUtilsSourceModule,
     runtimeUtilsRuntimeModule,
     combatLogSourceModule,
-    combatLogRuntimeSourceModule,
     tickSafetySourceModule,
     importantLogSourceModule,
     combatHistorySourceModule,
@@ -694,8 +692,8 @@ async function main() {
     assert(displayFormatRuntimeModule.includes('escapeHtml') && displayFormatRuntimeModule.includes('formatDistance') && displayFormatRuntimeModule.includes('formatDurationMs') && displayFormatRuntimeModule.includes('actorLabel') && displayFormatRuntimeModule.includes('hpDisplay'), 'browser display-format helper module exports are incomplete');
     assert(exitSummaryRuntimeModule.includes("require('../../shared/exit-summary')"), 'browser exit-summary helper module does not reuse shared exit-summary helpers');
     assert(exitSummaryRuntimeModule.includes('staminaExhaustedLongWindows') && exitSummaryRuntimeModule.includes('staminaExhaustedWindowLabel') && exitSummaryRuntimeModule.includes('staminaEvidenceRemaining') && exitSummaryRuntimeModule.includes('staminaHoldContradictedByStaminaEvidence') && exitSummaryRuntimeModule.includes('offlineLeaveSummaryText') && exitSummaryRuntimeModule.includes('combatLogExitSummaryFromDecision'), 'browser exit-summary helper module exports are incomplete');
-    assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
-    assert(combatLogRuntimeSourceModule.includes("require('./combat-log-source')"), 'combat-log runtime source module import not found');
+    assert(!fs.existsSync(path.join(ROOT, 'src/browser/combat-log-runtime-source.js')), 'obsolete combat-log runtime wrapper still exists');
+    assert(combatLogSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log source does not expose a bundler-owned exit-summary require');
     assert(controlLoginRuntimeSourceModule.includes("require('./control-login-source')"), 'control-login runtime source module import not found');
     assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-bootstrap-bindings')"), 'runtime bootstrap source does not expose the bundled bootstrap binding require');
     assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./exit-summary')"), 'runtime bootstrap bindings do not import exit-summary');
@@ -714,7 +712,8 @@ async function main() {
     assert(runtimeFragmentRegistryModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
     assert(!runtimeFragmentRegistryModule.includes("require('./status-panel-runtime-source')"), 'runtime fragment registry still imports obsolete status-panel runtime wrapper');
     assert(runtimeFragmentRegistryModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("require('./combat-log-runtime-source')"), 'combat-log runtime source module import not found');
+    assert(runtimeFragmentRegistryModule.includes("require('./combat-log-source')"), 'combat-log source module import not found');
+    assert(!runtimeFragmentRegistryModule.includes("require('./combat-log-runtime-source')"), 'runtime fragment registry still imports obsolete combat-log runtime wrapper');
     assert(runtimeFragmentRegistryModule.includes("require('./important-log-source')"), 'important-log source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./combat-history-source')"), 'combat-history source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./combat-aim-source')"), 'combat-aim source module import not found');
@@ -802,7 +801,7 @@ async function main() {
     assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
     assert(!fragmentEntriesBody.includes('array-count'), 'obsolete standalone array-count fragment is still registered');
     assert(!fragmentEntriesBody.includes('runtime-utility-clone'), 'obsolete empty runtime-utility-clone fragment is still registered');
-    assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['combat-history', () => combatHistorySource(config)]"), 'combat-history fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['control-login-runtime', () => controlLoginRuntimeSource(config)]"), 'control-login-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-motion-runtime', () => coinMotionRuntimeSource(config)]"), 'coin-motion-runtime fragment is not config-aware for bundled runtime migration');
@@ -822,7 +821,7 @@ async function main() {
       ['runtime-bootstrap', runtimeBootstrapSourceModule],
       ['runtime-utils', runtimeUtilsSourceModule],
       ['status-panel-runtime', statusPanelSourceModule],
-      ['combat-log-runtime', combatLogRuntimeSourceModule],
+      ['combat-log-runtime', combatLogSourceModule],
       ['control-login-runtime', controlLoginRuntimeSourceModule],
       ['combat-history', combatHistorySourceModule],
       ['entity-refresh', entityRefreshSourceModule],
@@ -881,13 +880,13 @@ async function main() {
     assert(!statusPanelSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel source still keeps inline display helper binding');
     assert(!statusPanelSourceModule.includes('helpers = {}'), 'status-panel source still accepts inline helper fallback object');
     assert(!statusPanelSourceModule.includes('.toString()'), 'status-panel source still inlines display helpers from function text');
-    assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
-    assert(!combatLogRuntimeSourceModule.includes('bundledCombatLogRuntimeSource'), 'combat-log runtime bundled selector wrapper should be removed');
-    assert(!combatLogRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'combat-log runtime should not import exit summary for inline injection');
-    assert(combatLogRuntimeSourceModule.includes('module.exports = {\n  combatLogRuntimeSource\n}'), 'combat-log runtime source export not found');
-    assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
-    assert(!combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime still keeps inline exit-summary binding');
-    assert(combatLogRuntimeSourceModule.includes('combatLogSource()'), 'combat-log runtime source does not use bundled-only source factory');
+    assert(combatLogSourceModule.includes('function combatLogSource()'), 'combat-log source factory not found');
+    assert(!combatLogSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log source should not keep obsolete runtime wrapper factory');
+    assert(!combatLogSourceModule.includes('bundledCombatLogRuntimeSource'), 'combat-log bundled selector wrapper should be removed');
+    assert(!combatLogSourceModule.includes("require('./runtime/exit-summary')"), 'combat-log source should not import exit summary for inline injection');
+    assert(combatLogSourceModule.includes('module.exports = {\n  combatLogSource\n}'), 'combat-log source export not found');
+    assert(combatLogSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log source does not expose a bundler-owned exit-summary require');
+    assert(!combatLogSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log source still keeps inline exit-summary binding');
     assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
     assert(!controlLoginRuntimeSourceModule.includes('bundledControlLoginRuntimeSource'), 'control-login runtime bundled selector wrapper should be removed');
     assert(!controlLoginRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'control-login runtime should not import stamina helper for inline injection');
@@ -934,7 +933,7 @@ async function main() {
       'targetWhitelistSource',
       'statusPanelSource',
       'runtimeUtilityPreludeSource',
-      'combatLogRuntimeSource',
+      'combatLogSource',
       'tickSafetySource',
       'importantLogSource',
       'combatHistorySource',
@@ -1087,7 +1086,6 @@ async function main() {
       ['target-whitelist', targetWhitelistSourceModule, 'targetWhitelistSource'],
       ['status-panel', statusPanelSourceModule, 'statusPanelSource'],
       ['combat-log', combatLogSourceModule, 'combatLogSource'],
-      ['combat-log-runtime', combatLogRuntimeSourceModule, 'combatLogRuntimeSource'],
       ['important-log', importantLogSourceModule, 'importantLogSource'],
       ['combat-history', combatHistorySourceModule, 'combatHistorySource'],
       ['entity-refresh', entityRefreshSourceModule, 'entityRefreshSource'],
@@ -1147,7 +1145,7 @@ async function main() {
 
     const runtimeRequires = [
       [statusPanelSourceModule, "require('./src/browser/runtime/display-format')", 'status-panel display-format'],
-      [combatLogRuntimeSourceModule, "require('./src/browser/runtime/exit-summary')", 'combat-log exit-summary'],
+      [combatLogSourceModule, "require('./src/browser/runtime/exit-summary')", 'combat-log exit-summary'],
       [runtimeUtilsSourceModule, "require('./src/browser/runtime/runtime-utils')", 'runtime utils'],
       [runtimeUtilsSourceModule, "require('./src/browser/runtime/array-count')", 'array count'],
       [combatHistorySourceModule, "require('./src/browser/runtime/drop-matched-kill')", 'drop matched kill'],

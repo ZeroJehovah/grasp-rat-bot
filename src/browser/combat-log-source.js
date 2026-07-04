@@ -14,7 +14,9 @@ function combatLogSource() {
   const enemyHoldRemainingMsCall = enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForCombatLogBoundCore');
   const offlineHoldRemainingMsCall = offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForCombatLogBoundCore', 'clearOfflineReloginHoldForCombatLogBoundCore');
   const recordRuntimeDiagnosticsCall = values => `recordRuntimeDiagnosticsCore(bot, ${values})`;
-  return String.raw`${holdPrelude}      function combatLogEntryFailureKey(entry) {
+  return String.raw`const { combatLogExitSummaryFromDecision } = require('./src/browser/runtime/exit-summary');
+
+${holdPrelude}      function combatLogEntryFailureKey(entry) {
         if (!entry || typeof entry !== 'object') return '';
         return [
           entry.exitAuditLogId || '',
