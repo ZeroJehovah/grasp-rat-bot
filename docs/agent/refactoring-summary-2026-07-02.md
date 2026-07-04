@@ -1,5 +1,15 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-05 Follow-up: Runtime Entry Source Boundary
+
+`bootstrap-0.4.502` moves production/local runtime entry construction behind a browser-owned entry-source module:
+
+- `src/browser/runtime-entry-source.js` now owns `remoteRuntimeEntrySource(options)` and `runtimeEvalEntrySource(options)`.
+- `scripts/remote-bot-bundle.js` now bundles entry sources from that module instead of importing `src/browser/runtime-source.js` directly or constructing the eval `export default` wrapper inline.
+- Production manifest mode is now `production-runtime-entry-source`; the non-production candidate mode is `runtime-entry-source-candidate`.
+- `scripts/verify-objective-build.js` checks the entry-source boundary, prevents the shared bundler from bypassing it, and still verifies the virtual-entry esbuild path, local eval startup result, generated/dist hash alignment, and unresolved-import rejection.
+- The production dist records manifest SHA-256 `020b5c6c468c4fe21da06766070929287d572a0ba3e554d5cd3f55d954528f29` with direct source SHA-256 `5445ff4548b1bd55dd2f72637cd233b25d04901586b5dd2bd67ee3755055ea8f`.
+
 ## 2026-07-05 Follow-up: Runtime Fragment Registry Split
 
 `bootstrap-0.4.501` splits the ordered browser runtime fragment provider graph from the fragment materializer:
