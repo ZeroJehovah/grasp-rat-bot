@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.473" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.474" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4928,9 +4928,6 @@
       loginSnapshotSuccessRequiredCore,
       normalizeLoginSnapshotGateStateCore
     } = require_login_snapshot_gate();
-    function loginSnapshotSuccessRequired() {
-      return loginSnapshotSuccessRequiredCore();
-    }
     const { recordRuntimeDiagnosticsCore } = require_runtime_diagnostics();
     function recordRuntimeDiagnostics(values = {}) {
       return recordRuntimeDiagnosticsCore(bot, values);
@@ -5038,7 +5035,7 @@
         localWriteError: String(preserved.importantLogging?.localWriteError || ""),
         lastRemoteError: String(preserved.importantLogging?.lastRemoteError || "")
       },
-      loginSnapshotGate: normalizeLoginSnapshotGateStateCore(preserved.loginSnapshotGate, loginSnapshotSuccessRequired()),
+      loginSnapshotGate: normalizeLoginSnapshotGateStateCore(preserved.loginSnapshotGate, loginSnapshotSuccessRequiredCore()),
       loginPointSafety: preserved.loginPointSafety && typeof preserved.loginPointSafety === "object" ? { ...preserved.loginPointSafety } : null,
       sessionMismatchRecovery: null,
       leave403SnapshotRecovery: {
@@ -9695,8 +9692,8 @@
       return 0;
     }
     function snapshotLoginGateStatus(t = Date.now()) {
-      const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequired());
-      const required = loginSnapshotSuccessRequired();
+      const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
+      const required = loginSnapshotSuccessRequiredCore();
       state2.required = required;
       if (state2.streak > required) state2.streak = required;
       const lastSampleAt = Number(state2.lastSampleAt || state2.lastOkAt || state2.lastErrorAt || 0) || 0;
@@ -9720,9 +9717,9 @@
     function resetLoginSnapshotGate(reason = "exit", exitSelfLike = null) {
       const t = Date.now();
       bot.loginSnapshotGate = {
-        ...normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequired()),
+        ...normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore()),
         streak: 0,
-        required: loginSnapshotSuccessRequired(),
+        required: loginSnapshotSuccessRequiredCore(),
         lastError: "",
         resetAt: t,
         resetReason: String(reason || "exit")
@@ -9732,8 +9729,8 @@
     }
     function noteLoginSnapshotProbe(success, detail = {}) {
       const t = Date.now();
-      const required = loginSnapshotSuccessRequired();
-      const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequired());
+      const required = loginSnapshotSuccessRequiredCore();
+      const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
       state2.required = required;
       state2.lastSampleAt = t;
       if (success) {

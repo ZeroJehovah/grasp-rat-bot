@@ -26,11 +26,7 @@ function bundledLoginSnapshotGateSource() {
   return `const {
 			    loginSnapshotSuccessRequiredCore,
 			    normalizeLoginSnapshotGateStateCore
-			  } = require('./src/browser/runtime/login-snapshot-gate');
-
-			  function loginSnapshotSuccessRequired() {
-			    return loginSnapshotSuccessRequiredCore();
-		  }`;
+			  } = require('./src/browser/runtime/login-snapshot-gate');`;
 }
 
 function loginSnapshotGateSource(options = {}) {

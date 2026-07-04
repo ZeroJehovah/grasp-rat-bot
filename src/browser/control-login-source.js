@@ -25,8 +25,11 @@ function controlLoginSource(helpers = {}) {
   const normalizePendingExitReloadConfirmationCall = args => bundledRuntime
     ? `normalizePendingExitReloadConfirmationCore(${args})`
     : `normalizePendingExitReloadConfirmation(${args})`;
+  const loginSnapshotSuccessRequiredCall = bundledRuntime
+    ? 'loginSnapshotSuccessRequiredCore()'
+    : 'loginSnapshotSuccessRequired()';
   const normalizeLoginSnapshotGateStateCall = state => bundledRuntime
-    ? `normalizeLoginSnapshotGateStateCore(${state}, loginSnapshotSuccessRequired())`
+    ? `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`
     : `normalizeLoginSnapshotGateState(${state})`;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, { bundledRuntime });
   const enemyHoldRemainingMsCall = bundledRuntime
@@ -1755,7 +1758,7 @@ function controlLoginSource(helpers = {}) {
 
 	  function snapshotLoginGateStatus(t = Date.now()) {
 	    const state = ${normalizeLoginSnapshotGateStateCall('bot.loginSnapshotGate')};
-	    const required = loginSnapshotSuccessRequired();
+	    const required = ${loginSnapshotSuccessRequiredCall};
 	    state.required = required;
 	    if (state.streak > required) state.streak = required;
 	    const lastSampleAt = Number(state.lastSampleAt || state.lastOkAt || state.lastErrorAt || 0) || 0;
@@ -1782,7 +1785,7 @@ function controlLoginSource(helpers = {}) {
 	    bot.loginSnapshotGate = {
 	      ...${normalizeLoginSnapshotGateStateCall('bot.loginSnapshotGate')},
 	      streak: 0,
-	      required: loginSnapshotSuccessRequired(),
+	      required: ${loginSnapshotSuccessRequiredCall},
 	      lastError: '',
 	      resetAt: t,
 	      resetReason: String(reason || 'exit')
@@ -1793,7 +1796,7 @@ function controlLoginSource(helpers = {}) {
 
 	  function noteLoginSnapshotProbe(success, detail = {}) {
 	    const t = Date.now();
-	    const required = loginSnapshotSuccessRequired();
+	    const required = ${loginSnapshotSuccessRequiredCall};
 	    const state = ${normalizeLoginSnapshotGateStateCall('bot.loginSnapshotGate')};
 	    state.required = required;
 	    state.lastSampleAt = t;
