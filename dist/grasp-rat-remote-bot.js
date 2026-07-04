@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.468" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.469" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4878,7 +4878,6 @@
     }
     const {
       normalizePendingExitReloadConfirmationCore,
-      normalizePendingExitStateForStorageCore,
       readPersistedPendingExitStateCore,
       writePersistentPendingExitStateCore,
       chooseInitialPendingExitStateCore
@@ -4892,9 +4891,6 @@
         stringify: safeStringify,
         clearPersistentPendingExitState
       };
-    }
-    function normalizePendingExitStateForStorage(value, t = Date.now(), options = {}) {
-      return normalizePendingExitStateForStorageCore(value, t, options, pendingExitPersistenceCoreHelpers());
     }
     function readPersistedPendingExitState(t = Date.now(), options = {}) {
       return readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers());
