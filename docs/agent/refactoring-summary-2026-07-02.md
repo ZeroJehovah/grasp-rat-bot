@@ -1,5 +1,16 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-05 Follow-up: Runtime State Bindings
+
+`bootstrap-0.4.505` collapses the small state/persistence fragment group into a real runtime binding module:
+
+- `src/browser/runtime/runtime-state-bindings.js` creates the runtime-local accessors for persistent last-self, persistent exit, persistent clear, pending-exit persistence helpers, exit-detail refresh, restored coin failures/runtime state, login snapshot gate helpers, and runtime diagnostics.
+- `src/browser/runtime-state-bindings-source.js` is now the single source fragment for that group.
+- `src/browser/runtime-fragment-registry.js` now inserts one `runtime-state-bindings` fragment instead of nine small state fragments.
+- The obsolete `persistent-*-source.js`, `pending-exit-persistence-source.js`, `refresh-exit-detail-source.js`, `restored-*-source.js`, `login-snapshot-gate-source.js`, and `runtime-diagnostics-source.js` files are removed.
+- Static verification checks the new module boundary and rejects obsolete state source factories in the registry; the runtime helper-entry smoke test imports and executes `runtime-state-bindings`.
+- The production dist records manifest SHA-256 `4ad32992473c2eb28ca350b866d52674063c9334e064e52546d3141b8bde05d2` with direct source SHA-256 `a32c7e524af527eb5721a4b1f0ddd47ec46ad42ec0652a51377cdd1206f630b9`.
+
 ## 2026-07-05 Follow-up: Runtime Shell Boundary
 
 `bootstrap-0.4.504` moves the runtime IIFE shell out of the fragment registry and into the runtime-source boundary:
