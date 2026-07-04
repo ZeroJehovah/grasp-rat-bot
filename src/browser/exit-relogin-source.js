@@ -614,6 +614,7 @@ function bundledExitReloginHoldSource() {
 \t    unsafeExitReloginMinDelayMsCore,
 \t    pendingExitSuppressReasonCore,
 \t    startExitAuditCore,
+\t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressCore,
 \t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
@@ -625,131 +626,21 @@ function bundledExitReloginHoldSource() {
 \t  }
 
   function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
-    let existingUntil = Number(options.existingUntil || 0);
-    let existingReason = '';
-    const minimumUntil = Math.max(0, Number(options.minimumUntil || 0) || 0);
-    try {
-      const storedReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || '');
-      const storedUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-      if (isExitLoginSuppressReason(storedReason) && storedUntil > existingUntil) {
-        existingUntil = storedUntil;
-        existingReason = storedReason;
-      }
-    } catch (_) {}
-    const t = Date.now();
-\t    const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
-\t    const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1000, Math.round(fixedDelayRaw)) : 0;
-\t    const delay = fixedDelayMs
-\t      ? {
-\t        delayMs: fixedDelayMs,
-\t        hpDelayMs: fixedDelayMs,
-\t        minMs: fixedDelayMs,
-\t        maxMs: fixedDelayMs,
-\t        baseMaxMs: fixedDelayMs,
-\t        repeatMinMs: 0,
-\t        hp: hpInfoForRelogin(selfLike, detail)
-\t      }
-\t      : reloginDelayForHp(selfLike, detail);
-\t    const minimumDelayMs = minimumUntil > t ? Math.max(0, Math.round(minimumUntil - t)) : 0;
-\t    const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
-\t    if (existingUntil > t && existingUntil >= minimumUntil && reloginDelayMs > 0) {
-\t      const holdReason = existingReason || storageReason;
-\t      if (storageReason === 'enemy leave' || /enemy leave|combat leave|pursuit leave/i.test(holdReason)) bot.pursuitReloginUntil = existingUntil;
-\t      if (storageReason === 'offline leave' || /offline.*leave/i.test(holdReason)) bot.offlineReloginUntil = existingUntil;
-\t      if (detail) {
-\t        detail.reloginUntil = existingUntil;
-\t        detail.holdRemainingMs = Math.max(0, Math.round(existingUntil - Date.now()));
-\t        detail.enemyLeaveReason = reason;
-\t        detail.loginSuppressReason = holdReason;
-\t        detail.reusedExitSuppress = true;
-\t        finalizeLeaveDisplayReason(detail);
-\t        if (storageReason === 'enemy leave') {
-\t          bot.lastEnemyLeaveResult = detail;
-\t          bot.lastEnemyLeaveWaitMs = Number(detail.reloginDelayMs || detail.holdRemainingMs || bot.lastEnemyLeaveWaitMs || 0);
-\t          writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
-\t        } else if (storageReason === 'offline leave') {
-\t          bot.lastOfflineLeaveResult = detail;
-\t          bot.lastOfflineLeaveWaitMs = Number(detail.reloginDelayMs || detail.holdRemainingMs || bot.lastOfflineLeaveWaitMs || 0);
-\t          writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
-\t        }
-\t      }
-\t      return existingUntil;
-\t    }
-\t    if (storageReason === 'enemy leave') updateEnemyLeaveStreak(detail, t);
-\t    if (!(reloginDelayMs > 0)) {
-\t      if (storageReason === 'enemy leave') {
-\t        bot.pursuitReloginUntil = 0;
-\t        bot.lastEnemyLeaveWaitMs = 0;
-\t        clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
-\t      } else if (storageReason === 'offline leave') {
-\t        bot.offlineReloginUntil = 0;
-\t        bot.lastOfflineLeaveWaitMs = 0;
-\t        clearLoginSuppressMatching(/offline.*leave/i);
-\t      }
-\t      if (detail) {
-\t        detail.reloginDelayMs = 0;
-\t        detail.reloginHpDelayMs = delay.hpDelayMs || 0;
-\t        detail.reloginDelayRangeMs = {
-\t          min: delay.minMs || 0,
-\t          max: delay.maxMs || 0,
-\t          baseMax: delay.baseMaxMs || 0,
-\t          repeatMin: delay.repeatMinMs || 0
-\t        };
-\t        detail.reloginHp = delay.hp;
-\t        detail.reloginUntil = 0;
-\t        detail.holdRemainingMs = 0;
-\t        detail.enemyLeaveReason = reason;
-\t        detail.loginSuppressReason = '';
-\t        detail.defensiveReloginDelaySkipped = true;
-\t        finalizeLeaveDisplayReason(detail);
-\t        if (storageReason === 'enemy leave') {
-\t          bot.lastEnemyLeaveResult = detail;
-\t          writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
-\t        } else if (storageReason === 'offline leave') {
-\t          bot.lastOfflineLeaveResult = detail;
-\t          writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
-\t        }
-\t      }
-\t      return 0;
-\t    }
-\t    const reloginUntil = setLoginSuppress(storageReason, reloginDelayMs);
-    if (storageReason === 'enemy leave') {
-      bot.pursuitReloginUntil = reloginUntil;
-      bot.lastEnemyLeaveWaitMs = reloginDelayMs;
-    } else if (storageReason === 'offline leave') {
-      bot.offlineReloginUntil = reloginUntil;
-      bot.lastOfflineLeaveWaitMs = reloginDelayMs;
-    }
-\t    if (detail) {
-\t      detail.reloginDelayMs = reloginDelayMs;
-\t      detail.reloginHpDelayMs = delay.hpDelayMs;
-\t      detail.reloginDelayRangeMs = {
-\t        min: delay.minMs,
-\t        max: delay.maxMs,
-\t        baseMax: delay.baseMaxMs,
-\t        repeatMin: delay.repeatMinMs
-\t      };
-\t      if (minimumDelayMs) {
-\t        detail.reloginMinimumDelayMs = minimumDelayMs;
-\t        detail.reloginMinimumUntil = minimumUntil;
-\t        detail.reloginMinimumReason = options.minimumReason || '';
-\t      }
-\t      if (fixedDelayMs) detail.reloginFixedDelayMs = fixedDelayMs;
-\t      detail.reloginHp = delay.hp;
-\t      detail.reloginUntil = reloginUntil;
-\t      detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - Date.now()));
-\t      detail.enemyLeaveReason = reason;
-\t      detail.loginSuppressReason = storageReason;
-\t      finalizeLeaveDisplayReason(detail);
-\t      if (storageReason === 'enemy leave') {
-\t        bot.lastEnemyLeaveResult = detail;
-\t        writePersistentExitState(ENEMY_LEAVE_STATE_KEY, detail);
-\t      } else if (storageReason === 'offline leave') {
-\t        bot.lastOfflineLeaveResult = detail;
-\t        writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
-\t      }
-\t    }
-    return reloginUntil;
+    return setExitReloginSuppressCore(bot, localStorage, storageReason, reason, detail, selfLike, options, {
+      loginSuppressKey: LOGIN_SUPPRESS_KEY,
+      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+      isExitLoginSuppressReason,
+      hpInfoForRelogin,
+      reloginDelayForHp,
+      updateEnemyLeaveStreak,
+      clearLoginSuppressMatching,
+      finalizeLeaveDisplayReason,
+      writePersistentExitState,
+      setLoginSuppress,
+      now: Date.now
+    });
   }
 
 \t  function unsafeExitReloginMinDelayMs() {

@@ -708,6 +708,87 @@ function helperStatus(config = {}) {
       now: () => 5000
     }
   );
+  const exitReloginSuppressEvents = [];
+  const exitReloginSuppressHelpers = {
+    loginSuppressKey: 'suppress',
+    loginSuppressReasonKey: 'suppressReason',
+    enemyLeaveStateKey: 'enemy-state',
+    offlineLeaveStateKey: 'offline-state',
+    isExitLoginSuppressReason: exitRelogin.isExitLoginSuppressReasonCore,
+    hpInfoForRelogin: selfLike => ({ hp: selfLike?.hp, ratio: Number(selfLike?.hp || 0) / 100 }),
+    reloginDelayForHp: () => ({
+      delayMs: 2000,
+      hpDelayMs: 2000,
+      minMs: 1000,
+      maxMs: 4000,
+      baseMaxMs: 4000,
+      repeatMinMs: 0,
+      hp: { hp: 70, ratio: 0.7 }
+    }),
+    updateEnemyLeaveStreak: (detail, t) => {
+      exitReloginSuppressEvents.push(['streak', t]);
+      if (detail) detail.streaked = true;
+    },
+    clearLoginSuppressMatching: pattern => exitReloginSuppressEvents.push(['clear-suppress', pattern.test('offline leave')]),
+    finalizeLeaveDisplayReason: detail => {
+      detail.finalized = true;
+      return detail;
+    },
+    writePersistentExitState: (key, detail) => exitReloginSuppressEvents.push(['write-exit', key, detail.loginSuppressReason || '', detail.reusedExitSuppress || false]),
+    setLoginSuppress: (reason, delayMs) => {
+      exitReloginSuppressEvents.push(['set-login-suppress', reason, delayMs]);
+      return 1000 + delayMs;
+    },
+    now: () => 1000
+  };
+  const exitReloginSuppressReuseStorage = {
+    getItem(key) {
+      if (key === 'suppress') return '9000';
+      if (key === 'suppressReason') return 'combat leave';
+      return null;
+    }
+  };
+  const exitReloginSuppressReuseBot = { pursuitReloginUntil: 0, lastEnemyLeaveWaitMs: 111 };
+  const exitReloginSuppressReuseDetail = { summary: 'reuse hold' };
+  const exitReloginSuppressReuseUntil = exitRelogin.setExitReloginSuppressCore(
+    exitReloginSuppressReuseBot,
+    exitReloginSuppressReuseStorage,
+    'enemy leave',
+    'combat leave',
+    exitReloginSuppressReuseDetail,
+    { hp: 70 },
+    { minimumUntil: 2000 },
+    exitReloginSuppressHelpers
+  );
+  const exitReloginSuppressZeroStorage = { getItem: () => null };
+  const exitReloginSuppressZeroBot = { offlineReloginUntil: 5000, lastOfflineLeaveWaitMs: 3000 };
+  const exitReloginSuppressZeroDetail = { summary: 'zero hold' };
+  const exitReloginSuppressZeroUntil = exitRelogin.setExitReloginSuppressCore(
+    exitReloginSuppressZeroBot,
+    exitReloginSuppressZeroStorage,
+    'offline leave',
+    'offline leave',
+    exitReloginSuppressZeroDetail,
+    { hp: 100 },
+    {},
+    {
+      ...exitReloginSuppressHelpers,
+      reloginDelayForHp: () => ({ delayMs: 0, hpDelayMs: 0, minMs: 0, maxMs: 0, baseMaxMs: 0, repeatMinMs: 0, hp: { hp: 100, ratio: 1 } })
+    }
+  );
+  const exitReloginSuppressNewStorage = { getItem: () => null };
+  const exitReloginSuppressNewBot = { pursuitReloginUntil: 0, lastEnemyLeaveWaitMs: 0 };
+  const exitReloginSuppressNewDetail = { summary: 'new hold' };
+  const exitReloginSuppressNewUntil = exitRelogin.setExitReloginSuppressCore(
+    exitReloginSuppressNewBot,
+    exitReloginSuppressNewStorage,
+    'enemy leave',
+    'combat leave',
+    exitReloginSuppressNewDetail,
+    { hp: 60 },
+    { minimumUntil: 7000, minimumReason: 'spike-minimum' },
+    exitReloginSuppressHelpers
+  );
   const exitReloginBudgetHold = exitRelogin.staminaBudgetExitHoldUntilCore(
     { coin: { id: 'budget-coin' } },
     1000,
@@ -1006,6 +1087,21 @@ function helperStatus(config = {}) {
     exitReloginAuditMetaSource: exitReloginAuditDetail.auditMetaSource,
     exitReloginAuditEventAt: exitReloginAuditEvents.find(event => event[0] === 'exit-trigger')?.[2],
     exitReloginAuditEventCount: arrayCountRuntime.arrayCount(exitReloginAuditEvents),
+    exitReloginSuppressReuseUntil,
+    exitReloginSuppressReuseBotUntil: exitReloginSuppressReuseBot.pursuitReloginUntil,
+    exitReloginSuppressReuseHold: exitReloginSuppressReuseDetail.holdRemainingMs,
+    exitReloginSuppressReuseReason: exitReloginSuppressReuseDetail.loginSuppressReason,
+    exitReloginSuppressReusePersisted: exitReloginSuppressEvents.some(event => event[0] === 'write-exit' && event[1] === 'enemy-state' && event[3] === true),
+    exitReloginSuppressZeroUntil,
+    exitReloginSuppressZeroBotUntil: exitReloginSuppressZeroBot.offlineReloginUntil,
+    exitReloginSuppressZeroSkipped: exitReloginSuppressZeroDetail.defensiveReloginDelaySkipped,
+    exitReloginSuppressZeroPersisted: exitReloginSuppressEvents.some(event => event[0] === 'write-exit' && event[1] === 'offline-state' && event[2] === ''),
+    exitReloginSuppressNewUntil,
+    exitReloginSuppressNewDelay: exitReloginSuppressNewDetail.reloginDelayMs,
+    exitReloginSuppressNewMinimum: exitReloginSuppressNewDetail.reloginMinimumDelayMs,
+    exitReloginSuppressNewStreaked: exitReloginSuppressNewDetail.streaked,
+    exitReloginSuppressNewPersisted: exitReloginSuppressEvents.some(event => event[0] === 'write-exit' && event[1] === 'enemy-state' && event[2] === 'enemy leave'),
+    exitReloginSuppressEventCount: arrayCountRuntime.arrayCount(exitReloginSuppressEvents),
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,
     exitReloginOfflineUnsafe,
