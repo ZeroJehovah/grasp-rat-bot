@@ -613,6 +613,7 @@ function bundledExitReloginHoldSource() {
 \t    isExitLoginSuppressReasonCore,
 \t    unsafeExitReloginMinDelayMsCore,
 \t    pendingExitSuppressReasonCore,
+\t    primePendingUnsafeExitLoginSuppressCore,
 \t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
 \t    offlineExitRequiresUnsafeReloginDelayCore
@@ -773,28 +774,14 @@ function bundledExitReloginHoldSource() {
   }
 
   function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
-    if (!detail || !detail.attempted) return 0;
-    const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
-    const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1000, Math.round(fixedDelayRaw)) : 0;
-    const delay = fixedDelayMs
-      ? { delayMs: fixedDelayMs, hpDelayMs: fixedDelayMs, hp: hpInfoForRelogin(selfLike, detail) }
-      : reloginDelayForHp(selfLike, detail);
-    const minimumDelayMs = Math.max(
-      unsafeExitReloginMinDelayMs(),
-      Math.max(0, Number(options.minimumDelayMs || 0) || 0)
-    );
-    const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
-    if (!(delayMs > 0)) return 0;
-    const suppressReason = pendingExitSuppressReason(storageReason);
-    const until = setLoginSuppress(suppressReason, delayMs);
-    detail.pendingLoginSuppressReason = suppressReason;
-    detail.pendingLoginSuppressUntil = until;
-    detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - Date.now()));
-    detail.pendingLoginSuppressMinimumDelayMs = minimumDelayMs;
-    detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;
-    detail.pendingLoginSuppressHp = delay.hp || null;
-    if (reason) detail.enemyLeaveReason = detail.enemyLeaveReason || reason;
-    return until;
+    return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
+      hpInfoForRelogin,
+      reloginDelayForHp,
+      unsafeExitReloginMinDelayMs,
+      pendingExitSuppressReason,
+      setLoginSuppress,
+      now: Date.now
+    });
   }
 
   function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {

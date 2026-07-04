@@ -256,6 +256,13 @@ async function selfTest() {
   assert(status.exitReloginSuppressMatch === true, 'spike did not execute exit relogin suppress reason matcher');
   assert(status.exitReloginUnsafeMin === 1234, 'spike did not execute exit relogin unsafe minimum delay helper');
   assert(status.exitReloginPendingReason === 'pending unsafe hostile exit', 'spike did not execute exit relogin pending suppress reason helper');
+  assert(status.exitReloginPendingUnsafeUntil === 9000, 'spike did not prime pending unsafe login suppress');
+  assert(status.exitReloginPendingUnsafeDelay === 4000, 'spike did not preserve pending unsafe suppress delay');
+  assert(status.exitReloginPendingUnsafeReason === 'pending unsafe hostile exit', 'spike did not preserve pending unsafe suppress reason');
+  assert(status.exitReloginPendingUnsafeMinimum === 4000, 'spike did not preserve pending unsafe minimum delay');
+  assert(status.exitReloginPendingUnsafeHpDelay === 2000, 'spike did not preserve pending unsafe hp delay');
+  assert(status.exitReloginPendingUnsafeEnemyReason === 'combat leave', 'spike did not preserve pending unsafe enemy leave reason');
+  assert(status.exitReloginPendingUnsafeEventCount === 1, 'spike did not execute pending unsafe suppress side effect');
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
   assert(status.exitReloginOfflineUnsafe === true, 'spike did not execute exit relogin unsafe offline delay predicate');

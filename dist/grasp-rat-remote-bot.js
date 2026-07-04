@@ -1630,6 +1630,29 @@
         }
         return "pending unsafe exit";
       }
+      function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
+        if (!detail || !detail.attempted) return 0;
+        const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
+        const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1e3, Math.round(fixedDelayRaw)) : 0;
+        const delay = fixedDelayMs ? { delayMs: fixedDelayMs, hpDelayMs: fixedDelayMs, hp: helpers.hpInfoForRelogin(selfLike, detail) } : helpers.reloginDelayForHp(selfLike, detail);
+        const minimumDelayMs = Math.max(
+          helpers.unsafeExitReloginMinDelayMs(),
+          Math.max(0, Number(options.minimumDelayMs || 0) || 0)
+        );
+        const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
+        if (!(delayMs > 0)) return 0;
+        const suppressReason = helpers.pendingExitSuppressReason(storageReason);
+        const until = helpers.setLoginSuppress(suppressReason, delayMs);
+        const now = typeof helpers.now === "function" ? helpers.now() : Number(helpers.now || 0) || Date.now();
+        detail.pendingLoginSuppressReason = suppressReason;
+        detail.pendingLoginSuppressUntil = until;
+        detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));
+        detail.pendingLoginSuppressMinimumDelayMs = minimumDelayMs;
+        detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;
+        detail.pendingLoginSuppressHp = delay.hp || null;
+        if (reason) detail.enemyLeaveReason = detail.enemyLeaveReason || reason;
+        return until;
+      }
       function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs) {
         if (!staminaBudgetExit) return null;
         const delayMs = staminaBudgetReloginDelayMs();
@@ -1831,6 +1854,7 @@
         isExitLoginSuppressReasonCore,
         unsafeExitReloginMinDelayMsCore,
         pendingExitSuppressReasonCore,
+        primePendingUnsafeExitLoginSuppressCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
         offlineExitRequiresUnsafeReloginDelayCore,
@@ -4447,7 +4471,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.430" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.431" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10051,6 +10075,7 @@
       isExitLoginSuppressReasonCore,
       unsafeExitReloginMinDelayMsCore,
       pendingExitSuppressReasonCore,
+      primePendingUnsafeExitLoginSuppressCore,
       staminaBudgetExitHoldUntilCore,
       staminaExitHoldUntilForDetailCore,
       offlineExitRequiresUnsafeReloginDelayCore
@@ -10204,26 +10229,14 @@
       return detail.exitAuditId;
     }
     function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
-      if (!detail || !detail.attempted) return 0;
-      const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
-      const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1e3, Math.round(fixedDelayRaw)) : 0;
-      const delay = fixedDelayMs ? { delayMs: fixedDelayMs, hpDelayMs: fixedDelayMs, hp: hpInfoForRelogin(selfLike, detail) } : reloginDelayForHp(selfLike, detail);
-      const minimumDelayMs = Math.max(
-        unsafeExitReloginMinDelayMs(),
-        Math.max(0, Number(options.minimumDelayMs || 0) || 0)
-      );
-      const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
-      if (!(delayMs > 0)) return 0;
-      const suppressReason = pendingExitSuppressReason(storageReason);
-      const until = setLoginSuppress(suppressReason, delayMs);
-      detail.pendingLoginSuppressReason = suppressReason;
-      detail.pendingLoginSuppressUntil = until;
-      detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - Date.now()));
-      detail.pendingLoginSuppressMinimumDelayMs = minimumDelayMs;
-      detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;
-      detail.pendingLoginSuppressHp = delay.hp || null;
-      if (reason) detail.enemyLeaveReason = detail.enemyLeaveReason || reason;
-      return until;
+      return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
+        hpInfoForRelogin,
+        reloginDelayForHp,
+        unsafeExitReloginMinDelayMs,
+        pendingExitSuppressReason,
+        setLoginSuppress,
+        now: Date.now
+      });
     }
     function setEnemyLeaveSuppress(reason, detail, selfLike = null, options = {}) {
       return setExitReloginSuppress("enemy leave", reason, detail, selfLike, options);
