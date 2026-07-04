@@ -1340,7 +1340,9 @@ function main() {
     assert(attackWorthInlineBody.includes('isWhitelistedTarget(target)'), 'attack-worth inline source factory does not preserve whitelist guard');
     assert(attackWorthInlineBody.includes('isAfkProfitTarget(target)'), 'attack-worth inline source factory does not preserve AFK profit target handling');
     assert(attackWorthInlineBody.includes('cfg.attackMinRewardRatio'), 'attack-worth inline source factory does not preserve reward ratio guard');
-    assert(functionBody(attackWorthSourceModule, 'bundledAttackWorthSource').includes("require('./src/browser/runtime/attack-worth')"), 'attack-worth bundled source does not hand attack-worth core to the bundler');
+    const attackWorthBundledBody = functionBody(attackWorthSourceModule, 'bundledAttackWorthSource');
+    assert(attackWorthBundledBody.includes("require('./src/browser/runtime/attack-worth')"), 'attack-worth bundled source does not hand attack-worth core to the bundler');
+    assert(!attackWorthBundledBody.includes('const attackWorthTaking ='), 'attack-worth bundled source still keeps attack-worth wrapper');
     assert(exitMotionSourceModule.includes('function exitMotionInlineSource() {'), 'exit-motion inline source factory not found');
     assert(exitMotionSourceModule.includes('function bundledExitMotionSource() {'), 'exit-motion bundled source factory not found');
     assert(exitMotionSourceModule.includes('function exitMotionSource(options = {}) {'), 'exit-motion source selector not found');
@@ -4085,7 +4087,11 @@ function main() {
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/attack-worth')"), 'generated remote runtime does not hand attack-worth helper to the bundler');
     assert(!generatedRuntimeSource.includes('function attackWorthTakingCore'), 'generated remote runtime still inlines attack-worth core before bundling');
     assert(distSource.includes('function attackWorthTakingCore'), 'bundled dist does not contain attack-worth core');
-    assert(distSource.includes('attackWorthTakingCore(self, target'), 'bundled dist attack-worth wrapper does not call attack-worth core');
+    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('attackWorthTakingCore(self, e, {'), 'target-selection source does not call attack-worth core directly');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('attackWorthTakingCore(self, { ...raw, drop }, {'), 'opportunity-actions source does not call attack-worth core directly');
+    assert(distSource.includes('attackWorthTakingCore(self, e, {'), 'bundled dist target-selection does not call attack-worth core directly');
+    assert(distSource.includes('attackWorthTakingCore(self, { ...raw, drop }, {'), 'bundled dist opportunity-actions does not call attack-worth core directly');
+    assert(!distSource.includes('const attackWorthTaking ='), 'dist remote bot still keeps attack-worth wrapper');
   });
 
   check('exit motion uses strategy module core', () => {

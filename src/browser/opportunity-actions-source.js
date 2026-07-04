@@ -11,7 +11,16 @@ function opportunityActionsSource() {
       if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
       if (isWhitelistedTarget(raw)) continue;
       if (isInvulnerable(raw)) continue;
-      if (!attackWorthTaking(self, { ...raw, drop })) continue;
+      if (!(typeof attackWorthTakingCore === 'function'
+        ? attackWorthTakingCore(self, { ...raw, drop }, {
+          isWhitelistedTarget,
+          dropValue,
+          isAfkProfitTarget,
+          attackMinAfkDrop: cfg.attackMinAfkDrop,
+          attackMinDrop: cfg.attackMinDrop,
+          attackMinRewardRatio: cfg.attackMinRewardRatio
+        })
+        : attackWorthTaking(self, { ...raw, drop }))) continue;
       if (activeThreats.some(t => dist(raw, t) <= cfg.attackDangerRadius)) continue;
       const item = { ...raw, drop, distance };
       const previous = byId.get(String(id));

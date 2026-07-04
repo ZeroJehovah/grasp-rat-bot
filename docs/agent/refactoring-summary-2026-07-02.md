@@ -1445,6 +1445,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 204. Removed the coin-motion metadata wrapper by routing choose-action, post-attack, and opportunity-actions directly through `coinMotionMetaCore()`: integrated in `bootstrap-0.4.476`
 205. Removed the coin-target identity wrappers by routing combat-history, tracked coin visibility, and opportunity-choice visible-missing checks directly through `coinTargetKeyCore()` / `coinMatchesTrackedTargetCore()`: integrated in `bootstrap-0.4.477`
 206. Removed the coin-target tracked collection wrapper by routing `markCoinCollected()` directly through `trackedCoinTargetForCollectionCore()`: integrated in `bootstrap-0.4.478`
+207. Removed the production bundled attack-worth wrapper by routing target-selection and opportunity-actions directly through `attackWorthTakingCore()` while keeping local/CDP wrapper fallback: integrated in `bootstrap-0.4.479`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
