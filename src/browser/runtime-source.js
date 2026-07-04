@@ -63,5 +63,5 @@ function renderRuntimeFragments(fragments) {
   if (!Array.isArray(fragments)) {
     throw new TypeError('runtime fragments must be an array');
   }
-  return fragments.map(renderRuntimeFragment).join('');
+  return fragments.map(renderRuntimeFragment).join('\n\n');
 }

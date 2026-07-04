@@ -676,7 +676,7 @@ async function main() {
     assert(runtimeSourceModule.includes("typeof fragment.name !== 'string'"), 'runtime source renderer does not require named fragment objects');
     assert(runtimeSourceModule.includes("Object.prototype.hasOwnProperty.call(fragment, 'source')"), 'runtime source renderer does not require fragment source objects');
     assert(!runtimeSourceModule.includes(': fragment;'), 'runtime source renderer should not fall back to bare fragment values');
-    assert(runtimeSourceModule.includes('return fragments.map(renderRuntimeFragment).join'), 'runtime source renderer does not render through the single-fragment adapter');
+    assert(runtimeSourceModule.includes("return fragments.map(renderRuntimeFragment).join('\\n\\n');"), 'runtime source renderer does not own centralized fragment spacing');
     assert(runtimeSourceModule.includes('if (!Array.isArray(fragments))'), 'runtime source renderer does not validate the fragment registry shape');
     assert(runtimeSourceModule.includes('function renderRuntimeFragments(fragments)'), 'runtime source fragment renderer not found');
     assert(!runtimeSourceModule.includes('browserRuntimeAssemblySource'), 'runtime source boundary should not depend on the removed assembly adapter');
@@ -788,6 +788,7 @@ async function main() {
     assert(runtimeBodySourceBody.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime body source does not render the fragment registry');
     assert(runtimeIifeWrapperBody.includes('(() => {${source}') && runtimeIifeWrapperBody.includes('})()'), 'runtime IIFE wrapper does not own the browser runtime shell');
     assert(fragmentEntriesBody.includes('return ['), 'runtime fragment registry does not use an explicit fragment entries registry');
+    assert(!runtimeFragmentRegistryModule.includes('separator-'), 'runtime fragment registry still carries separator-only fragments');
     assert(!runtimeFragmentRegistryModule.includes('runtime-iife-open') && !runtimeFragmentRegistryModule.includes('runtime-iife-close'), 'runtime fragment registry still owns the IIFE shell');
     assert(fragmentMaterializerBody.includes('return entries.map(([name, source]) => runtimeFragment(name, source));'), 'runtime fragment materializer does not convert explicit entries to named fragment objects');
     assert(fragmentRegistryBody.includes('return materializeRuntimeFragments(browserRuntimeFragmentEntries(config));'), 'runtime fragments source does not materialize the explicit entries registry');
