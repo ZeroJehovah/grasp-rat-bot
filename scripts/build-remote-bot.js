@@ -48,11 +48,11 @@ Options:
 `);
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
   const scriptPath = path.join(options.outDir, options.fileName);
   const manifestPath = path.join(options.outDir, 'manifest.json');
-  const result = writeRemoteBotBundle({
+  const result = await writeRemoteBotBundle({
     outFile: scriptPath,
     manifestFile: manifestPath,
     version: options.version,
@@ -72,4 +72,7 @@ function main() {
   }, null, 2));
 }
 
-main();
+main().catch(err => {
+  console.error(err.stack || err.message);
+  process.exit(1);
+});

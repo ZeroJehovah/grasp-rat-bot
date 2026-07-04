@@ -7,6 +7,9 @@ const esbuild = require('esbuild');
 const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source');
 
 const ROOT = path.resolve(__dirname, '..');
+const VIRTUAL_ENTRY_NAMESPACE = 'grasp-rat-virtual-entry';
+const REMOTE_RUNTIME_ENTRY = 'grasp-rat-remote-runtime-entry.js';
+const RUNTIME_EVAL_ENTRY = 'grasp-rat-runtime-eval-entry.js';
 const BUNDLER_INFO = Object.freeze({
   name: 'esbuild',
   format: 'iife',
@@ -35,16 +38,35 @@ function remoteSourceFor(options) {
   return remoteBrowserRuntimeSource(options);
 }
 
-function bundleRemoteSource(directSource) {
-  const result = esbuild.buildSync({
-    stdin: {
-      contents: directSource,
-      sourcefile: 'grasp-rat-remote-bot.generated.js',
-      resolveDir: ROOT,
-      loader: 'js'
-    },
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function virtualEntryPlugin(entryPath, contents) {
+  const entryFilter = new RegExp(`^${escapeRegExp(entryPath)}$`);
+  return {
+    name: 'grasp-rat-virtual-entry',
+    setup(build) {
+      build.onResolve({ filter: entryFilter }, () => ({
+        path: entryPath,
+        namespace: VIRTUAL_ENTRY_NAMESPACE
+      }));
+      build.onLoad({ filter: entryFilter, namespace: VIRTUAL_ENTRY_NAMESPACE }, () => ({
+        contents,
+        loader: 'js',
+        resolveDir: ROOT
+      }));
+    }
+  };
+}
+
+async function bundleVirtualEntry(entryPath, contents, options = {}) {
+  const result = await esbuild.build({
+    entryPoints: [entryPath],
+    plugins: [virtualEntryPlugin(entryPath, contents)],
     bundle: true,
     format: BUNDLER_INFO.format,
+    ...(options.globalName ? { globalName: options.globalName } : {}),
     platform: BUNDLER_INFO.platform,
     target: [BUNDLER_INFO.target],
     minify: false,
@@ -55,39 +77,22 @@ function bundleRemoteSource(directSource) {
   });
   const output = result.outputFiles && result.outputFiles[0];
   if (!output || typeof output.text !== 'string') {
-    throw new Error('esbuild did not return bundled remote source');
+    throw new Error(`esbuild did not return bundled output for ${entryPath}`);
   }
   return output.text;
 }
 
-function bundleRuntimeEvalSource(directSource) {
-  const globalName = '__graspRatBotRuntimeEvalBundle';
-  const result = esbuild.buildSync({
-    stdin: {
-      contents: `export default ${directSource};`,
-      sourcefile: 'grasp-rat-runtime-eval.generated.js',
-      resolveDir: ROOT,
-      loader: 'js'
-    },
-    bundle: true,
-    format: BUNDLER_INFO.format,
-    globalName,
-    platform: BUNDLER_INFO.platform,
-    target: [BUNDLER_INFO.target],
-    minify: false,
-    sourcemap: false,
-    legalComments: 'none',
-    logLevel: 'silent',
-    write: false
-  });
-  const output = result.outputFiles && result.outputFiles[0];
-  if (!output || typeof output.text !== 'string') {
-    throw new Error('esbuild did not return bundled runtime eval source');
-  }
-  return `(() => {\n${output.text}\nreturn ${globalName}.default;\n})()`;
+async function bundleRemoteSource(directSource) {
+  return bundleVirtualEntry(REMOTE_RUNTIME_ENTRY, directSource);
 }
 
-function browserRuntimeEvalSourceFor(options = {}) {
+async function bundleRuntimeEvalSource(directSource) {
+  const globalName = '__graspRatBotRuntimeEvalBundle';
+  const output = await bundleVirtualEntry(RUNTIME_EVAL_ENTRY, `export default ${directSource};`, { globalName });
+  return `(() => {\n${output}\nreturn ${globalName}.default;\n})()`;
+}
+
+async function browserRuntimeEvalSourceFor(options = {}) {
   const directSource = require('../src/browser/runtime-source').browserRuntimeSource({
     ...options,
     bundledRuntime: true
@@ -95,9 +100,9 @@ function browserRuntimeEvalSourceFor(options = {}) {
   return bundleRuntimeEvalSource(directSource);
 }
 
-function bundledRemoteSourceFor(options) {
+async function bundledRemoteSourceFor(options) {
   const directSource = remoteSourceFor(options);
-  const bundledSource = bundleRemoteSource(directSource);
+  const bundledSource = await bundleRemoteSource(directSource);
   const directSha256 = sha256Hex(directSource);
   const sha256 = sha256Hex(bundledSource);
   return {
@@ -127,8 +132,8 @@ function remoteManifestFor(options, bundle, manifestOptions = {}) {
   };
 }
 
-function writeRemoteBotBundle(options, manifestOptions = {}) {
-  const bundle = bundledRemoteSourceFor(options);
+async function writeRemoteBotBundle(options, manifestOptions = {}) {
+  const bundle = await bundledRemoteSourceFor(options);
   fs.mkdirSync(path.dirname(options.outFile), { recursive: true });
   fs.mkdirSync(path.dirname(options.manifestFile), { recursive: true });
   const manifest = remoteManifestFor(options, bundle, manifestOptions);
@@ -147,9 +152,13 @@ function writeRemoteBotBundle(options, manifestOptions = {}) {
 
 module.exports = {
   BUNDLER_INFO,
+  REMOTE_RUNTIME_ENTRY,
+  RUNTIME_EVAL_ENTRY,
   buildVersion,
   sha256Hex,
   remoteSourceFor,
+  virtualEntryPlugin,
+  bundleVirtualEntry,
   bundleRemoteSource,
   bundleRuntimeEvalSource,
   browserRuntimeEvalSourceFor,

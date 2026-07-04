@@ -270,7 +270,7 @@ async function main() {
   }
 
   const result = await cdp.send('Runtime.evaluate', {
-    expression: browserRuntimeEvalSourceFor({
+    expression: await browserRuntimeEvalSourceFor({
       dryRun: options.dryRun,
       once: options.once,
       statusEvery: options.statusEvery,
@@ -299,22 +299,28 @@ async function main() {
   cdp.close();
 }
 
+async function printSource() {
+  writeStdoutSync(await browserRuntimeEvalSourceFor({
+    dryRun: options.dryRun,
+    once: options.once,
+    statusEvery: options.statusEvery,
+    overrides: options.overrides,
+  }));
+}
+
 if (options.selfTest) {
   runSelfTest();
   process.exit(0);
 }
 
 if (options.printSource) {
-  writeStdoutSync(browserRuntimeEvalSourceFor({
-    dryRun: options.dryRun,
-    once: options.once,
-    statusEvery: options.statusEvery,
-    overrides: options.overrides,
-  }));
-  process.exit(0);
+  printSource().catch((err) => {
+    console.error(err.stack || err.message);
+    process.exit(1);
+  });
+} else {
+  main().catch((err) => {
+    console.error(err.stack || err.message);
+    process.exit(1);
+  });
 }
-
-main().catch((err) => {
-  console.error(err.stack || err.message);
-  process.exit(1);
-});

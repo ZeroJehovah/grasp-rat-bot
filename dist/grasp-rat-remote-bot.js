@@ -5174,7 +5174,7 @@
     }
   });
 
-  // grasp-rat-remote-bot.generated.js
+  // grasp-rat-virtual-entry:grasp-rat-remote-runtime-entry.js
   (() => {
     function pageGlobalObject(value) {
       return value && (typeof value === "object" || typeof value === "function") ? value : null;
@@ -5216,7 +5216,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.499" };
+    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.500" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
