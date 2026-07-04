@@ -613,9 +613,7 @@ function bundledExitReloginHoldSource() {
 \t    isExitLoginSuppressReasonCore,
 \t    startExitAuditBoundCore,
 \t    setExitReloginSuppressCore,
-\t    primePendingUnsafeExitLoginSuppressBoundCore,
-\t    staminaExitHoldUntilForDetailCore,
-\t    staminaExitHoldUntilForDetailBoundCore
+\t    primePendingUnsafeExitLoginSuppressBoundCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
   function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
@@ -653,13 +651,6 @@ function bundledExitReloginHoldSource() {
       cfg,
       setLoginSuppress,
       now: Date.now
-    });
-  }
-
-  function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
-    return staminaExitHoldUntilForDetailBoundCore(detail, t, {
-      staminaBudgetReloginDelayMs,
-      staminaResetHoldUntil
     });
   }
 
