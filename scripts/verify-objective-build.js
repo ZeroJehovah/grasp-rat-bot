@@ -1601,9 +1601,9 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('startExitAuditBoundCore(detail, meta, bot'), 'exit-relogin hold bundled source does not bind start exit audit through bound core');
     assert(exitReloginHoldBundledBody.includes('resetLoginSnapshotGate') && exitReloginHoldBundledBody.includes('loginPointSafetyExitSelfForDetail') && exitReloginHoldBundledBody.includes('recordExitAuditEvent'), 'exit-relogin hold bundled source does not pass required exit audit bindings');
     assert(!exitReloginHoldBundledBody.includes('lastSelf: bot.lastSelf'), 'exit-relogin hold bundled source should not bind lastSelf outside the runtime bound core');
-    assert(exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind pending unsafe suppress through bound core');
+    assert(!exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'exit-relogin hold bundled source should not keep unused pending unsafe suppress bound core import');
+    assert(!exitReloginHoldBundledBody.includes('function primePendingUnsafeExitLoginSuppress'), 'exit-relogin hold bundled source should not keep unused pending unsafe suppress wrapper');
     assert(!exitReloginHoldBundledBody.includes('setEnemyLeaveSuppressCore'), 'exit-relogin hold bundled source should not keep unused enemy suppress wrapper core');
-    assert(exitReloginHoldBundledBody.includes('hpInfoForRelogin') && exitReloginHoldBundledBody.includes('reloginDelayForHp') && exitReloginHoldBundledBody.includes('setLoginSuppress'), 'exit-relogin hold bundled source does not pass required pending unsafe suppress bindings');
     assert(!exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore,'), 'exit-relogin hold bundled source should not import unused stamina budget wrapper helper');
     assert(!exitReloginHoldBundledBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold bundled source should not keep unused stamina budget wrapper');
     assert(!exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailBoundCore'), 'exit-relogin hold bundled source should not keep unused stamina hold selector bound core import');
@@ -1865,6 +1865,9 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)'), 'leave-flow source does not preserve inline offline unsafe predicate wrapper call');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending unsafe suppress bound core for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now'), 'leave-flow source does not bind pending unsafe suppress helpers for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('`primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`'), 'leave-flow source does not preserve inline pending unsafe suppress wrapper call template');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');

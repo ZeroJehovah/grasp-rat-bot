@@ -1,13 +1,16 @@
 'use strict';
 
 function leaveFlowSource(options = {}) {
-  const offlineUnsafePredicatePrelude = options.bundledRuntime
-    ? "  const { offlineExitRequiresUnsafeReloginDelayCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+  const runtimeExitReloginPrelude = options.bundledRuntime
+    ? "  const {\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingUnsafeExitLoginSuppressBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
     : 'offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)';
-  return String.raw`${offlineUnsafePredicatePrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
+  const pendingUnsafeSuppressCall = (storageReason, reason, detail, selfLike) => options.bundledRuntime
+    ? `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now })`
+    : `primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`;
+  return String.raw`${runtimeExitReloginPrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
     const skipped = pendingExitSkipNewLeave('offline', reason, {
@@ -48,7 +51,7 @@ function leaveFlowSource(options = {}) {
     if (detail.attempted) {
       const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
       if (!staminaSuppress && ${offlineUnsafePredicateCall}) {
-        primePendingUnsafeExitLoginSuppress('offline leave', reason, detail, selfSummary);
+        ${pendingUnsafeSuppressCall("'offline leave'", 'reason', 'detail', 'selfSummary')};
       }
     }
     if (detail.attempted || detail.exitAuditId) {
@@ -91,7 +94,7 @@ function leaveFlowSource(options = {}) {
     bot.lastInjuryLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
-      primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, injury?.self || injury);
+      ${pendingUnsafeSuppressCall("'enemy leave'", 'detail.reason', 'detail', 'injury?.self || injury')};
     }
     if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('enemy', 'injury', detail, injury?.self || injury);
@@ -136,7 +139,7 @@ function leaveFlowSource(options = {}) {
     bot.lastPursuitLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
-      primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, selfSummary);
+      ${pendingUnsafeSuppressCall("'enemy leave'", 'detail.reason', 'detail', 'selfSummary')};
     }
     if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('enemy', 'pursuit', detail, selfSummary);
@@ -196,7 +199,7 @@ function leaveFlowSource(options = {}) {
     bot.lastCombatLeaveAt = t;
     await issueLeaveCommand(detail);
     if (detail.attempted) {
-      primePendingUnsafeExitLoginSuppress('enemy leave', detail.reason, detail, selfSummary);
+      ${pendingUnsafeSuppressCall("'enemy leave'", 'detail.reason', 'detail', 'selfSummary')};
     }
     if (detail.attempted || detail.exitAuditId) {
       rememberPendingExit('enemy', 'combat', detail, selfSummary);
