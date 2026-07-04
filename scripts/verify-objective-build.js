@@ -2464,7 +2464,13 @@ function main() {
       assert(classifyBody.includes('const realtimeGlobalTargets = realtimeEntities'), 'classification does not split realtime AFK targets');
       assert(classifyBody.includes('.filter(e => e.native)'), 'combat targets can still include snapshot-only entities');
       assert(chooseBody.includes('const nearCoin = pickCoin(self, realtimeNearCoins'), 'near coin priority is not limited to realtime coins');
-      assert(chooseBody.includes('pickPostAttackDropCoin(self, realtimeCoins'), 'post-attack pickup is not limited to realtime coins');
+      assert(
+        chooseBody.includes('pickPostAttackDropCoin(self, realtimeCoins')
+          || text.includes('pickPostAttackDropCoin(self, realtimeCoins')
+          || (file === 'grasp-rat-bot.js' && chooseActionSourceModule.includes("pickPostAttackDropCoinCall('self', 'realtimeCoins', 'coinThreats', 'entities'"))
+          || (chooseBody.includes('safeCoinCandidates(realtimeCoins, coinThreats') && chooseBody.includes('pickPostAttackDropCoinCore(bot.attackHistory')),
+        'post-attack pickup is not limited to realtime coins'
+      );
       assert(chooseBody.includes('{ coins: realtimeGlobalCoins, maxDistance: cfg.globalCoinMaxDistance }'), 'normal opportunity coin pool is not limited to realtime coins');
       assert(chooseBody.includes('realtimeGlobalTargets.filter(isAfkProfitTarget)'), 'normal AFK opportunity pool is not limited to realtime targets');
       const visibleOpportunityIndex = chooseBody.indexOf('const opportunity = typeof pickBestOpportunityCore');
@@ -2550,7 +2556,7 @@ function main() {
       assert(coinCandidateBody.includes("actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance") && coinCandidateBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
     });
     check(`${file} lets high-value combat drops interrupt recovery`, () => {
-      const body = functionBody(text, 'pickPostAttackDropCoin');
+      const body = file === 'grasp-rat-bot.js' ? functionBody(text, 'pickPostAttackDropCoin') : functionBody(text, 'chooseAction');
       const coinCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : finalRuntimeText;
       assert(body.includes('options.maxDistance ?? cfg.postAttackDropCoinMaxDistance'), 'post-attack drop picker does not accept maxDistance override');
       assert(body.includes('options.minScore ?? 0'), 'post-attack drop picker does not accept minScore override');
@@ -2568,16 +2574,17 @@ function main() {
       assert(choiceMetadataSource.includes('oscillationLocked: Boolean'), 'opportunity choice does not expose oscillation lock state');
     });
     check(`${file} waits at killed high-drop target position before drop refresh`, () => {
-      const body = functionBody(text, 'pickPostAttackDropWaitTarget');
+      const body = file === 'grasp-rat-bot.js' ? functionBody(text, 'pickPostAttackDropWaitTarget') : functionBody(text, 'chooseAction');
       const waitCoreSource = file === 'grasp-rat-bot.js' ? strategyPostAttackDropSource : finalRuntimeText;
       assert(body.includes('cfg.postAttackDropWaitMs'), 'post-attack wait window not used');
       assert(body.includes('cfg.postAttackDropResolveMaxMs'), 'post-attack wait resolve window not used');
       assert(body.includes('cfg.postAttackDropWaitMinDrop'), 'post-attack wait minimum drop not used');
       assert(body.includes('postAttackDropResolvedAt'), 'post-attack wait is not anchored to target resolution');
-      assert(body.includes('postAttackVisibleCoinExists') || waitCoreSource.includes('postAttackVisibleCoinExistsCore'), 'post-attack wait does not skip already-visible drops');
+      assert(body.includes('postAttackVisibleCoinExists') || body.includes('pickPostAttackDropWaitTargetCore') || waitCoreSource.includes('postAttackVisibleCoinExistsCore'), 'post-attack wait does not skip already-visible drops');
       const waitCoreHasAttackAction = (waitCoreSource.includes("item.action === 'attack'") || waitCoreSource.includes('item.action === "attack"'))
         && (waitCoreSource.includes("item.action === 'opportunistic-shot'") || waitCoreSource.includes('item.action === "opportunistic-shot"'));
       assert((body.includes("item.action === 'attack'") && body.includes("item.action === 'opportunistic-shot'"))
+        || body.includes('pickPostAttackDropWaitTargetCore')
         || waitCoreHasAttackAction,
       'post-attack wait can trigger without a recent shot/attack');
       assert(body.includes('postAttackDropResolvedAt') || body.includes('!recentAttackTargetStillAttackable') || body.includes("!(entities || []).some(e => String(e.user_id ?? e.id ?? '') === String(item.id) && isAlive(e))"), 'post-attack wait does not require target resolution');
@@ -4093,10 +4100,19 @@ function main() {
       'applyOpportunityOscillationLock',
       'opportunityMatchesChoice',
       'opportunityMissingHoldUntil',
-      'missingHeldCoinCoveredByVisibleAuthority'
+      'missingHeldCoinCoveredByVisibleAuthority',
+      'buildMissingHeldOpportunity',
+      'rememberOpportunityChoice',
+      'chooseStableOpportunity'
     ]) {
       assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
     }
+    assert(generatedRuntimeSource.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({'), 'generated opportunity pick option does not bind missing-held core directly');
+    assert(generatedRuntimeSource.includes('chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions())'), 'generated opportunity pick option does not bind stable-choice core directly');
+    assert(generatedRuntimeSource.includes('rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions())'), 'generated opportunity pick option does not bind choice persistence core directly');
+    assert(distSource.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({'), 'bundled dist opportunity pick option does not bind missing-held core directly');
+    assert(distSource.includes('chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions())'), 'bundled dist opportunity pick option does not bind stable-choice core directly');
+    assert(distSource.includes('rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions())'), 'bundled dist opportunity pick option does not bind choice persistence core directly');
     assert(distSource.includes('function chooseStableOpportunityCore'), 'bundled dist does not contain opportunity choice stable picker core');
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'bundled dist does not contain opportunity choice persistence core');
     assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'bundled dist does not contain missing-held opportunity core');
@@ -4110,7 +4126,10 @@ function main() {
       'applyOpportunityOscillationLock',
       'opportunityMatchesChoice',
       'opportunityMissingHoldUntil',
-      'missingHeldCoinCoveredByVisibleAuthority'
+      'missingHeldCoinCoveredByVisibleAuthority',
+      'buildMissingHeldOpportunity',
+      'rememberOpportunityChoice',
+      'chooseStableOpportunity'
     ]) {
       assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
     }
@@ -4335,6 +4354,14 @@ function main() {
     assert(!generatedRuntimeSource.includes('function pickPostAttackDropCoinCore'), 'generated remote runtime still inlines post-attack drop coin core before bundling');
     assert(!generatedRuntimeSource.includes('function postAttackVisibleCoinExists('), 'generated remote runtime still declares unused postAttackVisibleCoinExists wrapper');
     assert(!distSource.includes('function postAttackVisibleCoinExists('), 'bundled dist still declares unused postAttackVisibleCoinExists wrapper');
+    for (const wrapperName of ['pickPostAttackDropCoin', 'pickPostAttackDropWaitTarget']) {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
+      assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+    }
+    assert(generatedRuntimeSource.includes('pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {'), 'generated choose-action does not call post-attack drop coin core directly');
+    assert(generatedRuntimeSource.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory, realtimeCoins, coinThreats, {'), 'generated choose-action does not call post-attack wait core directly');
+    assert(distSource.includes('pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {'), 'bundled dist choose-action does not call post-attack drop coin core directly');
+    assert(distSource.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory, realtimeCoins, coinThreats, {'), 'bundled dist choose-action does not call post-attack wait core directly');
     assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'bundled dist does not contain post-attack visible coin core');
     assert(distSource.includes('function resolvedRecentPostAttackDropsCore'), 'bundled dist does not contain post-attack resolved attack core');
     assert(distSource.includes('function buildPostAttackDropCoinCandidateCore'), 'bundled dist does not contain post-attack drop coin metadata core');

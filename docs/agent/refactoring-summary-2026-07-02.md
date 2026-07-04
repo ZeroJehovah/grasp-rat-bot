@@ -1456,6 +1456,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 215. Removed unused production bundled opportunity-choice wrapper declarations for locked choice, oscillation lock, choice matching, missing-hold time, and missing-visible authority while preserving local/CDP fallback and strategy core behavior: integrated in `bootstrap-0.4.487`
 216. Removed unused production bundled stamina-budget/opportunity-stamina wrappers by routing choose-action nearest stamina exit, daily final coin, and stamina wait summaries directly through strategy cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.488`
 217. Removed grouped production bundled route/ROI/snapshot/post-attack wrappers by routing coin-route selection, opportunity value scoring, snapshot worth/reason checks, and post-attack visible-coin checks directly through strategy/runtime cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.489`
+218. Removed grouped production bundled opportunity-choice and post-attack picker wrappers by routing missing-held choice construction, stable choice selection, choice persistence, drop-coin picking, and drop-wait picking directly through strategy/runtime cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.490`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

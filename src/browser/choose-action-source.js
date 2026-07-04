@@ -53,6 +53,107 @@ function chooseActionSource(options = {}) {
   const snapshotCoinNavigationReasonCall = options.bundledRuntime
     ? 'snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'
     : 'snapshotCoinNavigationReason(localRealtimeCoin)';
+  const buildMissingHeldOpportunityOption = options.bundledRuntime
+    ? String.raw`(missingSelf, missingThreats, opportunities) => {
+          const t = now();
+          const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
+            nowMs: t,
+            self: missingSelf,
+            activeThreats: missingThreats,
+            missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs,
+            nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius,
+            snapshotCoinMaxDistance: cfg.snapshotCoinMaxDistance,
+            globalCoinMaxDistance: cfg.globalCoinMaxDistance,
+            coinMaxDistance: cfg.coinMaxDistance,
+            visibleSourcesConfirmMissing: choice => visibleCoinSourcesConfirmTargetMissing(choice),
+            ignoredCoin: id => Boolean(bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))),
+            coinBlockedByThreat: (origin, coin, threat) => {
+              const blocked = coinBlockedByThreat(origin, coin, threat);
+              if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
+              return blocked;
+            },
+            coinStaminaCost: opportunityCoinStaminaCost,
+            coinStaminaAffordable: (origin, coin, staminaCost) => coinStaminaAffordableWithDiagnostic(origin, coin, staminaCost),
+            scoreCoinOpportunity,
+            priorityTier: opportunityPriorityTier
+          }));
+          if (result?.clearMissing) {
+            clearMissingVisibleCoinTarget(bot.opportunityChoice, result.coin, result.clearReason || 'visible-coin-disappeared', t);
+            return null;
+          }
+          const item = result?.opportunity || null;
+          if (!item) return null;
+          const coin = result.coin || item.sourceCoin || item;
+          const { sourceCoin, ...opportunity } = item;
+          return {
+            ...opportunity,
+            action: () => buildCoinAction(missingSelf, coin, opportunity.reason, opportunity.actionKind === 'seek-coin' ? 'seek-coin' : null)
+          };
+        }`
+    : 'buildMissingHeldOpportunity';
+  const chooseStableOpportunityOption = options.bundledRuntime
+    ? String.raw`opportunities => {
+          const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
+          bot.opportunitySwitchLock = result.switchLock;
+          return result.chosen;
+        }`
+    : 'chooseStableOpportunity';
+  const rememberOpportunityChoiceOption = options.bundledRuntime
+    ? String.raw`(item, action, previous = bot.opportunityChoice) => {
+          if (!item) return action;
+          const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
+          bot.opportunityChoice = result.choice;
+          return result.action;
+        }`
+    : 'rememberOpportunityChoice';
+  const pickPostAttackDropCoinCall = (selfExpr, coinsExpr, threatsExpr, entitiesExpr, optionsExpr = '{}') => options.bundledRuntime
+    ? String.raw`(() => {
+      const options = ${optionsExpr};
+      const t = Date.now();
+      const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
+      const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
+      const minScore = Math.max(0, Number(options.minScore ?? 0) || 0);
+      const candidateCoins = safeCoinCandidates(${coinsExpr}, ${threatsExpr}, maxDistance, ${selfExpr})
+        .filter(coin => Number(coin.amount || 0) > minAmount)
+        .filter(coin => Number.isFinite(Number(coin.distance)))
+        .filter(coin => coinStaminaAffordableWithDiagnostic(${selfExpr}, coin));
+      const result = pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {
+        nowMs: t,
+        dist,
+        priorityMs: cfg.postAttackDropCoinPriorityMs,
+        includeSingle: options.includeSingle,
+        minAmount,
+        maxDistance,
+        minScore,
+        dropCoinRadius: cfg.postAttackDropCoinRadius,
+        resolveAttack: attack => postAttackDropResolvedAt(attack, ${entitiesExpr}, t),
+        scoreCoin: scoreCoinOpportunity
+      });
+      for (const candidate of result.candidates || []) {
+        recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(${selfExpr}), 'post-attack-drop-visible');
+      }
+      return result.selected || null;
+    })()`
+    : `pickPostAttackDropCoin(${selfExpr}, ${coinsExpr}, ${threatsExpr}, ${entitiesExpr}, ${optionsExpr})`;
+  const pickPostAttackDropWaitTargetCall = (selfExpr, coinsExpr, threatsExpr, entitiesExpr) => options.bundledRuntime
+    ? String.raw`(() => {
+      const t = Date.now();
+      const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
+      return pickPostAttackDropWaitTargetCore(bot.attackHistory, ${coinsExpr}, ${threatsExpr}, {
+        nowMs: t,
+        self: ${selfExpr},
+        dist,
+        waitMs,
+        minDrop: Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0),
+        resolveMaxMs: Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs),
+        maxDistance: Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0)),
+        stopDistance: Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0)),
+        dropCoinRadius: cfg.postAttackDropCoinRadius,
+        resolveAttack: item => postAttackDropResolvedAt(item, ${entitiesExpr}, t),
+        coinBlockedByThreat: (origin, item, threat) => coinBlockedByThreat(origin, item, threat)
+      });
+    })()`
+    : `pickPostAttackDropWaitTarget(${selfExpr}, ${coinsExpr}, ${threatsExpr}, ${entitiesExpr})`;
   return String.raw`  function chooseAction(self) {
     const {
       entities,
@@ -171,7 +272,7 @@ function chooseActionSource(options = {}) {
     const recoveryCombatTarget = defensiveTargetOverridesEngaged(engagedCombatTarget, defensiveCombatTarget)
       ? defensiveCombatTarget
       : (engagedCombatTarget || defensiveCombatTarget);
-    const pendingPostAttackWaitTarget = pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
+    const pendingPostAttackWaitTarget = ${pickPostAttackDropWaitTargetCall('self', 'realtimeCoins', 'coinThreats', 'entities')};
     const highValuePriorityCoin = pickHighValueVisibleCoin(self, realtimeCoins, highValueCoinThreats, {
       ignoreThreats: hpValue(self) >= highValueCoinPriorityHealthyHp()
     });
@@ -277,11 +378,11 @@ function chooseActionSource(options = {}) {
       : cfg.nearCoinPriorityDistance;
     const nearCoin = pickCoin(self, realtimeNearCoins, coinThreats, nearCoinLimit);
     const footCoin = pickCoin(self, realtimeNearCoins, coinThreats, cfg.footCoinPriorityDistance);
-    const postAttackCoin = pickPostAttackDropCoin(self, realtimeCoins, coinThreats, entities, {
+    const postAttackCoin = ${pickPostAttackDropCoinCall('self', 'realtimeCoins', 'coinThreats', 'entities', String.raw`{
       includeSingle: !recovery,
       maxDistance: recovery ? cfg.postAttackRecoveryDropMaxDistance : cfg.postAttackDropCoinMaxDistance,
       minScore: recovery ? cfg.postAttackRecoveryDropMinScore : 0
-    });
+    }`)};
     if (postAttackCoin) {
       bot.fleeLock = null;
       if (bot.lastTarget?.kind === 'enemy') {
@@ -293,7 +394,7 @@ function chooseActionSource(options = {}) {
       action.postAttackTarget = postAttackCoin.postAttackTarget;
       return action;
     }
-    const postAttackWaitTarget = pendingPostAttackWaitTarget || pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
+    const postAttackWaitTarget = pendingPostAttackWaitTarget || ${pickPostAttackDropWaitTargetCall('self', 'realtimeCoins', 'coinThreats', 'entities')};
     if (postAttackWaitTarget) {
       bot.fleeLock = null;
       ${clearPostAttackWaitOpportunity}
@@ -425,9 +526,9 @@ function chooseActionSource(options = {}) {
         opportunityCandidateCoreOptions,
         buildCoinAction,
         buildEnemyAction,
-        buildMissingHeldOpportunity,
-        chooseStableOpportunity,
-        rememberOpportunityChoice
+        buildMissingHeldOpportunity: ${buildMissingHeldOpportunityOption},
+        chooseStableOpportunity: ${chooseStableOpportunityOption},
+        rememberOpportunityChoice: ${rememberOpportunityChoiceOption}
       })
       : pickBestOpportunity(
         self,
