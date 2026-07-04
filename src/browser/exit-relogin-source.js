@@ -337,10 +337,6 @@ function bundledExitReloginSummarySource() {
 \t  function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '') {
 \t    return currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary });
 \t  }
-
-\t  function reloginDelayForHp(selfLike, detail) {
-\t    return reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp });
-\t  }
 `;
 }
 

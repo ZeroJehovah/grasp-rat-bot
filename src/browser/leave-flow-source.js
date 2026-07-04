@@ -10,8 +10,11 @@ function leaveFlowSource(options = {}) {
   const pendingStaminaSuppressCall = options.bundledRuntime
     ? 'primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress })'
     : 'primePendingStaminaExitLoginSuppress(detail)';
+  const reloginDelayForHpBinding = options.bundledRuntime
+    ? 'reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'
+    : 'reloginDelayForHp';
   const pendingUnsafeSuppressCall = (storageReason, reason, detail, selfLike) => options.bundledRuntime
-    ? `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, reloginDelayForHp, cfg, setLoginSuppress, now: Date.now })`
+    ? `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, ${reloginDelayForHpBinding}, cfg, setLoginSuppress, now: Date.now })`
     : `primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`;
   const startExitAuditCall = (detail, meta) => options.bundledRuntime
     ? `startExitAuditBoundCore(${detail}, ${meta}, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now })`
