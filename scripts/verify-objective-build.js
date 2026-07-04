@@ -737,6 +737,9 @@ function main() {
     assert(fragmentEntriesBody.includes("['coin-safety', () => coinSafetySource(config)]"), 'coin-safety fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['restored-runtime-state', () => restoredRuntimeStateSource(config)]"), 'restored-runtime-state fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-diagnostics', () => runtimeDiagnosticsSource(config)]"), 'runtime-diagnostics fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['tick-safety', () => tickSafetySource(config)]"), 'tick-safety fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['page-native-snapshot', () => pageNativeSnapshotSource(config)]"), 'page-native-snapshot fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['entity-refresh', () => entityRefreshSource(config)]"), 'entity-refresh fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['exit-relogin', () => exitReloginSource(config)]"), 'exit-relogin fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['leave-flow', () => leaveFlowSource(config)]"), 'leave-flow fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
@@ -962,6 +965,7 @@ function main() {
     assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('String.raw`'), 'combat-log source factory does not return raw browser source');
     assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('combatLogExitSummarySource'), 'combat-log source factory does not support optional exit-summary helper injection');
     assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('combatLogExitSummaryFromDecision.toString()'), 'combat-log source factory does not inline exit-summary helper');
+    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'combat-log source factory does not route bundled runtime diagnostics through core');
     assert(importantLogSourceModule.includes('function importantLogSource() {'), 'important-log source factory not found');
     assert(importantLogSourceModule.includes('module.exports = {\n  importantLogSource'), 'important-log module export not found');
     assert(functionBody(importantLogSourceModule, 'importantLogSource').includes('String.raw`'), 'important-log source factory does not return raw browser source');
@@ -973,9 +977,10 @@ function main() {
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordKillHistoryItem'), 'combat-history source factory does not include kill history storage');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordDropMatchedKill'), 'combat-history source factory does not include drop matched kill attribution');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function updateKillHistory'), 'combat-history source factory does not include kill history update');
-    assert(entityRefreshSourceModule.includes('function entityRefreshSource() {'), 'entity-refresh source factory not found');
+    assert(entityRefreshSourceModule.includes('function entityRefreshSource(options = {}) {'), 'entity-refresh source factory not found');
     assert(entityRefreshSourceModule.includes('module.exports = {\n  entityRefreshSource'), 'entity-refresh source module export not found');
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('String.raw`'), 'entity-refresh source factory does not return raw browser source');
+    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'entity-refresh source factory does not route bundled runtime diagnostics through core');
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('function markRecentMovement'), 'entity-refresh source factory does not include recent movement marker');
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('async function refreshGlobalState'), 'entity-refresh source factory does not include global refresh helper');
     assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('passive-snapshot-only-active-game-api-disabled'), 'entity-refresh source factory does not preserve passive snapshot skip diagnostic');
@@ -1359,9 +1364,10 @@ function main() {
     assert(arrayCountRuntimeModule.includes('function arrayCount(value)'), 'array-count runtime helper not found');
     assert(arrayCountRuntimeModule.includes('Array.isArray(value) ? value.length : 0'), 'array-count runtime helper does not preserve array length fallback');
     assert(arrayCountRuntimeModule.includes('module.exports = {\n  arrayCount\n}'), 'array-count runtime helper export not found');
-    assert(tickSafetySourceModule.includes('function tickSafetySource() {'), 'tick-safety source factory not found');
+    assert(tickSafetySourceModule.includes('function tickSafetySource(options = {}) {'), 'tick-safety source factory not found');
     assert(tickSafetySourceModule.includes('module.exports = { tickSafetySource }'), 'tick-safety source module export not found');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('String.raw`'), 'tick-safety source factory does not return raw browser source');
+    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'tick-safety source factory does not route bundled runtime diagnostics through core');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('function recordUnhandledTickError'), 'tick-safety source factory does not include unhandled tick recorder');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes("console.error('[grasp-rat-bot:unhandled-tick]', err)"), 'tick-safety source factory does not preserve console error logging');
     assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('function runTickSafely'), 'tick-safety source factory does not include tick safety wrapper');
@@ -1541,7 +1547,8 @@ function main() {
     assert(runtimeDiagnosticsInlineBody.includes('catch (_) {}'), 'runtime-diagnostics inline source factory does not preserve error swallowing');
     const runtimeDiagnosticsBundledBody = functionBody(runtimeDiagnosticsSourceModule, 'bundledRuntimeDiagnosticsSource');
     assert(runtimeDiagnosticsBundledBody.includes("require('./src/browser/runtime/runtime-diagnostics')"), 'runtime-diagnostics bundled source does not hand recorder to the bundler');
-    assert(runtimeDiagnosticsBundledBody.includes('recordRuntimeDiagnosticsCore(bot, values)'), 'runtime-diagnostics bundled source does not bind bot diagnostics state');
+    assert(!runtimeDiagnosticsBundledBody.includes('function recordRuntimeDiagnostics('), 'runtime-diagnostics bundled source still keeps recorder wrapper');
+    assert(!distSource.includes('function recordRuntimeDiagnostics('), 'dist remote bot still keeps runtime diagnostics recorder wrapper');
     assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('options.bundledRuntime'), 'runtime-diagnostics source selector does not switch on bundled runtime mode');
     assert(runtimeDiagnosticsRuntimeModule.includes('function recordRuntimeDiagnosticsCore(bot, values = {})'), 'runtime-diagnostics runtime core not found');
     assert(runtimeDiagnosticsRuntimeModule.includes("if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== 'object') bot.runtimeDiagnostics = {};"), 'runtime-diagnostics runtime core does not initialize diagnostics object');
@@ -1997,9 +2004,10 @@ function main() {
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function summarizeOfflineThreat'), 'offline-safety source factory does not include offline threat summary helper');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function assessOfflineSafety'), 'offline-safety source factory does not include offline safety assessment helper');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function pickActiveCombatWaitThreat'), 'offline-safety source factory does not include active combat wait picker');
-    assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource() {'), 'page-native snapshot source factory not found');
+    assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource(options = {}) {'), 'page-native snapshot source factory not found');
     assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
+    assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'page-native snapshot source factory does not route bundled runtime diagnostics through core');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
     assert(actionArbitrationSourceModule.includes('function actionArbitrationInlineSource(helpers = {}) {'), 'action-arbitration inline source factory not found');
     assert(actionArbitrationSourceModule.includes('function bundledActionArbitrationSource() {'), 'action-arbitration bundled source factory not found');

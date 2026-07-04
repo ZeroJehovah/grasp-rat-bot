@@ -1,6 +1,9 @@
 'use strict';
 
-function entityRefreshSource() {
+function entityRefreshSource(options = {}) {
+  const recordRuntimeDiagnosticsCall = values => options.bundledRuntime
+    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
+    : `recordRuntimeDiagnostics(${values})`;
   return String.raw`  function markRecentMovement(entities) {
     const t = now();
     const sampleMs = Math.max(1, Number(cfg.combatAimMotionSampleMs || 50));
@@ -86,7 +89,7 @@ function entityRefreshSource() {
 	      minimap: { ok: false, skipped: true, error: '' },
 	      error: bot.globalState.error
 	    };
-	    recordRuntimeDiagnostics({ lastRefresh: refreshDiagnostic });
+	    ${recordRuntimeDiagnosticsCall('{ lastRefresh: refreshDiagnostic }')};
 	  }
 
 `;

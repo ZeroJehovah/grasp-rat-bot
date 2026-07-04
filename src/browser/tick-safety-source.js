@@ -1,6 +1,9 @@
 'use strict';
 
-function tickSafetySource() {
+function tickSafetySource(options = {}) {
+  const recordRuntimeDiagnosticsCall = values => options.bundledRuntime
+    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
+    : `recordRuntimeDiagnostics(${values})`;
   return String.raw`
       function recordUnhandledTickError(source, err) {
         const entry = {
@@ -23,21 +26,21 @@ function tickSafetySource() {
       function runTickSafely(source = 'timer') {
         const tickStartedAt = Date.now();
         const tickStartedPerf = now();
-        recordRuntimeDiagnostics({
+        ${recordRuntimeDiagnosticsCall(`{
           lastTickStartedAt: tickStartedAt,
           lastTickSource: source
-        });
+        }`)};
         return Promise.resolve()
           .then(() => tick(source))
           .catch(err => {
             recordUnhandledTickError(source, err);
           })
           .finally(() => {
-            recordRuntimeDiagnostics({
+            ${recordRuntimeDiagnosticsCall(`{
               lastTickCompletedAt: Date.now(),
               lastTickDurationMs: Math.max(0, Math.round(now() - tickStartedPerf)),
               lastTickSource: source
-            });
+            }`)};
           });
       }
 

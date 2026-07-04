@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.474" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.475" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4929,9 +4929,6 @@
       normalizeLoginSnapshotGateStateCore
     } = require_login_snapshot_gate();
     const { recordRuntimeDiagnosticsCore } = require_runtime_diagnostics();
-    function recordRuntimeDiagnostics(values = {}) {
-      return recordRuntimeDiagnosticsCore(bot, values);
-    }
     const { readEnemyLeaveStreakBoundCore } = require_exit_relogin();
     const bot = {
       running: true,
@@ -7571,7 +7568,7 @@
       try {
         return buildCombatLogEntry(source, decision);
       } finally {
-        recordRuntimeDiagnostics({
+        recordRuntimeDiagnosticsCore(bot, {
           lastCombatLogBuildAt: Date.now(),
           lastCombatLogBuildStartedAt: buildStartedAt,
           lastCombatLogBuildMs: Math.max(0, Math.round(now() - buildStartedPerf))
@@ -8089,7 +8086,7 @@
         }
         flushCombatLogs(false);
       } finally {
-        recordRuntimeDiagnostics({
+        recordRuntimeDiagnosticsCore(bot, {
           lastCombatLogRecordAt: Date.now(),
           lastCombatLogRecordStartedAt: recordStartedAt,
           lastCombatLogRecordMs: Math.max(0, Math.round(now() - recordStartedPerf))
@@ -8118,14 +8115,14 @@
     function runTickSafely(source = "timer") {
       const tickStartedAt = Date.now();
       const tickStartedPerf = now();
-      recordRuntimeDiagnostics({
+      recordRuntimeDiagnosticsCore(bot, {
         lastTickStartedAt: tickStartedAt,
         lastTickSource: source
       });
       return Promise.resolve().then(() => tick(source)).catch((err) => {
         recordUnhandledTickError(source, err);
       }).finally(() => {
-        recordRuntimeDiagnostics({
+        recordRuntimeDiagnosticsCore(bot, {
           lastTickCompletedAt: Date.now(),
           lastTickDurationMs: Math.max(0, Math.round(now() - tickStartedPerf)),
           lastTickSource: source
@@ -10205,7 +10202,7 @@
         source: bot.globalState.passiveSnapshotSource,
         passive: true
       });
-      recordRuntimeDiagnostics({
+      recordRuntimeDiagnosticsCore(bot, {
         lastPassiveSnapshot: {
           at: bot.globalState.snapshotRefreshedAt,
           source: bot.globalState.passiveSnapshotSource,
@@ -14922,7 +14919,7 @@
         minimap: { ok: false, skipped: true, error: "" },
         error: bot.globalState.error
       };
-      recordRuntimeDiagnostics({ lastRefresh: refreshDiagnostic });
+      recordRuntimeDiagnosticsCore(bot, { lastRefresh: refreshDiagnostic });
     }
     function wsSend(message) {
       if (cfg.dryRun) return true;
