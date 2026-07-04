@@ -611,8 +611,6 @@ function exitReloginHoldInlineSource() {
 function bundledExitReloginHoldSource() {
   return `	  const {
 \t    isExitLoginSuppressReasonCore,
-\t    unsafeExitReloginMinDelayMsCore,
-\t    pendingExitSuppressReasonCore,
 \t    startExitAuditCore,
 \t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressBoundCore,
@@ -644,14 +642,6 @@ function bundledExitReloginHoldSource() {
       now: Date.now
     });
   }
-
-\t  function unsafeExitReloginMinDelayMs() {
-\t    return unsafeExitReloginMinDelayMsCore(cfg);
-\t  }
-
-\t  function pendingExitSuppressReason(storageReason) {
-\t    return pendingExitSuppressReasonCore(storageReason);
-\t  }
 
 \t  function startExitAudit(detail, meta = {}) {
     return startExitAuditCore(detail, meta, {

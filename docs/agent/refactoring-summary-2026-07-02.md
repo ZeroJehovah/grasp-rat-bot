@@ -1407,6 +1407,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 166. Bundler-owned `exit-relogin` hold read/clear binding for remote builds: integrated in `bootstrap-0.4.438`
 167. Bundler-owned `exit-relogin` hold cleanup binding for remote builds: integrated in `bootstrap-0.4.439`
 168. Bundler-owned `exit-relogin` pending unsafe suppress binding for remote builds: integrated in `bootstrap-0.4.440`
+169. Bundled `exit-relogin` pending unsafe suppress wrapper cleanup for remote builds: integrated in `bootstrap-0.4.441`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
