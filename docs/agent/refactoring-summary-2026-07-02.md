@@ -1645,3 +1645,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/status-panel-runtime-source.js` remains the single bundled status-panel entry and exposes display helpers through `require('./src/browser/runtime/display-format')`.
 - Static verification now rejects the old helper-object fallback and function-text display helper injection.
 - The `.508` manifest records bundled SHA-256 `3b2f718fd5aaf6fcd23617e8500ebbbbad3fdcc2b08a215cf62921a420fd4e51` and pre-bundle remote direct SHA-256 `62dbdc4255a8ae49de08dbab413a08ddc73706be3168a698476adb2c0864bb9f`.
+
+`bootstrap-0.4.509` removes an empty runtime utility fragment:
+
+- `runtimeUtilityCloneSource()` is gone from `src/browser/runtime-utils-source.js`; the module now exports only `runtimeUtilityPreludeSource()`.
+- `src/browser/runtime-fragment-registry.js` no longer registers the empty `runtime-utility-clone` fragment between `array-count` and `combat-log-runtime`.
+- Static verification rejects reintroducing the empty fragment while still checking bundled runtime-utils and array-count helper ownership.
+- The `.509` manifest records bundled SHA-256 `e05eb913cb03b918c9ab68a8e958c82a85ebfb561104abef40e6b9b949ad61a6` and pre-bundle remote direct SHA-256 `fbeeb37ae4c736883208bd8519931185bf6984388826a07193d5a9fe9fe4c37d`.
