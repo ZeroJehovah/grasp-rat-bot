@@ -244,7 +244,7 @@ function browserRuntimeFragmentEntries(config) {
     ['combat-state', () => combatStateSource(config)],
     ['combat-fire', combatFireSource],
     ['combat-leave-cover', combatLeaveCoverSource],
-    ['combat-action', combatActionSource],
+    ['combat-action', () => combatActionSource(config)],
     ['opportunity-snapshot', opportunitySnapshotSource],
     ['opportunity-candidate', () => opportunityCandidateSource(config)],
     ['post-attack', () => postAttackSource(config)],
