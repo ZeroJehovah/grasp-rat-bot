@@ -10,7 +10,7 @@ const {
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./src/browser/runtime/exit-motion');\n  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const enemyHoldRemainingMsCall = options.bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForTickBoundCore')
@@ -36,6 +36,9 @@ function tickSource(options = {}) {
   const pursuitLeaveSummaryCall = pursuit => options.bundledRuntime
     ? `pursuitLeaveSummaryForTickCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`
     : `pursuitLeaveSummary(${pursuit})`;
+  const postExitDecisionWithoutTargetCall = (decision, reason) => options.bundledRuntime
+    ? `postExitDecisionWithoutTargetForTickCore(${decision}, ${reason}, { lastExitMotionStopReason: bot.lastExitMotionStopReason, exitMotionLockRemainingMs })`
+    : `postExitDecisionWithoutTarget(${decision}, ${reason})`;
   return String.raw`${clearPrelude}  async function tick(source = 'timer') {
     if (!bot.running) return;
     if (bot.ticking) {
@@ -99,7 +102,7 @@ function tickSource(options = {}) {
         refreshGlobalState(false).catch(err => {
           bot.globalState.error = err.message || String(err);
         });
-        bot.lastDecision = postExitDecisionWithoutTarget({
+        bot.lastDecision = ${postExitDecisionWithoutTargetCall(`{
           kind: 'wait',
           reason: bot.lastExitMotionStopReason || 'exit-motion-stopped',
           dx: 0,
@@ -108,7 +111,7 @@ function tickSource(options = {}) {
           currentUserId: getCurrentUserId(),
           control: summarizeControl(),
           holdRemainingMs: exitMotionLockRemainingMs
-        }, bot.lastExitMotionStopReason || 'exit-motion-stopped');
+        }`, "bot.lastExitMotionStopReason || 'exit-motion-stopped'")};
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
         return;

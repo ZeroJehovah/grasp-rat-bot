@@ -1359,8 +1359,10 @@ function main() {
     assert(exitMotionBundledBody.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'exit-motion bundled source does not call lock core with runtime state/config');
     assert(!exitMotionBundledBody.includes('function exitMotionStopActive'), 'exit-motion bundled source still keeps stop-active alias');
     assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'exit-motion bundled source does not call decision core');
+    assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(bot.lastDecision, reason'), 'exit-motion bundled cleanup does not sanitize last decision through core directly');
     assert(exitMotionBundledBody.includes('removeTargetOverlay()'), 'exit-motion bundled source does not retain target overlay cleanup');
     assert(functionBody(targetOverlaySourceModule, 'targetOverlaySuppressedAfterExit').includes('exitMotionStopLockRemainingMs() > 0'), 'target overlay still relies on exit-motion stop-active alias');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('postExitDecisionWithoutTargetForTickCore'), 'tick source does not route bundled post-exit decision through core alias');
     assert(arrayCountSourceModule.includes('function arrayCountSource(options = {}) {'), 'array-count source factory not found');
     assert(arrayCountSourceModule.includes('function bundledArrayCountSource()'), 'bundled array-count source factory not found');
     assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
@@ -2944,7 +2946,7 @@ function main() {
 	      assert(actionVelocityBody.includes('action.exitMotionBlocked'), 'exit motion lock is not exposed on blocked actions');
 	      const tickBody = functionBody(text, 'tick');
 	      assert(tickBody.includes('const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs()'), 'main tick does not check post-exit motion lock before choosing actions');
-	      assert(tickBody.includes('postExitDecisionWithoutTarget({'), 'main tick does not publish a targetless post-exit wait decision');
+	      assert((tickBody.includes('postExitDecisionWithoutTarget(') || tickBody.includes('postExitDecisionWithoutTargetForTickCore(') || tickBody.includes('postExitDecisionWithoutTargetCall(')) && tickBody.includes('holdRemainingMs: exitMotionLockRemainingMs'), 'main tick does not publish a targetless post-exit wait decision');
 	      assert(expectObjectNumber(defaultConfigSource, 'exitMotionStopLockMs', 8000), 'exit motion stop lock duration not configured');
 	    });
     check(`${file} confirms exits from local evidence and throttles live pending retries`, () => {
@@ -4125,6 +4127,8 @@ function main() {
     assert(distSource.includes('function postExitDecisionWithoutTargetCore'), 'bundled dist does not contain exit-motion decision core');
     assert(distSource.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'bundled dist exit-motion lock wrapper does not call strategy core');
     assert(distSource.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'bundled dist exit-motion decision wrapper does not call strategy core');
+    assert(distSource.includes('postExitDecisionWithoutTargetCore(bot.lastDecision, reason'), 'bundled dist exit-motion cleanup does not call decision core directly');
+    assert(distSource.includes('postExitDecisionWithoutTargetForTickCore({'), 'bundled dist tick does not call decision core alias directly');
     assert(!distSource.includes('function exitMotionStopActive('), 'dist remote bot still keeps exit-motion stop-active alias');
   });
 

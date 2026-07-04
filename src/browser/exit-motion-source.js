@@ -73,7 +73,10 @@ function bundledExitMotionSource() {
     bot.coinApproachLock = null;
     removeTargetOverlay();
     if (bot.lastDecision && typeof bot.lastDecision === 'object') {
-      bot.lastDecision = postExitDecisionWithoutTarget(bot.lastDecision, reason);
+      bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
+        lastExitMotionStopReason: bot.lastExitMotionStopReason,
+        exitMotionLockRemainingMs
+      });
       try {
         updateBotPanel(bot.lastDecision);
       } catch (_) {}
