@@ -1,5 +1,15 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-05 Follow-up: Runtime Helper Entry Promotion
+
+`bootstrap-0.4.503` removes the last dedicated bundler-spike source directory and promotes its smoke test into the browser runtime tree:
+
+- `src/bundler-spike/runtime-entry.mjs` moves to `src/browser/runtime-helper-entry.mjs`, using `./runtime/*` and `./page-global-core.js` imports from the browser runtime directory.
+- `scripts/build-bundler-spike.js` is renamed to `scripts/build-runtime-helper-entry.js`.
+- Root package scripts now expose `npm run build:runtime-helper-entry` / `npm run test:runtime-helper-entry`.
+- Static verification checks the new helper entry path, package commands, helper-entry global/config keys, page-global adapter use, and esbuild IIFE smoke-test build.
+- The production dist records manifest SHA-256 `156109b6e5b474d4a69733b9c6d6da7a2c1adc10c06d9369792004d5192f9b19` with direct source SHA-256 `f608b33be993481451ae7ba082a1c4a9a5a21bacec082a2d20bca7a403f21db9`.
+
 ## 2026-07-05 Follow-up: Runtime Entry Source Boundary
 
 `bootstrap-0.4.502` moves production/local runtime entry construction behind a browser-owned entry-source module:
