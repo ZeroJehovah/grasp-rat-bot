@@ -368,12 +368,24 @@ function chooseActionSource() {
         realtimeGlobalTargets.filter(isAfkProfitTarget)
       ]
       : [realtimeInactiveTargets, realtimeGlobalTargets];
-    const opportunity = pickBestOpportunity(
-      self,
-      coinThreats,
-      opportunityCoinGroups,
-      opportunityEnemyGroups
-    );
+    const opportunity = typeof pickBestOpportunityCore === 'function'
+      ? pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups, {
+        enemyOpportunityCandidates,
+        uniqueVisibleRouteCoins,
+        pickCoinRouteOpportunity,
+        opportunityCandidateCoreOptions,
+        buildCoinAction,
+        buildEnemyAction,
+        buildMissingHeldOpportunity,
+        chooseStableOpportunity,
+        rememberOpportunityChoice
+      })
+      : pickBestOpportunity(
+        self,
+        coinThreats,
+        opportunityCoinGroups,
+        opportunityEnemyGroups
+      );
     if (opportunity) {
       bot.fleeLock = null;
       return attachOpportunisticShot(opportunity, self, realtimeEntities, { recovery });

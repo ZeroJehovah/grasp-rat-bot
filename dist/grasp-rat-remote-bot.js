@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.479" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.480" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19976,20 +19976,6 @@
       return result.chosen;
     }
     const { pickBestOpportunityCore } = require_opportunity_pick2();
-    function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
-      return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups, {
-        ...options,
-        enemyOpportunityCandidates,
-        uniqueVisibleRouteCoins,
-        pickCoinRouteOpportunity,
-        opportunityCandidateCoreOptions,
-        buildCoinAction,
-        buildEnemyAction,
-        buildMissingHeldOpportunity,
-        chooseStableOpportunity,
-        rememberOpportunityChoice
-      });
-    }
     const { patrolDirectionCore } = require_patrol2();
     function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
       const result = patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin, {
@@ -20722,7 +20708,17 @@
         realtimeInactiveTargets.filter(isAfkProfitTarget),
         realtimeGlobalTargets.filter(isAfkProfitTarget)
       ] : [realtimeInactiveTargets, realtimeGlobalTargets];
-      const opportunity = pickBestOpportunity(
+      const opportunity = typeof pickBestOpportunityCore === "function" ? pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups, {
+        enemyOpportunityCandidates,
+        uniqueVisibleRouteCoins,
+        pickCoinRouteOpportunity,
+        opportunityCandidateCoreOptions,
+        buildCoinAction,
+        buildEnemyAction,
+        buildMissingHeldOpportunity,
+        chooseStableOpportunity,
+        rememberOpportunityChoice
+      }) : pickBestOpportunity(
         self,
         coinThreats,
         opportunityCoinGroups,
