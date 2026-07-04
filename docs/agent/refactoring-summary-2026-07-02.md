@@ -1652,3 +1652,11 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-fragment-registry.js` no longer registers the empty `runtime-utility-clone` fragment between `array-count` and `combat-log-runtime`.
 - Static verification rejects reintroducing the empty fragment while still checking bundled runtime-utils and array-count helper ownership.
 - The `.509` manifest records bundled SHA-256 `e05eb913cb03b918c9ab68a8e958c82a85ebfb561104abef40e6b9b949ad61a6` and pre-bundle remote direct SHA-256 `fbeeb37ae4c736883208bd8519931185bf6984388826a07193d5a9fe9fe4c37d`.
+
+`bootstrap-0.4.510` merges the remaining tiny array-count source fragment into the runtime utility prelude:
+
+- `src/browser/array-count-source.js` is removed.
+- `runtimeUtilityPreludeSource()` now emits both `require('./src/browser/runtime/runtime-utils')` and `require('./src/browser/runtime/array-count')`.
+- `src/browser/runtime-fragment-registry.js` no longer registers a standalone `array-count` fragment.
+- Static verification checks the merged prelude, rejects the old standalone registry entry, and still verifies final `require_array_count` bundling.
+- The `.510` manifest records bundled SHA-256 `a24ce60dd08ce4d50c5d78de47da69919e1b5fc35168832575f62d9e815155c0` and pre-bundle remote direct SHA-256 `0a5524591c923e061b79fba9c44aa2299ddf00da8cc8f43de07f5688ee638845`.
