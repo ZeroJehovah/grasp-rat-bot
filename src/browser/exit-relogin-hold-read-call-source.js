@@ -9,7 +9,7 @@ function enemyReloginHoldRemainingMsBoundCall(name = 'enemyReloginHoldRemainingM
 }
 
 function offlineReloginHoldRemainingMsBoundCall(name = 'offlineReloginHoldRemainingMsBoundCore', clearName = 'clearOfflineReloginHoldBoundCore') {
-  const writePendingExit = writePersistentPendingExitStateCallback({ bundledRuntime: true });
+  const writePendingExit = writePersistentPendingExitStateCallback();
   return `${name}(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: reason => ${clearName}(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState: ${writePendingExit}, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now })`;
 }
 

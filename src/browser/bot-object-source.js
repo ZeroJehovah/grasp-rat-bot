@@ -5,23 +5,13 @@ const {
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
 
-function botObjectSource(options = {}) {
-  const pendingExitSummaryPrelude = pendingExitSummaryPreludeSource('BotObject', options);
-  const runtimePrelude = options.bundledRuntime
-    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require('./src/browser/runtime/exit-motion');\n  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPrelude + "\n"
-    : '';
-  const enemyLeaveStreakStatus = options.bundledRuntime
-    ? 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })'
-    : 'readEnemyLeaveStreak()';
-  const loginSnapshotSuccessRequiredCall = options.bundledRuntime
-    ? 'loginSnapshotSuccessRequiredCore()'
-    : 'loginSnapshotSuccessRequired()';
-  const normalizeLoginSnapshotGateStateCall = state => options.bundledRuntime
-    ? `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`
-    : `normalizeLoginSnapshotGateState(${state})`;
-  const postExitDecisionWithoutTargetCall = (decision, reason) => options.bundledRuntime
-    ? `postExitDecisionWithoutTargetForStatusCore(${decision}, ${reason}, { lastExitMotionStopReason: this.lastExitMotionStopReason, exitMotionLockRemainingMs })`
-    : `postExitDecisionWithoutTarget(${decision}, ${reason})`;
+function botObjectSource() {
+  const pendingExitSummaryPrelude = pendingExitSummaryPreludeSource('BotObject');
+  const runtimePrelude = "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require('./src/browser/runtime/exit-motion');\n  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPrelude + "\n";
+  const enemyLeaveStreakStatus = 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })';
+  const loginSnapshotSuccessRequiredCall = 'loginSnapshotSuccessRequiredCore()';
+  const normalizeLoginSnapshotGateStateCall = state => `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`;
+  const postExitDecisionWithoutTargetCall = (decision, reason) => `postExitDecisionWithoutTargetForStatusCore(${decision}, ${reason}, { lastExitMotionStopReason: this.lastExitMotionStopReason, exitMotionLockRemainingMs })`;
   return String.raw`${runtimePrelude}		  const bot = {
 	    running: true,
 	    version: cfg.version,
@@ -499,7 +489,7 @@ function botObjectSource(options = {}) {
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
           lastResult: this.lastLoginResult
         },
-        pendingExit: ${summarizePendingExitCall('this.pendingExit', { ...options, alias: 'BotObject' })},
+        pendingExit: ${summarizePendingExitCall('this.pendingExit', { alias: 'BotObject' })},
         offlineLeave: {
           lastAt: this.lastOfflineLeaveAt || 0,
           lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,

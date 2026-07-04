@@ -1,55 +1,19 @@
 'use strict';
 
 const {
-  staminaExhaustedLongWindows,
-  staminaEvidenceRemaining,
-  staminaHoldContradictedByStaminaEvidence
-} = require('./runtime/exit-summary');
-const {
-  buildBrowserPreservedState
-} = require('./runtime/browser-preserved-state');
-const {
-  buildRuntimeDefaults
-} = require('./runtime/runtime-defaults');
-const {
   browserPageGlobalSource
 } = require('./page-global-core');
-const {
-  normalizeTargetWhitelistName,
-  parseTargetWhitelistNames,
-  deriveTargetWhitelistUrl
-} = require('./runtime/target-whitelist');
 const { OPPORTUNITY_CONSTANTS } = require('./runtime/opportunity-constants');
 
-function bundledRuntimeBootstrapHelperSource() {
+function runtimeBootstrapHelperSource() {
   return `		  const { buildBrowserPreservedState } = require('./src/browser/runtime/browser-preserved-state');
 		  const { buildRuntimeDefaults } = require('./src/browser/runtime/runtime-defaults');
 		  const { normalizeTargetWhitelistName, parseTargetWhitelistNames, deriveTargetWhitelistUrl } = require('./src/browser/runtime/target-whitelist');
 		  const { staminaExhaustedLongWindows, staminaEvidenceRemaining, staminaHoldContradictedByStaminaEvidence } = require('./src/browser/runtime/exit-summary');`;
 }
 
-function inlineRuntimeBootstrapHelperSource() {
-  return `		  ${buildBrowserPreservedState.toString()}
-
-		  ${buildRuntimeDefaults.toString()}
-
-		  ${normalizeTargetWhitelistName.toString()}
-
-		  ${parseTargetWhitelistNames.toString()}
-
-		  ${deriveTargetWhitelistUrl.toString()}
-
-		  ${staminaExhaustedLongWindows.toString()}
-
-		  ${staminaEvidenceRemaining.toString()}
-
-		  ${staminaHoldContradictedByStaminaEvidence.toString()}`;
-}
-
 function runtimeBootstrapSource(config) {
-  const helperSource = config?.bundledRuntime
-    ? bundledRuntimeBootstrapHelperSource()
-    : inlineRuntimeBootstrapHelperSource();
+  const helperSource = runtimeBootstrapHelperSource();
   return `
 		  ${browserPageGlobalSource()}
 
@@ -113,7 +77,6 @@ ${helperSource}
 }
 
 module.exports = {
-  bundledRuntimeBootstrapHelperSource,
-  inlineRuntimeBootstrapHelperSource,
+  runtimeBootstrapHelperSource,
   runtimeBootstrapSource
 };

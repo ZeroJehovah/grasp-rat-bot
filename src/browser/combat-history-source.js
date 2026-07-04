@@ -1,9 +1,6 @@
 'use strict';
 
-function recordDropMatchedKillCall(targetExpr, amountExpr, currentSummaryExpr, reasonExpr = "''", options = {}) {
-  if (!options.bundledRuntime) {
-    return `recordDropMatchedKill(${targetExpr}, ${amountExpr}, ${currentSummaryExpr}, ${reasonExpr})`;
-  }
+function recordDropMatchedKillCall(targetExpr, amountExpr, currentSummaryExpr, reasonExpr = "''") {
   return String.raw`(() => {
         const dropMatchedKill = buildDropMatchedKillCore(${targetExpr}, ${amountExpr}, ${currentSummaryExpr}, ${reasonExpr}, {
           nowMs: Date.now(),
@@ -16,74 +13,9 @@ function recordDropMatchedKillCall(targetExpr, amountExpr, currentSummaryExpr, r
       })()`;
 }
 
-function combatHistorySource(options = {}) {
-  const dropMatchedKillPrelude = options.bundledRuntime
-    ? "  const { buildDropMatchedKillCore } = require('./src/browser/runtime/drop-matched-kill');\n\n"
-    : '';
-  const localDropMatchedKillSource = options.bundledRuntime ? '' : String.raw`
-  function recordDropMatchedKill(target, amount, currentSummary, reason = '') {
-    const postAttackTarget = target?.postAttackTarget || null;
-    if (!postAttackTarget) return null;
-    const reward = Math.max(0, Math.round(Number(amount || 0)));
-    const targetDrop = Math.max(0, Math.round(Number(postAttackTarget.drop || 0)));
-    if (!reward || !targetDrop || reward !== targetDrop) return null;
-    const coinKey = coinTargetKeyCore(target) || ('xy:' + Math.round(Number(target.x) || 0) + ':' + Math.round(Number(target.y) || 0) + ':' + reward);
-    const targetKey = postAttackTarget.id !== undefined && postAttackTarget.id !== null && postAttackTarget.id !== ''
-      ? 'id:' + String(postAttackTarget.id)
-      : 'name:' + String(postAttackTarget.name || '');
-    const seenKey = 'drop-coin-match|' + targetKey + '|' + coinKey + '|' + reward;
-    if (bot.seenKillKeys.has(seenKey)) return null;
-    const t = Date.now();
-    const battleStartedAt = Number(postAttackTarget.battleStartedAt || 0) || 0;
-    const rawBattleStaminaStart = postAttackTarget.battleStaminaSpentStartMs;
-    const battleStaminaSpentStartMs = rawBattleStaminaStart !== null && rawBattleStaminaStart !== undefined && rawBattleStaminaStart !== ''
-      ? Number(rawBattleStaminaStart)
-      : NaN;
-    const battleStaminaSpentEndMs = importantSessionStaminaSpentMs(bot.session);
-    return recordKillHistoryItem({
-      at: t,
-      time: '',
-      victim: postAttackTarget.name || '',
-      id: postAttackTarget.id ?? null,
-      drop: targetDrop,
-      rewardCoins: reward,
-      reportedRewardCoins: reward,
-      playerCategory: postAttackTarget.playerCategory || (postAttackTarget.afk === false ? 'active' : 'afk'),
-      afk: postAttackTarget.afk !== false,
-      active: postAttackTarget.active === true || postAttackTarget.playerCategory === 'active',
-      combat: Boolean(postAttackTarget.combat),
-      combatIntent: postAttackTarget.combatIntent || '',
-      mode: postAttackTarget.mode || '',
-      currentlyActive: Boolean(postAttackTarget.currentlyActive),
-      moving: Boolean(postAttackTarget.moving),
-      firing: Boolean(postAttackTarget.firing),
-      matchedAttack: true,
-      dropMatched: true,
-      rewardConfirmed: true,
-      chatConfirmed: false,
-      source: 'drop-coin-match',
-      targetDrop,
-      attackDistance: Number.isFinite(Number(postAttackTarget.distance)) ? Math.round(Number(postAttackTarget.distance)) : null,
-      battleStartedAt,
-      battleEndedAt: t,
-      battleDurationMs: battleStartedAt ? Math.max(0, Math.round(t - battleStartedAt)) : 0,
-      battleStaminaSpentStartMs: Number.isFinite(battleStaminaSpentStartMs) ? Math.max(0, Math.round(battleStaminaSpentStartMs)) : null,
-      battleStaminaSpentEndMs: Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs)) : null,
-      battleStaminaSpentMs: Number.isFinite(battleStaminaSpentStartMs) && Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs - battleStaminaSpentStartMs)) : null,
-      sessionId: bot.session?.importantSessionId || '',
-      coin: {
-        id: target.id ?? target.drop_id ?? target.coin_id ?? null,
-        amount: reward,
-        x: Number.isFinite(Number(target.x)) ? Math.round(Number(target.x)) : null,
-        y: Number.isFinite(Number(target.y)) ? Math.round(Number(target.y)) : null,
-        distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
-      },
-      attributionReason: reason || 'coin-pickup',
-      self: currentSummary || null
-    }, seenKey);
-  }
-`;
-  return String.raw`${dropMatchedKillPrelude}
+function combatHistorySource() {
+  return String.raw`  const { buildDropMatchedKillCore } = require('./src/browser/runtime/drop-matched-kill');
+
   function attackPlayerCategory(target, action = {}) {
     if (!target) return 'unknown';
     const afkProfit = isAfkProfitTarget(target);
@@ -428,8 +360,6 @@ function combatHistorySource(options = {}) {
     }
     return null;
   }
-
-${localDropMatchedKillSource}
 
   function updateKillHistory(self) {
     const ownName = self?.name || '';

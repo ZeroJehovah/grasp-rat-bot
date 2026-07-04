@@ -1,12 +1,8 @@
 'use strict';
 
-function combatStateSource(options = {}) {
-  const offlineDisplayPrelude = options.bundledRuntime
-    ? "  const { currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore } = require('./src/browser/runtime/exit-relogin');\n\n"
-    : '';
-  const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
-    ? `currentOfflineDisplayReasonForCombatStateCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })`
-    : `currentOfflineDisplayReason(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback})`;
+function combatStateSource() {
+  const offlineDisplayPrelude = "  const { currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore } = require('./src/browser/runtime/exit-relogin');\n\n";
+  const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => `currentOfflineDisplayReasonForCombatStateCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })`;
   return String.raw`${offlineDisplayPrelude}  function combatTargetId(target) {
     const id = target?.user_id ?? target?.id;
     return id === null || id === undefined ? '' : String(id);

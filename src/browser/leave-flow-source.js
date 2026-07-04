@@ -7,43 +7,19 @@ const {
   finalizeLeaveDisplayReasonCoreCall
 } = require('./exit-relogin-display-call-source');
 
-function leaveFlowSource(options = {}) {
-  const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,\n    enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,\n    finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForLeaveFlowCore,\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    leaveWaitDisplayCore: leaveWaitDisplayForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
-    : '';
-  const finalizeLeaveDisplayReasonCall = detail => options.bundledRuntime
-    ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForLeaveFlowCore', 'leaveWaitDisplayForLeaveFlowCore')
-    : `finalizeLeaveDisplayReason(${detail})`;
-  const enemyHoldRemainingMsCall = options.bundledRuntime
-    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForLeaveFlowBoundCore')
-    : 'enemyReloginHoldRemainingMs()';
-  const offlineUnsafePredicateCall = options.bundledRuntime
-    ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
-    : 'offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)';
-  const pendingStaminaSuppressCall = options.bundledRuntime
-    ? 'primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress })'
-    : 'primePendingStaminaExitLoginSuppress(detail)';
-  const reloginDelayForHpBinding = options.bundledRuntime
-    ? 'reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'
-    : 'reloginDelayForHp';
-  const pendingUnsafeSuppressCall = (storageReason, reason, detail, selfLike) => options.bundledRuntime
-    ? `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, ${reloginDelayForHpBinding}, cfg, setLoginSuppress, now: Date.now })`
-    : `primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`;
-  const startExitAuditCall = (detail, meta) => options.bundledRuntime
-    ? `startExitAuditBoundCore(${detail}, ${meta}, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now })`
-    : `startExitAudit(${detail}, ${meta})`;
-  const offlineLeaveSummaryCall = (reason, offlineSafety) => options.bundledRuntime
-    ? `offlineLeaveSummaryForLeaveFlowCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`
-    : `offlineLeaveSummary(${reason}, ${offlineSafety})`;
-  const combatExitSummaryCall = (reason, target, combatState) => options.bundledRuntime
-    ? `combatExitSummaryForLeaveFlowCore(${reason}, ${target}, ${combatState}, { cfg, actorLabel, hpDisplay, formatDurationMs })`
-    : `combatExitSummary(${reason}, ${target}, ${combatState})`;
-  const injuryLeaveSummaryCall = injury => options.bundledRuntime
-    ? `injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })`
-    : `injuryLeaveSummary(${injury})`;
-  const pursuitLeaveSummaryCall = pursuit => options.bundledRuntime
-    ? `pursuitLeaveSummaryForLeaveFlowCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`
-    : `pursuitLeaveSummary(${pursuit})`;
+function leaveFlowSource() {
+  const runtimeExitReloginPrelude = "  const {\n    combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,\n    enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,\n    finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForLeaveFlowCore,\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    leaveWaitDisplayCore: leaveWaitDisplayForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n";
+  const finalizeLeaveDisplayReasonCall = detail => finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForLeaveFlowCore', 'leaveWaitDisplayForLeaveFlowCore');
+  const enemyHoldRemainingMsCall = enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForLeaveFlowBoundCore');
+  const offlineUnsafePredicateCall = 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)';
+  const pendingStaminaSuppressCall = 'primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress })';
+  const reloginDelayForHpBinding = 'reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })';
+  const pendingUnsafeSuppressCall = (storageReason, reason, detail, selfLike) => `primePendingUnsafeExitLoginSuppressBoundCore(${storageReason}, ${reason}, ${detail}, ${selfLike}, {}, { hpInfoForRelogin, ${reloginDelayForHpBinding}, cfg, setLoginSuppress, now: Date.now })`;
+  const startExitAuditCall = (detail, meta) => `startExitAuditBoundCore(${detail}, ${meta}, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now })`;
+  const offlineLeaveSummaryCall = (reason, offlineSafety) => `offlineLeaveSummaryForLeaveFlowCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`;
+  const combatExitSummaryCall = (reason, target, combatState) => `combatExitSummaryForLeaveFlowCore(${reason}, ${target}, ${combatState}, { cfg, actorLabel, hpDisplay, formatDurationMs })`;
+  const injuryLeaveSummaryCall = injury => `injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })`;
+  const pursuitLeaveSummaryCall = pursuit => `pursuitLeaveSummaryForLeaveFlowCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`;
   return String.raw`${runtimeExitReloginPrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;

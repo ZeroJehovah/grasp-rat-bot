@@ -1,21 +1,9 @@
 'use strict';
 
-const {
-  coinTargetKeyCore,
-  coinTargetDistance,
-  coinMatchesTrackedTargetCore,
-  trackedCoinTargetForCollectionCore,
-  buildNativeCoinSnapshotCore,
-  pointToSegmentDistanceCore,
-  pickIncidentalCoinPickupsCore,
-  snapshotCoinWorthLongTravelCore,
-  snapshotCoinNavigationReasonCore
-} = require('./runtime/coin-target');
 const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
 const { recordDropMatchedKillCall } = require('./combat-history-source');
 
-function nativeCoinSnapshotCall(options = {}) {
-  if (!options.bundledRuntime) return 'nativeCoinSnapshot()';
+function nativeCoinSnapshotCall() {
   return String.raw`(() => {
       const nativeCoinList = getNativeCoinList();
       if (!Array.isArray(nativeCoinList)) return null;
@@ -26,24 +14,18 @@ function nativeCoinSnapshotCall(options = {}) {
     })()`;
 }
 
-function rememberNativeCoinSnapshotCall(snapshotExpr = 'null', options = {}) {
-  if (!options.bundledRuntime) {
-    return snapshotExpr === 'null' || snapshotExpr === null || snapshotExpr === undefined
-      ? 'rememberNativeCoinSnapshot()'
-      : `rememberNativeCoinSnapshot(${snapshotExpr})`;
-  }
+function rememberNativeCoinSnapshotCall(snapshotExpr = 'null') {
   return String.raw`(() => {
       const rememberedSnapshot = ${snapshotExpr || 'null'};
       const nextSnapshot = Array.isArray(rememberedSnapshot)
         ? rememberedSnapshot
-        : ${nativeCoinSnapshotCall(options)};
+        : ${nativeCoinSnapshotCall()};
       if (Array.isArray(nextSnapshot)) bot.lastNativeCoinSnapshot = nextSnapshot.slice(-160);
       return nextSnapshot;
     })()`;
 }
 
-function trackedCoinStillVisibleCall(targetExpr, options = {}) {
-  if (!options.bundledRuntime) return `trackedCoinStillVisible(${targetExpr})`;
+function trackedCoinStillVisibleCall(targetExpr) {
   return String.raw`(() => {
       const visibleTarget = ${targetExpr};
       const nativeCoinList = getNativeCoinList();
@@ -55,8 +37,7 @@ function trackedCoinStillVisibleCall(targetExpr, options = {}) {
     })()`;
 }
 
-function pruneCollectedSnapshotCoinCall(targetExpr, options = {}) {
-  if (!options.bundledRuntime) return `pruneCollectedSnapshotCoin(${targetExpr})`;
+function pruneCollectedSnapshotCoinCall(targetExpr) {
   return String.raw`(() => {
       const pruneTarget = ${targetExpr};
       const pruneId = pruneTarget?.id === undefined || pruneTarget?.id === null ? '' : String(pruneTarget.id);
@@ -76,10 +57,7 @@ function pruneCollectedSnapshotCoinCall(targetExpr, options = {}) {
     })()`;
 }
 
-function recordSessionCoinPickupCall(targetExpr, amountExpr, currentSummaryExpr, previousCoinsExpr, reasonExpr, options = {}) {
-  if (!options.bundledRuntime) {
-    return `recordSessionCoinPickup(${targetExpr}, ${amountExpr}, ${currentSummaryExpr}, ${previousCoinsExpr}, ${reasonExpr})`;
-  }
+function recordSessionCoinPickupCall(targetExpr, amountExpr, currentSummaryExpr, previousCoinsExpr, reasonExpr) {
   return String.raw`(() => {
       const sessionTarget = ${targetExpr};
       const sessionAmount = ${amountExpr};
@@ -100,7 +78,7 @@ function recordSessionCoinPickupCall(targetExpr, amountExpr, currentSummaryExpr,
         return false;
       }
       if (sessionKey) pushBounded(session.coinPickupKeys, { key: sessionKey, at: sessionAt, amount: sessionValue, reason: sessionReason || '' }, 80);
-      ${recordDropMatchedKillCall('sessionTarget', 'sessionValue', 'sessionSummary', 'sessionReason', options)};
+      ${recordDropMatchedKillCall('sessionTarget', 'sessionValue', 'sessionSummary', 'sessionReason')};
       session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + sessionValue;
       const sessionCoinDiff = Math.max(0, Math.round(Number(sessionSummary?.coins || 0) - Number(sessionPreviousCoins || 0)));
       session.coinsGained = Math.max(
@@ -113,101 +91,20 @@ function recordSessionCoinPickupCall(targetExpr, amountExpr, currentSummaryExpr,
     })()`;
 }
 
-function coinTargetRuntimeInlineSource(helpers = {}, options = {}) {
-  const {
-    coinTargetKeyCore,
-    coinTargetDistance,
-    coinMatchesTrackedTargetCore,
-    trackedCoinTargetForCollectionCore,
-    buildNativeCoinSnapshotCore,
-    pointToSegmentDistanceCore,
-    pickIncidentalCoinPickupsCore,
-    snapshotCoinWorthLongTravelCore,
-    snapshotCoinNavigationReasonCore
-  } = helpers;
-  const coinTargetHelperSource = [
-    coinTargetKeyCore,
-    coinTargetDistance,
-    coinMatchesTrackedTargetCore,
-    trackedCoinTargetForCollectionCore,
-    buildNativeCoinSnapshotCore,
-    pointToSegmentDistanceCore,
-    pickIncidentalCoinPickupsCore,
-    snapshotCoinWorthLongTravelCore,
-    snapshotCoinNavigationReasonCore
-  ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
-  const clearTrackedCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null', options);
-  const localCoinTargetSupportSource = options.bundledRuntime ? '' : String.raw`
-  function trackedCoinStillVisible(target) {
-    const nativeCoinList = getNativeCoinList();
-    if (!Array.isArray(nativeCoinList)) return null;
-    return nativeCoinList
-      .map(coin => normalizeCoinDrop(coin, 'native'))
-      .filter(Boolean)
-      .some(coin => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
-  }
+function coinTargetRuntimeSource() {
+  const clearTrackedCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null');
+  return String.raw`const {
+  coinTargetKeyCore,
+  coinTargetDistance,
+  coinMatchesTrackedTargetCore,
+  trackedCoinTargetForCollectionCore,
+  buildNativeCoinSnapshotCore,
+  pointToSegmentDistanceCore,
+  pickIncidentalCoinPickupsCore,
+  snapshotCoinWorthLongTravelCore,
+  snapshotCoinNavigationReasonCore
+} = require('./src/browser/runtime/coin-target');
 
-  function nativeCoinSnapshot() {
-    const nativeCoinList = getNativeCoinList();
-    if (!Array.isArray(nativeCoinList)) return null;
-    const coins = nativeCoinList
-      .map(coin => normalizeCoinDrop(coin, 'native'))
-      .filter(Boolean);
-    return buildNativeCoinSnapshotCore(coins, coinTargetCoreOptions({ nowMs: Date.now() }));
-  }
-
-  function rememberNativeCoinSnapshot(snapshot = null) {
-    const next = Array.isArray(snapshot) ? snapshot : nativeCoinSnapshot();
-    if (Array.isArray(next)) bot.lastNativeCoinSnapshot = next.slice(-160);
-    return next;
-  }
-
-  function recordSessionCoinPickup(target, amount, currentSummary, previousCoins, reason) {
-    const value = Math.max(0, Math.round(Number(amount || 0)));
-    if (!value) return false;
-    updateSessionStats(currentSummary);
-    const session = bot.session || (bot.session = {});
-    const t = Date.now();
-    const key = coinTargetKeyCore(target);
-    if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
-    session.coinPickupKeys = session.coinPickupKeys
-      .filter(item => item && t - Number(item.at || 0) <= 60000)
-      .slice(-80);
-    if (key && session.coinPickupKeys.some(item => String(item.key || '') === key && t - Number(item.at || 0) <= 5000)) {
-      return false;
-    }
-    if (key) pushBounded(session.coinPickupKeys, { key, at: t, amount: value, reason: reason || '' }, 80);
-    ${recordDropMatchedKillCall('target', 'value', 'currentSummary', 'reason', options)};
-    session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + value;
-    const coinDiff = Math.max(0, Math.round(Number(currentSummary?.coins || 0) - Number(previousCoins || 0)));
-    session.coinsGained = Math.max(
-      Math.max(0, Number(session.coinsGained || 0) || 0),
-      Math.max(0, Number(session.coinPickupTotal || 0) || 0),
-      coinDiff
-    );
-    upsertImportantSessionRecord(session, currentSummary, { at: t });
-    return true;
-  }
-
-  function pruneCollectedSnapshotCoin(target) {
-    const id = target?.id === undefined || target?.id === null ? '' : String(target.id);
-    const x = Number(target?.x);
-    const y = Number(target?.y);
-    const hasPoint = Number.isFinite(x) && Number.isFinite(y);
-    if (!id && !hasPoint) return 0;
-	    const before = arrayCount(bot.globalState.coinDrops);
-	    bot.globalState.coinDrops = (Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : []).filter(raw => {
-      const coin = normalizeCoinDrop(raw, 'snapshot');
-      if (!coin) return false;
-      if (id && String(coin.drop_id) === id) return false;
-      if (hasPoint && dist({ x, y }, coin) <= Number(cfg.coinCollectedPruneRadius || 0)) return false;
-      return true;
-    });
-	    return before - arrayCount(bot.globalState.coinDrops);
-  }
-
-`;
-  return String.raw`
   function setLastTarget(kind, id) {
     if (!id && id !== 0) return;
     if (!bot.lastTarget || bot.lastTarget.kind !== kind || String(bot.lastTarget.id) !== String(id)) {
@@ -229,8 +126,6 @@ function coinTargetRuntimeInlineSource(helpers = {}, options = {}) {
 	    bot.lastCoinClearReason = reason;
   }
 
-${coinTargetHelperSource}
-
   function coinTargetCoreOptions(extra = {}) {
     return {
       dist,
@@ -247,11 +142,9 @@ ${coinTargetHelperSource}
     };
   }
 
-${localCoinTargetSupportSource}
-
   function recordIncidentalCoinPickups(self, currentSummary, previousSelf, previousCoins) {
     const previousSnapshot = Array.isArray(bot.lastNativeCoinSnapshot) ? bot.lastNativeCoinSnapshot : [];
-    const currentSnapshot = ${nativeCoinSnapshotCall(options)};
+    const currentSnapshot = ${nativeCoinSnapshotCall()};
     if (!Array.isArray(currentSnapshot)) return false;
     const t = Date.now();
     let recorded = false;
@@ -271,7 +164,7 @@ ${localCoinTargetSupportSource}
         x: coin.x,
         y: coin.y,
         distance: currentDistance
-      }`, 'coin.amount', 'currentSummary', 'previousCoins', "'incidental-coin-disappeared'", options)};
+      }`, 'coin.amount', 'currentSummary', 'previousCoins', "'incidental-coin-disappeared'")};
       recorded = Boolean(recorded || sessionRecorded);
       if (sessionRecorded) {
         bot.lastCoinCollected = {
@@ -287,7 +180,7 @@ ${localCoinTargetSupportSource}
         };
       }
     }
-    ${rememberNativeCoinSnapshotCall('currentSnapshot', options)};
+    ${rememberNativeCoinSnapshotCall('currentSnapshot')};
     return recorded;
   }
 
@@ -303,7 +196,7 @@ ${localCoinTargetSupportSource}
     if (Number.isFinite(distance) && distance > Number(cfg.coinCollectedConfirmDistance || 0)) return false;
     const currentCoins = Number(currentSummary?.coins || 0);
     const coinDelta = Math.max(0, Math.round(currentCoins - Number(previousCoins || 0)));
-    const visible = ${trackedCoinStillVisibleCall('target', options)};
+    const visible = ${trackedCoinStillVisibleCall('target')};
     const confirmed = coinDelta > 0 || visible === false;
     if (!confirmed) return false;
     const amount = Math.max(0, Math.round(Number(target.amount || 0))) || coinDelta;
@@ -313,9 +206,9 @@ ${localCoinTargetSupportSource}
       bot.ignoredCoins.set(id, t + Number(cfg.coinCollectedIgnoreMs || 0));
       bot.coinAttempts.delete(id);
     }
-    const pruned = ${pruneCollectedSnapshotCoinCall('target', options)};
+    const pruned = ${pruneCollectedSnapshotCoinCall('target')};
     const confirmReason = coinDelta > 0 ? 'coins-increased' : 'coin-disappeared';
-    const sessionRecorded = ${recordSessionCoinPickupCall('target', 'amount', 'currentSummary', 'previousCoins', 'confirmReason', options)};
+    const sessionRecorded = ${recordSessionCoinPickupCall('target', 'amount', 'currentSummary', 'previousCoins', 'confirmReason')};
     bot.lastCoinCollected = {
       id,
       amount,
@@ -328,46 +221,13 @@ ${localCoinTargetSupportSource}
       at: Date.now()
     };
     clearCoinTracking(confirmReason);
-    ${rememberNativeCoinSnapshotCall('null', options)};
+    ${rememberNativeCoinSnapshotCall('null')};
     return true;
   }
 `;
 }
 
-function bundledCoinTargetRuntimeSource() {
-  return `const {
-  coinTargetKeyCore,
-  coinTargetDistance,
-  coinMatchesTrackedTargetCore,
-  trackedCoinTargetForCollectionCore,
-  buildNativeCoinSnapshotCore,
-  pointToSegmentDistanceCore,
-  pickIncidentalCoinPickupsCore,
-  snapshotCoinWorthLongTravelCore,
-  snapshotCoinNavigationReasonCore
-} = require('./src/browser/runtime/coin-target');
-
-${coinTargetRuntimeInlineSource({}, { bundledRuntime: true })}`;
-}
-
-function coinTargetRuntimeSource(options = {}) {
-  if (options.bundledRuntime) return bundledCoinTargetRuntimeSource();
-  return coinTargetRuntimeInlineSource({
-    coinTargetKeyCore,
-    coinTargetDistance,
-    coinMatchesTrackedTargetCore,
-    trackedCoinTargetForCollectionCore,
-    buildNativeCoinSnapshotCore,
-    pointToSegmentDistanceCore,
-    pickIncidentalCoinPickupsCore,
-    snapshotCoinWorthLongTravelCore,
-    snapshotCoinNavigationReasonCore
-  });
-}
-
 module.exports = {
-  bundledCoinTargetRuntimeSource,
-  coinTargetRuntimeInlineSource,
   coinTargetRuntimeSource,
   rememberNativeCoinSnapshotCall
 };

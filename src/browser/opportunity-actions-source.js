@@ -2,40 +2,9 @@
 
 const { coinDirectionToCall } = require('./coin-motion-runtime-source');
 
-function opportunityActionsSource(options = {}) {
-  const localEnemyOpportunityCandidatesSource = options.bundledRuntime ? '' : String.raw`  function enemyOpportunityCandidates(self, targets, activeThreats) {
-    const byId = new Map();
-    for (const raw of targets) {
-      const id = raw?.user_id;
-      if (!id && id !== 0) continue;
-      const drop = Number(raw.drop ?? dropValue(raw) ?? 0);
-      const distance = Number(raw.distance ?? Infinity);
-      if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
-      if (isWhitelistedTarget(raw)) continue;
-      if (isInvulnerable(raw)) continue;
-      if (!(typeof attackWorthTakingCore === 'function'
-        ? attackWorthTakingCore(self, { ...raw, drop }, {
-          isWhitelistedTarget,
-          dropValue,
-          isAfkProfitTarget,
-          attackMinAfkDrop: cfg.attackMinAfkDrop,
-          attackMinDrop: cfg.attackMinDrop,
-          attackMinRewardRatio: cfg.attackMinRewardRatio
-        })
-        : attackWorthTaking(self, { ...raw, drop }))) continue;
-      if (activeThreats.some(t => dist(raw, t) <= cfg.attackDangerRadius)) continue;
-      const item = { ...raw, drop, distance };
-      const previous = byId.get(String(id));
-      if (!previous || item.drop > previous.drop || item.distance < previous.distance || !item.minimapOnly) {
-        byId.set(String(id), item);
-      }
-    }
-    return Array.from(byId.values());
-  }
-
-`;
-  return String.raw`${localEnemyOpportunityCandidatesSource}  function buildCoinAction(self, coin, reason, kind = null) {
-    const dir = ${coinDirectionToCall('self', 'coin', 'cfg.coinPrecisionTolerance', options)};
+function opportunityActionsSource() {
+  return String.raw`  function buildCoinAction(self, coin, reason, kind = null) {
+    const dir = ${coinDirectionToCall('self', 'coin', 'cfg.coinPrecisionTolerance')};
     const staminaCost = opportunityCoinStaminaCost(coin);
     const routeMeta = coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance);
     return {

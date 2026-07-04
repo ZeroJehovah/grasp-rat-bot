@@ -1,84 +1,14 @@
 'use strict';
 
-const {
+function opportunityStaminaSource() {
+  return `const {
   dailyStaminaBudgetIsLimitingCore,
   summarizeBlockedStaminaOpportunityCore,
   summarizeNearestCoinStaminaBudgetExitCore,
   pickNearestDailyStaminaFinalCoinCore
-} = require('./runtime/stamina-budget');
+} = require('./src/browser/runtime/stamina-budget');
 
-function opportunityStaminaInlineSource(helpers = {}, options = {}) {
-  const {
-    dailyStaminaBudgetIsLimitingCore,
-    summarizeBlockedStaminaOpportunityCore,
-    summarizeNearestCoinStaminaBudgetExitCore,
-    pickNearestDailyStaminaFinalCoinCore
-  } = helpers;
-  const staminaBudgetHelperSource = [
-    dailyStaminaBudgetIsLimitingCore,
-    summarizeBlockedStaminaOpportunityCore,
-    summarizeNearestCoinStaminaBudgetExitCore,
-    pickNearestDailyStaminaFinalCoinCore
-  ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
-  const localEffectiveStaminaCostSource = options.bundledRuntime ? '' : String.raw`  function opportunityEffectiveStaminaCost(staminaCost) {
-    return opportunityEffectiveStaminaCostCore(staminaCost, {
-      distanceFloor: cfg.opportunityDistanceFloor
-    });
-  }
-
-`;
-  const localStaminaBudgetWrapperSource = options.bundledRuntime ? '' : String.raw`	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
-	    return dailyStaminaBudgetIsLimitingCore(
-	      staminaCost,
-	      opportunityWindowStaminaBudget(self, '1h'),
-	      opportunityWindowStaminaBudget(self, '1d')
-	    );
-	  }
-
-	  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
-	    return summarizeBlockedStaminaOpportunityCore(coins, targets, {
-	      budget: opportunityLongStaminaBudget(self),
-	      coinStaminaCost: opportunityCoinStaminaCost,
-	      enemyStaminaCost: opportunityEnemyStaminaCost,
-	      targetDrop: dropValue
-	    });
-	  }
-
-	  function summarizeNearestCoinStaminaBudgetExit(self, coins) {
-	    return summarizeNearestCoinStaminaBudgetExitCore(self, coins, {
-	      budget: opportunityWindowStaminaBudget(self, '1h'),
-	      dist,
-	      coinStaminaCost: opportunityCoinStaminaCost,
-	      reloginDelayMs: staminaBudgetReloginDelayMs()
-	    });
-	  }
-
-	  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
-	    return pickNearestDailyStaminaFinalCoinCore(
-	      safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self),
-	      {
-	        isSnapshotOnlyCoin,
-	        coinStaminaCost: opportunityCoinStaminaCost,
-	        dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimiting(self, staminaCost)
-	      }
-	    );
-	  }
-
-`;
-  const localMergeCoinRouteDisplaySource = options.bundledRuntime ? '' : String.raw`	  function mergeCoinRouteDisplay(base, routeCoin) {
-	    return mergeCoinRouteDisplayCore(base, routeCoin);
-	  }
-`;
-  const localOpportunityValueScoreSource = options.bundledRuntime ? '' : String.raw`  function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
-    return opportunityValueScoreCore(value, staminaCost, {
-      weight,
-      distanceFloor: cfg.opportunityDistanceFloor,
-      distanceScoreScale: cfg.opportunityDistanceScoreScale
-    });
-  }
-
-`;
-  return String.raw`${localEffectiveStaminaCostSource}  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
+  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
     const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
     return travel * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1));
   }
@@ -116,10 +46,6 @@ function opportunityStaminaInlineSource(helpers = {}, options = {}) {
 	    if (!values.length) return Infinity;
 	    return Math.min(...values);
 	  }
-
-${staminaBudgetHelperSource}
-
-${localStaminaBudgetWrapperSource}
 
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
@@ -175,8 +101,6 @@ ${localStaminaBudgetWrapperSource}
 	    };
 	  }
 
-${localOpportunityValueScoreSource}
-
 	  function compareCoinOpportunity(a, b) {
 	    const scoreDiff = scoreCoinOpportunity(b) - scoreCoinOpportunity(a);
 	    if (scoreDiff) return scoreDiff;
@@ -184,34 +108,9 @@ ${localOpportunityValueScoreSource}
 	    if (amountDiff) return amountDiff;
 	    return Number(a.distance || 0) - Number(b.distance || 0);
 	  }
-
-${localMergeCoinRouteDisplaySource}
 `;
 }
 
-function bundledOpportunityStaminaSource() {
-  return `const {
-  dailyStaminaBudgetIsLimitingCore,
-  summarizeBlockedStaminaOpportunityCore,
-  summarizeNearestCoinStaminaBudgetExitCore,
-  pickNearestDailyStaminaFinalCoinCore
-} = require('./src/browser/runtime/stamina-budget');
-
-${opportunityStaminaInlineSource({}, { bundledRuntime: true })}`;
-}
-
-function opportunityStaminaSource(options = {}) {
-  if (options.bundledRuntime) return bundledOpportunityStaminaSource();
-  return opportunityStaminaInlineSource({
-    dailyStaminaBudgetIsLimitingCore,
-    summarizeBlockedStaminaOpportunityCore,
-    summarizeNearestCoinStaminaBudgetExitCore,
-    pickNearestDailyStaminaFinalCoinCore
-  }, options);
-}
-
 module.exports = {
-  bundledOpportunityStaminaSource,
-  opportunityStaminaInlineSource,
   opportunityStaminaSource
 };

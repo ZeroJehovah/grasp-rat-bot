@@ -18,37 +18,17 @@ const {
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
 
-function tickSource(options = {}) {
-  const clearPrelude = options.bundledRuntime
-    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./src/browser/runtime/exit-motion');\n  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('Tick', options) + "\n"
-    : '';
-  const enemyHoldRemainingMsCall = options.bundledRuntime
-    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForTickBoundCore')
-    : 'enemyReloginHoldRemainingMs()';
-  const offlineHoldRemainingMsCall = options.bundledRuntime
-    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForTickBoundCore', 'clearOfflineReloginHoldForTickBoundCore')
-    : 'offlineReloginHoldRemainingMs()';
-  const clearEnemyOnlineRestore = options.bundledRuntime
-    ? `clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState: ${writePersistentPendingExitStateCallback(options)}, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })`
-    : "clearEnemyReloginHold('online self restored during enemy hold')";
-  const clearOfflineOnlineRestore = options.bundledRuntime
-    ? `clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState: ${writePersistentPendingExitStateCallback(options)}, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })`
-    : "clearOfflineReloginHold('online self restored during offline hold')";
-  const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
-    ? `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) })`
-    : `currentOfflineDisplayReason(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback})`;
-  const offlineLeaveSummaryCall = (reason, offlineSafety) => options.bundledRuntime
-    ? `offlineLeaveSummaryForTickCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`
-    : `offlineLeaveSummary(${reason}, ${offlineSafety})`;
-  const injuryLeaveSummaryCall = injury => options.bundledRuntime
-    ? `injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })`
-    : `injuryLeaveSummary(${injury})`;
-  const pursuitLeaveSummaryCall = pursuit => options.bundledRuntime
-    ? `pursuitLeaveSummaryForTickCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`
-    : `pursuitLeaveSummary(${pursuit})`;
-  const postExitDecisionWithoutTargetCall = (decision, reason) => options.bundledRuntime
-    ? `postExitDecisionWithoutTargetForTickCore(${decision}, ${reason}, { lastExitMotionStopReason: bot.lastExitMotionStopReason, exitMotionLockRemainingMs })`
-    : `postExitDecisionWithoutTarget(${decision}, ${reason})`;
+function tickSource() {
+  const clearPrelude = "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./src/browser/runtime/exit-motion');\n  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('Tick') + "\n";
+  const enemyHoldRemainingMsCall = enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForTickBoundCore');
+  const offlineHoldRemainingMsCall = offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForTickBoundCore', 'clearOfflineReloginHoldForTickBoundCore');
+  const clearEnemyOnlineRestore = `clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState: ${writePersistentPendingExitStateCallback()}, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })`;
+  const clearOfflineOnlineRestore = `clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState: ${writePersistentPendingExitStateCallback()}, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })`;
+  const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) })`;
+  const offlineLeaveSummaryCall = (reason, offlineSafety) => `offlineLeaveSummaryForTickCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })`;
+  const injuryLeaveSummaryCall = injury => `injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })`;
+  const pursuitLeaveSummaryCall = pursuit => `pursuitLeaveSummaryForTickCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })`;
+  const postExitDecisionWithoutTargetCall = (decision, reason) => `postExitDecisionWithoutTargetForTickCore(${decision}, ${reason}, { lastExitMotionStopReason: bot.lastExitMotionStopReason, exitMotionLockRemainingMs })`;
   return String.raw`${clearPrelude}  async function tick(source = 'timer') {
     if (!bot.running) return;
     if (bot.ticking) {
@@ -480,7 +460,7 @@ function tickSource(options = {}) {
           coinMarked = recordIncidentalCoinPickups(self, currentSummary, bot.lastSelf, previousCoins);
         }
       } else {
-        ${rememberNativeCoinSnapshotCall('null', options)};
+        ${rememberNativeCoinSnapshotCall('null')};
       }
 	      if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
 	        clearCoinTracking('drop-increased');
@@ -690,7 +670,7 @@ function tickSource(options = {}) {
 	            offlineSafety,
 	            displayReason: skippedLeave.displayReason || action.displayReason || '',
 	            leave: skippedLeave,
-	            pendingExit: ${summarizePendingExitCall('bot.pendingExit', { ...options, alias: 'Tick' })}
+	            pendingExit: ${summarizePendingExitCall('bot.pendingExit', { alias: 'Tick' })}
 	          };
 	          updateBotPanel(bot.lastDecision);
 	          if (cfg.once) bot.stop('once');
@@ -747,7 +727,7 @@ function tickSource(options = {}) {
 	            }
 	        };
 	      }
-	      action = attachCoinDiagnostics(${trackCoinProgressCall('action', 'self', options)});
+	      action = attachCoinDiagnostics(${trackCoinProgressCall('action', 'self')});
       const escape = bot.staleCoinEscape;
       const escapeActive = escape && now() < Number(escape.until || 0) && (escape.dx || escape.dy);
       if (escapeActive && action.kind !== 'flee') {
@@ -823,8 +803,8 @@ function tickSource(options = {}) {
           pursuit: pursuitSummary
         };
 	      }
-	      action = ${applyFinalActionArbitrationCall('action', 'source', options)};
-	      action = ${recordActionSwitchDiagnosticsCall('action', 'source', options)};
+	      action = ${applyFinalActionArbitrationCall('action', 'source')};
+	      action = ${recordActionSwitchDiagnosticsCall('action', 'source')};
 	      const canMove = true;
 	      const canAttack = true;
 	      if (!isSnapshotCoinWaitAction(action)) {
@@ -860,7 +840,7 @@ function tickSource(options = {}) {
       bot.lastDecision = {
         ...action,
         source,
-        pendingExit: ${summarizePendingExitCall('bot.pendingExit', { ...options, alias: 'Tick' })},
+        pendingExit: ${summarizePendingExitCall('bot.pendingExit', { alias: 'Tick' })},
         coinDiagnostics: action.coinDiagnostics || safeJsonClone(bot.coinDiagnostics) || bot.coinDiagnostics || null,
         self: {
           ...summarizeSelf(self),

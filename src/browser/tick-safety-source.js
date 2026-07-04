@@ -1,9 +1,7 @@
 'use strict';
 
-function tickSafetySource(options = {}) {
-  const recordRuntimeDiagnosticsCall = values => options.bundledRuntime
-    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
-    : `recordRuntimeDiagnostics(${values})`;
+function tickSafetySource() {
+  const recordRuntimeDiagnosticsCall = values => `recordRuntimeDiagnosticsCore(bot, ${values})`;
   return String.raw`
       function recordUnhandledTickError(source, err) {
         const entry = {

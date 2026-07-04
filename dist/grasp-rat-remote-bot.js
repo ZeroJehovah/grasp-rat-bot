@@ -645,7 +645,7 @@
   var require_exit_summary = __commonJS({
     "src/shared/exit-summary.js"(exports, module) {
       "use strict";
-      function staminaExhaustedWindowLabel(staminaState) {
+      function staminaExhaustedWindowLabel2(staminaState) {
         return staminaExhaustedLongWindows(staminaState).join("/");
       }
       function staminaExhaustedLongWindows(staminaState) {
@@ -684,7 +684,7 @@
       }
       function offlineLeaveSummaryText(reason, offlineSafety) {
         if (offlineSafety?.staminaBudgetExit) return "\u4E00\u5C0F\u65F6\u4F53\u529B\u4E0D\u8DB3\u4EE5\u62FE\u53D6\u6700\u8FD1\u91D1\u5E01\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-        const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
+        const staminaLabel = staminaExhaustedWindowLabel2(offlineSafety?.staminaExhausted);
         if (staminaLabel === "1h") return "\u4E00\u5C0F\u65F6\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
         if (staminaLabel === "1d") return "\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
         if (staminaLabel === "1h/1d") return "\u4E00\u5C0F\u65F6\u548C\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
@@ -732,7 +732,7 @@
       }
       module.exports = {
         staminaExhaustedLongWindows,
-        staminaExhaustedWindowLabel,
+        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2,
         staminaEvidenceRemaining,
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
@@ -747,7 +747,7 @@
       "use strict";
       var {
         staminaExhaustedLongWindows,
-        staminaExhaustedWindowLabel,
+        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2,
         staminaEvidenceRemaining,
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
@@ -755,7 +755,7 @@
       } = require_exit_summary();
       module.exports = {
         staminaExhaustedLongWindows,
-        staminaExhaustedWindowLabel,
+        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2,
         staminaEvidenceRemaining,
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
@@ -3453,7 +3453,7 @@
         const coinStaminaCost = typeof options.coinStaminaCost === "function" ? options.coinStaminaCost : (coin) => Number(coin?.staminaCost || 0);
         const coinStaminaAffordable = typeof options.coinStaminaAffordable === "function" ? options.coinStaminaAffordable : () => true;
         const scoreCoinOpportunity = typeof options.scoreCoinOpportunity === "function" ? options.scoreCoinOpportunity : (coin) => Number(coin?.opportunityScore ?? 0);
-        const snapshotCoinNavigationReason2 = typeof options.snapshotCoinNavigationReason === "function" ? options.snapshotCoinNavigationReason : (coin) => Number(coin?.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? "best-opportunity-coin" : "best-opportunity-visible-coin";
+        const snapshotCoinNavigationReason = typeof options.snapshotCoinNavigationReason === "function" ? options.snapshotCoinNavigationReason : (coin) => Number(coin?.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? "best-opportunity-coin" : "best-opportunity-visible-coin";
         const priorityTier = typeof options.priorityTier === "function" ? options.priorityTier : (item) => opportunityPriorityTierCore(item, options);
         const byId = /* @__PURE__ */ new Map();
         for (const { coins: groupCoins, maxDistance } of coinGroups || []) {
@@ -3484,7 +3484,7 @@
           }
         }
         return Array.from(byId.values()).map((coin) => {
-          const reason = coin.route ? "best-opportunity-coin-route" : snapshotCoinNavigationReason2(coin);
+          const reason = coin.route ? "best-opportunity-coin-route" : snapshotCoinNavigationReason(coin);
           const actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? "coin" : "seek-coin";
           const score = Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin);
           return {
@@ -5216,7 +5216,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.498" };
+    const baseConfig = { "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.499" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -8597,7 +8597,6 @@
         }
       };
     }
-    const { staminaExhaustedWindowLabel } = require_exit_summary2();
     const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require_exit_relogin();
     const { pendingExitRetryMsCore: pendingExitRetryMsForControlLoginCore, summarizePendingExitCore: summarizePendingExitForControlLoginCore } = require_pending_exit2();
     function requestReload(reason) {
@@ -19889,7 +19888,11 @@
         linkDistance: cfg.coinRouteLinkDistance,
         maxLinkDistance: cfg.coinRouteMaxLinkDistance,
         coinOpportunityValue: cfg.coinOpportunityValue,
-        valueScore: opportunityValueScore,
+        valueScore: (value, staminaCost, weight = cfg.coinOpportunityValue) => opportunityValueScoreCore(value, staminaCost, {
+          weight,
+          distanceFloor: cfg.opportunityDistanceFloor,
+          distanceScoreScale: cfg.opportunityDistanceScoreScale
+        }),
         staminaAffordable: (staminaCost) => opportunityStaminaAffordable(self, staminaCost),
         recordDiagnostic: (coin, reason, detail) => recordCoinFilterDiagnostic(coin, reason, detail),
         nearbyFirstCoinDistance: cfg.coinRouteNearbyFirstCoinDistance,
@@ -19932,7 +19935,7 @@
         coinStaminaCost: opportunityCoinStaminaCost,
         coinStaminaAffordable: (coin, staminaCost = opportunityCoinStaminaCost(coin)) => coinStaminaAffordableWithDiagnostic(self, coin, staminaCost),
         scoreCoinOpportunity,
-        snapshotCoinNavigationReason,
+        snapshotCoinNavigationReason: (coin) => snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions()),
         maxCoinDistance: cfg.coinMaxDistance,
         routeMaxDistance: cfg.coinRouteMaxDistance,
         scoreEnemyOpportunity,
@@ -20127,7 +20130,14 @@
       opportunityChoiceKey,
       opportunityPairKey,
       opportunityByKey,
+      opportunityMatchesChoiceCore,
+      isHighValueCoinOpportunityCore,
+      highValueCoinHoldBlocksEnemySwitchCore,
+      lockedOpportunityChoiceCore,
+      applyOpportunityOscillationLockCore,
       chooseStableOpportunityCore,
+      opportunityMissingHoldUntilCore,
+      missingHeldCoinCoveredByVisibleAuthorityCore,
       buildMissingHeldOpportunityCore,
       opportunityRouteIds,
       rememberOpportunityChoiceCore

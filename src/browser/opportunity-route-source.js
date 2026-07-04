@@ -1,6 +1,7 @@
 'use strict';
 
-const {
+function opportunityRouteSource() {
+  return String.raw`const {
   defaultDist,
   coinRouteKey,
   coinRouteIdsFrom,
@@ -16,94 +17,7 @@ const {
   coinRouteMatchesHeldChoiceCore,
   heldCoinRouteBeatsSwitchCore,
   pickCoinRouteOpportunityCore
-} = require('./runtime/coin-route');
-
-function opportunityRouteInlineSource(helpers = {}, options = {}) {
-  const {
-    defaultDist,
-    coinRouteKey,
-    coinRouteIdsFrom,
-    coinRouteLegStaminaCostCore,
-    coinRouteLegClearCore,
-    coinRoutePointLimitCore,
-    coinRouteSummaryCore,
-    coinRoutePoints,
-    coinRouteActionMetaCore,
-    buildCoinRouteFromAnchorCore,
-    coinRouteSkipsCloserFirstCoinCore,
-    coinRouteSkipsHeldSingleCoinCore,
-    coinRouteMatchesHeldChoiceCore,
-    heldCoinRouteBeatsSwitchCore,
-    pickCoinRouteOpportunityCore
-  } = helpers;
-  const coinRouteHelperSource = [
-    defaultDist,
-    coinRouteKey,
-    coinRouteIdsFrom,
-    coinRouteLegStaminaCostCore,
-    coinRouteLegClearCore,
-    coinRoutePointLimitCore,
-    coinRouteSummaryCore,
-    coinRoutePoints,
-    coinRouteActionMetaCore,
-    buildCoinRouteFromAnchorCore,
-    coinRouteSkipsCloserFirstCoinCore,
-    coinRouteSkipsHeldSingleCoinCore,
-    coinRouteMatchesHeldChoiceCore,
-    heldCoinRouteBeatsSwitchCore,
-    pickCoinRouteOpportunityCore
-  ].map((fn, index) => {
-    if (typeof fn !== 'function') return '';
-    const indent = index >= 5 && index <= 9 ? '\t\t\t  ' : '\t  ';
-    return `${indent}${fn.toString()}`;
-  }).join('\n');
-  const localCoinRouteWrapperSource = options.bundledRuntime ? '' : String.raw`
-	  function coinRouteLegStaminaCost(from, to) {
-	    return coinRouteLegStaminaCostCore(from, to, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteLegClear(from, to, activeThreats) {
-	    return coinRouteLegClearCore(from, to, activeThreats, coinRouteCoreOptions());
-	  }
-
-	  function coinRoutePointLimit(anchor, candidates) {
-	    return coinRoutePointLimitCore(anchor, candidates, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteSummary(route, self) {
-	    return coinRouteSummaryCore(route, self, coinRouteCoreOptions());
-	  }
-
-	  function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
-	    return buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, coinRouteCoreOptions(self));
-	  }
-
-	  function coinRouteSkipsCloserFirstCoin(self, route, candidates) {
-	    return coinRouteSkipsCloserFirstCoinCore(self, route, candidates, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteSkipsHeldSingleCoin(self, route, choice) {
-	    return coinRouteSkipsHeldSingleCoinCore(self, route, choice, coinRouteCoreOptions());
-	  }
-
-	  function coinRouteMatchesHeldChoice(route, choice) {
-	    return coinRouteMatchesHeldChoiceCore(route, choice, coinRouteCoreOptions());
-	  }
-
-	  function heldCoinRouteBeatsSwitch(heldRoute, bestRoute) {
-	    return heldCoinRouteBeatsSwitchCore(heldRoute, bestRoute, coinRouteCoreOptions());
-	  }
-
-	  function pickCoinRouteOpportunity(self, coins, activeThreats) {
-	    return pickCoinRouteOpportunityCore(self, coins, activeThreats, {
-	      ...coinRouteCoreOptions(self),
-	      heldChoice: currentHeldCoinChoice(),
-	      heldRouteChoice: currentHeldCoinRouteChoice()
-	    });
-	  }
-
-`;
-  return String.raw`${coinRouteHelperSource}
+} = require('./src/browser/runtime/coin-route');
 
 	  function coinRouteCoreOptions(self = null) {
 	    return {
@@ -120,7 +34,11 @@ function opportunityRouteInlineSource(helpers = {}, options = {}) {
 	      linkDistance: cfg.coinRouteLinkDistance,
 	      maxLinkDistance: cfg.coinRouteMaxLinkDistance,
 	      coinOpportunityValue: cfg.coinOpportunityValue,
-	      valueScore: opportunityValueScore,
+	      valueScore: (value, staminaCost, weight = cfg.coinOpportunityValue) => opportunityValueScoreCore(value, staminaCost, {
+	        weight,
+	        distanceFloor: cfg.opportunityDistanceFloor,
+	        distanceScoreScale: cfg.opportunityDistanceScoreScale
+	      }),
 	      staminaAffordable: staminaCost => opportunityStaminaAffordable(self, staminaCost),
 	      recordDiagnostic: (coin, reason, detail) => recordCoinFilterDiagnostic(coin, reason, detail),
 	      nearbyFirstCoinDistance: cfg.coinRouteNearbyFirstCoinDistance,
@@ -159,57 +77,9 @@ function opportunityRouteInlineSource(helpers = {}, options = {}) {
     if (!id && id !== '0') return null;
     return choice;
   }
-
-${localCoinRouteWrapperSource}
-
 `;
 }
 
-function bundledOpportunityRouteSource() {
-  return `const {
-  defaultDist,
-  coinRouteKey,
-  coinRouteIdsFrom,
-  coinRouteLegStaminaCostCore,
-  coinRouteLegClearCore,
-  coinRoutePointLimitCore,
-  coinRouteSummaryCore,
-  coinRoutePoints,
-  coinRouteActionMetaCore,
-  buildCoinRouteFromAnchorCore,
-  coinRouteSkipsCloserFirstCoinCore,
-  coinRouteSkipsHeldSingleCoinCore,
-  coinRouteMatchesHeldChoiceCore,
-  heldCoinRouteBeatsSwitchCore,
-  pickCoinRouteOpportunityCore
-} = require('./src/browser/runtime/coin-route');
-
-${opportunityRouteInlineSource({}, { bundledRuntime: true })}`;
-}
-
-function opportunityRouteSource(options = {}) {
-  if (options.bundledRuntime) return bundledOpportunityRouteSource();
-  return opportunityRouteInlineSource({
-    defaultDist,
-    coinRouteKey,
-    coinRouteIdsFrom,
-    coinRouteLegStaminaCostCore,
-    coinRouteLegClearCore,
-    coinRoutePointLimitCore,
-    coinRouteSummaryCore,
-    coinRoutePoints,
-    coinRouteActionMetaCore,
-    buildCoinRouteFromAnchorCore,
-    coinRouteSkipsCloserFirstCoinCore,
-    coinRouteSkipsHeldSingleCoinCore,
-    coinRouteMatchesHeldChoiceCore,
-    heldCoinRouteBeatsSwitchCore,
-    pickCoinRouteOpportunityCore
-  }, options);
-}
-
 module.exports = {
-  bundledOpportunityRouteSource,
-  opportunityRouteInlineSource,
   opportunityRouteSource
 };

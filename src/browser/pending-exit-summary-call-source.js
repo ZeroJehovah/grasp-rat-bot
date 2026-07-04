@@ -11,7 +11,6 @@ function pendingExitRetryCoreOptionsSource() {
 }
 
 function pendingExitSummaryPreludeSource(alias, options = {}) {
-  if (!options.bundledRuntime) return '';
   const suffix = String(alias || 'Summary').replace(/[^A-Za-z0-9_$]/g, '') || 'Summary';
   const indent = options.indent || '  ';
   return `${indent}const { pendingExitRetryMsCore: pendingExitRetryMsFor${suffix}Core, summarizePendingExitCore: summarizePendingExitFor${suffix}Core } = require('./src/browser/runtime/pending-exit');\n`;
@@ -19,7 +18,6 @@ function pendingExitSummaryPreludeSource(alias, options = {}) {
 
 function summarizePendingExitCall(pendingExpr = 'bot.pendingExit', options = {}) {
   const expr = pendingExpr || 'bot.pendingExit';
-  if (!options.bundledRuntime) return `summarizePendingExit(${expr})`;
   const suffix = String(options.alias || 'Summary').replace(/[^A-Za-z0-9_$]/g, '') || 'Summary';
   const retryCoreName = options.retryCoreName || `pendingExitRetryMsFor${suffix}Core`;
   const summaryCoreName = options.summaryCoreName || `summarizePendingExitFor${suffix}Core`;

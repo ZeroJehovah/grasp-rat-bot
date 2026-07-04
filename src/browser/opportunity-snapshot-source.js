@@ -1,26 +1,12 @@
 'use strict';
 
-function opportunitySnapshotSource(options = {}) {
-  const opportunityValueScoreCall = (valueExpr, staminaExpr, weightExpr) => options.bundledRuntime
-    ? `opportunityValueScoreCore(${valueExpr}, ${staminaExpr}, {
+function opportunitySnapshotSource() {
+  const opportunityValueScoreCall = (valueExpr, staminaExpr, weightExpr) => `opportunityValueScoreCore(${valueExpr}, ${staminaExpr}, {
         weight: ${weightExpr},
         distanceFloor: cfg.opportunityDistanceFloor,
         distanceScoreScale: cfg.opportunityDistanceScoreScale
-      })`
-    : `opportunityValueScore(${valueExpr}, ${staminaExpr}, ${weightExpr})`;
-  const snapshotCoinWorthLongTravelCall = (coinExpr, membersExpr, totalExpr) => options.bundledRuntime
-    ? `snapshotCoinWorthLongTravelCore(${coinExpr}, ${membersExpr}, ${totalExpr}, coinTargetCoreOptions())`
-    : `snapshotCoinWorthLongTravel(${coinExpr}, ${membersExpr}, ${totalExpr})`;
-  const localSnapshotCoinWrapperSource = options.bundledRuntime ? '' : String.raw`
-  function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
-    return snapshotCoinWorthLongTravelCore(coin, members, totalAmount, coinTargetCoreOptions());
-  }
-
-	  function snapshotCoinNavigationReason(coin) {
-	    return snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions());
-  }
-
-`;
+      })`;
+  const snapshotCoinWorthLongTravelCall = (coinExpr, membersExpr, totalExpr) => `snapshotCoinWorthLongTravelCore(${coinExpr}, ${membersExpr}, ${totalExpr}, coinTargetCoreOptions())`;
   return String.raw`	  function snapshotCoinAgeMs() {
 	    return bot.globalState.snapshotRefreshedAt ? Math.max(0, Date.now() - Number(bot.globalState.snapshotRefreshedAt || 0)) : Infinity;
 	  }
@@ -97,8 +83,6 @@ function opportunitySnapshotSource(options = {}) {
 	    if (best) return asOpportunity(best);
 	    return idleBest ? asIdleFallback(idleBest) : null;
 	  }
-
-${localSnapshotCoinWrapperSource}
 
   function scoreCoinOpportunity(coin) {
     const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? coin?.fieldScore ?? NaN);
