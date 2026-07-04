@@ -5,7 +5,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const { bundledRemoteSourceFor } = require('./remote-bot-bundle');
+const {
+  browserRuntimeEvalSourceFor,
+  bundledRemoteSourceFor
+} = require('./remote-bot-bundle');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -527,6 +530,12 @@ function main() {
   const generatedBuild = generateRemoteBuild(manifest);
   const generatedSource = generatedBuild.bundledSource;
   const generatedRuntimeSource = generatedBuild.directSource;
+  const generatedEvalSource = browserRuntimeEvalSourceFor({
+    dryRun: true,
+    once: true,
+    statusEvery: 0,
+    version: String(manifest.version || ''),
+  });
   const distHash = sha256Hex(distSource);
   const generatedHash = sha256Hex(generatedSource);
 
@@ -614,6 +623,9 @@ function main() {
     assert(remoteBundleSource.includes("const esbuild = require('esbuild')"), 'shared remote bundler does not use esbuild');
     assert(remoteBundleSource.includes("const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source')"), 'shared remote bundler does not use the browser runtime source boundary');
     assert(remoteBundleSource.includes('remoteBrowserRuntimeSource(options)'), 'shared remote bundler does not get direct source through the runtime source boundary');
+    assert(remoteBundleSource.includes('function bundleRuntimeEvalSource(directSource)'), 'shared remote bundler does not expose the CDP/runtime eval bundle path');
+    assert(remoteBundleSource.includes('export default ${directSource};'), 'runtime eval bundle does not preserve startup result as a default export');
+    assert(remoteBundleSource.includes('return ${globalName}.default;'), 'runtime eval bundle does not return the default startup result');
     assert(!remoteBundleSource.includes("require('../src/browser/bot-source')"), 'shared remote bundler should not depend directly on the old browser source builder');
     assert(remoteBundleSource.includes('write: false'), 'shared remote bundler should generate source through esbuild outputFiles');
     assert(remoteBundleSource.includes("format: BUNDLER_INFO.format"), 'shared remote bundler does not centralize IIFE format');
@@ -621,16 +633,29 @@ function main() {
     assert(remoteBundleSource.includes("target: [BUNDLER_INFO.target]"), 'shared remote bundler does not centralize es2020 target');
   });
 
+  check('local CDP and print-source use the esbuild runtime eval bundle', () => {
+    assert(sourceBot.includes("require('./scripts/remote-bot-bundle')"), 'main bot does not import the shared remote bundler');
+    assert(sourceBot.includes('browserRuntimeEvalSourceFor({'), 'main bot does not use the runtime eval bundle for injection/print-source');
+    assert(!sourceBot.includes("require('./src/browser/runtime-source')"), 'main bot still imports direct runtime-source generation');
+    assert(!sourceBot.includes('browserRuntimeSource({'), 'main bot still injects direct runtime source');
+    assert(generatedEvalSource.includes('__graspRatBotRuntimeEvalBundle'), 'generated eval source does not contain the eval bundle wrapper');
+    assert(generatedEvalSource.includes('return __graspRatBotRuntimeEvalBundle.default;'), 'generated eval source does not return the startup default export');
+    assert(generatedEvalSource.includes('function installPageGlobal'), 'generated eval source does not bundle the page-global helper');
+    assert(generatedEvalSource.includes('function leaveCommandFailureMessageCore'), 'generated eval source does not bundle runtime helper modules');
+    assert(!/require\(['"]\.\.?\//.test(generatedEvalSource), 'generated eval source still contains unresolved relative require()');
+    assert(!/\bfrom\s+['"]\.\.?\//.test(generatedEvalSource), 'generated eval source still contains unresolved relative import');
+    new vm.Script(generatedEvalSource, { filename: 'grasp-rat-runtime-eval.generated.js' });
+  });
+
   check('source modules split browser source generation while generated runtime stays single file', () => {
-    assert(sourceBot.includes("require('./src/browser/runtime-source')"), 'main bot runtime source boundary import not found');
-    assert(sourceBot.includes('browserRuntimeSource({'), 'main bot does not use the runtime source boundary for injection/print-source');
     assert(!sourceBot.includes("require('./src/browser/bot-source')"), 'main bot should not import the old browser source builder directly');
     assert(!fs.existsSync(path.join(ROOT, 'src/browser/bot-source.js')), 'legacy bot-source.js should no longer exist');
     assert(!fs.existsSync(path.join(ROOT, 'src/browser/runtime-assembly-source.js')), 'legacy runtime-assembly-source.js should no longer exist');
     assert(runtimeSourceModule.includes("const { browserRuntimeFragments } = require('./runtime-fragments-source')"), 'runtime source boundary does not own the runtime fragment registry dependency');
     assert(runtimeSourceModule.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime source boundary does not render the runtime fragment registry');
     assert(runtimeSourceModule.includes('function browserRuntimeConfig(options = {})'), 'browser runtime config adapter not found');
-    assert(runtimeSourceModule.includes('if (options.bundledRuntime) config.bundledRuntime = true;'), 'browser runtime config does not gate bundled-runtime mode');
+    assert(runtimeSourceModule.includes('bundledRuntime: true'), 'browser runtime config does not default to bundled-runtime mode');
+    assert(!runtimeSourceModule.includes('if (options.bundledRuntime) config.bundledRuntime = true;'), 'browser runtime config still treats bundled-runtime as optional');
     assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
     assert(functionBody(runtimeSourceModule, 'remoteBrowserRuntimeSource').includes('bundledRuntime: true'), 'remote browser runtime source does not enable bundled-runtime fragments');

@@ -1461,6 +1461,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 220. Removed grouped production bundled coin-runtime wrappers by routing coin movement direction, coin-progress state transitions, native coin snapshots, tracked visibility, pickup session accounting, snapshot pruning, and snapshot memory refresh through direct strategy/runtime core snippets while preserving local/CDP fallback: integrated in `bootstrap-0.4.492`
 221. Removed grouped production pending-exit leave helper wrappers by routing leave HTTP 403 detection, leave success detection, leave-success reload-confirmation construction/satisfaction, and wait-reason selection through `src/strategy/pending-exit.js` / `src/browser/runtime/pending-exit.js` cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.496`
 222. Removed grouped production leave-command and Clash rescue wrappers by routing result summaries, failed-detail detection, stage selection, retry-detail construction, retry summaries, and round reset through `src/strategy/leave-command.js` / `src/browser/runtime/leave-command.js` cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.497`
+223. Switched local CDP injection and `--print-source` to an esbuild runtime eval bundle and made browser runtime config bundled-only by default, turning the remaining non-bundled inline source branches into dead compatibility code: integrated in `bootstrap-0.4.498`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
@@ -1542,3 +1543,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime/leave-command.js` exposes those cores to bundled browser builds; `src/browser/leave-command-source.js` and `src/browser/pending-exit-source.js` call them directly in production while keeping local CDP fallback wrappers.
 - Strategy self-tests add seven leave-command cases, raising the strategy suite to 107 passing cases.
 - Final production dist no longer declares the removed leave-command/Clash rescue helper wrappers, and verifier rejects those wrapper declarations in generated/final output.
+
+`bootstrap-0.4.498` changes the local runtime entry direction:
+
+- `grasp-rat-bot.js` now injects and prints `browserRuntimeEvalSourceFor(...)` from `scripts/remote-bot-bundle.js` instead of direct `browserRuntimeSource(...)`.
+- The new eval bundle wraps the generated browser runtime as an esbuild IIFE, exports the startup promise as default, and returns that default so CDP `Runtime.evaluate(... awaitPromise: true)` still receives startup status.
+- `src/browser/runtime-source.js` defaults `bundledRuntime: true`, so local, print-source, and production paths all select the same bundled-runtime fragment shape.
+- Static verification now generates the eval bundle, syntax-checks it, rejects unresolved relative imports/requires, and checks that the main file no longer imports the direct runtime source boundary.

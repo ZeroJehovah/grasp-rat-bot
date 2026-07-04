@@ -60,6 +60,41 @@ function bundleRemoteSource(directSource) {
   return output.text;
 }
 
+function bundleRuntimeEvalSource(directSource) {
+  const globalName = '__graspRatBotRuntimeEvalBundle';
+  const result = esbuild.buildSync({
+    stdin: {
+      contents: `export default ${directSource};`,
+      sourcefile: 'grasp-rat-runtime-eval.generated.js',
+      resolveDir: ROOT,
+      loader: 'js'
+    },
+    bundle: true,
+    format: BUNDLER_INFO.format,
+    globalName,
+    platform: BUNDLER_INFO.platform,
+    target: [BUNDLER_INFO.target],
+    minify: false,
+    sourcemap: false,
+    legalComments: 'none',
+    logLevel: 'silent',
+    write: false
+  });
+  const output = result.outputFiles && result.outputFiles[0];
+  if (!output || typeof output.text !== 'string') {
+    throw new Error('esbuild did not return bundled runtime eval source');
+  }
+  return `(() => {\n${output.text}\nreturn ${globalName}.default;\n})()`;
+}
+
+function browserRuntimeEvalSourceFor(options = {}) {
+  const directSource = require('../src/browser/runtime-source').browserRuntimeSource({
+    ...options,
+    bundledRuntime: true
+  });
+  return bundleRuntimeEvalSource(directSource);
+}
+
 function bundledRemoteSourceFor(options) {
   const directSource = remoteSourceFor(options);
   const bundledSource = bundleRemoteSource(directSource);
@@ -116,6 +151,8 @@ module.exports = {
   sha256Hex,
   remoteSourceFor,
   bundleRemoteSource,
+  bundleRuntimeEvalSource,
+  browserRuntimeEvalSourceFor,
   bundledRemoteSourceFor,
   remoteManifestFor,
   writeRemoteBotBundle
