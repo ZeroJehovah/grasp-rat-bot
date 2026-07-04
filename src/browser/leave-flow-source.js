@@ -2,7 +2,7 @@
 
 function leaveFlowSource(options = {}) {
   const runtimeExitReloginPrelude = options.bundledRuntime
-    ? "  const {\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const {\n    injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,\n    offlineExitRequiresUnsafeReloginDelayCore,\n    primePendingStaminaExitLoginSuppressBoundCore,\n    primePendingUnsafeExitLoginSuppressBoundCore,\n    startExitAuditBoundCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineUnsafePredicateCall = options.bundledRuntime
     ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
@@ -19,6 +19,9 @@ function leaveFlowSource(options = {}) {
   const startExitAuditCall = (detail, meta) => options.bundledRuntime
     ? `startExitAuditBoundCore(${detail}, ${meta}, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now })`
     : `startExitAudit(${detail}, ${meta})`;
+  const injuryLeaveSummaryCall = injury => options.bundledRuntime
+    ? `injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })`
+    : `injuryLeaveSummary(${injury})`;
   return String.raw`${runtimeExitReloginPrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
@@ -76,7 +79,7 @@ function leaveFlowSource(options = {}) {
     if (cfg.dryRun || cfg.once) return null;
     const skipped = pendingExitSkipNewLeave('injury', 'injury hp drop', {
       injury,
-      summary: injuryLeaveSummary(injury)
+      summary: ${injuryLeaveSummaryCall('injury')}
     });
     if (skipped) return skipped;
     if (t - Number(bot.lastInjuryLeaveAt || 0) < cfg.combatLeaveRetryMs) {
@@ -85,7 +88,7 @@ function leaveFlowSource(options = {}) {
         reason: 'cooldown',
         cooldownRemainingMs: Math.max(0, Math.round(cfg.combatLeaveRetryMs - (t - Number(bot.lastInjuryLeaveAt || 0)))),
         injury,
-        summary: injuryLeaveSummary(injury)
+        summary: ${injuryLeaveSummaryCall('injury')}
       };
       return finalizeLeaveDisplayReason(detail);
     }
@@ -96,7 +99,7 @@ function leaveFlowSource(options = {}) {
       at: t,
       userId: getCurrentUserId() || null,
       injury,
-      summary: injuryLeaveSummary(injury),
+      summary: ${injuryLeaveSummaryCall('injury')},
       error: ''
     };
     ${startExitAuditCall('detail', "{ scope: 'enemy', source: 'injury', reason: detail.reason, self: injury?.self || injury, injury }")};

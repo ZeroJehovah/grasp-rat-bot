@@ -2,7 +2,7 @@
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const clearEnemyOnlineRestore = options.bundledRuntime
     ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
@@ -13,6 +13,9 @@ function tickSource(options = {}) {
   const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
     ? `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })`
     : `currentOfflineDisplayReason(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback})`;
+  const injuryLeaveSummaryCall = injury => options.bundledRuntime
+    ? `injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })`
+    : `injuryLeaveSummary(${injury})`;
   return String.raw`${clearPrelude}  async function tick(source = 'timer') {
     if (!bot.running) return;
     if (bot.ticking) {
@@ -695,7 +698,7 @@ function tickSource(options = {}) {
 	        bot.pendingInjuryLeave = null;
 	        const skippedLeave = pendingExitSkipNewLeave('injury', 'injury hp drop', {
 	          injury,
-	          summary: injuryLeaveSummary(injury)
+	          summary: ${injuryLeaveSummaryCall('injury')}
 	        });
 	        if (!skippedLeave) {
 	          Promise.resolve(leaveForInjury(injury)).catch(err => recordUnhandledTickError('injury-leave', err));
@@ -707,7 +710,7 @@ function tickSource(options = {}) {
 	            ? pendingExitIntentForSkippedLeave('injury', 'injury hp drop', skippedLeave)
 	            : {
 	              reason: 'injury-leave',
-	              summary: injuryLeaveSummary(injury)
+	              summary: ${injuryLeaveSummaryCall('injury')}
 	            }
 	        };
 	      }

@@ -1190,6 +1190,8 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldForTickBoundCore(bot, localStorage') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldForTickBoundCore(bot, localStorage'), 'tick source factory does not bind bundled relogin hold cleanup through runtime bound cores');
     assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore'), 'tick source factory does not import bundled offline display core alias');
     assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })'), 'tick source factory does not bind bundled offline display core directly');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore'), 'tick source factory does not import bundled injury summary core alias');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })'), 'tick source factory does not bind bundled injury summary core directly');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['combat-state', () => combatStateSource(config)]"), 'runtime fragment registry does not pass config into combat-state source');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['tick', () => tickSource(config)]"), 'runtime fragment registry does not pass config into tick source');
     assert(functionBody(tickSourceModule, 'tickSource').includes("async function tick(source = 'timer')"), 'tick source factory does not include tick');
@@ -1594,7 +1596,7 @@ function main() {
     assert(exitReloginSummaryBundledBody.includes('combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'exit-relogin summary bundled source does not bind combat summary helpers');
     assert(exitReloginSummaryBundledBody.includes('combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp })'), 'exit-relogin summary bundled source does not bind combat leave action helpers');
     assert(exitReloginSummaryBundledBody.includes('pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance })'), 'exit-relogin summary bundled source does not bind pursuit summary helpers');
-    assert(exitReloginSummaryBundledBody.includes('injuryLeaveSummaryCore(injury, { actorLabel, hpDisplay })'), 'exit-relogin summary bundled source does not bind injury summary helpers');
+    assert(!exitReloginSummaryBundledBody.includes('function injuryLeaveSummary'), 'exit-relogin summary bundled source still keeps injury summary wrapper');
     assert(exitReloginSummaryBundledBody.includes('offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'exit-relogin summary bundled source does not bind offline summary helpers');
     assert(!exitReloginSummaryBundledBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary bundled source still keeps offline display wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function reloginDelayForHp'), 'exit-relogin summary bundled source still keeps HP relogin delay wrapper');
@@ -1907,6 +1909,8 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pendingExitSkipNewLeave'), 'leave-flow source factory does not preserve pending-exit duplicate leave guard');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('options.bundledRuntime'), 'leave-flow source does not select offline unsafe predicate call from runtime config');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled injury summary core alias');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })'), 'leave-flow source does not bind bundled injury summary core directly');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)'), 'leave-flow source does not preserve inline offline unsafe predicate wrapper call');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingStaminaExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending stamina suppress bound core for bundled builds');
