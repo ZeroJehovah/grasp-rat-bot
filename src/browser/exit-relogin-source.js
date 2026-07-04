@@ -74,24 +74,7 @@ function exitReloginActorInlineSource() {
 }
 
 function bundledExitReloginActorSource() {
-  return `	  const {
-	    normalizeEnemyActorCore,
-	    enemyActorFromLeaveDetailCore,
-	    enemyRepeatDelayMsForCountCore
-	  } = require('./src/browser/runtime/exit-relogin');
-
-	  function normalizeEnemyActor(actor) {
-	    return normalizeEnemyActorCore(actor);
-	  }
-
-	  function enemyActorFromLeaveDetail(detail) {
-	    return enemyActorFromLeaveDetailCore(detail, normalizeEnemyActor);
-	  }
-
-	  function enemyRepeatDelayMsForCount(count) {
-	    return enemyRepeatDelayMsForCountCore(count, cfg);
-	  }
-`;
+  return '';
 }
 
 function exitReloginStreakInlineSource() {
