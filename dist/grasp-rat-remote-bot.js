@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.463" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.464" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10341,11 +10341,11 @@
       combatLeaveActionCore,
       reloginDelayForHpCore
     } = require_exit_relogin();
-    function combatExitSummary(reason, target, combatState = {}) {
-      return combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs });
-    }
     function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
-      return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
+      return combatLeaveActionCore(reason, baseTarget, combatState, cover, {
+        combatExitSummary: (summaryReason, target, state2) => combatExitSummaryCore(summaryReason, target, state2, { cfg, actorLabel, hpDisplay, formatDurationMs }),
+        clamp
+      });
     }
     const {
       enemyReloginHoldRemainingMsBoundCore,
@@ -12042,6 +12042,7 @@
       return detail;
     }
     const {
+      combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,
       injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
       offlineExitRequiresUnsafeReloginDelayCore,
       offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,
@@ -12196,7 +12197,7 @@
         target: action?.target || null,
         combat: action?.combatState || null,
         combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
-        summary: action?.exitSummary || combatExitSummary(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {})
+        summary: action?.exitSummary || combatExitSummaryForLeaveFlowCore(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {}, { cfg, actorLabel, hpDisplay, formatDurationMs })
       });
       if (skipped) return skipped;
       if (t - Number(bot.lastCombatLeaveAt || 0) < cfg.combatLeaveRetryMs) {
@@ -12207,7 +12208,7 @@
           combat: action?.combatState || null,
           combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
           target: action?.target || null,
-          summary: action?.exitSummary || combatExitSummary(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {})
+          summary: action?.exitSummary || combatExitSummaryForLeaveFlowCore(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {}, { cfg, actorLabel, hpDisplay, formatDurationMs })
         };
         finalizeLeaveDisplayReason(detail2);
         rememberPendingCombatLeave(action, selfSummary, detail2);
@@ -12223,7 +12224,7 @@
         target: action?.target || null,
         combat: action?.combatState || null,
         combatCover: action?.combatCover || action?.combatState?.leaveCover || null,
-        summary: action?.exitSummary || combatExitSummary(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {}),
+        summary: action?.exitSummary || combatExitSummaryForLeaveFlowCore(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {}, { cfg, actorLabel, hpDisplay, formatDurationMs }),
         error: ""
       };
       startExitAuditBoundCore(detail, { scope: "enemy", source: "combat", reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });

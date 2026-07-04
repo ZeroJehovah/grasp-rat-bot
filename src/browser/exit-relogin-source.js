@@ -310,12 +310,11 @@ function bundledExitReloginSummarySource() {
 \t    reloginDelayForHpCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
-\t  function combatExitSummary(reason, target, combatState = {}) {
-\t    return combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs });
-\t  }
-
 \t  function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
-\t    return combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp });
+\t    return combatLeaveActionCore(reason, baseTarget, combatState, cover, {
+\t      combatExitSummary: (summaryReason, target, state) => combatExitSummaryCore(summaryReason, target, state, { cfg, actorLabel, hpDisplay, formatDurationMs }),
+\t      clamp
+\t    });
 \t  }
 `;
 }

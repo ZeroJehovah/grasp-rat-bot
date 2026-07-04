@@ -1598,8 +1598,9 @@ function main() {
     assert(exitReloginSummaryInlineBody.includes('repeatMinMs'), 'exit-relogin summary inline source does not preserve repeat relogin delay minimum');
     const exitReloginSummaryBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginSummarySource');
     assert(exitReloginSummaryBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin summary bundled source does not hand summary helpers to the bundler');
-    assert(exitReloginSummaryBundledBody.includes('combatExitSummaryCore(reason, target, combatState, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'exit-relogin summary bundled source does not bind combat summary helpers');
-    assert(exitReloginSummaryBundledBody.includes('combatLeaveActionCore(reason, baseTarget, combatState, cover, { combatExitSummary, clamp })'), 'exit-relogin summary bundled source does not bind combat leave action helpers');
+    assert(!exitReloginSummaryBundledBody.includes('function combatExitSummary'), 'exit-relogin summary bundled source still keeps combat summary wrapper');
+    assert(exitReloginSummaryBundledBody.includes('combatExitSummary: (summaryReason, target, state) => combatExitSummaryCore(summaryReason, target, state, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'exit-relogin summary bundled source does not bind combat summary core into combat leave action');
+    assert(exitReloginSummaryBundledBody.includes('combatLeaveActionCore(reason, baseTarget, combatState, cover,'), 'exit-relogin summary bundled source does not bind combat leave action helpers');
     assert(!exitReloginSummaryBundledBody.includes('function pursuitLeaveSummary'), 'exit-relogin summary bundled source still keeps pursuit summary wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function injuryLeaveSummary'), 'exit-relogin summary bundled source still keeps injury summary wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function offlineLeaveSummary'), 'exit-relogin summary bundled source still keeps offline summary wrapper');
@@ -1914,6 +1915,8 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pendingExitSkipNewLeave'), 'leave-flow source factory does not preserve pending-exit duplicate leave guard');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('options.bundledRuntime'), 'leave-flow source does not select offline unsafe predicate call from runtime config');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('combatExitSummaryCore: combatExitSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled combat summary core alias');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('combatExitSummaryForLeaveFlowCore(${reason}, ${target}, ${combatState}, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'leave-flow source does not bind bundled combat summary core directly');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled injury summary core alias');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })'), 'leave-flow source does not bind bundled injury summary core directly');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled offline summary core alias');
@@ -3012,6 +3015,9 @@ function main() {
       assert(combatBody.includes('const closeRisk = combatLowHpCloseRiskState'), 'combat action does not evaluate low-HP close-risk exit');
       assert(combatBody.includes('const pressureDisadvantage = combatPressureDisadvantageState'), 'combat action does not evaluate close-pressure HP disadvantage exit');
       assert(combatBody.includes("combatLeaveAction('combat-hp-disadvantage-leave', baseTarget"), 'combat action does not leave on close-pressure HP disadvantage');
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(!text.includes('function combatExitSummary('), 'dist remote bot still keeps combatExitSummary wrapper');
+      }
       assert(combatBody.includes('const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState'), 'combat action does not evaluate sustained pressure stop-loss');
       assert(combatBody.includes('const serverStallNoDamage = combatServerStallNoDamageLeaveState'), 'combat action does not evaluate server-stall no-damage disadvantage');
       assert(combatBody.includes('const retreatingTarget = combatRetreatingTargetState'), 'combat action does not evaluate retreating target state');
