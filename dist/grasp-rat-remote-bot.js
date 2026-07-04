@@ -4734,7 +4734,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.440" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.441" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10336,8 +10336,6 @@
     }
     const {
       isExitLoginSuppressReasonCore,
-      unsafeExitReloginMinDelayMsCore,
-      pendingExitSuppressReasonCore,
       startExitAuditCore,
       setExitReloginSuppressCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
@@ -10366,12 +10364,6 @@
         setLoginSuppress,
         now: Date.now
       });
-    }
-    function unsafeExitReloginMinDelayMs() {
-      return unsafeExitReloginMinDelayMsCore(cfg);
-    }
-    function pendingExitSuppressReason(storageReason) {
-      return pendingExitSuppressReasonCore(storageReason);
     }
     function startExitAudit(detail, meta = {}) {
       return startExitAuditCore(detail, meta, {

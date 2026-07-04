@@ -1591,8 +1591,10 @@ function main() {
     const exitReloginHoldBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldSource');
     assert(exitReloginHoldBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold bundled source does not hand hold helpers to the bundler');
     assert(exitReloginHoldBundledBody.includes('isExitLoginSuppressReasonCore(reason)'), 'exit-relogin hold bundled source does not bind suppress reason matcher');
-    assert(exitReloginHoldBundledBody.includes('unsafeExitReloginMinDelayMsCore(cfg)'), 'exit-relogin hold bundled source does not bind unsafe minimum helper');
-    assert(exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore(storageReason)'), 'exit-relogin hold bundled source does not bind pending suppress helper');
+    assert(!exitReloginHoldBundledBody.includes('unsafeExitReloginMinDelayMsCore,'), 'exit-relogin hold bundled source should not import unused unsafe minimum helper');
+    assert(!exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore,'), 'exit-relogin hold bundled source should not import unused pending suppress helper');
+    assert(!exitReloginHoldBundledBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold bundled source should not keep unused unsafe minimum wrapper');
+    assert(!exitReloginHoldBundledBody.includes('function pendingExitSuppressReason'), 'exit-relogin hold bundled source should not keep unused pending suppress wrapper');
     assert(exitReloginHoldBundledBody.includes('startExitAuditCore(detail, meta'), 'exit-relogin hold bundled source does not bind start exit audit core');
     assert(exitReloginHoldBundledBody.includes('resetLoginSnapshotGate') && exitReloginHoldBundledBody.includes('loginPointSafetyExitSelfForDetail') && exitReloginHoldBundledBody.includes('recordExitAuditEvent'), 'exit-relogin hold bundled source does not pass required exit audit bindings');
     assert(exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind pending unsafe suppress through bound core');
