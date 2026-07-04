@@ -1440,6 +1440,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 199. Removed the bundled pending-exit persistence writer wrapper by routing control-login, pending-exit, leave-command, and relogin-hold cleanup paths through direct `writePersistentPendingExitStateCore()` call helpers: integrated in `bootstrap-0.4.471`
 200. Removed the bundled restored coin-failures wrapper by routing restored-runtime-state directly through `restoredCoinFailuresCore()`: integrated in `bootstrap-0.4.472`
 201. Removed the bundled login-snapshot-gate state normalizer wrapper by routing bot-object and control-login directly through `normalizeLoginSnapshotGateStateCore()`: integrated in `bootstrap-0.4.473`
+202. Removed the bundled login-snapshot-gate required-count wrapper by routing bot-object and control-login directly through `loginSnapshotSuccessRequiredCore()`: integrated in `bootstrap-0.4.474`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

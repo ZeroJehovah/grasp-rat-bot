@@ -7,8 +7,11 @@ function botObjectSource(options = {}) {
   const enemyLeaveStreakStatus = options.bundledRuntime
     ? 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })'
     : 'readEnemyLeaveStreak()';
+  const loginSnapshotSuccessRequiredCall = options.bundledRuntime
+    ? 'loginSnapshotSuccessRequiredCore()'
+    : 'loginSnapshotSuccessRequired()';
   const normalizeLoginSnapshotGateStateCall = state => options.bundledRuntime
-    ? `normalizeLoginSnapshotGateStateCore(${state}, loginSnapshotSuccessRequired())`
+    ? `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`
     : `normalizeLoginSnapshotGateState(${state})`;
   return String.raw`${streakPrelude}		  const bot = {
 	    running: true,
