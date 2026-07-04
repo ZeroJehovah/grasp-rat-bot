@@ -1,6 +1,11 @@
 'use strict';
 
-function chooseActionSource() {
+const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
+
+function chooseActionSource(options = {}) {
+  const clearPostAttackCoinOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackCoin.postAttackTarget?.id', options);
+  const clearPostAttackWaitOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackWaitTarget.id', options);
+  const clearDailyStaminaCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null', options);
   return String.raw`  function chooseAction(self) {
     const {
       entities,
@@ -236,7 +241,7 @@ function chooseActionSource() {
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
       }
-      clearOpportunityChoiceFor('enemy', postAttackCoin.postAttackTarget?.id);
+      ${clearPostAttackCoinOpportunity}
       const action = buildCoinAction(self, postAttackCoin, 'post-attack-drop-coin');
       action.postAttackTarget = postAttackCoin.postAttackTarget;
       return action;
@@ -244,7 +249,7 @@ function chooseActionSource() {
     const postAttackWaitTarget = pendingPostAttackWaitTarget || pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
     if (postAttackWaitTarget) {
       bot.fleeLock = null;
-      clearOpportunityChoiceFor('enemy', postAttackWaitTarget.id);
+      ${clearPostAttackWaitOpportunity}
       return buildPostAttackDropWaitAction(self, postAttackWaitTarget);
     }
 	    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
@@ -336,7 +341,7 @@ function chooseActionSource() {
     const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
     if (dailyStaminaFinalCoin) {
       bot.fleeLock = null;
-      clearOpportunityChoiceFor('coin');
+      ${clearDailyStaminaCoinOpportunity}
       return attachOpportunisticShot(
         dailyStaminaFinalCoinAction(self, dailyStaminaFinalCoin),
         self,

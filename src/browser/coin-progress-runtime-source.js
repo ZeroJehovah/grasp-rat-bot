@@ -11,8 +11,9 @@ const {
   buildIgnoredCoinPatrolActionCore,
   coinIgnoreCleanupIntentCore
 } = require('./runtime/coin-progress');
+const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
 
-function coinProgressRuntimeInlineSource(helpers = {}) {
+function coinProgressRuntimeInlineSource(helpers = {}, options = {}) {
   const {
     coinFailureIgnoreCore,
     staleCoinEscapeDirectionCore,
@@ -35,6 +36,7 @@ function coinProgressRuntimeInlineSource(helpers = {}) {
     buildIgnoredCoinPatrolActionCore,
     coinIgnoreCleanupIntentCore
   ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
+  const clearIgnoredCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'id', options);
   return String.raw`${coinProgressHelperSource}
 
   function coinProgressCoreOptions(extra = {}) {
@@ -81,7 +83,7 @@ function coinProgressRuntimeInlineSource(helpers = {}) {
       bot.lastTarget = null;
       bot.lastTargetAt = 0;
     }
-    clearOpportunityChoiceFor('coin', id);
+    ${clearIgnoredCoinOpportunity}
     if (cleanup.clearCoinApproachLock) bot.coinApproachLock = null;
   }
 
@@ -168,7 +170,7 @@ function bundledCoinProgressRuntimeSource() {
   coinIgnoreCleanupIntentCore
 } = require('./src/browser/runtime/coin-progress');
 
-${coinProgressRuntimeInlineSource()}`;
+${coinProgressRuntimeInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function coinProgressRuntimeSource(options = {}) {

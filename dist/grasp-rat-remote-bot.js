@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.484" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.485" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19907,7 +19907,10 @@
       }
       if (!idText || bot.coinProgress?.id && String(bot.coinProgress.id) === idText) bot.coinProgress = null;
       if (!idText || bot.coinApproachLock?.id === idText) bot.coinApproachLock = null;
-      clearOpportunityChoiceFor("coin", idText || null);
+      if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", idText || null)) {
+        bot.opportunityChoice = null;
+        resetOpportunitySwitchLock();
+      }
       bot.lastCoinClearReason = reason;
       bot.lastMissingVisibleCoin = {
         id: idText,
@@ -19973,11 +19976,6 @@
     const { pickBestOpportunityCore } = require_opportunity_pick2();
     const { patrolDirectionCore } = require_patrol2();
     const { shouldClearOpportunityChoiceCore } = require_opportunity_clear2();
-    function clearOpportunityChoiceFor(type, id = null) {
-      if (!shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)) return;
-      bot.opportunityChoice = null;
-      resetOpportunitySwitchLock();
-    }
     const {
       coinFailureIgnoreCore,
       staleCoinEscapeDirectionCore,
@@ -20030,7 +20028,10 @@
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
       }
-      clearOpportunityChoiceFor("coin", id);
+      if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", id)) {
+        bot.opportunityChoice = null;
+        resetOpportunitySwitchLock();
+      }
       if (cleanup.clearCoinApproachLock) bot.coinApproachLock = null;
     }
     function trackCoinProgress(action, self) {
@@ -20189,7 +20190,10 @@
         bot.lastTarget = null;
         bot.lastTargetAt = 0;
       }
-      clearOpportunityChoiceFor("coin");
+      if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", null)) {
+        bot.opportunityChoice = null;
+        resetOpportunitySwitchLock();
+      }
       bot.lastCoinClearReason = reason;
     }
     function coinTargetCoreOptions(extra = {}) {
@@ -20569,7 +20573,10 @@
           bot.lastTarget = null;
           bot.lastTargetAt = 0;
         }
-        clearOpportunityChoiceFor("enemy", postAttackCoin.postAttackTarget?.id);
+        if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", postAttackCoin.postAttackTarget?.id)) {
+          bot.opportunityChoice = null;
+          resetOpportunitySwitchLock();
+        }
         const action = buildCoinAction(self, postAttackCoin, "post-attack-drop-coin");
         action.postAttackTarget = postAttackCoin.postAttackTarget;
         return action;
@@ -20577,7 +20584,10 @@
       const postAttackWaitTarget = pendingPostAttackWaitTarget || pickPostAttackDropWaitTarget(self, realtimeCoins, coinThreats, entities);
       if (postAttackWaitTarget) {
         bot.fleeLock = null;
-        clearOpportunityChoiceFor("enemy", postAttackWaitTarget.id);
+        if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", postAttackWaitTarget.id)) {
+          bot.opportunityChoice = null;
+          resetOpportunitySwitchLock();
+        }
         return buildPostAttackDropWaitAction(self, postAttackWaitTarget);
       }
       const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
@@ -20664,7 +20674,10 @@
       const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
       if (dailyStaminaFinalCoin) {
         bot.fleeLock = null;
-        clearOpportunityChoiceFor("coin");
+        if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", null)) {
+          bot.opportunityChoice = null;
+          resetOpportunitySwitchLock();
+        }
         return attachOpportunisticShot(
           dailyStaminaFinalCoinAction(self, dailyStaminaFinalCoin),
           self,

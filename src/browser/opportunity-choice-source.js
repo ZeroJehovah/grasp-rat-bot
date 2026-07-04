@@ -19,8 +19,9 @@ const {
   opportunityRouteIds,
   rememberOpportunityChoiceCore
 } = require('./runtime/opportunity-choice');
+const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
 
-function opportunityChoiceInlineSource(helpers = {}) {
+function opportunityChoiceInlineSource(helpers = {}, options = {}) {
   const {
     opportunityKey,
     opportunityChoiceType,
@@ -59,6 +60,7 @@ function opportunityChoiceInlineSource(helpers = {}) {
     opportunityRouteIds,
     rememberOpportunityChoiceCore
   ].map(fn => typeof fn === 'function' ? `\t\t\t  ${fn.toString()}` : '').join('\n');
+  const clearMissingVisibleCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'idText || null', options);
   return String.raw`${opportunityChoiceHelperSource}
 
 			  function opportunityChoiceCoreOptions(extra = {}) {
@@ -158,7 +160,7 @@ function opportunityChoiceInlineSource(helpers = {}) {
 			    }
 			    if (!idText || (bot.coinProgress?.id && String(bot.coinProgress.id) === idText)) bot.coinProgress = null;
 			    if (!idText || bot.coinApproachLock?.id === idText) bot.coinApproachLock = null;
-			    clearOpportunityChoiceFor('coin', idText || null);
+			    ${clearMissingVisibleCoinOpportunity}
 			    bot.lastCoinClearReason = reason;
 			    bot.lastMissingVisibleCoin = {
 			      id: idText,
@@ -250,7 +252,7 @@ function bundledOpportunityChoiceSource() {
   rememberOpportunityChoiceCore
 } = require('./src/browser/runtime/opportunity-choice');
 
-${opportunityChoiceInlineSource()}`;
+${opportunityChoiceInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function opportunityChoiceSource(options = {}) {
@@ -273,7 +275,7 @@ function opportunityChoiceSource(options = {}) {
     buildMissingHeldOpportunityCore,
     opportunityRouteIds,
     rememberOpportunityChoiceCore
-  });
+  }, options);
 }
 
 module.exports = {

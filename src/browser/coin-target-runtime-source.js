@@ -11,8 +11,9 @@ const {
   snapshotCoinWorthLongTravelCore,
   snapshotCoinNavigationReasonCore
 } = require('./runtime/coin-target');
+const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
 
-function coinTargetRuntimeInlineSource(helpers = {}) {
+function coinTargetRuntimeInlineSource(helpers = {}, options = {}) {
   const {
     coinTargetKeyCore,
     coinTargetDistance,
@@ -35,6 +36,7 @@ function coinTargetRuntimeInlineSource(helpers = {}) {
     snapshotCoinWorthLongTravelCore,
     snapshotCoinNavigationReasonCore
   ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n');
+  const clearTrackedCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null', options);
   return String.raw`
   function setLastTarget(kind, id) {
     if (!id && id !== 0) return;
@@ -53,7 +55,7 @@ function coinTargetRuntimeInlineSource(helpers = {}) {
 	      bot.lastTarget = null;
 	      bot.lastTargetAt = 0;
 	    }
-	    clearOpportunityChoiceFor('coin');
+	    ${clearTrackedCoinOpportunity}
 	    bot.lastCoinClearReason = reason;
 	  }
 
@@ -241,7 +243,7 @@ function bundledCoinTargetRuntimeSource() {
   snapshotCoinNavigationReasonCore
 } = require('./src/browser/runtime/coin-target');
 
-${coinTargetRuntimeInlineSource()}`;
+${coinTargetRuntimeInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function coinTargetRuntimeSource(options = {}) {

@@ -21,12 +21,7 @@ function opportunityClearInlineSource() {
 
 function bundledOpportunityClearSource() {
   return `const { shouldClearOpportunityChoiceCore } = require('./src/browser/runtime/opportunity-clear');
-
-		  function clearOpportunityChoiceFor(type, id = null) {
-		    if (!shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)) return;
-		    bot.opportunityChoice = null;
-		    resetOpportunitySwitchLock();
-		  }`;
+`;
 }
 
 function opportunityClearSource(options = {}) {
