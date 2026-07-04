@@ -3891,8 +3891,14 @@ function main() {
     assert(coinTargetRuntimeBody.includes('fn.toString()'), 'coin-target runtime source does not inline coin target helper text for local builds');
     assert(coinTargetRuntimeBody.includes('function coinTargetCoreOptions'), 'coin-target runtime wrapper options not found');
     assert(coinTargetRuntimeBody.includes('trackedCoinTargetForCollectionCore({'), 'coin-target runtime tracked coin target wrapper does not call strategy core');
-    assert(coinTargetRuntimeBody.includes('return coinTargetKeyCore(target);'), 'coin-target runtime coin target key wrapper does not call strategy core');
-    assert(coinTargetRuntimeBody.includes('return coinMatchesTrackedTargetCore(coin, target'), 'coin-target runtime coin target matcher wrapper does not call strategy core');
+    assert(!coinTargetRuntimeBody.includes('function coinTargetKey('), 'coin-target runtime source still keeps coin target key wrapper');
+    assert(!coinTargetRuntimeBody.includes('function coinMatchesTrackedTarget('), 'coin-target runtime source still keeps coin target matcher wrapper');
+    assert(coinTargetRuntimeBody.includes('const key = coinTargetKeyCore(target);'), 'coin-target runtime recorder does not call coin target key core directly');
+    assert(coinTargetRuntimeBody.includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'coin-target runtime visibility check does not call matcher core directly');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('const coinKey = coinTargetKeyCore(target)'), 'combat-history source does not call coin target key core directly');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceInlineSource').includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'opportunity-choice source does not call coin target matcher core directly');
+    assert(!distSource.includes('function coinTargetKey('), 'dist remote bot still keeps coin target key wrapper');
+    assert(!distSource.includes('function coinMatchesTrackedTarget('), 'dist remote bot still keeps coin target matcher wrapper');
     assert(coinTargetRuntimeBody.includes('return buildNativeCoinSnapshotCore(coins'), 'coin-target runtime native coin snapshot wrapper does not call strategy core');
     assert(coinTargetRuntimeBody.includes('pickIncidentalCoinPickupsCore('), 'coin-target runtime incidental pickup wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');

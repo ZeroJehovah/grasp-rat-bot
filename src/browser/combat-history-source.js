@@ -353,7 +353,7 @@ function combatHistorySource() {
     const reward = Math.max(0, Math.round(Number(amount || 0)));
     const targetDrop = Math.max(0, Math.round(Number(postAttackTarget.drop || 0)));
     if (!reward || !targetDrop || reward !== targetDrop) return null;
-    const coinKey = coinTargetKey(target) || ('xy:' + Math.round(Number(target.x) || 0) + ':' + Math.round(Number(target.y) || 0) + ':' + reward);
+    const coinKey = coinTargetKeyCore(target) || ('xy:' + Math.round(Number(target.x) || 0) + ':' + Math.round(Number(target.y) || 0) + ':' + reward);
     const targetKey = postAttackTarget.id !== undefined && postAttackTarget.id !== null && postAttackTarget.id !== ''
       ? 'id:' + String(postAttackTarget.id)
       : 'name:' + String(postAttackTarget.name || '');

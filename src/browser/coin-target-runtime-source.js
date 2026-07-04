@@ -83,21 +83,13 @@ ${coinTargetHelperSource}
     }, self, coinTargetCoreOptions());
   }
 
-  function coinTargetKey(target) {
-    return coinTargetKeyCore(target);
-  }
-
-  function coinMatchesTrackedTarget(coin, target) {
-    return coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions());
-  }
-
   function trackedCoinStillVisible(target) {
     const nativeCoinList = getNativeCoinList();
     if (!Array.isArray(nativeCoinList)) return null;
     return nativeCoinList
       .map(coin => normalizeCoinDrop(coin, 'native'))
       .filter(Boolean)
-      .some(coin => coinMatchesTrackedTarget(coin, target));
+      .some(coin => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
   }
 
   function nativeCoinSnapshot() {
@@ -121,7 +113,7 @@ ${coinTargetHelperSource}
     updateSessionStats(currentSummary);
     const session = bot.session || (bot.session = {});
     const t = Date.now();
-    const key = coinTargetKey(target);
+    const key = coinTargetKeyCore(target);
     if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
     session.coinPickupKeys = session.coinPickupKeys
       .filter(item => item && t - Number(item.at || 0) <= 60000)
