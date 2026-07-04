@@ -120,6 +120,31 @@ function updateEnemyLeaveStreakCore(detail, t, helpers) {
   return streak;
 }
 
+function readEnemyLeaveStreakBoundCore(storage, bot, cfg, t, helpers) {
+  return readEnemyLeaveStreakCore(
+    storage,
+    helpers.enemyLeaveStreakKey,
+    bot,
+    cfg,
+    t,
+    count => enemyRepeatDelayMsForCountCore(count, cfg)
+  );
+}
+
+function writeEnemyLeaveStreakBoundCore(storage, bot, streak, helpers) {
+  return writeEnemyLeaveStreakCore(storage, helpers.enemyLeaveStreakKey, bot, streak);
+}
+
+function updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, cfg, helpers) {
+  return updateEnemyLeaveStreakCore(detail, t, {
+    cfg,
+    enemyActorFromLeaveDetail: value => enemyActorFromLeaveDetailCore(value, normalizeEnemyActorCore),
+    readEnemyLeaveStreak: readAt => readEnemyLeaveStreakBoundCore(storage, bot, cfg, readAt, helpers),
+    writeEnemyLeaveStreak: streak => writeEnemyLeaveStreakBoundCore(storage, bot, streak, helpers),
+    enemyRepeatDelayMsForCount: count => enemyRepeatDelayMsForCountCore(count, cfg)
+  });
+}
+
 function combatExitSummaryCore(reason, target, combatState = {}, helpers) {
   const cfg = helpers.cfg;
   const selfHp = Number(combatState.selfHp ?? combatState.hp ?? NaN);
@@ -452,7 +477,9 @@ function setExitReloginSuppressBoundCore(bot, storage, storageReason, reason, de
     isExitLoginSuppressReason: isExitLoginSuppressReasonCore,
     hpInfoForRelogin: helpers.hpInfoForRelogin,
     reloginDelayForHp: helpers.reloginDelayForHp,
-    updateEnemyLeaveStreak: helpers.updateEnemyLeaveStreak,
+    updateEnemyLeaveStreak: (detail, t) => updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, helpers.cfg, {
+      enemyLeaveStreakKey: helpers.enemyLeaveStreakKey
+    }),
     clearLoginSuppressMatching: helpers.clearLoginSuppressMatching,
     finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
     writePersistentExitState: helpers.writePersistentExitState,
@@ -813,6 +840,9 @@ module.exports = {
   readEnemyLeaveStreakCore,
   writeEnemyLeaveStreakCore,
   updateEnemyLeaveStreakCore,
+  readEnemyLeaveStreakBoundCore,
+  writeEnemyLeaveStreakBoundCore,
+  updateEnemyLeaveStreakBoundCore,
   combatExitSummaryCore,
   combatLeaveActionCore,
   pursuitLeaveSummaryCore,

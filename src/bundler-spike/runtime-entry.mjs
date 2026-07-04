@@ -578,6 +578,15 @@ function helperStatus(config = {}) {
       enemyRepeatDelayMsForCount: count => exitRelogin.enemyRepeatDelayMsForCountCore(count, exitReloginStreakCfg)
     }
   );
+  const exitReloginBoundStreakDetail = { target: { user_id: 42, name: '追击者' } };
+  const exitReloginBoundStreak = exitRelogin.updateEnemyLeaveStreakBoundCore(
+    exitReloginBoundStreakDetail,
+    3000,
+    exitReloginStreakStorage,
+    exitReloginStreakBot,
+    exitReloginStreakCfg,
+    { enemyLeaveStreakKey: 'enemy-streak-key' }
+  );
   const exitReloginSummaryHelpers = {
     cfg: {
       combatCriticalHpLeaveThreshold: 25,
@@ -789,16 +798,29 @@ function helperStatus(config = {}) {
     exitReloginSuppressHelpers
   );
   const exitReloginSuppressBoundBot = { pursuitReloginUntil: 0, lastEnemyLeaveWaitMs: 0 };
-  const exitReloginSuppressBoundDetail = { summary: 'bound hold' };
+  const exitReloginSuppressBoundStorage = {
+    values: {},
+    getItem(key) {
+      return this.values[key] ?? null;
+    },
+    setItem(key, value) {
+      this.values[key] = value;
+    }
+  };
+  const exitReloginSuppressBoundDetail = { summary: 'bound hold', target: { user_id: 99, name: 'bound-streak-enemy' } };
   const exitReloginSuppressBoundUntil = exitRelogin.setExitReloginSuppressBoundCore(
     exitReloginSuppressBoundBot,
-    exitReloginSuppressNewStorage,
+    exitReloginSuppressBoundStorage,
     'enemy leave',
     'combat leave',
     exitReloginSuppressBoundDetail,
     { hp: 65 },
     { minimumUntil: 6000 },
-    exitReloginSuppressHelpers
+    {
+      ...exitReloginSuppressHelpers,
+      cfg: exitReloginStreakCfg,
+      enemyLeaveStreakKey: 'enemy-streak-key'
+    }
   );
   const exitReloginBudgetHold = exitRelogin.staminaBudgetExitHoldUntilCore(
     { coin: { id: 'budget-coin' } },
@@ -853,6 +875,8 @@ function helperStatus(config = {}) {
     {
       loginSuppressKey: 'suppress',
       loginSuppressReasonKey: 'suppressReason',
+      cfg: exitReloginStreakCfg,
+      enemyLeaveStreakKey: 'enemy-streak-key',
       enemyLeaveStateKey: 'enemy-state',
       readPersistentExitState: () => ({ reloginUntil: 2500, reason: 'enemy-leave' }),
       now: () => 1000
@@ -1150,6 +1174,8 @@ function helperStatus(config = {}) {
     exitReloginReadStreakCount: exitReloginReadStreak?.count,
     exitReloginUpdatedStreakCount: exitReloginUpdatedStreak?.count,
     exitReloginUpdatedRepeatDelay: exitReloginUpdateDetail.reloginRepeatDelayMs,
+    exitReloginBoundStreakCount: exitReloginBoundStreak?.count,
+    exitReloginBoundStreakRepeatDelay: exitReloginBoundStreakDetail.reloginRepeatDelayMs,
     exitReloginWrittenStreakCount: exitReloginStreakStorage.writtenValue?.count,
     exitReloginBotStreakKey: exitReloginStreakBot.enemyLeaveStreak?.key,
     exitReloginCombatSummary,
@@ -1193,7 +1219,7 @@ function helperStatus(config = {}) {
     exitReloginSuppressNewPersisted: exitReloginSuppressEvents.some(event => event[0] === 'write-exit' && event[1] === 'enemy-state' && event[2] === 'enemy leave'),
     exitReloginSuppressBoundUntil,
     exitReloginSuppressBoundDelay: exitReloginSuppressBoundDetail.reloginDelayMs,
-    exitReloginSuppressBoundStreaked: exitReloginSuppressBoundDetail.streaked,
+    exitReloginSuppressBoundStreakCount: exitReloginSuppressBoundDetail.enemyLeaveStreak?.count,
     exitReloginSuppressEventCount: arrayCountRuntime.arrayCount(exitReloginSuppressEvents),
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,

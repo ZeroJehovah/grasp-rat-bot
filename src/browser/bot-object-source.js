@@ -1,7 +1,13 @@
 'use strict';
 
-function botObjectSource() {
-  return String.raw`		  const bot = {
+function botObjectSource(options = {}) {
+  const streakPrelude = options.bundledRuntime
+    ? "  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    : '';
+  const enemyLeaveStreakStatus = options.bundledRuntime
+    ? 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })'
+    : 'readEnemyLeaveStreak()';
+  return String.raw`${streakPrelude}		  const bot = {
 	    running: true,
 	    version: cfg.version,
 	    sourceHash: cfg.sourceHash,
@@ -504,7 +510,7 @@ function botObjectSource() {
 			          reason: enemyLeaveDetail?.reason || this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || '',
 	          summary: enemyLeaveDetail?.summary || latestEnemyLeaveSummary(),
 	          displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
-	          streak: readEnemyLeaveStreak(),
+	          streak: ${enemyLeaveStreakStatus},
 	          lastWaitMs: this.lastEnemyLeaveWaitMs || enemyLeaveDetail?.reloginDelayMs || enemyLeaveDetail?.holdRemainingMs || 0,
 	          enemyActor: enemyLeaveDetail?.enemyActor || null,
 	          reloginRepeatCount: enemyLeaveDetail?.reloginRepeatCount || enemyLeaveDetail?.enemyLeaveStreak?.count || 0,
