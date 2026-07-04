@@ -12,6 +12,7 @@ const {
   snapshotCoinNavigationReasonCore
 } = require('./runtime/coin-target');
 const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
+const { recordDropMatchedKillCall } = require('./combat-history-source');
 
 function nativeCoinSnapshotCall(options = {}) {
   if (!options.bundledRuntime) return 'nativeCoinSnapshot()';
@@ -99,7 +100,7 @@ function recordSessionCoinPickupCall(targetExpr, amountExpr, currentSummaryExpr,
         return false;
       }
       if (sessionKey) pushBounded(session.coinPickupKeys, { key: sessionKey, at: sessionAt, amount: sessionValue, reason: sessionReason || '' }, 80);
-      recordDropMatchedKill(sessionTarget, sessionValue, sessionSummary, sessionReason);
+      ${recordDropMatchedKillCall('sessionTarget', 'sessionValue', 'sessionSummary', 'sessionReason', options)};
       session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + sessionValue;
       const sessionCoinDiff = Math.max(0, Math.round(Number(sessionSummary?.coins || 0) - Number(sessionPreviousCoins || 0)));
       session.coinsGained = Math.max(
@@ -176,7 +177,7 @@ function coinTargetRuntimeInlineSource(helpers = {}, options = {}) {
       return false;
     }
     if (key) pushBounded(session.coinPickupKeys, { key, at: t, amount: value, reason: reason || '' }, 80);
-    recordDropMatchedKill(target, value, currentSummary, reason);
+    ${recordDropMatchedKillCall('target', 'value', 'currentSummary', 'reason', options)};
     session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + value;
     const coinDiff = Math.max(0, Math.round(Number(currentSummary?.coins || 0) - Number(previousCoins || 0)));
     session.coinsGained = Math.max(

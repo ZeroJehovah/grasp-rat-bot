@@ -304,6 +304,7 @@ function main() {
   const opportunityPickRuntimeModule = readText('src/browser/runtime/opportunity-pick.js');
   const patrolRuntimeModule = readText('src/browser/runtime/patrol.js');
   const postAttackDropRuntimeModule = readText('src/browser/runtime/post-attack-drop.js');
+  const dropMatchedKillRuntimeModule = readText('src/browser/runtime/drop-matched-kill.js');
   const staminaBudgetRuntimeModule = readText('src/browser/runtime/stamina-budget.js');
   const opportunityConstantsRuntimeModule = readText('src/browser/runtime/opportunity-constants.js');
   const strategyActionArbitrationSource = readText('src/strategy/action-arbitration.js');
@@ -322,6 +323,7 @@ function main() {
   const strategyOpportunityPickSource = readText('src/strategy/opportunity-pick.js');
   const strategyPatrolSource = readText('src/strategy/patrol.js');
   const strategyPostAttackDropSource = readText('src/strategy/post-attack-drop.js');
+  const strategyDropMatchedKillSource = readText('src/strategy/drop-matched-kill.js');
   const strategyStaminaBudgetSource = readText('src/strategy/stamina-budget.js');
   const strategyOpportunityConstantsSource = readText('src/strategy/opportunity-constants.js');
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
@@ -437,6 +439,7 @@ function main() {
     opportunityClearRuntimeModule,
     opportunityCandidatesRuntimeModule,
     postAttackDropRuntimeModule,
+    dropMatchedKillRuntimeModule,
     staminaBudgetRuntimeModule,
     opportunityConstantsRuntimeModule,
     targetOverlaySourceModule,
@@ -453,6 +456,7 @@ function main() {
     tickSafetySourceModule,
     importantLogSourceModule,
     combatHistorySourceModule,
+    strategyDropMatchedKillSource,
     entityRefreshSourceModule,
     classifySourceModule,
     coinSafetySourceModule,
@@ -592,6 +596,7 @@ function main() {
     assert(distSource.includes('var require_coin_diagnostics = __commonJS'), 'bundled production dist does not bundle the coin-diagnostics runtime module through esbuild');
     assert(distSource.includes('var require_stamina_budget = __commonJS'), 'bundled production dist does not bundle the stamina-budget runtime module through esbuild');
     assert(distSource.includes('var require_post_attack_drop = __commonJS'), 'bundled production dist does not bundle the post-attack-drop runtime module through esbuild');
+    assert(distSource.includes('var require_drop_matched_kill = __commonJS'), 'bundled production dist does not bundle the drop-matched-kill runtime module through esbuild');
     new vm.Script(distSource, { filename: 'dist/grasp-rat-remote-bot.js' });
     assert(buildRemoteSource.includes("require('./remote-bot-bundle')"), 'production build does not use the shared remote bundler');
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
@@ -732,6 +737,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['array-count', () => arrayCountSource(config)]"), 'array-count fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-utility-clone', () => runtimeUtilityCloneSource(config)]"), 'runtime-utility-clone fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['combat-history', () => combatHistorySource(config)]"), 'combat-history fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['control-login-runtime', () => controlLoginRuntimeSource(config)]"), 'control-login-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-motion-runtime', () => coinMotionRuntimeSource(config)]"), 'coin-motion-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-target-runtime', () => coinTargetRuntimeSource(config)]"), 'coin-target-runtime fragment is not config-aware for bundled runtime migration');
@@ -971,13 +977,16 @@ function main() {
     assert(importantLogSourceModule.includes('function importantLogSource() {'), 'important-log source factory not found');
     assert(importantLogSourceModule.includes('module.exports = {\n  importantLogSource'), 'important-log module export not found');
     assert(functionBody(importantLogSourceModule, 'importantLogSource').includes('String.raw`'), 'important-log source factory does not return raw browser source');
-    assert(combatHistorySourceModule.includes('function combatHistorySource() {'), 'combat-history source factory not found');
-    assert(combatHistorySourceModule.includes('module.exports = {\n  combatHistorySource'), 'combat-history module export not found');
+    assert(combatHistorySourceModule.includes('function recordDropMatchedKillCall('), 'combat-history drop-matched kill call helper not found');
+    assert(combatHistorySourceModule.includes('function combatHistorySource(options = {}) {'), 'combat-history source factory not found');
+    assert(combatHistorySourceModule.includes('module.exports = {\n  recordDropMatchedKillCall,\n  combatHistorySource'), 'combat-history module exports are incomplete');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('String.raw`'), 'combat-history source factory does not return raw browser source');
+    assert(functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('buildDropMatchedKillCore') && functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('recordKillHistoryItem(dropMatchedKill.kill, dropMatchedKill.seenKey)'), 'combat-history drop-matched kill call does not route through core');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes("require('./src/browser/runtime/drop-matched-kill')"), 'combat-history source does not hand drop-matched kill core to the bundler');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function rememberAttack'), 'combat-history source factory does not include attack history tracking');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function rememberCombatEngagement'), 'combat-history source factory does not include combat engagement tracking');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordKillHistoryItem'), 'combat-history source factory does not include kill history storage');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordDropMatchedKill'), 'combat-history source factory does not include drop matched kill attribution');
+    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('localDropMatchedKillSource'), 'combat-history source factory does not preserve local drop matched kill attribution');
     assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function updateKillHistory'), 'combat-history source factory does not include kill history update');
     assert(entityRefreshSourceModule.includes('function entityRefreshSource(options = {}) {'), 'entity-refresh source factory not found');
     assert(entityRefreshSourceModule.includes('module.exports = {\n  entityRefreshSource'), 'entity-refresh source module export not found');
@@ -1233,7 +1242,7 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('leaveOffline'), 'tick source factory does not preserve offline leave handling');
     assert(functionBody(tickSourceModule, 'tickSource').includes('chooseAction(self)'), 'tick source factory does not preserve action selection');
     assert(functionBody(tickSourceModule, 'tickSource').includes("trackCoinProgressCall('action', 'self', options)"), 'tick source factory does not preserve coin progress tracking');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('applyFinalActionArbitration(action, source)'), 'tick source factory does not preserve final action arbitration');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("applyFinalActionArbitrationCall('action', 'source', options)"), 'tick source factory does not preserve final action arbitration');
     assert(functionBody(tickSourceModule, 'tickSource').includes('recordImportantCombatTick(source, bot.lastDecision)'), 'tick source factory does not preserve important combat tick logging');
     assert(functionBody(tickSourceModule, 'tickSource').includes('recordCombatLogTick(source, bot.lastDecision)'), 'tick source factory does not preserve combat-log tick logging');
     assert(startupSourceModule.includes('function startupSource() {'), 'startup source factory not found');
@@ -2028,10 +2037,10 @@ function main() {
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'page-native snapshot source factory does not route bundled runtime diagnostics through core');
     assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
-    assert(actionArbitrationSourceModule.includes('function actionArbitrationInlineSource(helpers = {}) {'), 'action-arbitration inline source factory not found');
+    assert(actionArbitrationSourceModule.includes('function actionArbitrationInlineSource(helpers = {}, options = {}) {'), 'action-arbitration inline source factory not found');
     assert(actionArbitrationSourceModule.includes('function bundledActionArbitrationSource() {'), 'action-arbitration bundled source factory not found');
     assert(actionArbitrationSourceModule.includes('function actionArbitrationSource(options = {}) {'), 'action-arbitration source selector not found');
-    assert(actionArbitrationSourceModule.includes('module.exports = {\n  actionArbitrationInlineSource,\n  bundledActionArbitrationSource,\n  actionArbitrationSource'), 'action-arbitration module exports are incomplete');
+    assert(actionArbitrationSourceModule.includes('module.exports = {\n  recordActionSwitchDiagnosticsCall,\n  applyFinalActionArbitrationCall,\n  actionArbitrationInlineSource,\n  bundledActionArbitrationSource,\n  actionArbitrationSource'), 'action-arbitration module exports are incomplete');
     assert(actionArbitrationSourceModule.includes("require('./runtime/action-priority')"), 'action-arbitration source does not import action-priority through the browser runtime helper module');
     assert(actionArbitrationSourceModule.includes("require('./runtime/action-arbitration')"), 'action-arbitration source does not import action-arbitration through the browser runtime helper module');
     assert(!actionArbitrationSourceModule.includes("require('../strategy/action-arbitration')"), 'action-arbitration source still imports final action arbitration directly from strategy');
@@ -2045,14 +2054,15 @@ function main() {
     assert(actionSwitchDiagnosticsRuntimeModule.includes('actionSwitchPairKey') && actionSwitchDiagnosticsRuntimeModule.includes('buildPreviousDecisionSummary') && actionSwitchDiagnosticsRuntimeModule.includes('recordActionSwitchDiagnosticsCore'), 'browser action-switch diagnostics helper module exports are incomplete');
     const actionArbitrationInlineBody = functionBody(actionArbitrationSourceModule, 'actionArbitrationInlineSource');
     assert(actionArbitrationInlineBody.includes('String.raw`'), 'action-arbitration inline source factory does not return raw browser source');
-    assert(actionArbitrationInlineBody.includes('function recordActionSwitchDiagnostics'), 'action-arbitration inline source factory does not include target switch diagnostics wrapper');
-    assert(actionArbitrationInlineBody.includes('function applyFinalActionArbitration'), 'action-arbitration inline source factory does not include final action arbitration wrapper');
+    assert(actionArbitrationInlineBody.includes('localActionSwitchWrapperSource') && actionArbitrationInlineBody.includes('function recordActionSwitchDiagnostics'), 'action-arbitration inline source factory does not include local target switch diagnostics wrapper');
+    assert(actionArbitrationInlineBody.includes('localFinalActionWrapperSource') && actionArbitrationInlineBody.includes('function applyFinalActionArbitration'), 'action-arbitration inline source factory does not include local final action arbitration wrapper');
     assert(actionArbitrationInlineBody.includes('actionPriorityHelperSource') && actionArbitrationInlineBody.includes('actionSwitchHelperSource') && actionArbitrationInlineBody.includes('finalActionHelperSource'), 'action-arbitration inline source factory does not inject helper groups');
     assert(actionArbitrationInlineBody.includes('fn.toString()'), 'action-arbitration inline source factory does not inline helper functions');
     const actionArbitrationBundledBody = functionBody(actionArbitrationSourceModule, 'bundledActionArbitrationSource');
     assert(actionArbitrationBundledBody.includes("require('./src/browser/runtime/action-priority')"), 'action-arbitration bundled source does not hand action-priority helpers to the bundler');
     assert(actionArbitrationBundledBody.includes("require('./src/browser/runtime/action-switch-diagnostics')"), 'action-arbitration bundled source does not hand action-switch diagnostics helpers to the bundler');
     assert(actionArbitrationBundledBody.includes("require('./src/browser/runtime/action-arbitration')"), 'action-arbitration bundled source does not hand final action arbitration helpers to the bundler');
+    assert(actionArbitrationBundledBody.includes('actionArbitrationInlineSource({}, { bundledRuntime: true })'), 'action-arbitration bundled source does not omit local wrappers');
     assert(networkQualitySourceModule.includes('function networkQualitySource() {'), 'network-quality source factory not found');
     assert(networkQualitySourceModule.includes('module.exports = {\n  networkQualitySource'), 'network-quality module export not found');
     assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('String.raw`'), 'network-quality source factory does not return raw browser source');
@@ -2100,6 +2110,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("import coinTarget from '../browser/runtime/coin-target.js'"), 'bundler spike does not import coin target through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import opportunityClear from '../browser/runtime/opportunity-clear.js'"), 'bundler spike does not import opportunity clear through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import postAttackDrop from '../browser/runtime/post-attack-drop.js'"), 'bundler spike does not import post-attack drop through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import dropMatchedKill from '../browser/runtime/drop-matched-kill.js'"), 'bundler spike does not import drop-matched kill through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import staminaBudget from '../browser/runtime/stamina-budget.js'"), 'bundler spike does not import stamina budget through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import opportunityConstants from '../browser/runtime/opportunity-constants.js'"), 'bundler spike does not import opportunity constants through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import pageAdapter from '../browser/page-global-core.js'"), 'bundler spike does not import the shared page-global adapter');
@@ -2115,6 +2126,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes("coinTarget.coinTargetKeyCore({ drop_id: 'target-spike'"), 'bundler spike does not execute the coin target helper module');
     assert(bundlerSpikeEntrySource.includes('opportunityClear.shouldClearOpportunityChoiceCore('), 'bundler spike does not execute the opportunity clear helper module');
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute the post-attack drop helper module');
+    assert(bundlerSpikeEntrySource.includes('dropMatchedKill.buildDropMatchedKillCore({'), 'bundler spike does not execute the drop-matched kill helper module');
     assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute the stamina budget helper module');
     assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute the opportunity constants helper module');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setExitReloginSuppressCore('), 'bundler spike does not execute the exit-relogin suppress writer core');
@@ -2835,8 +2847,13 @@ function main() {
       assert(text.includes('if (sample.exitOnly) return;'), 'exit-only combat samples can still start combat summaries');
       assert(text.includes('!importantCombatHasActualEngagement(record)'), 'empty combat summaries are not discarded');
       assert(text.includes("exitReason = 'session-interrupted-before-next-login'"), 'next-login interrupted sessions are not explicitly marked');
-      assert(text.includes('recordDropMatchedKill(candidate') && text.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards');
-      assert(text.includes('recordDropMatchedKill(target, value') || text.includes('recordDropMatchedKill(sessionTarget, sessionValue'), 'picked post-attack drop coins are not attributed as kill rewards');
+      if (file === 'grasp-rat-bot.js') {
+        assert(postAttackSourceModule.includes("recordDropMatchedKillCall('candidate', 'candidate.amount'") && postAttackSourceModule.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards through drop-matched call helper');
+        assert(coinTargetRuntimeSourceModule.includes("recordDropMatchedKillCall('sessionTarget', 'sessionValue'") && coinTargetRuntimeSourceModule.includes("recordDropMatchedKillCall('target', 'value'"), 'picked post-attack drop coins are not attributed as kill rewards through drop-matched call helper');
+      } else {
+        assert(text.includes('buildDropMatchedKillCore(candidate') && text.includes("'post-attack-drop-visible'"), 'post-attack visible drop coins are not attributed as kill rewards through drop-matched core');
+        assert(text.includes('buildDropMatchedKillCore(sessionTarget') || text.includes('buildDropMatchedKillCore(target'), 'picked post-attack drop coins are not attributed as kill rewards through drop-matched core');
+      }
       assert(text.includes('dropMatched') && text.includes('chatConfirmed'), 'kill summaries do not include attribution/confirmation flags');
       assert(functionBody(text, 'updateKillHistory').includes('rewardCoins: existingRewardConfirmed') && functionBody(text, 'updateKillHistory').includes('reportedRewardCoins: targetDrop'), 'chat-confirmed kills still treat target Drop as confirmed reward');
       assert(text.includes('function findLiveKillVictim') && functionBody(text, 'updateKillHistory').includes('findLiveKillVictim') && text.includes('victim-still-alive'), 'chat-confirmed kills are not blocked while the victim is still alive');
@@ -3967,7 +3984,9 @@ function main() {
     assert(!coinTargetRuntimeBody.includes('function coinMatchesTrackedTarget('), 'coin-target runtime source still keeps coin target matcher wrapper');
     assert(coinTargetRuntimeBody.includes('const key = coinTargetKeyCore(target);'), 'coin-target runtime recorder does not call coin target key core directly');
     assert(coinTargetRuntimeBody.includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'coin-target runtime visibility check does not call matcher core directly');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('const coinKey = coinTargetKeyCore(target)'), 'combat-history source does not call coin target key core directly');
+    assert(functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('coinTargetKey: coinTargetKeyCore'), 'combat-history drop-matched kill call does not bind coin target key core');
+    assert(strategyDropMatchedKillSource.includes('function buildDropMatchedKillCore') && strategyDropMatchedKillSource.includes('coinTargetKey(target)'), 'drop-matched kill strategy core does not use coin target key callback');
+    assert(dropMatchedKillRuntimeModule.includes("require('../../strategy/drop-matched-kill')") && dropMatchedKillRuntimeModule.includes('buildDropMatchedKillCore'), 'browser drop-matched kill runtime adapter is incomplete');
     assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceInlineSource').includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'opportunity-choice source does not call coin target matcher core directly');
     assert(!distSource.includes('function coinTargetKey('), 'dist remote bot still keeps coin target key wrapper');
     assert(!distSource.includes('function coinMatchesTrackedTarget('), 'dist remote bot still keeps coin target matcher wrapper');
@@ -4390,18 +4409,25 @@ function main() {
     assert(strategyPostAttackDropSource.includes('function resolvedRecentPostAttackDropsCore'), 'strategy post-attack resolved attack core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropCoinCore'), 'strategy post-attack drop coin picker core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropWaitTargetCore'), 'strategy post-attack wait picker core not found');
+    assert(strategyDropMatchedKillSource.includes('function buildDropMatchedKillCore'), 'strategy drop-matched kill core not found');
     assert(postAttackSourceModule.includes("require('./runtime/post-attack-drop')"), 'post-attack source does not import post-attack drop through browser runtime adapter');
+    assert(postAttackSourceModule.includes("require('./combat-history-source')"), 'post-attack source does not import drop-matched kill call helper');
     assert(!postAttackSourceModule.includes("require('../strategy/post-attack-drop')"), 'post-attack source still imports post-attack drop directly from strategy');
     assert(postAttackDropRuntimeModule.includes("require('../../strategy/post-attack-drop')"), 'post-attack drop runtime adapter does not reuse strategy module core');
     assert(postAttackDropRuntimeModule.includes('postAttackVisibleCoinExistsCore') && postAttackDropRuntimeModule.includes('pickPostAttackDropCoinCore') && postAttackDropRuntimeModule.includes('pickPostAttackDropWaitTargetCore'), 'post-attack drop runtime adapter does not export expected helpers');
+    assert(dropMatchedKillRuntimeModule.includes("require('../../strategy/drop-matched-kill')") && dropMatchedKillRuntimeModule.includes('buildDropMatchedKillCore'), 'drop-matched kill runtime adapter does not export expected helper');
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/post-attack-drop.js'"), 'bundler spike does not import post-attack drop runtime adapter');
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute post-attack drop picker helper');
     assert(bundlerSpikeBuildSource.includes("status.postAttackDropSelectedId === 'post-attack-coin'"), 'bundler spike self-test does not assert post-attack drop execution');
+    assert(bundlerSpikeBuildSource.includes("status.dropMatchedKillVictim === 'Post Target'") && bundlerSpikeBuildSource.includes('status.dropMatchedKillStaminaMs === 150'), 'bundler spike self-test does not assert drop-matched kill execution');
     assert(postAttackSourceModule.includes('postAttackDropHelperSource') && postAttackSourceModule.includes('fn.toString()'), 'source modules do not wire local post-attack drop helper injection');
     assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/post-attack-drop')"), 'generated remote runtime does not hand post-attack drop helpers to the bundler');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/drop-matched-kill')"), 'generated remote runtime does not hand drop-matched kill helper to the bundler');
     assert(!generatedRuntimeSource.includes('function pickPostAttackDropCoinCore'), 'generated remote runtime still inlines post-attack drop coin core before bundling');
+    assert(!generatedRuntimeSource.includes('function recordDropMatchedKill('), 'generated remote runtime still declares drop-matched kill wrapper');
+    assert(!distSource.includes('function recordDropMatchedKill('), 'bundled dist still declares drop-matched kill wrapper');
     assert(!generatedRuntimeSource.includes('function postAttackVisibleCoinExists('), 'generated remote runtime still declares unused postAttackVisibleCoinExists wrapper');
     assert(!distSource.includes('function postAttackVisibleCoinExists('), 'bundled dist still declares unused postAttackVisibleCoinExists wrapper');
     for (const wrapperName of ['pickPostAttackDropCoin', 'pickPostAttackDropWaitTarget']) {
@@ -4410,13 +4436,16 @@ function main() {
     }
     assert(generatedRuntimeSource.includes('pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {'), 'generated choose-action does not call post-attack drop coin core directly');
     assert(generatedRuntimeSource.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory, realtimeCoins, coinThreats, {'), 'generated choose-action does not call post-attack wait core directly');
+    assert(generatedRuntimeSource.includes('buildDropMatchedKillCore(candidate') && generatedRuntimeSource.includes('buildDropMatchedKillCore(sessionTarget'), 'generated runtime does not call drop-matched kill core directly');
     assert(distSource.includes('pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {'), 'bundled dist choose-action does not call post-attack drop coin core directly');
     assert(distSource.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory, realtimeCoins, coinThreats, {'), 'bundled dist choose-action does not call post-attack wait core directly');
+    assert(distSource.includes('buildDropMatchedKillCore(candidate') && distSource.includes('buildDropMatchedKillCore(sessionTarget'), 'bundled dist does not call drop-matched kill core directly');
     assert(distSource.includes('function postAttackVisibleCoinExistsCore'), 'bundled dist does not contain post-attack visible coin core');
     assert(distSource.includes('function resolvedRecentPostAttackDropsCore'), 'bundled dist does not contain post-attack resolved attack core');
     assert(distSource.includes('function buildPostAttackDropCoinCandidateCore'), 'bundled dist does not contain post-attack drop coin metadata core');
     assert(distSource.includes('function pickPostAttackDropCoinCore'), 'bundled dist does not contain post-attack drop coin picker core');
     assert(distSource.includes('function pickPostAttackDropWaitTargetCore'), 'bundled dist does not contain post-attack wait picker core');
+    assert(distSource.includes('function buildDropMatchedKillCore'), 'bundled dist does not contain drop-matched kill core');
   });
 
   check('stamina budget helpers use strategy module core', () => {
@@ -4483,13 +4512,16 @@ function main() {
     assert(strategyActionSwitchDiagnosticsSource.includes('function recordActionSwitchDiagnosticsCore'), 'strategy target switch diagnostic core not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('function actionSwitchPairKey'), 'strategy target switch pair key helper not found');
     assert(strategyActionSwitchDiagnosticsSource.includes('targetSwitch: snapshot'), 'strategy target switch event is not attached to decisions');
-    assert(actionArbitrationSourceModule.includes('actionSwitchHelperSource') && actionArbitrationSourceModule.includes('fn.toString()'), 'source modules do not wire local action switch helper injection');
+    assert(actionArbitrationSourceModule.includes('function recordActionSwitchDiagnosticsCall') && actionArbitrationSourceModule.includes('targetSwitchState = ensureTargetSwitchDiagnostics()'), 'source modules do not wire direct action switch diagnostic call generation');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/action-switch-diagnostics')"), 'generated remote runtime does not hand action switch diagnostics helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function recordActionSwitchDiagnosticsCore'), 'generated remote runtime still inlines target switch diagnostic core before bundling');
+    assert(!generatedRuntimeSource.includes('function recordActionSwitchDiagnostics(action'), 'generated remote runtime still keeps target switch diagnostic wrapper');
+    assert(!distSource.includes('function recordActionSwitchDiagnostics(action'), 'bundled dist still keeps target switch diagnostic wrapper');
     assert(distSource.includes('function recordActionSwitchDiagnosticsCore'), 'bundled dist does not contain target switch diagnostic core');
     assert(distSource.includes('targetSwitch: snapshot'), 'bundled dist target switch event is not attached to decisions');
     assert(sourceRuntimeText.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
-    assert(sourceRuntimeText.includes('action = recordActionSwitchDiagnostics(action, source);'), 'final action path does not record target switch diagnostics');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("recordActionSwitchDiagnosticsCall('action', 'source', options)"), 'tick source does not generate direct target switch diagnostics call');
+    assert(generatedRuntimeSource.includes('recordActionSwitchDiagnosticsCore(action, targetSwitchState'), 'generated runtime does not record target switch diagnostics directly');
     assert(combatLogSourceModule.includes("type: 'target-switch'"), 'standalone target-switch log entry not found');
     assert(combatLogSourceModule.includes('recordTargetSwitchLog(source, decision || {})'), 'target switch diagnostics are not recorded on each log tick');
     assert(combatLogSourceModule.includes('targetSwitchDiagnosticSignature'), 'target switch log throttle signature not found');
@@ -4500,16 +4532,19 @@ function main() {
     assert(strategyActionArbitrationSource.includes('function finalActionBandRank'), 'strategy final action priority band rank helper not found');
     assert(strategyActionArbitrationSource.includes('function applyFinalActionArbitrationCore'), 'strategy final action arbitration core not found');
     assert(strategyActionPrioritySource.includes('function actionFocusSummary'), 'strategy action focus summary helper not found');
-    assert(actionArbitrationSourceModule.includes('actionPriorityHelperSource') && actionArbitrationSourceModule.includes('finalActionHelperSource'), 'source modules do not wire local final action arbitration helper injection');
+    assert(actionArbitrationSourceModule.includes('function applyFinalActionArbitrationCall') && actionArbitrationSourceModule.includes('finalActionState = ensureFinalActionArbitration()'), 'source modules do not wire direct final action arbitration call generation');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/action-priority')"), 'generated remote runtime does not hand action priority helpers to the bundler');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/action-arbitration')"), 'generated remote runtime does not hand final action arbitration helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function finalActionBandRank'), 'generated remote runtime still inlines final action priority band rank helper before bundling');
     assert(!generatedRuntimeSource.includes('function applyFinalActionArbitrationCore'), 'generated remote runtime still inlines final action arbitration core before bundling');
+    assert(!generatedRuntimeSource.includes('function applyFinalActionArbitration(action'), 'generated remote runtime still keeps final action arbitration wrapper');
+    assert(!distSource.includes('function applyFinalActionArbitration(action'), 'bundled dist still keeps final action arbitration wrapper');
     assert(distSource.includes('function finalActionBandRank'), 'bundled dist does not contain final action priority band rank helper');
     assert(distSource.includes('function applyFinalActionArbitrationCore'), 'bundled dist does not contain final action arbitration core');
     assert(distSource.includes('higher-priority-band-stick'), 'final action hysteresis reason not found in bundled dist');
-    assert(sourceRuntimeText.includes('action = applyFinalActionArbitration(action, source);'), 'final action path does not run arbitration before diagnostics');
-    assert(sourceRuntimeText.indexOf('action = applyFinalActionArbitration(action, source);') < sourceRuntimeText.indexOf('action = recordActionSwitchDiagnostics(action, source);'), 'final action arbitration must run before target-switch diagnostics');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("applyFinalActionArbitrationCall('action', 'source', options)"), 'tick source does not generate direct final action arbitration call');
+    assert(generatedRuntimeSource.includes('applyFinalActionArbitrationCore(action, finalActionState'), 'generated runtime does not run final action arbitration directly');
+    assert(generatedRuntimeSource.indexOf('applyFinalActionArbitrationCore(action, finalActionState') < generatedRuntimeSource.indexOf('recordActionSwitchDiagnosticsCore(action, targetSwitchState'), 'final action arbitration must run before target-switch diagnostics');
     assert(sourceRuntimeText.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');
     assert(sourceRuntimeText.includes('preserved.finalActionArbitration?.lastAction'), 'runtime does not restore final action arbitration state');
     assert(sharedPreservedStateSource.includes('finalActionArbitration: previousBot?.finalActionArbitration'), 'hot-update preserved state omits final action arbitration');

@@ -9,6 +9,10 @@ const {
 } = require('./pending-exit-persistence-call-source');
 const { trackCoinProgressCall } = require('./coin-progress-runtime-source');
 const { rememberNativeCoinSnapshotCall } = require('./coin-target-runtime-source');
+const {
+  applyFinalActionArbitrationCall,
+  recordActionSwitchDiagnosticsCall
+} = require('./action-arbitration-source');
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
@@ -815,8 +819,8 @@ function tickSource(options = {}) {
           pursuit: pursuitSummary
         };
 	      }
-	      action = applyFinalActionArbitration(action, source);
-	      action = recordActionSwitchDiagnostics(action, source);
+	      action = ${applyFinalActionArbitrationCall('action', 'source', options)};
+	      action = ${recordActionSwitchDiagnosticsCall('action', 'source', options)};
 	      const canMove = true;
 	      const canAttack = true;
 	      if (!isSnapshotCoinWaitAction(action)) {

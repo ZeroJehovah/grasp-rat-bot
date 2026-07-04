@@ -8,6 +8,7 @@ const {
   pickPostAttackDropWaitTargetCore
 } = require('./runtime/post-attack-drop');
 const { coinDirectionToCall } = require('./coin-motion-runtime-source');
+const { recordDropMatchedKillCall } = require('./combat-history-source');
 
 function postAttackInlineSource(helpers = {}, options = {}) {
   const {
@@ -56,7 +57,7 @@ function postAttackInlineSource(helpers = {}, options = {}) {
       scoreCoin: scoreCoinOpportunity
     });
     for (const candidate of result.candidates || []) {
-      recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), 'post-attack-drop-visible');
+      ${recordDropMatchedKillCall('candidate', 'candidate.amount', 'summarizeSelf(self)', "'post-attack-drop-visible'", options)};
     }
     return result.selected || null;
   }

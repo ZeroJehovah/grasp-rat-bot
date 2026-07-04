@@ -2,6 +2,7 @@
 
 const { coinDirectionToCall } = require('./coin-motion-runtime-source');
 const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
+const { recordDropMatchedKillCall } = require('./combat-history-source');
 
 function chooseActionSource(options = {}) {
   const clearPostAttackCoinOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackCoin.postAttackTarget?.id', options);
@@ -163,7 +164,7 @@ function chooseActionSource(options = {}) {
         scoreCoin: scoreCoinOpportunity
       });
       for (const candidate of result.candidates || []) {
-        recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(${selfExpr}), 'post-attack-drop-visible');
+        ${recordDropMatchedKillCall('candidate', 'candidate.amount', `summarizeSelf(${selfExpr})`, "'post-attack-drop-visible'", options)};
       }
       return result.selected || null;
     })()`

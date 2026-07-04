@@ -208,7 +208,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-important-log',
     `
 `],
-    ['combat-history', combatHistorySource],
+    ['combat-history', () => combatHistorySource(config)],
     ['separator-after-combat-history',
     `
 `],
