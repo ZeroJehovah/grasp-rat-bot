@@ -7,6 +7,8 @@ const {
 const {
   writePersistentPendingExitStateCallback
 } = require('./pending-exit-persistence-call-source');
+const { trackCoinProgressCall } = require('./coin-progress-runtime-source');
+const { rememberNativeCoinSnapshotCall } = require('./coin-target-runtime-source');
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
@@ -470,7 +472,7 @@ function tickSource(options = {}) {
           coinMarked = recordIncidentalCoinPickups(self, currentSummary, bot.lastSelf, previousCoins);
         }
       } else {
-        rememberNativeCoinSnapshot();
+        ${rememberNativeCoinSnapshotCall('null', options)};
       }
 	      if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
 	        clearCoinTracking('drop-increased');
@@ -737,7 +739,7 @@ function tickSource(options = {}) {
 	            }
 	        };
 	      }
-	      action = attachCoinDiagnostics(trackCoinProgress(action, self));
+	      action = attachCoinDiagnostics(${trackCoinProgressCall('action', 'self', options)});
       const escape = bot.staleCoinEscape;
       const escapeActive = escape && now() < Number(escape.until || 0) && (escape.dx || escape.dy);
       if (escapeActive && action.kind !== 'flee') {

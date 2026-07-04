@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.491" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.492" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -15363,21 +15363,6 @@
         }
       }
     }
-    function coinDirectionTo(self, target, tolerance = cfg.coinPrecisionTolerance) {
-      const dxRaw = Number(target.x) - Number(self.x);
-      const dyRaw = Number(target.y) - Number(self.y);
-      const distance = hypot(dxRaw, dyRaw);
-      const t = now();
-      const id = String(target.drop_id ?? target.id ?? "");
-      const result = coinDirectionToCore(self, target, coinMotionCoreOptions(tolerance, {
-        nowMs: t,
-        lock: bot.coinApproachLock,
-        pickupFailureCount: coinPickupFailureCount(id, t),
-        pickupAttemptSlowCount: coinPickupAttemptSlowCount(id, distance, t)
-      }));
-      applyCoinApproachLockUpdate(result.lockUpdate);
-      return result.direction;
-    }
     function fleeDirection(self, threats) {
       let vx = 0;
       let vy = 0;
@@ -19571,7 +19556,23 @@
       return t;
     }
     function buildPostAttackDropWaitAction(self, target) {
-      const dir = coinDirectionTo(self, target, cfg.patrolPrecisionTolerance);
+      const dir = (() => {
+        const coinDirectionSelf = self;
+        const coinDirectionTarget = target;
+        const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
+        const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
+        const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
+        const coinDirectionAt = now();
+        const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
+        const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.patrolPrecisionTolerance, {
+          nowMs: coinDirectionAt,
+          lock: bot.coinApproachLock,
+          pickupFailureCount: coinPickupFailureCount(coinDirectionId, coinDirectionAt),
+          pickupAttemptSlowCount: coinPickupAttemptSlowCount(coinDirectionId, coinDirectionDistance, coinDirectionAt)
+        }));
+        applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate);
+        return coinDirectionResult.direction;
+      })();
       return {
         kind: "patrol",
         reason: "post-attack-drop-wait-position",
@@ -19603,7 +19604,23 @@
       };
     }
     function buildCoinAction(self, coin, reason, kind = null) {
-      const dir = coinDirectionTo(self, coin);
+      const dir = (() => {
+        const coinDirectionSelf = self;
+        const coinDirectionTarget = coin;
+        const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
+        const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
+        const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
+        const coinDirectionAt = now();
+        const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
+        const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
+          nowMs: coinDirectionAt,
+          lock: bot.coinApproachLock,
+          pickupFailureCount: coinPickupFailureCount(coinDirectionId, coinDirectionAt),
+          pickupAttemptSlowCount: coinPickupAttemptSlowCount(coinDirectionId, coinDirectionDistance, coinDirectionAt)
+        }));
+        applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate);
+        return coinDirectionResult.direction;
+      })();
       const staminaCost = opportunityCoinStaminaCost(coin);
       const routeMeta = coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance);
       return {
@@ -19777,96 +19794,6 @@
         ...extra
       };
     }
-    function coinFailureIgnore(id, reason, t) {
-      const result = coinFailureIgnoreCore(bot.coinFailures.get(id) || {}, reason, t, coinProgressCoreOptions());
-      bot.coinFailures.set(id, {
-        count: result.count,
-        reason: result.reason,
-        lastAt: result.lastAt,
-        ignoreUntil: result.ignoreUntil
-      });
-      bot.ignoredCoins.set(id, result.ignoreUntil);
-      return { count: result.count, ignoreMs: result.ignoreMs, ignoreUntil: result.ignoreUntil };
-    }
-    function staleCoinEscapeDirection(action, self, t) {
-      const result = staleCoinEscapeDirectionCore(action, self, t, coinProgressCoreOptions());
-      bot.staleCoinEscape = result.state;
-      return { dx: result.dx, dy: result.dy };
-    }
-    function clearIgnoredCoinRuntimeState(id) {
-      const cleanup = coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, id);
-      if (cleanup.clearLastTarget) {
-        bot.lastTarget = null;
-        bot.lastTargetAt = 0;
-      }
-      if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", id)) {
-        bot.opportunityChoice = null;
-        resetOpportunitySwitchLock();
-      }
-      if (cleanup.clearCoinApproachLock) bot.coinApproachLock = null;
-    }
-    function trackCoinProgress(action, self) {
-      const t = now();
-      const options = coinProgressCoreOptions();
-      for (const [id2, attempt2] of bot.coinAttempts.entries()) {
-        if (coinAttemptExpiredCore(attempt2, t, options)) {
-          bot.coinAttempts.delete(id2);
-        }
-      }
-      if (!coinProgressIntentCore(action)) {
-        bot.coinProgress = null;
-        if (!bot.staleCoinEscape || t >= Number(bot.staleCoinEscape.until || 0)) bot.coinApproachLock = null;
-        return action;
-      }
-      const attemptResult = updateCoinAttemptCore(bot.coinAttempts.get(String(action.target.id)), action, t, options);
-      const id = attemptResult.id;
-      const distance = attemptResult.distance;
-      const attempt = attemptResult.attempt;
-      bot.coinAttempts.set(id, attempt);
-      const closeStuck = attemptResult.closeStuck;
-      const nearStuck = attemptResult.nearStuck;
-      if (closeStuck || nearStuck) {
-        const failure2 = coinFailureIgnore(id, closeStuck ? "close" : "near", t);
-        const ignoreUntil2 = failure2.ignoreUntil;
-        bot.coinAttempts.delete(id);
-        bot.coinProgress = buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil2, "stuck");
-        clearIgnoredCoinRuntimeState(id);
-        const escape2 = staleCoinEscapeDirection(action, self, t);
-        return buildIgnoredCoinPatrolActionCore(
-          action,
-          id,
-          distance,
-          attempt,
-          failure2,
-          escape2,
-          t,
-          closeStuck ? "ignore-close-stale-coin" : "ignore-near-stale-coin",
-          true
-        );
-      }
-      const previous = bot.coinProgress;
-      const progressResult = updateCoinProgressRecordCore(previous, attempt, distance, t, options);
-      bot.coinProgress = progressResult.progress;
-      if (!progressResult.stale) {
-        return action;
-      }
-      const failure = coinFailureIgnore(id, "progress", t);
-      const ignoreUntil = failure.ignoreUntil;
-      bot.coinAttempts.delete(id);
-      bot.coinProgress = buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, "progress");
-      clearIgnoredCoinRuntimeState(id);
-      const escape = staleCoinEscapeDirection(action, self, t);
-      return buildIgnoredCoinPatrolActionCore(
-        action,
-        id,
-        distance,
-        previous,
-        failure,
-        escape,
-        t,
-        "ignore-stale-coin-no-progress"
-      );
-    }
     const {
       actionPriorityBand,
       actionFocusTargetType,
@@ -19982,49 +19909,14 @@
         ...extra
       };
     }
-    function trackedCoinStillVisible(target) {
-      const nativeCoinList = getNativeCoinList();
-      if (!Array.isArray(nativeCoinList)) return null;
-      return nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean).some((coin) => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
-    }
-    function nativeCoinSnapshot() {
-      const nativeCoinList = getNativeCoinList();
-      if (!Array.isArray(nativeCoinList)) return null;
-      const coins = nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
-      return buildNativeCoinSnapshotCore(coins, coinTargetCoreOptions({ nowMs: Date.now() }));
-    }
-    function rememberNativeCoinSnapshot(snapshot = null) {
-      const next = Array.isArray(snapshot) ? snapshot : nativeCoinSnapshot();
-      if (Array.isArray(next)) bot.lastNativeCoinSnapshot = next.slice(-160);
-      return next;
-    }
-    function recordSessionCoinPickup(target, amount, currentSummary, previousCoins, reason) {
-      const value = Math.max(0, Math.round(Number(amount || 0)));
-      if (!value) return false;
-      updateSessionStats(currentSummary);
-      const session = bot.session || (bot.session = {});
-      const t = Date.now();
-      const key = coinTargetKeyCore(target);
-      if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
-      session.coinPickupKeys = session.coinPickupKeys.filter((item) => item && t - Number(item.at || 0) <= 6e4).slice(-80);
-      if (key && session.coinPickupKeys.some((item) => String(item.key || "") === key && t - Number(item.at || 0) <= 5e3)) {
-        return false;
-      }
-      if (key) pushBounded(session.coinPickupKeys, { key, at: t, amount: value, reason: reason || "" }, 80);
-      recordDropMatchedKill(target, value, currentSummary, reason);
-      session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + value;
-      const coinDiff = Math.max(0, Math.round(Number(currentSummary?.coins || 0) - Number(previousCoins || 0)));
-      session.coinsGained = Math.max(
-        Math.max(0, Number(session.coinsGained || 0) || 0),
-        Math.max(0, Number(session.coinPickupTotal || 0) || 0),
-        coinDiff
-      );
-      upsertImportantSessionRecord(session, currentSummary, { at: t });
-      return true;
-    }
     function recordIncidentalCoinPickups(self, currentSummary, previousSelf, previousCoins) {
       const previousSnapshot = Array.isArray(bot.lastNativeCoinSnapshot) ? bot.lastNativeCoinSnapshot : [];
-      const currentSnapshot = nativeCoinSnapshot();
+      const currentSnapshot = (() => {
+        const nativeCoinList = getNativeCoinList();
+        if (!Array.isArray(nativeCoinList)) return null;
+        const nativeSnapshotCoins = nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
+        return buildNativeCoinSnapshotCore(nativeSnapshotCoins, coinTargetCoreOptions({ nowMs: Date.now() }));
+      })();
       if (!Array.isArray(currentSnapshot)) return false;
       const t = Date.now();
       let recorded = false;
@@ -20038,13 +19930,41 @@
       for (const pickup of incidentalPickups) {
         const coin = pickup.coin;
         const currentDistance = pickup.currentDistance;
-        const sessionRecorded = recordSessionCoinPickup({
-          id: coin.id || coin.key,
-          amount: coin.amount,
-          x: coin.x,
-          y: coin.y,
-          distance: currentDistance
-        }, coin.amount, currentSummary, previousCoins, "incidental-coin-disappeared");
+        const sessionRecorded = (() => {
+          const sessionTarget = {
+            id: coin.id || coin.key,
+            amount: coin.amount,
+            x: coin.x,
+            y: coin.y,
+            distance: currentDistance
+          };
+          const sessionAmount = coin.amount;
+          const sessionSummary = currentSummary;
+          const sessionPreviousCoins = previousCoins;
+          const sessionReason = "incidental-coin-disappeared";
+          const sessionValue = Math.max(0, Math.round(Number(sessionAmount || 0)));
+          if (!sessionValue) return false;
+          updateSessionStats(sessionSummary);
+          const session = bot.session || (bot.session = {});
+          const sessionAt = Date.now();
+          const sessionKey = coinTargetKeyCore(sessionTarget);
+          if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
+          session.coinPickupKeys = session.coinPickupKeys.filter((item) => item && sessionAt - Number(item.at || 0) <= 6e4).slice(-80);
+          if (sessionKey && session.coinPickupKeys.some((item) => String(item.key || "") === sessionKey && sessionAt - Number(item.at || 0) <= 5e3)) {
+            return false;
+          }
+          if (sessionKey) pushBounded(session.coinPickupKeys, { key: sessionKey, at: sessionAt, amount: sessionValue, reason: sessionReason || "" }, 80);
+          recordDropMatchedKill(sessionTarget, sessionValue, sessionSummary, sessionReason);
+          session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + sessionValue;
+          const sessionCoinDiff = Math.max(0, Math.round(Number(sessionSummary?.coins || 0) - Number(sessionPreviousCoins || 0)));
+          session.coinsGained = Math.max(
+            Math.max(0, Number(session.coinsGained || 0) || 0),
+            Math.max(0, Number(session.coinPickupTotal || 0) || 0),
+            sessionCoinDiff
+          );
+          upsertImportantSessionRecord(session, sessionSummary, { at: sessionAt });
+          return true;
+        })();
         recorded = Boolean(recorded || sessionRecorded);
         if (sessionRecorded) {
           bot.lastCoinCollected = {
@@ -20060,24 +19980,18 @@
           };
         }
       }
-      rememberNativeCoinSnapshot(currentSnapshot);
+      (() => {
+        const rememberedSnapshot = currentSnapshot;
+        const nextSnapshot = Array.isArray(rememberedSnapshot) ? rememberedSnapshot : (() => {
+          const nativeCoinList = getNativeCoinList();
+          if (!Array.isArray(nativeCoinList)) return null;
+          const nativeSnapshotCoins = nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
+          return buildNativeCoinSnapshotCore(nativeSnapshotCoins, coinTargetCoreOptions({ nowMs: Date.now() }));
+        })();
+        if (Array.isArray(nextSnapshot)) bot.lastNativeCoinSnapshot = nextSnapshot.slice(-160);
+        return nextSnapshot;
+      })();
       return recorded;
-    }
-    function pruneCollectedSnapshotCoin(target) {
-      const id = target?.id === void 0 || target?.id === null ? "" : String(target.id);
-      const x = Number(target?.x);
-      const y = Number(target?.y);
-      const hasPoint = Number.isFinite(x) && Number.isFinite(y);
-      if (!id && !hasPoint) return 0;
-      const before = arrayCount(bot.globalState.coinDrops);
-      bot.globalState.coinDrops = (Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : []).filter((raw) => {
-        const coin = normalizeCoinDrop(raw, "snapshot");
-        if (!coin) return false;
-        if (id && String(coin.drop_id) === id) return false;
-        if (hasPoint && dist({ x, y }, coin) <= Number(cfg.coinCollectedPruneRadius || 0)) return false;
-        return true;
-      });
-      return before - arrayCount(bot.globalState.coinDrops);
     }
     function markCoinCollected(self, currentSummary, previousCoins) {
       const target = trackedCoinTargetForCollectionCore({
@@ -20091,7 +20005,12 @@
       if (Number.isFinite(distance) && distance > Number(cfg.coinCollectedConfirmDistance || 0)) return false;
       const currentCoins = Number(currentSummary?.coins || 0);
       const coinDelta = Math.max(0, Math.round(currentCoins - Number(previousCoins || 0)));
-      const visible = trackedCoinStillVisible(target);
+      const visible = (() => {
+        const visibleTarget = target;
+        const nativeCoinList = getNativeCoinList();
+        if (!Array.isArray(nativeCoinList)) return null;
+        return nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean).some((coin) => coinMatchesTrackedTargetCore(coin, visibleTarget, coinTargetCoreOptions()));
+      })();
       const confirmed = coinDelta > 0 || visible === false;
       if (!confirmed) return false;
       const amount = Math.max(0, Math.round(Number(target.amount || 0))) || coinDelta;
@@ -20101,9 +20020,53 @@
         bot.ignoredCoins.set(id, t + Number(cfg.coinCollectedIgnoreMs || 0));
         bot.coinAttempts.delete(id);
       }
-      const pruned = pruneCollectedSnapshotCoin(target);
+      const pruned = (() => {
+        const pruneTarget = target;
+        const pruneId = pruneTarget?.id === void 0 || pruneTarget?.id === null ? "" : String(pruneTarget.id);
+        const pruneX = Number(pruneTarget?.x);
+        const pruneY = Number(pruneTarget?.y);
+        const pruneHasPoint = Number.isFinite(pruneX) && Number.isFinite(pruneY);
+        if (!pruneId && !pruneHasPoint) return 0;
+        const beforePrune = arrayCount(bot.globalState.coinDrops);
+        bot.globalState.coinDrops = (Array.isArray(bot.globalState.coinDrops) ? bot.globalState.coinDrops : []).filter((raw) => {
+          const coin = normalizeCoinDrop(raw, "snapshot");
+          if (!coin) return false;
+          if (pruneId && String(coin.drop_id) === pruneId) return false;
+          if (pruneHasPoint && dist({ x: pruneX, y: pruneY }, coin) <= Number(cfg.coinCollectedPruneRadius || 0)) return false;
+          return true;
+        });
+        return beforePrune - arrayCount(bot.globalState.coinDrops);
+      })();
       const confirmReason = coinDelta > 0 ? "coins-increased" : "coin-disappeared";
-      const sessionRecorded = recordSessionCoinPickup(target, amount, currentSummary, previousCoins, confirmReason);
+      const sessionRecorded = (() => {
+        const sessionTarget = target;
+        const sessionAmount = amount;
+        const sessionSummary = currentSummary;
+        const sessionPreviousCoins = previousCoins;
+        const sessionReason = confirmReason;
+        const sessionValue = Math.max(0, Math.round(Number(sessionAmount || 0)));
+        if (!sessionValue) return false;
+        updateSessionStats(sessionSummary);
+        const session = bot.session || (bot.session = {});
+        const sessionAt = Date.now();
+        const sessionKey = coinTargetKeyCore(sessionTarget);
+        if (!Array.isArray(session.coinPickupKeys)) session.coinPickupKeys = [];
+        session.coinPickupKeys = session.coinPickupKeys.filter((item) => item && sessionAt - Number(item.at || 0) <= 6e4).slice(-80);
+        if (sessionKey && session.coinPickupKeys.some((item) => String(item.key || "") === sessionKey && sessionAt - Number(item.at || 0) <= 5e3)) {
+          return false;
+        }
+        if (sessionKey) pushBounded(session.coinPickupKeys, { key: sessionKey, at: sessionAt, amount: sessionValue, reason: sessionReason || "" }, 80);
+        recordDropMatchedKill(sessionTarget, sessionValue, sessionSummary, sessionReason);
+        session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + sessionValue;
+        const sessionCoinDiff = Math.max(0, Math.round(Number(sessionSummary?.coins || 0) - Number(sessionPreviousCoins || 0)));
+        session.coinsGained = Math.max(
+          Math.max(0, Number(session.coinsGained || 0) || 0),
+          Math.max(0, Number(session.coinPickupTotal || 0) || 0),
+          sessionCoinDiff
+        );
+        upsertImportantSessionRecord(session, sessionSummary, { at: sessionAt });
+        return true;
+      })();
       bot.lastCoinCollected = {
         id,
         amount,
@@ -20116,7 +20079,17 @@
         at: Date.now()
       };
       clearCoinTracking(confirmReason);
-      rememberNativeCoinSnapshot();
+      (() => {
+        const rememberedSnapshot = null;
+        const nextSnapshot = Array.isArray(rememberedSnapshot) ? rememberedSnapshot : (() => {
+          const nativeCoinList = getNativeCoinList();
+          if (!Array.isArray(nativeCoinList)) return null;
+          const nativeSnapshotCoins = nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
+          return buildNativeCoinSnapshotCore(nativeSnapshotCoins, coinTargetCoreOptions({ nowMs: Date.now() }));
+        })();
+        if (Array.isArray(nextSnapshot)) bot.lastNativeCoinSnapshot = nextSnapshot.slice(-160);
+        return nextSnapshot;
+      })();
       return true;
     }
     function chooseAction(self) {
@@ -20444,7 +20417,23 @@
       }
       if (recovery && nearCoin) {
         bot.fleeLock = null;
-        const dir = coinDirectionTo(self, nearCoin);
+        const dir = (() => {
+          const coinDirectionSelf = self;
+          const coinDirectionTarget = nearCoin;
+          const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
+          const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
+          const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
+          const coinDirectionAt = now();
+          const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
+          const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
+            nowMs: coinDirectionAt,
+            lock: bot.coinApproachLock,
+            pickupFailureCount: coinPickupFailureCount(coinDirectionId, coinDirectionAt),
+            pickupAttemptSlowCount: coinPickupAttemptSlowCount(coinDirectionId, coinDirectionDistance, coinDirectionAt)
+          }));
+          applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate);
+          return coinDirectionResult.direction;
+        })();
         return {
           kind: "coin",
           reason: "recovery-foot-coin",
@@ -20471,7 +20460,23 @@
       if (!fullHp && cautionThreats.length) {
         if (footCoin) {
           bot.fleeLock = null;
-          const dir = coinDirectionTo(self, footCoin);
+          const dir = (() => {
+            const coinDirectionSelf = self;
+            const coinDirectionTarget = footCoin;
+            const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
+            const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
+            const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
+            const coinDirectionAt = now();
+            const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
+            const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
+              nowMs: coinDirectionAt,
+              lock: bot.coinApproachLock,
+              pickupFailureCount: coinPickupFailureCount(coinDirectionId, coinDirectionAt),
+              pickupAttemptSlowCount: coinPickupAttemptSlowCount(coinDirectionId, coinDirectionDistance, coinDirectionAt)
+            }));
+            applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate);
+            return coinDirectionResult.direction;
+          })();
           return {
             kind: "coin",
             reason: "foot-coin-before-active-caution",
@@ -20493,7 +20498,23 @@
       }
       if (footCoin) {
         bot.fleeLock = null;
-        const dir = coinDirectionTo(self, footCoin);
+        const dir = (() => {
+          const coinDirectionSelf = self;
+          const coinDirectionTarget = footCoin;
+          const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
+          const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
+          const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
+          const coinDirectionAt = now();
+          const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
+          const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
+            nowMs: coinDirectionAt,
+            lock: bot.coinApproachLock,
+            pickupFailureCount: coinPickupFailureCount(coinDirectionId, coinDirectionAt),
+            pickupAttemptSlowCount: coinPickupAttemptSlowCount(coinDirectionId, coinDirectionDistance, coinDirectionAt)
+          }));
+          applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate);
+          return coinDirectionResult.direction;
+        })();
         return attachOpportunisticShot({
           kind: "coin",
           reason: "foot-coin-priority",
@@ -20643,7 +20664,23 @@
       const distantCoin = pickDistantCoin(self, realtimeCoins, coinThreats);
       if (distantCoin) {
         bot.fleeLock = null;
-        const dir = coinDirectionTo(self, distantCoin);
+        const dir = (() => {
+          const coinDirectionSelf = self;
+          const coinDirectionTarget = distantCoin;
+          const coinDirectionDxRaw = Number(coinDirectionTarget.x) - Number(coinDirectionSelf.x);
+          const coinDirectionDyRaw = Number(coinDirectionTarget.y) - Number(coinDirectionSelf.y);
+          const coinDirectionDistance = hypot(coinDirectionDxRaw, coinDirectionDyRaw);
+          const coinDirectionAt = now();
+          const coinDirectionId = String(coinDirectionTarget.drop_id ?? coinDirectionTarget.id ?? "");
+          const coinDirectionResult = coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions(cfg.coinPrecisionTolerance, {
+            nowMs: coinDirectionAt,
+            lock: bot.coinApproachLock,
+            pickupFailureCount: coinPickupFailureCount(coinDirectionId, coinDirectionAt),
+            pickupAttemptSlowCount: coinPickupAttemptSlowCount(coinDirectionId, coinDirectionDistance, coinDirectionAt)
+          }));
+          applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate);
+          return coinDirectionResult.direction;
+        })();
         return attachOpportunisticShot({
           kind: "seek-coin",
           reason: "safe-distant-coin",
@@ -21089,7 +21126,17 @@
             coinMarked = recordIncidentalCoinPickups(self, currentSummary, bot.lastSelf, previousCoins);
           }
         } else {
-          rememberNativeCoinSnapshot();
+          (() => {
+            const rememberedSnapshot = null;
+            const nextSnapshot = Array.isArray(rememberedSnapshot) ? rememberedSnapshot : (() => {
+              const nativeCoinList = getNativeCoinList();
+              if (!Array.isArray(nativeCoinList)) return null;
+              const nativeSnapshotCoins = nativeCoinList.map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
+              return buildNativeCoinSnapshotCore(nativeSnapshotCoins, coinTargetCoreOptions({ nowMs: Date.now() }));
+            })();
+            if (Array.isArray(nextSnapshot)) bot.lastNativeCoinSnapshot = nextSnapshot.slice(-160);
+            return nextSnapshot;
+          })();
         }
         if (!coinMarked && Number(currentSummary.drop || 0) > previousDrop) {
           clearCoinTracking("drop-increased");
@@ -21330,7 +21377,114 @@
             }
           };
         }
-        action = attachCoinDiagnostics(trackCoinProgress(action, self));
+        action = attachCoinDiagnostics((() => {
+          const progressAction = action;
+          const progressSelf = self;
+          const progressAt = now();
+          const progressOptions = coinProgressCoreOptions();
+          for (const [progressAttemptId, progressAttempt] of bot.coinAttempts.entries()) {
+            if (coinAttemptExpiredCore(progressAttempt, progressAt, progressOptions)) {
+              bot.coinAttempts.delete(progressAttemptId);
+            }
+          }
+          if (!coinProgressIntentCore(progressAction)) {
+            bot.coinProgress = null;
+            if (!bot.staleCoinEscape || progressAt >= Number(bot.staleCoinEscape.until || 0)) bot.coinApproachLock = null;
+            return progressAction;
+          }
+          const progressAttemptResult = updateCoinAttemptCore(bot.coinAttempts.get(String(progressAction.target.id)), progressAction, progressAt, progressOptions);
+          const progressId = progressAttemptResult.id;
+          const progressDistance = progressAttemptResult.distance;
+          const progressAttemptRecord = progressAttemptResult.attempt;
+          bot.coinAttempts.set(progressId, progressAttemptRecord);
+          const progressCloseStuck = progressAttemptResult.closeStuck;
+          const progressNearStuck = progressAttemptResult.nearStuck;
+          if (progressCloseStuck || progressNearStuck) {
+            const progressFailureResult = coinFailureIgnoreCore(bot.coinFailures.get(progressId) || {}, progressCloseStuck ? "close" : "near", progressAt, progressOptions);
+            bot.coinFailures.set(progressId, {
+              count: progressFailureResult.count,
+              reason: progressFailureResult.reason,
+              lastAt: progressFailureResult.lastAt,
+              ignoreUntil: progressFailureResult.ignoreUntil
+            });
+            bot.ignoredCoins.set(progressId, progressFailureResult.ignoreUntil);
+            const progressFailure = {
+              count: progressFailureResult.count,
+              ignoreMs: progressFailureResult.ignoreMs,
+              ignoreUntil: progressFailureResult.ignoreUntil
+            };
+            bot.coinAttempts.delete(progressId);
+            bot.coinProgress = buildIgnoredCoinProgressCore(progressId, progressAttemptRecord, progressDistance, progressAt, progressFailure.ignoreUntil, "stuck");
+            const progressCleanup = coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, progressId);
+            if (progressCleanup.clearLastTarget) {
+              bot.lastTarget = null;
+              bot.lastTargetAt = 0;
+            }
+            if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", progressId)) {
+              bot.opportunityChoice = null;
+              resetOpportunitySwitchLock();
+            }
+            if (progressCleanup.clearCoinApproachLock) bot.coinApproachLock = null;
+            const progressEscapeResult = staleCoinEscapeDirectionCore(progressAction, progressSelf, progressAt, progressOptions);
+            bot.staleCoinEscape = progressEscapeResult.state;
+            const progressEscape = { dx: progressEscapeResult.dx, dy: progressEscapeResult.dy };
+            return buildIgnoredCoinPatrolActionCore(
+              progressAction,
+              progressId,
+              progressDistance,
+              progressAttemptRecord,
+              progressFailure,
+              progressEscape,
+              progressAt,
+              progressCloseStuck ? "ignore-close-stale-coin" : "ignore-near-stale-coin",
+              true
+            );
+          }
+          const previousProgress = bot.coinProgress;
+          const progressResult = updateCoinProgressRecordCore(previousProgress, progressAttemptRecord, progressDistance, progressAt, progressOptions);
+          bot.coinProgress = progressResult.progress;
+          if (!progressResult.stale) {
+            return progressAction;
+          }
+          const staleFailureResult = coinFailureIgnoreCore(bot.coinFailures.get(progressId) || {}, "progress", progressAt, progressOptions);
+          bot.coinFailures.set(progressId, {
+            count: staleFailureResult.count,
+            reason: staleFailureResult.reason,
+            lastAt: staleFailureResult.lastAt,
+            ignoreUntil: staleFailureResult.ignoreUntil
+          });
+          bot.ignoredCoins.set(progressId, staleFailureResult.ignoreUntil);
+          const staleFailure = {
+            count: staleFailureResult.count,
+            ignoreMs: staleFailureResult.ignoreMs,
+            ignoreUntil: staleFailureResult.ignoreUntil
+          };
+          bot.coinAttempts.delete(progressId);
+          bot.coinProgress = buildIgnoredCoinProgressCore(progressId, bot.coinProgress, progressDistance, progressAt, staleFailure.ignoreUntil, "progress");
+          const staleCleanup = coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, progressId);
+          if (staleCleanup.clearLastTarget) {
+            bot.lastTarget = null;
+            bot.lastTargetAt = 0;
+          }
+          if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", progressId)) {
+            bot.opportunityChoice = null;
+            resetOpportunitySwitchLock();
+          }
+          if (staleCleanup.clearCoinApproachLock) bot.coinApproachLock = null;
+          const staleEscapeResult = staleCoinEscapeDirectionCore(progressAction, progressSelf, progressAt, progressOptions);
+          bot.staleCoinEscape = staleEscapeResult.state;
+          const staleEscape = { dx: staleEscapeResult.dx, dy: staleEscapeResult.dy };
+          return buildIgnoredCoinPatrolActionCore(
+            progressAction,
+            progressId,
+            progressDistance,
+            previousProgress,
+            staleFailure,
+            staleEscape,
+            progressAt,
+            "ignore-stale-coin-no-progress"
+          );
+        })());
         const escape = bot.staleCoinEscape;
         const escapeActive = escape && now() < Number(escape.until || 0) && (escape.dx || escape.dy);
         if (escapeActive && action.kind !== "flee") {

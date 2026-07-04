@@ -7,6 +7,7 @@ const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./runtime/post-attack-drop');
+const { coinDirectionToCall } = require('./coin-motion-runtime-source');
 
 function postAttackInlineSource(helpers = {}, options = {}) {
   const {
@@ -114,7 +115,7 @@ ${localPostAttackVisibleCoinExistsSource}
 ${localPostAttackPickerSource}
 
   function buildPostAttackDropWaitAction(self, target) {
-    const dir = coinDirectionTo(self, target, cfg.patrolPrecisionTolerance);
+    const dir = ${coinDirectionToCall('self', 'target', 'cfg.patrolPrecisionTolerance', options)};
     return {
       kind: 'patrol',
       reason: 'post-attack-drop-wait-position',
