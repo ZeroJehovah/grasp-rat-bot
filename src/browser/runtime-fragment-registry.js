@@ -62,127 +62,41 @@ function browserRuntimeFragmentEntries(config) {
   return [
     ['runtime-bootstrap', () => runtimeBootstrapSource(config)],
     ['runtime-state-bindings', () => runtimeStateBindingsSource(config)],
-    ['separator-after-runtime-state-bindings',
-    `
-
-`],
     ['bot-object', () => botObjectSource(config)],
-    ['separator-after-bot-object',
-    `
-
-`],
     ['entity-activity', entityActivitySource],
-    ['separator-after-entity-activity',
-    `
-`],
     ['target-whitelist', targetWhitelistSource],
-    ['separator-after-target-whitelist',
-    `
-`],
     ['stamina-runtime', staminaRuntimeSource],
-    ['separator-after-stamina-runtime',
-    `
-`],
     ['attack-worth', () => attackWorthSource(config)],
-    ['separator-after-attack-worth',
-    `
-`],
     ['exit-motion', () => exitMotionSource(config)],
-    ['separator-after-exit-motion',
-    `
-
-`],
     ['target-overlay', targetOverlaySource],
-    ['separator-after-target-overlay',
-    `
-
-    `],
     ['status-panel-runtime', () => statusPanelSource(config)],
     ['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)],
     ['combat-log-runtime', () => combatLogSource(config)],
-    ['separator-after-combat-log-runtime',
-    `
-`],
     ['tick-safety', () => tickSafetySource(config)],
-    ['separator-before-control-login-runtime',
-    `
-
-			`],
     ['control-login-runtime', () => controlLoginSource(config)],
-    ['separator-after-control-login-runtime',
-    `
-
-`],
     ['page-native-snapshot', () => pageNativeSnapshotSource(config)],
-    ['separator-after-page-native-snapshot',
-    `
-
-`],
     ['exit-relogin', () => exitReloginSource(config)],
-    ['separator-after-exit-relogin',
-    `
-`],
     ['pending-exit', () => pendingExitSource(config)],
     ['leave-command', () => leaveCommandSource(config)],
     ['auto-login', autoLoginSource],
     ['leave-flow', () => leaveFlowSource(config)],
     ['native-state', nativeStateSource],
-    ['separator-after-native-state',
-    `
-
-`],
     ['runtime-summary', runtimeSummarySource],
-    ['separator-after-runtime-summary',
-    `
-
-`],
     ['network-quality', networkQualitySource],
-    ['separator-after-network-quality',
-    `
-
-`],
     ['network-quality-summary', networkQualitySummarySource],
-    ['separator-after-network-quality-summary',
-    `
-
-`],
     ['important-log', importantLogSource],
-    ['separator-after-important-log',
-    `
-`],
     ['combat-history', () => combatHistorySource(config)],
-    ['separator-after-combat-history',
-    `
-`],
     ['entity-refresh', () => entityRefreshSource(config)],
     ['native-control', nativeControlSource],
-    ['separator-after-native-control',
-    `
-
-`],
     ['coin-motion-runtime', () => coinMotionRuntimeSource(config)],
-    ['separator-after-coin-motion-runtime',
-    `
-
-`],
     ['return-block', returnBlockSource],
-    ['separator-after-return-block',
-    `
-
-`],
     ['classify', classifySource],
     ['offline-safety', offlineSafetySource],
-    ['separator-after-offline-safety',
-    `
-	`],
     ['coin-safety', () => coinSafetySource(config)],
     ['target-selection', targetSelectionSource],
     ['combat-movement', combatMovementSource],
     ['combat-aim', combatAimSource],
     ['opportunity-stamina', () => opportunityStaminaSource(config)],
-    ['separator-after-opportunity-stamina',
-    `
-`],
     ['combat-state', () => combatStateSource(config)],
     ['combat-fire', combatFireSource],
     ['combat-leave-cover', combatLeaveCoverSource],
@@ -195,32 +109,11 @@ function browserRuntimeFragmentEntries(config) {
     ['opportunity-pick', () => opportunityPickSource(config)],
     ['patrol', () => patrolSource(config)],
     ['opportunity-clear', () => opportunityClearSource(config)],
-    ['separator-after-opportunity-clear',
-    `
-
-`],
     ['coin-progress-runtime', () => coinProgressRuntimeSource(config)],
-    ['separator-after-coin-progress-runtime',
-    `
-`],
     ['action-arbitration', () => actionArbitrationSource(config)],
-    ['separator-after-action-arbitration',
-    `
-`],
     ['coin-target-runtime', () => coinTargetRuntimeSource(config)],
-    ['separator-after-coin-target-runtime',
-    `
-`],
     ['choose-action', () => chooseActionSource(config)],
-    ['separator-after-choose-action',
-    `
-
-`],
     ['tick', () => tickSource(config)],
-    ['separator-after-tick',
-    `
-
-`],
     ['startup', startupSource]
   ];
 }
