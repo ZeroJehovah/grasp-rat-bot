@@ -1442,6 +1442,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 201. Removed the bundled login-snapshot-gate state normalizer wrapper by routing bot-object and control-login directly through `normalizeLoginSnapshotGateStateCore()`: integrated in `bootstrap-0.4.473`
 202. Removed the bundled login-snapshot-gate required-count wrapper by routing bot-object and control-login directly through `loginSnapshotSuccessRequiredCore()`: integrated in `bootstrap-0.4.474`
 203. Removed the bundled runtime-diagnostics recorder wrapper by routing tick-safety, page-native-snapshot, entity-refresh, and combat-log directly through `recordRuntimeDiagnosticsCore()`: integrated in `bootstrap-0.4.475`
+204. Removed the coin-motion metadata wrapper by routing choose-action, post-attack, and opportunity-actions directly through `coinMotionMetaCore()`: integrated in `bootstrap-0.4.476`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 

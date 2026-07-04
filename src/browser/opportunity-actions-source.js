@@ -42,7 +42,7 @@ function opportunityActionsSource() {
       },
       dx: dir.dx,
       dy: dir.dy,
-      ...coinMotionMeta(dir),
+      ...coinMotionMetaCore(dir),
       score: Math.round(scoreCoinOpportunity(coin)),
       staminaCost: Math.round(staminaCost),
       coinRoute: routeMeta

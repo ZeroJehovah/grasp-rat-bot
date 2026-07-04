@@ -1112,12 +1112,14 @@ function main() {
     assert(postAttackInlineBody.includes('function pickPostAttackDropWaitTarget'), 'post-attack inline source factory does not include wait target picker');
     assert(postAttackInlineBody.includes('function buildPostAttackDropWaitAction'), 'post-attack inline source factory does not include wait action builder');
     assert(postAttackInlineBody.includes('postAttackDropHelperSource'), 'post-attack inline source factory does not inject drop helpers');
+    assert(postAttackInlineBody.includes('coinMotionMetaCore(dir)'), 'post-attack source factory does not use coin motion metadata core directly');
     assert(functionBody(postAttackSourceModule, 'bundledPostAttackSource').includes("require('./src/browser/runtime/post-attack-drop')"), 'post-attack bundled source does not hand post-attack-drop helpers to the bundler');
     assert(opportunityActionsSourceModule.includes('function opportunityActionsSource() {'), 'opportunity-actions source factory not found');
     assert(opportunityActionsSourceModule.includes('module.exports = { opportunityActionsSource }'), 'opportunity-actions source module export not found');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('String.raw`'), 'opportunity-actions source factory does not return raw browser source');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function enemyOpportunityCandidates'), 'opportunity-actions source factory does not include enemy candidate helper');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('coinMotionMetaCore(dir)'), 'opportunity-actions source factory does not use coin motion metadata core directly');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
     assert(opportunityCandidateSourceModule.includes('function opportunityCandidateInlineSource(helpers = {}, options = {}) {'), 'opportunity-candidate inline source factory not found');
     assert(opportunityCandidateSourceModule.includes('function bundledOpportunityCandidateSource(options = {}) {'), 'opportunity-candidate bundled source factory not found');
@@ -1196,6 +1198,7 @@ function main() {
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('String.raw`'), 'choose-action source factory does not return raw browser source');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('function chooseAction(self)'), 'choose-action source factory does not include chooseAction');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('buildCoinDiagnostics'), 'choose-action source factory does not preserve coin diagnostics');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('coinMotionMetaCore(dir)'), 'choose-action source factory does not use coin motion metadata core directly');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('highValueVisibleCoinPriorityNeeded'), 'choose-action source factory does not preserve high-value visible coin priority');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickPostAttackDropCoin'), 'choose-action source factory does not preserve post-attack drop coin handling');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('summarizeNearestCoinStaminaBudgetExit'), 'choose-action source factory does not preserve stamina-budget exit handling');
@@ -3861,7 +3864,8 @@ function main() {
     assert(coinMotionRuntimeBody.includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime coin approach lock wrapper not found');
     assert(coinMotionRuntimeBody.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'coin-motion runtime coin direction wrapper does not call strategy core');
     assert(coinMotionRuntimeBody.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'coin-motion runtime coin direction wrapper does not apply lock updates');
-    assert(coinMotionRuntimeBody.includes('return coinMotionMetaCore(dir);'), 'coin-motion runtime coin motion metadata wrapper does not call strategy core');
+    assert(!coinMotionRuntimeBody.includes('function coinMotionMeta('), 'coin-motion runtime source still keeps metadata wrapper');
+    assert(!distSource.includes('function coinMotionMeta('), 'dist remote bot still keeps coin motion metadata wrapper');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-motion')"), 'generated remote runtime does not hand coin motion helpers to the bundler');
     assert(distSource.includes('function coinDirectionToCore'), 'bundled dist does not contain coin direction core');
     assert(distSource.includes('function coinPickupPrecisionPulseMsCore'), 'bundled dist does not contain coin pickup pulse core');

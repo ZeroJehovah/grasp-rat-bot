@@ -124,9 +124,7 @@ ${coinMotionHelperSource}
     return result.direction;
   }
 
-  function coinMotionMeta(dir) {
-    return coinMotionMetaCore(dir);
-  }`;
+`;
 }
 
 function bundledCoinMotionRuntimeSource() {

@@ -277,7 +277,7 @@ function chooseActionSource() {
         target: { id: nearCoin.drop_id, x: nearCoin.x, y: nearCoin.y, amount: nearCoin.amount, distance: Math.round(dir.distance) },
         dx: dir.dx,
         dy: dir.dy,
-        ...coinMotionMeta(dir)
+        ...coinMotionMetaCore(dir)
       };
     }
 
@@ -306,7 +306,7 @@ function chooseActionSource() {
           target: { id: footCoin.drop_id, x: footCoin.x, y: footCoin.y, amount: footCoin.amount, distance: Math.round(dir.distance) },
           dx: dir.dx,
           dy: dir.dy,
-          ...coinMotionMeta(dir)
+          ...coinMotionMetaCore(dir)
         };
       }
       const flee = lockedFleeDirection(self, cautionThreats, 'active-threat-caution-migration');
@@ -329,7 +329,7 @@ function chooseActionSource() {
         target: { id: footCoin.drop_id, x: footCoin.x, y: footCoin.y, amount: footCoin.amount, distance: Math.round(dir.distance) },
         dx: dir.dx,
         dy: dir.dy,
-        ...coinMotionMeta(dir)
+        ...coinMotionMetaCore(dir)
       }, self, realtimeEntities, { recovery });
     }
 
@@ -389,7 +389,7 @@ function chooseActionSource() {
         target: { id: distantCoin.drop_id, x: distantCoin.x, y: distantCoin.y, amount: distantCoin.amount, distance: Math.round(dir.distance) },
         dx: dir.dx,
         dy: dir.dy,
-        ...coinMotionMeta(dir)
+        ...coinMotionMetaCore(dir)
       }, self, realtimeEntities, { recovery });
     }
 

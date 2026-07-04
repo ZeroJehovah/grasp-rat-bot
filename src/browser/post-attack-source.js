@@ -135,7 +135,7 @@ ${postAttackDropHelperSource}
         battleStaminaSpentStartMs: Number.isFinite(Number(target.battleStaminaSpentStartMs)) ? Math.max(0, Math.round(Number(target.battleStaminaSpentStartMs))) : null,
         staminaSpentMs: Number.isFinite(Number(target.staminaSpentMs)) ? Math.max(0, Math.round(Number(target.staminaSpentMs))) : null
       },
-      ...coinMotionMeta(dir)
+      ...coinMotionMetaCore(dir)
     };
   }
 

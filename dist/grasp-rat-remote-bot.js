@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.475" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.476" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -15391,9 +15391,6 @@
       applyCoinApproachLockUpdate(result.lockUpdate);
       return result.direction;
     }
-    function coinMotionMeta(dir) {
-      return coinMotionMetaCore(dir);
-    }
     function fleeDirection(self, threats) {
       let vx = 0;
       let vy = 0;
@@ -19726,7 +19723,7 @@
           battleStaminaSpentStartMs: Number.isFinite(Number(target.battleStaminaSpentStartMs)) ? Math.max(0, Math.round(Number(target.battleStaminaSpentStartMs))) : null,
           staminaSpentMs: Number.isFinite(Number(target.staminaSpentMs)) ? Math.max(0, Math.round(Number(target.staminaSpentMs))) : null
         },
-        ...coinMotionMeta(dir)
+        ...coinMotionMetaCore(dir)
       };
     }
     function enemyOpportunityCandidates(self, targets, activeThreats) {
@@ -19769,7 +19766,7 @@
         },
         dx: dir.dx,
         dy: dir.dy,
-        ...coinMotionMeta(dir),
+        ...coinMotionMetaCore(dir),
         score: Math.round(scoreCoinOpportunity(coin)),
         staminaCost: Math.round(staminaCost),
         coinRoute: routeMeta
@@ -20647,7 +20644,7 @@
           target: { id: nearCoin.drop_id, x: nearCoin.x, y: nearCoin.y, amount: nearCoin.amount, distance: Math.round(dir.distance) },
           dx: dir.dx,
           dy: dir.dy,
-          ...coinMotionMeta(dir)
+          ...coinMotionMetaCore(dir)
         };
       }
       if (recovery) {
@@ -20674,7 +20671,7 @@
             target: { id: footCoin.drop_id, x: footCoin.x, y: footCoin.y, amount: footCoin.amount, distance: Math.round(dir.distance) },
             dx: dir.dx,
             dy: dir.dy,
-            ...coinMotionMeta(dir)
+            ...coinMotionMetaCore(dir)
           };
         }
         const flee = lockedFleeDirection(self, cautionThreats, "active-threat-caution-migration");
@@ -20696,7 +20693,7 @@
           target: { id: footCoin.drop_id, x: footCoin.x, y: footCoin.y, amount: footCoin.amount, distance: Math.round(dir.distance) },
           dx: dir.dx,
           dy: dir.dy,
-          ...coinMotionMeta(dir)
+          ...coinMotionMetaCore(dir)
         }, self, realtimeEntities, { recovery });
       }
       const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
@@ -20748,7 +20745,7 @@
           target: { id: distantCoin.drop_id, x: distantCoin.x, y: distantCoin.y, amount: distantCoin.amount, distance: Math.round(dir.distance) },
           dx: dir.dx,
           dy: dir.dy,
-          ...coinMotionMeta(dir)
+          ...coinMotionMetaCore(dir)
         }, self, realtimeEntities, { recovery });
       }
       if (localRealtimeCoin) {
