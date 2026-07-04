@@ -302,6 +302,18 @@ function startExitAuditCore(detail, meta = {}, helpers) {
   return detail.exitAuditId;
 }
 
+function startExitAuditBoundCore(detail, meta = {}, bot, helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return startExitAuditCore(detail, meta, {
+    resetLoginSnapshotGate: helpers.resetLoginSnapshotGate,
+    loginPointSafetyExitSelfForDetail: helpers.loginPointSafetyExitSelfForDetail,
+    ensureExitAuditDetail: helpers.ensureExitAuditDetail,
+    recordExitAuditEvent: helpers.recordExitAuditEvent,
+    lastSelf: bot?.lastSelf,
+    now: nowFn
+  });
+}
+
 function setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers) {
   const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || Date.now());
   let existingUntil = Number(options.existingUntil || 0);
@@ -789,6 +801,7 @@ module.exports = {
   unsafeExitReloginMinDelayMsCore,
   pendingExitSuppressReasonCore,
   startExitAuditCore,
+  startExitAuditBoundCore,
   setExitReloginSuppressCore,
   primePendingUnsafeExitLoginSuppressCore,
   primePendingUnsafeExitLoginSuppressBoundCore,

@@ -1644,6 +1644,17 @@
         });
         return detail.exitAuditId;
       }
+      function startExitAuditBoundCore(detail, meta = {}, bot, helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return startExitAuditCore(detail, meta, {
+          resetLoginSnapshotGate: helpers.resetLoginSnapshotGate,
+          loginPointSafetyExitSelfForDetail: helpers.loginPointSafetyExitSelfForDetail,
+          ensureExitAuditDetail: helpers.ensureExitAuditDetail,
+          recordExitAuditEvent: helpers.recordExitAuditEvent,
+          lastSelf: bot?.lastSelf,
+          now: nowFn
+        });
+      }
       function setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers) {
         const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || Date.now();
         let existingUntil = Number(options.existingUntil || 0);
@@ -2106,6 +2117,7 @@
         unsafeExitReloginMinDelayMsCore,
         pendingExitSuppressReasonCore,
         startExitAuditCore,
+        startExitAuditBoundCore,
         setExitReloginSuppressCore,
         primePendingUnsafeExitLoginSuppressCore,
         primePendingUnsafeExitLoginSuppressBoundCore,
@@ -4734,7 +4746,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.441" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.442" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10336,7 +10348,7 @@
     }
     const {
       isExitLoginSuppressReasonCore,
-      startExitAuditCore,
+      startExitAuditBoundCore,
       setExitReloginSuppressCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
       setEnemyLeaveSuppressCore,
@@ -10366,12 +10378,11 @@
       });
     }
     function startExitAudit(detail, meta = {}) {
-      return startExitAuditCore(detail, meta, {
+      return startExitAuditBoundCore(detail, meta, bot, {
         resetLoginSnapshotGate,
         loginPointSafetyExitSelfForDetail,
         ensureExitAuditDetail,
         recordExitAuditEvent,
-        lastSelf: bot.lastSelf,
         now: Date.now
       });
     }
