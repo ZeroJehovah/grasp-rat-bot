@@ -1631,9 +1631,9 @@ function main() {
     assert(exitReloginHoldReadInlineBody.includes('localStorage.removeItem(LOGIN_SUPPRESS_KEY)'), 'exit-relogin hold-read inline source does not clear login suppress key');
     const exitReloginHoldReadBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldReadSource');
     assert(exitReloginHoldReadBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold-read bundled source does not hand helpers to the bundler');
-    assert(exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind enemy hold reader');
-    assert(exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind offline hold reader');
-    assert(exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern)'), 'exit-relogin hold-read bundled source does not bind suppress clear helper');
+    assert(exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind enemy hold reader through bound core');
+    assert(exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind offline hold reader through bound core');
+    assert(exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingBoundCore(localStorage, pattern'), 'exit-relogin hold-read bundled source does not bind suppress clear helper through bound core');
     assert(exitReloginHoldReadBundledBody.includes('readPersistentExitState') && exitReloginHoldReadBundledBody.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadBundledBody.includes('clearOfflineReloginHold'), 'exit-relogin hold-read bundled source does not pass required runtime helper bindings');
     const exitReloginClearInlineBody = functionBody(exitReloginSourceModule, 'exitReloginClearInlineSource');
     assert(exitReloginClearInlineBody.includes('function clearEnemyReloginHold'), 'exit-relogin clear inline source does not include enemy hold cleanup helper');
@@ -1734,6 +1734,12 @@ function main() {
     assert(exitReloginRuntimeModule.includes("helpers.clearOfflineReloginHold('stale offline suppress contradicted by known stamina')"), 'exit-relogin hold-read runtime offline reader does not preserve stale suppress cleanup');
     assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern)'), 'exit-relogin hold-read runtime suppress clear core not found');
     assert(exitReloginRuntimeModule.includes('storage.removeItem(suppressKey)') && exitReloginRuntimeModule.includes('storage.removeItem(suppressReasonKey)'), 'exit-relogin hold-read runtime suppress clear core does not remove both keys');
+    assert(exitReloginRuntimeModule.includes('function enemyReloginHoldRemainingMsBoundCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime enemy bound reader core not found');
+    assert(exitReloginRuntimeModule.includes('return enemyReloginHoldRemainingMsCore(bot, storage, {') && exitReloginRuntimeModule.includes('enemyLeaveStateKey: helpers.enemyLeaveStateKey'), 'exit-relogin hold-read runtime enemy bound reader does not preserve helper binding');
+    assert(exitReloginRuntimeModule.includes('function offlineReloginHoldRemainingMsBoundCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime offline bound reader core not found');
+    assert(exitReloginRuntimeModule.includes('return offlineReloginHoldRemainingMsCore(bot, storage, {') && exitReloginRuntimeModule.includes('clearOfflineReloginHold: helpers.clearOfflineReloginHold'), 'exit-relogin hold-read runtime offline bound reader does not preserve helper binding');
+    assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingBoundCore(storage, pattern, helpers)'), 'exit-relogin hold-read runtime suppress clear bound core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.loginSuppressKey') && exitReloginRuntimeModule.includes('helpers.loginSuppressReasonKey'), 'exit-relogin hold-read runtime suppress clear bound core does not preserve suppress key binding');
     assert(exitReloginRuntimeModule.includes('function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin prefix runtime offline suppress core not found');
     assert(exitReloginRuntimeModule.includes('const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);'), 'exit-relogin prefix runtime offline suppress core does not read stamina hold');
     assert(exitReloginRuntimeModule.includes('detail.safeReloginAllowed = !unsafeOfflineExit;'), 'exit-relogin prefix runtime offline suppress core does not preserve safe marker');
@@ -1789,6 +1795,9 @@ function main() {
       'enemyReloginHoldRemainingMsCore',
       'offlineReloginHoldRemainingMsCore',
       'clearLoginSuppressMatchingCore',
+      'enemyReloginHoldRemainingMsBoundCore',
+      'offlineReloginHoldRemainingMsBoundCore',
+      'clearLoginSuppressMatchingBoundCore',
       'setOfflineLeaveSuppressCore',
       'setOfflineLeaveSuppressBoundCore',
       'primePendingStaminaExitLoginSuppressCore',
@@ -1934,6 +1943,9 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setExitReloginSuppressCore('), 'bundler spike does not execute the exit-relogin suppress writer core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setEnemyLeaveSuppressCore('), 'bundler spike does not execute the exit-relogin enemy suppress core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.staminaExitHoldUntilForDetailBoundCore('), 'bundler spike does not execute the exit-relogin bound stamina hold selector core');
+    assert(bundlerSpikeEntrySource.includes('exitRelogin.enemyReloginHoldRemainingMsBoundCore('), 'bundler spike does not execute the exit-relogin bound enemy hold reader core');
+    assert(bundlerSpikeEntrySource.includes('exitRelogin.offlineReloginHoldRemainingMsBoundCore('), 'bundler spike does not execute the exit-relogin bound offline hold reader core');
+    assert(bundlerSpikeEntrySource.includes('exitRelogin.clearLoginSuppressMatchingBoundCore('), 'bundler spike does not execute the exit-relogin bound suppress clear core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setOfflineLeaveSuppressBoundCore('), 'bundler spike does not execute the exit-relogin bound offline suppress core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.primePendingStaminaExitLoginSuppressBoundCore('), 'bundler spike does not execute the exit-relogin bound pending stamina suppress core');
     assert(bundlerSpikeEntrySource.includes("const SPIKE_KEY = '__graspRatBundlerSpike'"), 'bundler spike global key not found');

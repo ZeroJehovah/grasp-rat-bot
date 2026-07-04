@@ -1899,6 +1899,36 @@
           return false;
         }
       }
+      function enemyReloginHoldRemainingMsBoundCore(bot, storage, helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return enemyReloginHoldRemainingMsCore(bot, storage, {
+          loginSuppressKey: helpers.loginSuppressKey,
+          loginSuppressReasonKey: helpers.loginSuppressReasonKey,
+          readPersistentExitState: helpers.readPersistentExitState,
+          enemyLeaveStateKey: helpers.enemyLeaveStateKey,
+          now: nowFn()
+        });
+      }
+      function offlineReloginHoldRemainingMsBoundCore(bot, storage, helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return offlineReloginHoldRemainingMsCore(bot, storage, {
+          loginSuppressKey: helpers.loginSuppressKey,
+          loginSuppressReasonKey: helpers.loginSuppressReasonKey,
+          readPersistentExitState: helpers.readPersistentExitState,
+          offlineLeaveStateKey: helpers.offlineLeaveStateKey,
+          staleOfflineStaminaHoldContradicted: helpers.staleOfflineStaminaHoldContradicted,
+          clearOfflineReloginHold: helpers.clearOfflineReloginHold,
+          now: nowFn()
+        });
+      }
+      function clearLoginSuppressMatchingBoundCore(storage, pattern, helpers) {
+        return clearLoginSuppressMatchingCore(
+          storage,
+          helpers.loginSuppressKey,
+          helpers.loginSuppressReasonKey,
+          pattern
+        );
+      }
       function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
         const now = Number(helpers.now || 0) || 0;
         const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);
@@ -2045,6 +2075,9 @@
         enemyReloginHoldRemainingMsCore,
         offlineReloginHoldRemainingMsCore,
         clearLoginSuppressMatchingCore,
+        enemyReloginHoldRemainingMsBoundCore,
+        offlineReloginHoldRemainingMsBoundCore,
+        clearLoginSuppressMatchingBoundCore,
         setOfflineLeaveSuppressCore,
         setOfflineLeaveSuppressBoundCore,
         primePendingStaminaExitLoginSuppressCore,
@@ -4657,7 +4690,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.437" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.438" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10358,32 +10391,35 @@
       });
     }
     const {
-      enemyReloginHoldRemainingMsCore,
-      offlineReloginHoldRemainingMsCore,
-      clearLoginSuppressMatchingCore
+      enemyReloginHoldRemainingMsBoundCore,
+      offlineReloginHoldRemainingMsBoundCore,
+      clearLoginSuppressMatchingBoundCore
     } = require_exit_relogin();
     function enemyReloginHoldRemainingMs() {
-      return enemyReloginHoldRemainingMsCore(bot, localStorage, {
+      return enemyReloginHoldRemainingMsBoundCore(bot, localStorage, {
         loginSuppressKey: LOGIN_SUPPRESS_KEY,
         loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
         readPersistentExitState,
         enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-        now: Date.now()
+        now: Date.now
       });
     }
     function offlineReloginHoldRemainingMs() {
-      return offlineReloginHoldRemainingMsCore(bot, localStorage, {
+      return offlineReloginHoldRemainingMsBoundCore(bot, localStorage, {
         loginSuppressKey: LOGIN_SUPPRESS_KEY,
         loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
         readPersistentExitState,
         offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
         staleOfflineStaminaHoldContradicted,
         clearOfflineReloginHold,
-        now: Date.now()
+        now: Date.now
       });
     }
     function clearLoginSuppressMatching(pattern) {
-      return clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern);
+      return clearLoginSuppressMatchingBoundCore(localStorage, pattern, {
+        loginSuppressKey: LOGIN_SUPPRESS_KEY,
+        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY
+      });
     }
     const {
       clearEnemyReloginHoldCore,

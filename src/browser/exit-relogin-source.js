@@ -770,35 +770,38 @@ function exitReloginHoldReadInlineSource() {
 
 function bundledExitReloginHoldReadSource() {
   return `	  const {
-\t    enemyReloginHoldRemainingMsCore,
-\t    offlineReloginHoldRemainingMsCore,
-\t    clearLoginSuppressMatchingCore
+\t    enemyReloginHoldRemainingMsBoundCore,
+\t    offlineReloginHoldRemainingMsBoundCore,
+\t    clearLoginSuppressMatchingBoundCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
   function enemyReloginHoldRemainingMs() {
-    return enemyReloginHoldRemainingMsCore(bot, localStorage, {
+    return enemyReloginHoldRemainingMsBoundCore(bot, localStorage, {
       loginSuppressKey: LOGIN_SUPPRESS_KEY,
       loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
       readPersistentExitState,
       enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-      now: Date.now()
+      now: Date.now
     });
   }
 
   function offlineReloginHoldRemainingMs() {
-    return offlineReloginHoldRemainingMsCore(bot, localStorage, {
+    return offlineReloginHoldRemainingMsBoundCore(bot, localStorage, {
       loginSuppressKey: LOGIN_SUPPRESS_KEY,
       loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
       readPersistentExitState,
       offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
       staleOfflineStaminaHoldContradicted,
       clearOfflineReloginHold,
-      now: Date.now()
+      now: Date.now
     });
   }
 
 \t  function clearLoginSuppressMatching(pattern) {
-\t    return clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern);
+\t    return clearLoginSuppressMatchingBoundCore(localStorage, pattern, {
+\t      loginSuppressKey: LOGIN_SUPPRESS_KEY,
+\t      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY
+\t    });
 \t  }
 `;
 }

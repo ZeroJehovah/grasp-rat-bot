@@ -849,7 +849,7 @@ function helperStatus(config = {}) {
       delete this.values[key];
     }
   };
-  const exitReloginEnemyHoldRemaining = exitRelogin.enemyReloginHoldRemainingMsCore(
+  const exitReloginEnemyHoldRemaining = exitRelogin.enemyReloginHoldRemainingMsBoundCore(
     exitReloginHoldBot,
     exitReloginHoldStorage,
     {
@@ -857,12 +857,12 @@ function helperStatus(config = {}) {
       loginSuppressReasonKey: 'suppressReason',
       enemyLeaveStateKey: 'enemy-state',
       readPersistentExitState: () => ({ reloginUntil: 2500, reason: 'enemy-leave' }),
-      now: 1000
+      now: () => 1000
     }
   );
   exitReloginHoldStorage.values.suppress = '4500';
   exitReloginHoldStorage.values.suppressReason = 'offline leave';
-  const exitReloginOfflineHoldRemaining = exitRelogin.offlineReloginHoldRemainingMsCore(
+  const exitReloginOfflineHoldRemaining = exitRelogin.offlineReloginHoldRemainingMsBoundCore(
     exitReloginHoldBot,
     exitReloginHoldStorage,
     {
@@ -874,7 +874,7 @@ function helperStatus(config = {}) {
       clearOfflineReloginHold: reason => {
         exitReloginHoldBot.clearedOfflineReason = reason;
       },
-      now: 1000
+      now: () => 1000
     }
   );
   const exitReloginClearStorage = {
@@ -891,11 +891,13 @@ function helperStatus(config = {}) {
       delete this.values[key];
     }
   };
-  const exitReloginClearedSuppress = exitRelogin.clearLoginSuppressMatchingCore(
+  const exitReloginClearedSuppress = exitRelogin.clearLoginSuppressMatchingBoundCore(
     exitReloginClearStorage,
-    'suppress',
-    'suppressReason',
-    /offline.*leave/i
+    /offline.*leave/i,
+    {
+      loginSuppressKey: 'suppress',
+      loginSuppressReasonKey: 'suppressReason'
+    }
   );
   const exitReloginOfflineSuppressEvents = [];
   const exitReloginOfflineSuppressBot = {
