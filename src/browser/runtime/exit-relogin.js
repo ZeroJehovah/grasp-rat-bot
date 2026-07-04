@@ -287,6 +287,21 @@ function pendingExitSuppressReasonCore(storageReason) {
   return 'pending unsafe exit';
 }
 
+function startExitAuditCore(detail, meta = {}, helpers) {
+  if (!detail || typeof detail !== 'object') return null;
+  detail.loginSnapshotGateReset = helpers.resetLoginSnapshotGate(
+    'exit-trigger:' + (meta.reason || detail.reason || ''),
+    helpers.loginPointSafetyExitSelfForDetail(detail, meta, helpers.lastSelf)
+  );
+  helpers.ensureExitAuditDetail(detail, meta);
+  const now = typeof helpers.now === 'function' ? helpers.now() : (Number(helpers.now || 0) || Date.now());
+  helpers.recordExitAuditEvent('exit-trigger', detail, {
+    ...meta,
+    at: Number(detail.exitTriggeredAt || detail.at || now)
+  });
+  return detail.exitAuditId;
+}
+
 function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
   if (!detail || !detail.attempted) return 0;
   const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
@@ -524,6 +539,7 @@ module.exports = {
   isExitLoginSuppressReasonCore,
   unsafeExitReloginMinDelayMsCore,
   pendingExitSuppressReasonCore,
+  startExitAuditCore,
   primePendingUnsafeExitLoginSuppressCore,
   staminaBudgetExitHoldUntilCore,
   staminaExitHoldUntilForDetailCore,

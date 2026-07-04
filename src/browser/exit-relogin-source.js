@@ -613,6 +613,7 @@ function bundledExitReloginHoldSource() {
 \t    isExitLoginSuppressReasonCore,
 \t    unsafeExitReloginMinDelayMsCore,
 \t    pendingExitSuppressReasonCore,
+\t    startExitAuditCore,
 \t    primePendingUnsafeExitLoginSuppressCore,
 \t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
@@ -760,17 +761,14 @@ function bundledExitReloginHoldSource() {
 \t  }
 
 \t  function startExitAudit(detail, meta = {}) {
-\t    if (!detail || typeof detail !== 'object') return null;
-\t    detail.loginSnapshotGateReset = resetLoginSnapshotGate(
-\t      'exit-trigger:' + (meta.reason || detail.reason || ''),
-\t      loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)
-\t    );
-\t    ensureExitAuditDetail(detail, meta);
-\t    recordExitAuditEvent('exit-trigger', detail, {
-      ...meta,
-      at: Number(detail.exitTriggeredAt || detail.at || Date.now())
+    return startExitAuditCore(detail, meta, {
+      resetLoginSnapshotGate,
+      loginPointSafetyExitSelfForDetail,
+      ensureExitAuditDetail,
+      recordExitAuditEvent,
+      lastSelf: bot.lastSelf,
+      now: Date.now
     });
-    return detail.exitAuditId;
   }
 
   function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {

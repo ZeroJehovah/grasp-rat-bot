@@ -681,6 +681,33 @@ function helperStatus(config = {}) {
       now: () => 5000
     }
   );
+  const exitReloginAuditEvents = [];
+  const exitReloginAuditDetail = {
+    reason: 'offline leave',
+    exitTriggeredAt: 4321
+  };
+  const exitReloginAuditId = exitRelogin.startExitAuditCore(
+    exitReloginAuditDetail,
+    { reason: 'offline unsafe', source: 'spike' },
+    {
+      resetLoginSnapshotGate: (reason, self) => {
+        exitReloginAuditEvents.push(['reset', reason, self?.hp]);
+        return { reason, selfHp: self?.hp };
+      },
+      loginPointSafetyExitSelfForDetail: (detail, meta, lastSelf) => ({
+        hp: detail.self?.hp ?? meta.self?.hp ?? lastSelf?.hp
+      }),
+      ensureExitAuditDetail: (detail, meta) => {
+        detail.exitAuditId = 'audit-spike';
+        detail.auditMetaSource = meta.source;
+      },
+      recordExitAuditEvent: (type, detail, event) => {
+        exitReloginAuditEvents.push([type, detail.exitAuditId, event.at, event.source]);
+      },
+      lastSelf: { hp: 77 },
+      now: () => 5000
+    }
+  );
   const exitReloginBudgetHold = exitRelogin.staminaBudgetExitHoldUntilCore(
     { coin: { id: 'budget-coin' } },
     1000,
@@ -973,6 +1000,12 @@ function helperStatus(config = {}) {
     exitReloginPendingUnsafeHpDelay: exitReloginPendingUnsafeDetail.pendingLoginSuppressHpDelayMs,
     exitReloginPendingUnsafeEnemyReason: exitReloginPendingUnsafeDetail.enemyLeaveReason,
     exitReloginPendingUnsafeEventCount: arrayCountRuntime.arrayCount(exitReloginPendingUnsafeEvents),
+    exitReloginAuditId,
+    exitReloginAuditResetReason: exitReloginAuditDetail.loginSnapshotGateReset?.reason,
+    exitReloginAuditResetSelfHp: exitReloginAuditDetail.loginSnapshotGateReset?.selfHp,
+    exitReloginAuditMetaSource: exitReloginAuditDetail.auditMetaSource,
+    exitReloginAuditEventAt: exitReloginAuditEvents.find(event => event[0] === 'exit-trigger')?.[2],
+    exitReloginAuditEventCount: arrayCountRuntime.arrayCount(exitReloginAuditEvents),
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,
     exitReloginOfflineUnsafe,
