@@ -251,7 +251,7 @@ function assertBundledOnlySourceModule(text, label) {
   assert(!text.includes('config?.bundledRuntime'), `${label} still branches on optional bundledRuntime config`);
 }
 
-function generateRemoteBuild(manifest) {
+async function generateRemoteBuild(manifest) {
   const statusEvery = Number(manifest.statusEvery) === 0
     ? 0
     : Number(manifest.statusEvery || 1000);
@@ -267,7 +267,7 @@ function extractSingle(text, re, label) {
   return String(match[1]);
 }
 
-function main() {
+async function main() {
   const rootPackage = readJson('package.json');
   const manifest = readJson('dist/manifest.json');
   const targetWhitelistConfig = readJson('dist/target-whitelist.json');
@@ -533,10 +533,10 @@ function main() {
     networkQualitySummarySourceModule,
     runtimeSummarySourceModule
   ].join('\n');
-  const generatedBuild = generateRemoteBuild(manifest);
+  const generatedBuild = await generateRemoteBuild(manifest);
   const generatedSource = generatedBuild.bundledSource;
   const generatedRuntimeSource = generatedBuild.directSource;
-  const generatedEvalSource = browserRuntimeEvalSourceFor({
+  const generatedEvalSource = await browserRuntimeEvalSourceFor({
     dryRun: true,
     once: true,
     statusEvery: 0,
@@ -629,6 +629,17 @@ function main() {
     assert(remoteBundleSource.includes("const esbuild = require('esbuild')"), 'shared remote bundler does not use esbuild');
     assert(remoteBundleSource.includes("const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source')"), 'shared remote bundler does not use the browser runtime source boundary');
     assert(remoteBundleSource.includes('remoteBrowserRuntimeSource(options)'), 'shared remote bundler does not get direct source through the runtime source boundary');
+    assert(remoteBundleSource.includes("const VIRTUAL_ENTRY_NAMESPACE = 'grasp-rat-virtual-entry'"), 'shared remote bundler does not define the virtual entry namespace');
+    assert(remoteBundleSource.includes("const REMOTE_RUNTIME_ENTRY = 'grasp-rat-remote-runtime-entry.js'"), 'shared remote bundler does not name the remote runtime virtual entry');
+    assert(remoteBundleSource.includes("const RUNTIME_EVAL_ENTRY = 'grasp-rat-runtime-eval-entry.js'"), 'shared remote bundler does not name the runtime eval virtual entry');
+    assert(remoteBundleSource.includes('function virtualEntryPlugin(entryPath, contents)'), 'shared remote bundler does not expose the virtual entry plugin');
+    assert(remoteBundleSource.includes('build.onResolve({ filter: entryFilter }'), 'virtual entry plugin does not resolve the generated entry');
+    assert(remoteBundleSource.includes('build.onLoad({ filter: entryFilter, namespace: VIRTUAL_ENTRY_NAMESPACE }'), 'virtual entry plugin does not load the generated entry source');
+    assert(remoteBundleSource.includes('resolveDir: ROOT'), 'virtual entry plugin does not resolve generated runtime imports from the repo root');
+    assert(remoteBundleSource.includes('function bundleVirtualEntry(entryPath, contents, options = {})'), 'shared remote bundler does not expose virtual entry bundling');
+    assert(remoteBundleSource.includes('entryPoints: [entryPath]'), 'shared remote bundler does not build through explicit entryPoints');
+    assert(remoteBundleSource.includes('plugins: [virtualEntryPlugin(entryPath, contents)]'), 'shared remote bundler does not install the virtual entry plugin');
+    assert(!remoteBundleSource.includes('stdin: {'), 'shared remote bundler still feeds generated runtime source through esbuild stdin');
     assert(remoteBundleSource.includes('function bundleRuntimeEvalSource(directSource)'), 'shared remote bundler does not expose the CDP/runtime eval bundle path');
     assert(remoteBundleSource.includes('export default ${directSource};'), 'runtime eval bundle does not preserve startup result as a default export');
     assert(remoteBundleSource.includes('return ${globalName}.default;'), 'runtime eval bundle does not return the default startup result');
@@ -641,7 +652,7 @@ function main() {
 
   check('local CDP and print-source use the esbuild runtime eval bundle', () => {
     assert(sourceBot.includes("require('./scripts/remote-bot-bundle')"), 'main bot does not import the shared remote bundler');
-    assert(sourceBot.includes('browserRuntimeEvalSourceFor({'), 'main bot does not use the runtime eval bundle for injection/print-source');
+    assert(sourceBot.includes('await browserRuntimeEvalSourceFor({'), 'main bot does not await the runtime eval bundle for injection/print-source');
     assert(!sourceBot.includes("require('./src/browser/runtime-source')"), 'main bot still imports direct runtime-source generation');
     assert(!sourceBot.includes('browserRuntimeSource({'), 'main bot still injects direct runtime source');
     assert(generatedEvalSource.includes('__graspRatBotRuntimeEvalBundle'), 'generated eval source does not contain the eval bundle wrapper');
@@ -1290,7 +1301,8 @@ function main() {
 
   check('remote bundled candidate parses the full generated runtime through esbuild', () => {
     assert(remoteBundleSource.includes('function bundleRemoteSource(directSource)'), 'shared remote bundler does not expose source bundling');
-    assert(remoteBundleSource.includes("stdin: {\n      contents: directSource"), 'shared remote bundler does not feed generated runtime source to esbuild stdin');
+    assert(remoteBundleSource.includes('return bundleVirtualEntry(REMOTE_RUNTIME_ENTRY, directSource);'), 'shared remote bundler does not feed generated runtime source through the remote virtual entry');
+    assert(remoteBundleSource.includes('const output = await bundleVirtualEntry(RUNTIME_EVAL_ENTRY'), 'runtime eval bundle does not use the eval virtual entry');
     assert(remoteBundleSource.includes('function writeRemoteBotBundle'), 'shared remote bundler does not write bundle outputs');
     assert(remoteBundledBuildSource.includes('writeRemoteBotBundle(options'), 'remote bundled candidate does not write through the shared bundler');
     assert(remoteBundledBuildSource.includes('production: false'), 'remote bundled candidate manifest must stay non-production');
@@ -4046,4 +4058,7 @@ function main() {
   console.log(`objective build verification ok (${results.length} checks)`);
 }
 
-main();
+main().catch(err => {
+  console.error(err.stack || err.message);
+  process.exit(1);
+});
