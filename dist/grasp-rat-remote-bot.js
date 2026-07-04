@@ -1816,6 +1816,16 @@
         if (!holds.length) return null;
         return holds.sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || null;
       }
+      function staminaExitHoldUntilForDetailBoundCore(detail, t, helpers) {
+        return staminaExitHoldUntilForDetailCore(detail, t, {
+          staminaBudgetExitHoldUntil: (staminaBudgetExit, at) => staminaBudgetExitHoldUntilCore(
+            staminaBudgetExit,
+            at,
+            helpers.staminaBudgetReloginDelayMs
+          ),
+          staminaResetHoldUntil: helpers.staminaResetHoldUntil
+        });
+      }
       function offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety) {
         if (!offlineSafety) return false;
         if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage || offlineSafety.combatTickGap) return true;
@@ -2004,6 +2014,7 @@
         setEnemyLeaveSuppressCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
+        staminaExitHoldUntilForDetailBoundCore,
         offlineExitRequiresUnsafeReloginDelayCore,
         enemyReloginHoldRemainingMsCore,
         offlineReloginHoldRemainingMsCore,
@@ -4618,7 +4629,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.434" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.435" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10228,6 +10239,7 @@
       setEnemyLeaveSuppressCore,
       staminaBudgetExitHoldUntilCore,
       staminaExitHoldUntilForDetailCore,
+      staminaExitHoldUntilForDetailBoundCore,
       offlineExitRequiresUnsafeReloginDelayCore
     } = require_exit_relogin();
     function isExitLoginSuppressReason(reason) {
@@ -10285,8 +10297,8 @@
       return staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs);
     }
     function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
-      return staminaExitHoldUntilForDetailCore(detail, t, {
-        staminaBudgetExitHoldUntil,
+      return staminaExitHoldUntilForDetailBoundCore(detail, t, {
+        staminaBudgetReloginDelayMs,
         staminaResetHoldUntil
       });
     }

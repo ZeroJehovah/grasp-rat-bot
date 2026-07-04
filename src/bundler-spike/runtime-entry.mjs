@@ -816,6 +816,15 @@ function helperStatus(config = {}) {
     staminaBudgetExitHoldUntil: (detail, t) => exitRelogin.staminaBudgetExitHoldUntilCore(detail, t, () => 3000),
     staminaResetHoldUntil: () => ({ until: 6000, reason: 'stamina reset' })
   });
+  const exitReloginStaminaHoldBound = exitRelogin.staminaExitHoldUntilForDetailBoundCore({
+    offlineSafety: {
+      staminaBudgetExit: { coin: { id: 'budget-coin' } },
+      staminaExhausted: { window: '1d' }
+    }
+  }, 1000, {
+    staminaBudgetReloginDelayMs: () => 3000,
+    staminaResetHoldUntil: () => ({ until: 6000, reason: 'stamina reset' })
+  });
   const exitReloginOfflineUnsafe = exitRelogin.offlineExitRequiresUnsafeReloginDelayCore(
     'global sampling outage',
     { samplingOutage: true }
@@ -1119,6 +1128,7 @@ function helperStatus(config = {}) {
     exitReloginEnemySuppressReturn,
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,
+    exitReloginStaminaHoldBoundReason: exitReloginStaminaHoldBound?.reason,
     exitReloginOfflineUnsafe,
     exitReloginEnemyHoldRemaining,
     exitReloginEnemyHoldBotUntil: exitReloginHoldBot.pursuitReloginUntil,

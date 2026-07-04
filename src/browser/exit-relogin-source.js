@@ -619,6 +619,7 @@ function bundledExitReloginHoldSource() {
 \t    setEnemyLeaveSuppressCore,
 \t    staminaBudgetExitHoldUntilCore,
 \t    staminaExitHoldUntilForDetailCore,
+\t    staminaExitHoldUntilForDetailBoundCore,
 \t    offlineExitRequiresUnsafeReloginDelayCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
@@ -685,8 +686,8 @@ function bundledExitReloginHoldSource() {
 \t  }
 
   function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
-    return staminaExitHoldUntilForDetailCore(detail, t, {
-      staminaBudgetExitHoldUntil,
+    return staminaExitHoldUntilForDetailBoundCore(detail, t, {
+      staminaBudgetReloginDelayMs,
       staminaResetHoldUntil
     });
   }
