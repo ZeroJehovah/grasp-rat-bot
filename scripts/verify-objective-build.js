@@ -1652,7 +1652,8 @@ function main() {
     assert(exitReloginHoldReadBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold-read bundled source does not hand helpers to the bundler');
     assert(exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind enemy hold reader through bound core');
     assert(exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind offline hold reader through bound core');
-    assert(exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingBoundCore(localStorage, pattern'), 'exit-relogin hold-read bundled source does not bind suppress clear helper through bound core');
+    assert(!exitReloginHoldReadBundledBody.includes('function clearLoginSuppressMatching'), 'exit-relogin hold-read bundled source should not keep suppress clear wrapper');
+    assert(!exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingBoundCore'), 'exit-relogin hold-read bundled source should not keep unused suppress clear import');
     assert(exitReloginHoldReadBundledBody.includes('readPersistentExitState') && exitReloginHoldReadBundledBody.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadBundledBody.includes('clearOfflineReloginHoldBoundCore(bot, localStorage, reason'), 'exit-relogin hold-read bundled source does not pass required runtime helper bindings');
     const exitReloginClearInlineBody = functionBody(exitReloginSourceModule, 'exitReloginClearInlineSource');
     assert(exitReloginClearInlineBody.includes('function clearEnemyReloginHold'), 'exit-relogin clear inline source does not include enemy hold cleanup helper');
@@ -1857,13 +1858,16 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("options.bundledRuntime"), 'pending-exit source does not select bundled enemy suppress call from runtime config');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setExitReloginSuppressBoundCore'), 'pending-exit source does not import runtime suppress writer bound core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setOfflineLeaveSuppressBoundCore'), 'pending-exit source does not import runtime offline suppress bound core for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('clearLoginSuppressMatchingBoundCore'), 'pending-exit source does not import runtime suppress clear bound core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline'"), 'pending-exit source does not pass storage into bundled offline suppress bound core');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'pending-exit source does not bind cfg/streak key for bundled offline suppress');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const clearLoginSuppressMatchingBinding') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(localStorage, pattern'), 'pending-exit source does not bind suppress writer cleanup through bound core');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${clearLoginSuppressMatchingBinding}'), 'pending-exit source does not pass bound suppress cleanup into bundled suppress writers');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppress(detail.reason || 'websocket offline'"), 'pending-exit source does not preserve inline offline suppress wrapper call');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through bound runtime writer');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
     assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
@@ -3109,7 +3113,11 @@ function main() {
       assert(probeBody.includes('clearLeave403RiskHolds'), 'snapshot success streak does not clear 403 hold');
       assert(probeBody.includes('leave403SnapshotSuccessRequired()'), 'snapshot success threshold helper not used');
       const clearBody = functionBody(text, 'clearLeave403RiskHolds');
-      assert(clearBody.includes('clearLoginSuppressMatching'), '403 snapshot recovery does not clear login suppress');
+      assert(
+        clearBody.includes('clearLoginSuppressMatching')
+          || clearBody.includes('clearLoginSuppressMatchingBoundCore'),
+        '403 snapshot recovery does not clear login suppress'
+      );
       assert(clearBody.includes('clearPersistentExitState'), '403 snapshot recovery does not clear persistent hold state');
     });
     check(`${file} gates relogin on learned login-point safety`, () => {
