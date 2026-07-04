@@ -1543,8 +1543,9 @@ function main() {
     assert(exitReloginDisplayInlineBody.includes('formatDurationMs(waitMs)'), 'exit-relogin display inline source does not preserve wait duration formatting');
     const exitReloginDisplayBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginDisplaySource');
     assert(exitReloginDisplayBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin display bundled source does not hand display helpers to the bundler');
-    assert(exitReloginDisplayBundledBody.includes('leaveWaitDisplayCore(base, detail, formatDurationMs)'), 'exit-relogin display bundled source does not bind formatDurationMs');
-    assert(exitReloginDisplayBundledBody.includes('finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay)'), 'exit-relogin display bundled source does not bind leaveWaitDisplay finalizer');
+    assert(!exitReloginDisplayBundledBody.includes('function leaveWaitDisplay'), 'exit-relogin display bundled source still keeps wait-display wrapper');
+    assert(exitReloginDisplayBundledBody.includes('(base, value) => leaveWaitDisplayCore(base, value, formatDurationMs)'), 'exit-relogin display bundled source does not bind formatDurationMs directly');
+    assert(exitReloginDisplayBundledBody.includes('finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs))'), 'exit-relogin display bundled source does not bind display finalizer directly');
     const exitReloginActorInlineBody = functionBody(exitReloginSourceModule, 'exitReloginActorInlineSource');
     assert(exitReloginActorInlineBody.includes('function normalizeEnemyActor'), 'exit-relogin actor inline source does not include actor normalizer');
     assert(exitReloginActorInlineBody.includes('function enemyActorFromLeaveDetail'), 'exit-relogin actor inline source does not include detail actor resolver');
@@ -2153,9 +2154,13 @@ function main() {
       );
     });
     check(`${file} displays relogin wait using remaining hold before original delay`, () => {
-      const body = functionBody(text, 'leaveWaitDisplay');
-      const reloginDisplaySource = `${body}\n${finalRuntimeText}`;
+      const reloginDisplaySource = file === 'dist/grasp-rat-remote-bot.js'
+        ? `${text}\n${finalRuntimeText}`
+        : `${functionBody(text, 'leaveWaitDisplay')}\n${finalRuntimeText}`;
       assert(reloginDisplaySource.includes('detail?.holdRemainingMs ?? detail?.reloginDelayMs'), 'leave wait display does not prefer remaining hold time');
+      if (file === 'dist/grasp-rat-remote-bot.js') {
+        assert(!text.includes('function leaveWaitDisplay('), 'dist remote bot still keeps leaveWaitDisplay wrapper');
+      }
     });
     check(`${file} keeps shared runtime utility helpers available`, () => {
       const runtimeUtilsSource = file === 'grasp-rat-bot.js' ? sharedRuntimeUtilsSource : text;

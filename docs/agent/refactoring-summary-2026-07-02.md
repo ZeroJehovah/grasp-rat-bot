@@ -1424,6 +1424,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 183. Removed bundled `exit-relogin` clear relogin hold wrappers by routing tick recovery and stale offline hold cleanup directly through runtime bound cores: integrated in `bootstrap-0.4.455`
 184. Removed unused bundled `exit-relogin` actor wrappers after streak/suppress paths moved actor resolution into runtime bound cores: integrated in `bootstrap-0.4.456`
 185. Removed the bundled `exit-relogin` login-suppress clear wrapper by routing pending-exit suppress writers and 403 recovery directly through `clearLoginSuppressMatchingBoundCore()`: integrated in `bootstrap-0.4.457`
+186. Removed the bundled `exit-relogin` wait-display wrapper by binding `finalizeLeaveDisplayReasonCore()` directly to `leaveWaitDisplayCore()` for remote builds: integrated in `bootstrap-0.4.458`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
