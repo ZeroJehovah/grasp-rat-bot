@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.459" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.460" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10336,7 +10336,6 @@
       pursuitLeaveSummaryCore,
       injuryLeaveSummaryCore,
       offlineLeaveSummaryCore,
-      currentOfflineDisplayReasonCore,
       reloginDelayForHpCore
     } = require_exit_relogin();
     function combatExitSummary(reason, target, combatState = {}) {
@@ -10353,9 +10352,6 @@
     }
     function offlineLeaveSummary(reason, offlineSafety) {
       return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
-    }
-    function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = "") {
-      return currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary });
     }
     const {
       enemyReloginHoldRemainingMsBoundCore,
@@ -17733,6 +17729,7 @@
     function mergeCoinRouteDisplay(base, routeCoin) {
       return mergeCoinRouteDisplayCore(base, routeCoin);
     }
+    const { currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore } = require_exit_relogin();
     function combatTargetId(target) {
       const id = target?.user_id ?? target?.id;
       return id === null || id === void 0 ? "" : String(id);
@@ -18165,7 +18162,7 @@
         leaveDelayMs: 0,
         offlineSafety,
         combatTickGap,
-        displayReason: currentOfflineDisplayReason("combat tick gap", offlineSafety, leaveResult, offlineDetail, "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA"),
+        displayReason: currentOfflineDisplayReasonForCombatStateCore("combat tick gap", offlineSafety, leaveResult, offlineDetail, "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA", { offlineLeaveSummary }),
         leave: leaveResult,
         tickReentry: true
       };
@@ -20864,7 +20861,7 @@
         }
       };
     }
-    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore } = require_exit_relogin();
+    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -21138,7 +21135,7 @@
               noSelfGameSession: noSelfExit,
               liveSessionTakeover,
               offlineSafety,
-              displayReason: currentOfflineDisplayReason(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason),
+              displayReason: currentOfflineDisplayReasonForTickCore(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason, { offlineLeaveSummary }),
               leave: leaveResult
             };
             updateBotPanel(bot.lastDecision);
@@ -21233,7 +21230,7 @@
             leaveDelayMs: 0,
             stamina: staminaState,
             offlineSafety,
-            displayReason: currentOfflineDisplayReason("stamina exhausted", offlineSafety, leaveResult, offlineDetail, staminaDisplayReason),
+            displayReason: currentOfflineDisplayReasonForTickCore("stamina exhausted", offlineSafety, leaveResult, offlineDetail, staminaDisplayReason, { offlineLeaveSummary }),
             leave: leaveResult
           };
           updateBotPanel(bot.lastDecision);
@@ -21318,7 +21315,7 @@
             serverPositionStall,
             samplingOutage,
             combatTickGap,
-            displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, samplingOutage ? "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6B63\u5728\u9000\u51FA" : combatTickGap ? "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA" : actionSettlementStallOffline ? "\u52A8\u4F5C\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6B63\u5728\u9000\u51FA" : reconnectChurn ? "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u6B63\u5728\u9000\u51FA" : ""),
+            displayReason: currentOfflineDisplayReasonForTickCore(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, samplingOutage ? "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6B63\u5728\u9000\u51FA" : combatTickGap ? "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA" : actionSettlementStallOffline ? "\u52A8\u4F5C\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6B63\u5728\u9000\u51FA" : reconnectChurn ? "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u6B63\u5728\u9000\u51FA" : "", { offlineLeaveSummary }),
             leave: leaveResult
           };
           updateBotPanel(bot.lastDecision);
@@ -21458,7 +21455,7 @@
             control: summarizeControl(),
             self: currentSummary,
             offlineSafety,
-            displayReason: currentOfflineDisplayReason(action.reason || "stamina budget coin leave", offlineSafety, leaveResult, offlineDetail, action.displayReason || ""),
+            displayReason: currentOfflineDisplayReasonForTickCore(action.reason || "stamina budget coin leave", offlineSafety, leaveResult, offlineDetail, action.displayReason || "", { offlineLeaveSummary }),
             leave: leaveResult,
             holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
           };

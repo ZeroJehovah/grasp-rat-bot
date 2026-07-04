@@ -1426,6 +1426,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 185. Removed the bundled `exit-relogin` login-suppress clear wrapper by routing pending-exit suppress writers and 403 recovery directly through `clearLoginSuppressMatchingBoundCore()`: integrated in `bootstrap-0.4.457`
 186. Removed the bundled `exit-relogin` wait-display wrapper by binding `finalizeLeaveDisplayReasonCore()` directly to `leaveWaitDisplayCore()` for remote builds: integrated in `bootstrap-0.4.458`
 187. Removed the bundled `exit-relogin` HP relogin-delay wrapper by passing direct `reloginDelayForHpCore()` helper bindings into pending-exit and leave-flow runtime-bound suppress helpers: integrated in `bootstrap-0.4.459`
+188. Removed the bundled `exit-relogin` offline display-reason wrapper by routing tick and combat-state display construction directly through `currentOfflineDisplayReasonCore()`: integrated in `bootstrap-0.4.460`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
