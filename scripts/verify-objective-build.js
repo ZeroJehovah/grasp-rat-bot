@@ -2671,8 +2671,13 @@ function main() {
     });
     check(`${file} protects held high-value coins from AFK drop target switches`, () => {
       const choiceMetadataSource = file === 'grasp-rat-bot.js' ? strategyOpportunityChoiceSource : finalRuntimeText;
-      assert(text.includes('function isHighValueCoinOpportunity(item)'), 'high-value opportunity helper not found');
-      assert(text.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'high-value coin hold switch blocker not found');
+      assert(strategyOpportunityChoiceSource.includes('function isHighValueCoinOpportunityCore'), 'high-value opportunity core not found');
+      assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'high-value coin hold switch blocker core not found');
+      if (file !== 'grasp-rat-bot.js') {
+        assert(finalRuntimeText.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'bundled runtime does not contain high-value coin hold switch blocker core');
+        assert(!text.includes('function isHighValueCoinOpportunity(item)'), 'bundled runtime still declares unused high-value opportunity wrapper');
+        assert(!text.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'bundled runtime still declares unused high-value switch blocker wrapper');
+      }
       assert(strategyOpportunityChoiceSource.includes("isHighValueCoinOpportunityCore(held, options) && String(best?.type || '') === 'enemy'"), 'high-value hold does not specifically block enemy switches');
       assert(text.includes('highValueCoinHold: true') || strategyOpportunityChoiceSource.includes('highValueCoinHold: true'), 'held high-value coin decision marker not found');
       assert(text.includes('opportunityChoice.highValueCoinHold') || choiceMetadataSource.includes('highValueCoinHold: Boolean(item.highValueCoinHold)'), 'high-value hold metadata is not exposed');
@@ -4047,9 +4052,14 @@ function main() {
     assert(!generatedRuntimeSource.includes('function chooseStableOpportunityCore'), 'generated remote runtime still inlines opportunity choice stable picker core before bundling');
     assert(!generatedRuntimeSource.includes('function rememberOpportunityChoiceCore'), 'generated remote runtime still inlines opportunity choice persistence core before bundling');
     assert(!generatedRuntimeSource.includes('function buildMissingHeldOpportunityCore'), 'generated remote runtime still inlines missing-held opportunity core before bundling');
+    assert(!generatedRuntimeSource.includes('function isHighValueCoinOpportunity(item)'), 'generated remote runtime still declares unused high-value opportunity wrapper');
+    assert(!generatedRuntimeSource.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'generated remote runtime still declares unused high-value switch blocker wrapper');
     assert(distSource.includes('function chooseStableOpportunityCore'), 'bundled dist does not contain opportunity choice stable picker core');
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'bundled dist does not contain opportunity choice persistence core');
     assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'bundled dist does not contain missing-held opportunity core');
+    assert(distSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'bundled dist does not contain high-value coin hold switch blocker core');
+    assert(!distSource.includes('function isHighValueCoinOpportunity(item)'), 'bundled dist still declares unused high-value opportunity wrapper');
+    assert(!distSource.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'bundled dist still declares unused high-value switch blocker wrapper');
     assert(generatedRuntimeSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
   });
 
