@@ -47,22 +47,12 @@
           return fallback;
         }
       }
-      function browserPageGlobalSource() {
-        return [
-          pageGlobalObject.toString(),
-          resolvePageGlobal.toString(),
-          readPageGlobal.toString(),
-          installPageGlobal.toString(),
-          readPageLocalStorageJson.toString()
-        ].join("\n\n");
-      }
       module.exports = {
         pageGlobalObject,
         resolvePageGlobal,
         readPageGlobal,
         installPageGlobal,
-        readPageLocalStorageJson,
-        browserPageGlobalSource
+        readPageLocalStorageJson
       };
     }
   });
@@ -5669,7 +5659,7 @@
   // grasp-rat-virtual-entry:grasp-rat-remote-runtime-entry.js
   (() => {
     const { createRuntimeBootstrapBindings } = require_runtime_bootstrap_bindings();
-    const runtimeBootstrapBindings = createRuntimeBootstrapBindings({ "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.506" });
+    const runtimeBootstrapBindings = createRuntimeBootstrapBindings({ "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.507" });
     const {
       pageGlobalObject,
       resolvePageGlobal,

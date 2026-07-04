@@ -919,9 +919,8 @@ async function main() {
     assert(autoLoginSourceModule.includes('const result = startLoginFn.call(pageGlobal);'), 'manual login does not call page-global login function with page-global this');
     assert(!autoLoginSourceModule.includes('window.__graspRatBotRawStartLinuxDoLogin'), 'manual login still reads raw startLinuxDoLogin directly from window');
     assert(!autoLoginSourceModule.includes('typeof startLinuxDoLogin ==='), 'login availability still checks bare startLinuxDoLogin instead of page-global adapter');
-    assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
-    assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
-    assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
+    assert(!browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global core still exposes obsolete source builder');
+    assert(!browserPageGlobalCoreSource.includes('.toString()'), 'page-global core still builds browser source from function text');
     assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource()'), 'runtime utility prelude source factory not found');
     assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility clone source factory not found');
     assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource,\n  runtimeUtilityCloneSource\n}'), 'runtime utility source module exports not found');

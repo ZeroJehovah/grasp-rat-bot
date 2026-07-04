@@ -46,21 +46,10 @@ function readPageLocalStorageJson(key, fallback = null, root = resolvePageGlobal
   }
 }
 
-function browserPageGlobalSource() {
-  return [
-    pageGlobalObject.toString(),
-    resolvePageGlobal.toString(),
-    readPageGlobal.toString(),
-    installPageGlobal.toString(),
-    readPageLocalStorageJson.toString()
-  ].join('\n\n');
-}
-
 module.exports = {
   pageGlobalObject,
   resolvePageGlobal,
   readPageGlobal,
   installPageGlobal,
-  readPageLocalStorageJson,
-  browserPageGlobalSource
+  readPageLocalStorageJson
 };
