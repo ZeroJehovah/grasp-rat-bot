@@ -4746,7 +4746,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.442" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.443" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10352,7 +10352,6 @@
       setExitReloginSuppressCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
       setEnemyLeaveSuppressCore,
-      staminaBudgetExitHoldUntilCore,
       staminaExitHoldUntilForDetailCore,
       staminaExitHoldUntilForDetailBoundCore,
       offlineExitRequiresUnsafeReloginDelayCore
@@ -10399,9 +10398,6 @@
       return setEnemyLeaveSuppressCore(reason, detail, selfLike, options, {
         setExitReloginSuppress
       });
-    }
-    function staminaBudgetExitHoldUntil(staminaBudgetExit, t = Date.now()) {
-      return staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs);
     }
     function staminaExitHoldUntilForDetail(detail, t = Date.now()) {
       return staminaExitHoldUntilForDetailBoundCore(detail, t, {

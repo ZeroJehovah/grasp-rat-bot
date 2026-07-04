@@ -1602,7 +1602,8 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('setEnemyLeaveSuppressCore(reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind enemy suppress core');
     assert(exitReloginHoldBundledBody.includes('setExitReloginSuppress'), 'exit-relogin hold bundled source does not pass enemy suppress delegate binding');
     assert(exitReloginHoldBundledBody.includes('hpInfoForRelogin') && exitReloginHoldBundledBody.includes('reloginDelayForHp') && exitReloginHoldBundledBody.includes('setLoginSuppress'), 'exit-relogin hold bundled source does not pass required pending unsafe suppress bindings');
-    assert(exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs)'), 'exit-relogin hold bundled source does not bind stamina budget hold helper');
+    assert(!exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore,'), 'exit-relogin hold bundled source should not import unused stamina budget wrapper helper');
+    assert(!exitReloginHoldBundledBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold bundled source should not keep unused stamina budget wrapper');
     assert(exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailBoundCore(detail, t'), 'exit-relogin hold bundled source does not bind stamina hold selector through runtime-bound core');
     assert(exitReloginHoldBundledBody.includes('staminaBudgetReloginDelayMs') && exitReloginHoldBundledBody.includes('staminaResetHoldUntil'), 'exit-relogin hold bundled source does not pass stamina hold selector bindings');
     assert(exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold bundled source does not bind offline unsafe predicate');
