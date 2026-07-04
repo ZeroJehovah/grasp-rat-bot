@@ -304,19 +304,7 @@ function exitReloginSummaryInlineSource() {
 }
 
 function bundledExitReloginSummarySource() {
-  return `	  const {
-\t    combatExitSummaryCore,
-\t    combatLeaveActionCore,
-\t    reloginDelayForHpCore
-\t  } = require('./src/browser/runtime/exit-relogin');
-
-\t  function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
-\t    return combatLeaveActionCore(reason, baseTarget, combatState, cover, {
-\t      combatExitSummary: (summaryReason, target, state) => combatExitSummaryCore(summaryReason, target, state, { cfg, actorLabel, hpDisplay, formatDurationMs }),
-\t      clamp
-\t    });
-\t  }
-`;
+  return '';
 }
 
 function exitReloginHoldInlineSource() {

@@ -1,7 +1,13 @@
 'use strict';
 
-function combatActionSource() {
-  return String.raw`  function buildCombatAction(self, target, bullets) {
+function combatActionSource(options = {}) {
+  const combatActionPrelude = options.bundledRuntime
+    ? "  const {\n    combatExitSummaryCore: combatExitSummaryForCombatActionCore,\n    combatLeaveActionCore: combatLeaveActionForCombatActionCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
+    : '';
+  const combatLeaveActionCall = (reason, baseTarget, combatState, cover) => options.bundledRuntime
+    ? `combatLeaveActionForCombatActionCore(${reason}, ${baseTarget}, ${combatState}, ${cover}, { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp })`
+    : `combatLeaveAction(${reason}, ${baseTarget}, ${combatState}, ${cover})`;
+  return String.raw`${combatActionPrelude}  function buildCombatAction(self, target, bullets) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);
     const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
@@ -41,10 +47,10 @@ function combatActionSource() {
       seenTargetRealBulletMs: seenTargetRealBulletMs || 0
 	    };
 	    if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
-	      return combatLeaveAction('combat-critical-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+	      return ${combatLeaveActionCall("'combat-critical-hp-leave'", 'baseTarget', '{ selfHp, targetHp }', 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
 	    }
 	    if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
-	      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+	      return ${combatLeaveActionCall("'combat-low-hp-leave'", 'baseTarget', '{ selfHp, targetHp }', 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
     }
     const knownSelfHp = knownHpValue(self);
     const knownTargetHp = knownHpValue(target);
@@ -55,7 +61,7 @@ function combatActionSource() {
       && hpGap > cfg.combatHighHpDisadvantageGap) {
       disadvantageObservation = combatDisadvantageObservationState(target, 'hp-gap', { selfHp, targetHp, hpGap });
       if (disadvantageObservation?.ready) {
-        return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        return ${combatLeaveActionCall("'combat-hp-disadvantage-leave'", 'baseTarget', '{ selfHp, targetHp, hpGap, disadvantageObservation }', 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
       }
     }
     let pressure = combatPressureThreat(self, target, bullets);
@@ -78,16 +84,16 @@ function combatActionSource() {
     );
     const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
     if (closeRisk) {
-      return combatLeaveAction('combat-low-hp-leave', baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+      return ${combatLeaveActionCall("'combat-low-hp-leave'", 'baseTarget', '{ selfHp, targetHp, closeRisk }', 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
     }
 	    const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
 		    if (pressureDisadvantage) {
-		      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+		      return ${combatLeaveActionCall("'combat-hp-disadvantage-leave'", 'baseTarget', `{
 		        selfHp,
 		        targetHp,
 		        hpGap: pressureDisadvantage.hpGap,
 		        pressureDisadvantage
-		      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+		      }`, 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
 		    }
 	    const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState(
 	      selfHp,
@@ -97,12 +103,12 @@ function combatActionSource() {
 	      targetRealBulletPressure
 	    );
 	    if (sustainedPressureDisadvantage) {
-	      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+	      return ${combatLeaveActionCall("'combat-hp-disadvantage-leave'", 'baseTarget', `{
 	        selfHp,
 	        targetHp,
 	        hpGap: sustainedPressureDisadvantage.hpGap,
 	        sustainedPressureDisadvantage
-	      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+	      }`, 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
 	    }
 	    const tradeEstimate = combatTradeEstimate(self, target);
     if (!disadvantageObservation && tradeEstimate?.active) {
@@ -113,13 +119,13 @@ function combatActionSource() {
         ...tradeEstimate
       });
       if (disadvantageObservation?.ready) {
-        return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+        return ${combatLeaveActionCall("'combat-hp-disadvantage-leave'", 'baseTarget', `{
           selfHp,
           targetHp,
           hpGap,
           tradeEstimate,
           disadvantageObservation
-        }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        }`, 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
       }
     }
     if (!disadvantageObservation) clearCombatDisadvantageObservation('not-disadvantaged');
@@ -131,13 +137,13 @@ function combatActionSource() {
       summarizeServerPositionStall()
     );
     if (serverStallNoDamage && !retreatingTarget.disengage) {
-      return combatLeaveAction('combat-hp-disadvantage-leave', baseTarget, {
+      return ${combatLeaveActionCall("'combat-hp-disadvantage-leave'", 'baseTarget', `{
         selfHp,
         targetHp,
         hpGap: serverStallNoDamage.hpGap,
         noDamageMs: damageState.noDamageMs,
         serverStallNoDamage
-      }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+      }`, 'combatLeaveCoverAction(self, target, bullets, targetDistance)')};
     }
     if (retreatingTarget.disengage) {
       clearCombatDisadvantageObservation('combat-disengage-range');

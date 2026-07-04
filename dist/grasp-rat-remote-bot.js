@@ -1289,7 +1289,7 @@
         if (currentSummary) return currentSummary;
         return leaveDisplay || String(offlineDetail?.displayReason || "") || String(fallback || "");
       }
-      function reloginDelayForHpCore(selfLike, detail, helpers) {
+      function reloginDelayForHpCore2(selfLike, detail, helpers) {
         const cfg = helpers.cfg;
         const info = helpers.hpInfoForRelogin(selfLike, detail);
         const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
@@ -1830,7 +1830,7 @@
         injuryLeaveSummaryCore,
         offlineLeaveSummaryCore,
         currentOfflineDisplayReasonCore,
-        reloginDelayForHpCore,
+        reloginDelayForHpCore: reloginDelayForHpCore2,
         isExitLoginSuppressReasonCore,
         unsafeExitReloginMinDelayMsCore,
         pendingExitSuppressReasonCore,
@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.464" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.465" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10335,17 +10335,6 @@
     } = require_exit_relogin();
     function finalizeLeaveDisplayReason(detail) {
       return finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs));
-    }
-    const {
-      combatExitSummaryCore,
-      combatLeaveActionCore,
-      reloginDelayForHpCore
-    } = require_exit_relogin();
-    function combatLeaveAction(reason, baseTarget, combatState = {}, cover = null) {
-      return combatLeaveActionCore(reason, baseTarget, combatState, cover, {
-        combatExitSummary: (summaryReason, target, state2) => combatExitSummaryCore(summaryReason, target, state2, { cfg, actorLabel, hpDisplay, formatDurationMs }),
-        clamp
-      });
     }
     const {
       enemyReloginHoldRemainingMsBoundCore,
@@ -18879,6 +18868,10 @@
         } : null
       };
     }
+    const {
+      combatExitSummaryCore: combatExitSummaryForCombatActionCore,
+      combatLeaveActionCore: combatLeaveActionForCombatActionCore
+    } = require_exit_relogin();
     function buildCombatAction(self, target, bullets) {
       const selfHp = hpValue(self);
       const targetHp = combatHpValue(target);
@@ -18916,10 +18909,10 @@
         seenTargetRealBulletMs: seenTargetRealBulletMs || 0
       };
       if (selfHp < cfg.combatCriticalHpLeaveThreshold) {
-        return combatLeaveAction("combat-critical-hp-leave", baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        return combatLeaveActionForCombatActionCore("combat-critical-hp-leave", baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
       }
       if (selfHp < cfg.combatLowHpLeaveThreshold && selfHp < targetHp) {
-        return combatLeaveAction("combat-low-hp-leave", baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        return combatLeaveActionForCombatActionCore("combat-low-hp-leave", baseTarget, { selfHp, targetHp }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
       }
       const knownSelfHp = knownHpValue(self);
       const knownTargetHp = knownHpValue(target);
@@ -18928,7 +18921,7 @@
       if (knownSelfHp > cfg.combatLowHpLeaveThreshold && Number.isFinite(hpGap) && hpGap > cfg.combatHighHpDisadvantageGap) {
         disadvantageObservation = combatDisadvantageObservationState(target, "hp-gap", { selfHp, targetHp, hpGap });
         if (disadvantageObservation?.ready) {
-          return combatLeaveAction("combat-hp-disadvantage-leave", baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+          return combatLeaveActionForCombatActionCore("combat-hp-disadvantage-leave", baseTarget, { selfHp, targetHp, hpGap, disadvantageObservation }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
         }
       }
       let pressure = combatPressureThreat(self, target, bullets);
@@ -18946,16 +18939,16 @@
       );
       const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
       if (closeRisk) {
-        return combatLeaveAction("combat-low-hp-leave", baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        return combatLeaveActionForCombatActionCore("combat-low-hp-leave", baseTarget, { selfHp, targetHp, closeRisk }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
       }
       const pressureDisadvantage = combatPressureDisadvantageState(selfHp, targetHp, targetDistance, realBulletPressure);
       if (pressureDisadvantage) {
-        return combatLeaveAction("combat-hp-disadvantage-leave", baseTarget, {
+        return combatLeaveActionForCombatActionCore("combat-hp-disadvantage-leave", baseTarget, {
           selfHp,
           targetHp,
           hpGap: pressureDisadvantage.hpGap,
           pressureDisadvantage
-        }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
       }
       const sustainedPressureDisadvantage = combatSustainedPressureDisadvantageState(
         selfHp,
@@ -18965,12 +18958,12 @@
         targetRealBulletPressure
       );
       if (sustainedPressureDisadvantage) {
-        return combatLeaveAction("combat-hp-disadvantage-leave", baseTarget, {
+        return combatLeaveActionForCombatActionCore("combat-hp-disadvantage-leave", baseTarget, {
           selfHp,
           targetHp,
           hpGap: sustainedPressureDisadvantage.hpGap,
           sustainedPressureDisadvantage
-        }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
       }
       const tradeEstimate = combatTradeEstimate(self, target);
       if (!disadvantageObservation && tradeEstimate?.active) {
@@ -18981,13 +18974,13 @@
           ...tradeEstimate
         });
         if (disadvantageObservation?.ready) {
-          return combatLeaveAction("combat-hp-disadvantage-leave", baseTarget, {
+          return combatLeaveActionForCombatActionCore("combat-hp-disadvantage-leave", baseTarget, {
             selfHp,
             targetHp,
             hpGap,
             tradeEstimate,
             disadvantageObservation
-          }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+          }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
         }
       }
       if (!disadvantageObservation) clearCombatDisadvantageObservation("not-disadvantaged");
@@ -18999,13 +18992,13 @@
         summarizeServerPositionStall()
       );
       if (serverStallNoDamage && !retreatingTarget.disengage) {
-        return combatLeaveAction("combat-hp-disadvantage-leave", baseTarget, {
+        return combatLeaveActionForCombatActionCore("combat-hp-disadvantage-leave", baseTarget, {
           selfHp,
           targetHp,
           hpGap: serverStallNoDamage.hpGap,
           noDamageMs: damageState.noDamageMs,
           serverStallNoDamage
-        }, combatLeaveCoverAction(self, target, bullets, targetDistance));
+        }, combatLeaveCoverAction(self, target, bullets, targetDistance), { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp });
       }
       if (retreatingTarget.disengage) {
         clearCombatDisadvantageObservation("combat-disengage-range");
