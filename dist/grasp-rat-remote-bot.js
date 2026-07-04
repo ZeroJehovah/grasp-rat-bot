@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.487" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.488" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -17521,11 +17521,6 @@
       summarizeNearestCoinStaminaBudgetExitCore,
       pickNearestDailyStaminaFinalCoinCore
     } = require_stamina_budget2();
-    function opportunityEffectiveStaminaCost(staminaCost) {
-      return opportunityEffectiveStaminaCostCore(staminaCost, {
-        distanceFloor: cfg.opportunityDistanceFloor
-      });
-    }
     function opportunityMoveStaminaCost(distance, stopDistance = 0) {
       const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
       return travel * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1));
@@ -17556,44 +17551,11 @@
       if (!values.length) return Infinity;
       return Math.min(...values);
     }
-    function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
-      return dailyStaminaBudgetIsLimitingCore(
-        staminaCost,
-        opportunityWindowStaminaBudget(self, "1h"),
-        opportunityWindowStaminaBudget(self, "1d")
-      );
-    }
     function opportunityStaminaAffordable(self, staminaCost) {
       const cost = Number(staminaCost);
       if (!Number.isFinite(cost) || cost <= 0) return true;
       const budget = opportunityLongStaminaBudget(self);
       return !Number.isFinite(budget) || cost <= budget;
-    }
-    function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
-      return summarizeBlockedStaminaOpportunityCore(coins, targets, {
-        budget: opportunityLongStaminaBudget(self),
-        coinStaminaCost: opportunityCoinStaminaCost,
-        enemyStaminaCost: opportunityEnemyStaminaCost,
-        targetDrop: dropValue
-      });
-    }
-    function summarizeNearestCoinStaminaBudgetExit(self, coins) {
-      return summarizeNearestCoinStaminaBudgetExitCore(self, coins, {
-        budget: opportunityWindowStaminaBudget(self, "1h"),
-        dist,
-        coinStaminaCost: opportunityCoinStaminaCost,
-        reloginDelayMs: staminaBudgetReloginDelayMs()
-      });
-    }
-    function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
-      return pickNearestDailyStaminaFinalCoinCore(
-        safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self),
-        {
-          isSnapshotOnlyCoin,
-          coinStaminaCost: opportunityCoinStaminaCost,
-          dailyStaminaBudgetIsLimiting: (staminaCost) => dailyStaminaBudgetIsLimiting(self, staminaCost)
-        }
-      );
     }
     function dailyStaminaFinalCoinAction(self, coin) {
       if (!coin) return null;
@@ -17646,9 +17608,6 @@
       const amountDiff = Number(b.amount || 0) - Number(a.amount || 0);
       if (amountDiff) return amountDiff;
       return Number(a.distance || 0) - Number(b.distance || 0);
-    }
-    function mergeCoinRouteDisplay(base, routeCoin) {
-      return mergeCoinRouteDisplayCore(base, routeCoin);
     }
     const { currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore } = require_exit_relogin();
     function combatTargetId(target) {
@@ -20553,9 +20512,15 @@
         }
         return buildPostAttackDropWaitAction(self, postAttackWaitTarget);
       }
-      const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
+      const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExitCore(
         self,
-        safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self)
+        safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self),
+        {
+          budget: opportunityWindowStaminaBudget(self, "1h"),
+          dist,
+          coinStaminaCost: opportunityCoinStaminaCost,
+          reloginDelayMs: staminaBudgetReloginDelayMs()
+        }
       );
       if (staminaBudgetExit) {
         bot.fleeLock = null;
@@ -20634,7 +20599,18 @@
           ...coinMotionMetaCore(dir)
         }, self, realtimeEntities, { recovery });
       }
-      const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
+      const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoinCore(
+        safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self),
+        {
+          isSnapshotOnlyCoin,
+          coinStaminaCost: opportunityCoinStaminaCost,
+          dailyStaminaBudgetIsLimiting: (staminaCost) => dailyStaminaBudgetIsLimitingCore(
+            staminaCost,
+            opportunityWindowStaminaBudget(self, "1h"),
+            opportunityWindowStaminaBudget(self, "1d")
+          )
+        }
+      );
       if (dailyStaminaFinalCoin) {
         bot.fleeLock = null;
         if (shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", null)) {
@@ -20719,7 +20695,12 @@
       bot.snapshotCoinWaitSince = 0;
       bot.lastSnapshotCoinWaitAgeMs = 0;
       const hasRealtimeCoinForBudgetWait = (realtimeCoins || []).some((coin) => Number(coin?.amount || 0) > 0);
-      const staminaBlocked = hasRealtimeCoinForBudgetWait ? summarizeBlockedStaminaOpportunity(self, realtimeCoins, []) : null;
+      const staminaBlocked = hasRealtimeCoinForBudgetWait ? summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {
+        budget: opportunityLongStaminaBudget(self),
+        coinStaminaCost: opportunityCoinStaminaCost,
+        enemyStaminaCost: opportunityEnemyStaminaCost,
+        targetDrop: dropValue
+      }) : null;
       const waitReason = staminaBlocked ? "wait-for-stamina-budget" : "wait-for-visible-coin-refresh";
       const sourceSummary = bot.lastCoinSourceSummary || {};
       const waitDisplay = staminaBlocked ? "\u957F\u671F\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u9884\u7B97" + formatDurationMs(staminaBlocked.budgetMs) + "\uFF0C\u6700\u8FD1\u76EE\u6807\u9700" + formatDurationMs(staminaBlocked.requiredMs) + "\uFF0C\u5DEE" + formatDurationMs(staminaBlocked.shortageMs) : "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0";
