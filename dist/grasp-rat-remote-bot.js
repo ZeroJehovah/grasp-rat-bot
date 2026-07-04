@@ -1782,6 +1782,23 @@
         }
         return reloginUntil;
       }
+      function setExitReloginSuppressBoundCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers) {
+        return setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options, {
+          loginSuppressKey: helpers.loginSuppressKey,
+          loginSuppressReasonKey: helpers.loginSuppressReasonKey,
+          enemyLeaveStateKey: helpers.enemyLeaveStateKey,
+          offlineLeaveStateKey: helpers.offlineLeaveStateKey,
+          isExitLoginSuppressReason: isExitLoginSuppressReasonCore,
+          hpInfoForRelogin: helpers.hpInfoForRelogin,
+          reloginDelayForHp: helpers.reloginDelayForHp,
+          updateEnemyLeaveStreak: helpers.updateEnemyLeaveStreak,
+          clearLoginSuppressMatching: helpers.clearLoginSuppressMatching,
+          finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
+          writePersistentExitState: helpers.writePersistentExitState,
+          setLoginSuppress: helpers.setLoginSuppress,
+          now: helpers.now
+        });
+      }
       function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
         if (!detail || !detail.attempted) return 0;
         const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
@@ -2116,6 +2133,7 @@
         startExitAuditCore,
         startExitAuditBoundCore,
         setExitReloginSuppressCore,
+        setExitReloginSuppressBoundCore,
         primePendingUnsafeExitLoginSuppressCore,
         primePendingUnsafeExitLoginSuppressBoundCore,
         staminaBudgetExitHoldUntilCore,
@@ -4742,7 +4760,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.451" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.452" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10422,7 +10440,7 @@
         offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
       });
     }
-    const { setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
+    const { setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
     function summarizePursuit(pursuit = bot.pursuit) {
       if (!pursuit) return null;
       const t = now();
@@ -10983,7 +11001,7 @@
       if (pending.scope === "offline") {
         setOfflineLeaveSuppressBoundCore(bot, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, finalizeLeaveDisplayReason, writePersistentExitState, setExitReloginSuppress, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });
       } else {
-        setExitReloginSuppress("enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);
+        setExitReloginSuppressBoundCore(bot, localStorage, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now });
         if (pending.source === "combat") bot.lastCombatLeaveResult = detail;
         if (pending.source === "pursuit") bot.lastPursuitLeaveResult = detail;
         if (pending.source === "injury") bot.lastInjuryLeaveResult = detail;

@@ -2,13 +2,13 @@
 
 function pendingExitSource(options = {}) {
   const offlineSuppressPrelude = options.bundledRuntime
-    ? "  const { setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const offlineSuppressCall = options.bundledRuntime
     ? "\t      setOfflineLeaveSuppressBoundCore(bot, detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, finalizeLeaveDisplayReason, writePersistentExitState, setExitReloginSuppress, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });"
     : "\t      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);";
   const enemyLeaveSuppressCall = options.bundledRuntime
-    ? "\t      setExitReloginSuppress('enemy leave', detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);"
+    ? "\t      setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now });"
     : "\t      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);";
   return String.raw`${offlineSuppressPrelude}	  function summarizePursuit(pursuit = bot.pursuit) {
 	    if (!pursuit) return null;

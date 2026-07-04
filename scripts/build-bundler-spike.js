@@ -294,7 +294,10 @@ async function selfTest() {
   assert(status.exitReloginSuppressNewMinimum === 6000, 'spike did not preserve suppress minimum metadata');
   assert(status.exitReloginSuppressNewStreaked === true, 'spike did not update enemy leave streak before new hold');
   assert(status.exitReloginSuppressNewPersisted === true, 'spike did not persist new suppress detail');
-  assert(status.exitReloginSuppressEventCount === 6, 'spike did not execute all suppress core side effects');
+  assert(status.exitReloginSuppressBoundUntil === 6000, 'spike did not create bound suppress hold');
+  assert(status.exitReloginSuppressBoundDelay === 5000, 'spike did not honor bound suppress minimum delay');
+  assert(status.exitReloginSuppressBoundStreaked === true, 'spike did not update enemy leave streak through bound suppress core');
+  assert(status.exitReloginSuppressEventCount === 9, 'spike did not execute all suppress core side effects');
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
   assert(status.exitReloginStaminaHoldBoundReason === 'stamina reset', 'spike did not execute exit relogin bound stamina hold selector');

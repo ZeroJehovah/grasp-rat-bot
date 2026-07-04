@@ -788,6 +788,18 @@ function helperStatus(config = {}) {
     { minimumUntil: 7000, minimumReason: 'spike-minimum' },
     exitReloginSuppressHelpers
   );
+  const exitReloginSuppressBoundBot = { pursuitReloginUntil: 0, lastEnemyLeaveWaitMs: 0 };
+  const exitReloginSuppressBoundDetail = { summary: 'bound hold' };
+  const exitReloginSuppressBoundUntil = exitRelogin.setExitReloginSuppressBoundCore(
+    exitReloginSuppressBoundBot,
+    exitReloginSuppressNewStorage,
+    'enemy leave',
+    'combat leave',
+    exitReloginSuppressBoundDetail,
+    { hp: 65 },
+    { minimumUntil: 6000 },
+    exitReloginSuppressHelpers
+  );
   const exitReloginBudgetHold = exitRelogin.staminaBudgetExitHoldUntilCore(
     { coin: { id: 'budget-coin' } },
     1000,
@@ -1167,6 +1179,9 @@ function helperStatus(config = {}) {
     exitReloginSuppressNewMinimum: exitReloginSuppressNewDetail.reloginMinimumDelayMs,
     exitReloginSuppressNewStreaked: exitReloginSuppressNewDetail.streaked,
     exitReloginSuppressNewPersisted: exitReloginSuppressEvents.some(event => event[0] === 'write-exit' && event[1] === 'enemy-state' && event[2] === 'enemy leave'),
+    exitReloginSuppressBoundUntil,
+    exitReloginSuppressBoundDelay: exitReloginSuppressBoundDetail.reloginDelayMs,
+    exitReloginSuppressBoundStreaked: exitReloginSuppressBoundDetail.streaked,
     exitReloginSuppressEventCount: arrayCountRuntime.arrayCount(exitReloginSuppressEvents),
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,

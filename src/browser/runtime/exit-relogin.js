@@ -443,6 +443,24 @@ function setExitReloginSuppressCore(bot, storage, storageReason, reason, detail,
   return reloginUntil;
 }
 
+function setExitReloginSuppressBoundCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers) {
+  return setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options, {
+    loginSuppressKey: helpers.loginSuppressKey,
+    loginSuppressReasonKey: helpers.loginSuppressReasonKey,
+    enemyLeaveStateKey: helpers.enemyLeaveStateKey,
+    offlineLeaveStateKey: helpers.offlineLeaveStateKey,
+    isExitLoginSuppressReason: isExitLoginSuppressReasonCore,
+    hpInfoForRelogin: helpers.hpInfoForRelogin,
+    reloginDelayForHp: helpers.reloginDelayForHp,
+    updateEnemyLeaveStreak: helpers.updateEnemyLeaveStreak,
+    clearLoginSuppressMatching: helpers.clearLoginSuppressMatching,
+    finalizeLeaveDisplayReason: helpers.finalizeLeaveDisplayReason,
+    writePersistentExitState: helpers.writePersistentExitState,
+    setLoginSuppress: helpers.setLoginSuppress,
+    now: helpers.now
+  });
+}
+
 function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
   if (!detail || !detail.attempted) return 0;
   const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
@@ -799,6 +817,7 @@ module.exports = {
   startExitAuditCore,
   startExitAuditBoundCore,
   setExitReloginSuppressCore,
+  setExitReloginSuppressBoundCore,
   primePendingUnsafeExitLoginSuppressCore,
   primePendingUnsafeExitLoginSuppressBoundCore,
   staminaBudgetExitHoldUntilCore,
