@@ -4054,12 +4054,32 @@ function main() {
     assert(!generatedRuntimeSource.includes('function buildMissingHeldOpportunityCore'), 'generated remote runtime still inlines missing-held opportunity core before bundling');
     assert(!generatedRuntimeSource.includes('function isHighValueCoinOpportunity(item)'), 'generated remote runtime still declares unused high-value opportunity wrapper');
     assert(!generatedRuntimeSource.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'generated remote runtime still declares unused high-value switch blocker wrapper');
+    for (const wrapperName of [
+      'lockedOpportunityChoice',
+      'applyOpportunityOscillationLock',
+      'opportunityMatchesChoice',
+      'opportunityMissingHoldUntil',
+      'missingHeldCoinCoveredByVisibleAuthority'
+    ]) {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
+    }
     assert(distSource.includes('function chooseStableOpportunityCore'), 'bundled dist does not contain opportunity choice stable picker core');
     assert(distSource.includes('function rememberOpportunityChoiceCore'), 'bundled dist does not contain opportunity choice persistence core');
     assert(distSource.includes('function buildMissingHeldOpportunityCore'), 'bundled dist does not contain missing-held opportunity core');
+    assert(distSource.includes('function applyOpportunityOscillationLockCore'), 'bundled dist does not contain opportunity oscillation lock core');
+    assert(distSource.includes('function opportunityMatchesChoiceCore'), 'bundled dist does not contain opportunity choice matcher core');
     assert(distSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'bundled dist does not contain high-value coin hold switch blocker core');
     assert(!distSource.includes('function isHighValueCoinOpportunity(item)'), 'bundled dist still declares unused high-value opportunity wrapper');
     assert(!distSource.includes('function highValueCoinHoldBlocksEnemySwitch(held, best)'), 'bundled dist still declares unused high-value switch blocker wrapper');
+    for (const wrapperName of [
+      'lockedOpportunityChoice',
+      'applyOpportunityOscillationLock',
+      'opportunityMatchesChoice',
+      'opportunityMissingHoldUntil',
+      'missingHeldCoinCoveredByVisibleAuthority'
+    ]) {
+      assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+    }
     assert(generatedRuntimeSource.includes('function opportunityChoiceCoreOptions'), 'generated runtime opportunity choice wrapper options not found');
   });
 

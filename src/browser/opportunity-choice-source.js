@@ -70,6 +70,36 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
 		    return highValueCoinHoldBlocksEnemySwitchCore(held, best, opportunityChoiceCoreOptions());
 		  }
 `;
+  const localOpportunityChoiceWrapperSource = options.bundledRuntime ? '' : String.raw`
+			  function lockedOpportunityChoice(sorted) {
+			    const result = lockedOpportunityChoiceCore(sorted, bot.opportunitySwitchLock);
+			    bot.opportunitySwitchLock = result.switchLock;
+			    return result.choice;
+			  }
+
+			  function applyOpportunityOscillationLock(sorted, current, chosen) {
+			    const result = applyOpportunityOscillationLockCore(sorted, current, chosen, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
+			    bot.opportunitySwitchLock = result.switchLock;
+			    return result.chosen;
+			  }
+
+			  function opportunityMatchesChoice(item, choice) {
+			    return opportunityMatchesChoiceCore(item, choice, opportunityChoiceCoreOptions());
+			  }
+
+			  function opportunityMissingHoldUntil(choice, t) {
+			    return opportunityMissingHoldUntilCore(choice, opportunityChoiceCoreOptions({
+			      nowMs: t,
+			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs
+			    }));
+			  }
+
+			  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
+			    return missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, opportunityChoiceCoreOptions({
+			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius
+			    }));
+			  }
+`;
   return String.raw`${opportunityChoiceHelperSource}
 
 			  function opportunityChoiceCoreOptions(extra = {}) {
@@ -90,32 +120,11 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
 		    bot.opportunitySwitchLock = null;
 		  }
 
-			  function lockedOpportunityChoice(sorted) {
-			    const result = lockedOpportunityChoiceCore(sorted, bot.opportunitySwitchLock);
-			    bot.opportunitySwitchLock = result.switchLock;
-			    return result.choice;
-			  }
-
-			  function applyOpportunityOscillationLock(sorted, current, chosen) {
-			    const result = applyOpportunityOscillationLockCore(sorted, current, chosen, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
-			    bot.opportunitySwitchLock = result.switchLock;
-			    return result.chosen;
-			  }
-
 		  function opportunitySameCoinRadius() {
 		    return Math.max(0, Number(cfg.opportunitySameCoinRadius || cfg.coinCollectedPruneRadius || 900));
 		  }
 
-			  function opportunityMatchesChoice(item, choice) {
-			    return opportunityMatchesChoiceCore(item, choice, opportunityChoiceCoreOptions());
-			  }
-
-			  function opportunityMissingHoldUntil(choice, t) {
-			    return opportunityMissingHoldUntilCore(choice, opportunityChoiceCoreOptions({
-			      nowMs: t,
-			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs
-			    }));
-			  }
+${localOpportunityChoiceWrapperSource}
 
 			  function currentVisibleCoinListForMissingHold() {
 			    if (typeof getNativeCoinSources !== 'function') return null;
@@ -146,12 +155,6 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
 			    const visibleCoins = currentVisibleCoinListForMissingHold();
 			    if (!Array.isArray(visibleCoins)) return false;
 			    return !visibleCoins.some(coin => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
-			  }
-
-			  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
-			    return missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, opportunityChoiceCoreOptions({
-			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius
-			    }));
 			  }
 
 			  function clearMissingVisibleCoinTarget(choice, coin, reason, t) {
@@ -241,12 +244,7 @@ function bundledOpportunityChoiceSource() {
   opportunityChoiceKey,
   opportunityPairKey,
   opportunityByKey,
-  opportunityMatchesChoiceCore,
-  lockedOpportunityChoiceCore,
-  applyOpportunityOscillationLockCore,
   chooseStableOpportunityCore,
-  opportunityMissingHoldUntilCore,
-  missingHeldCoinCoveredByVisibleAuthorityCore,
   buildMissingHeldOpportunityCore,
   opportunityRouteIds,
   rememberOpportunityChoiceCore
