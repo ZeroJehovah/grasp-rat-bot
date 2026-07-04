@@ -1655,6 +1655,73 @@
         const text = String(reason || "").toLowerCase();
         return text.includes("reconnect churn") || text.includes("server position") || text.includes("stamina") || text.includes("missing self") || text.includes("sampling outage") || text.includes("combat tick gap");
       }
+      function enemyReloginHoldRemainingMsCore(bot, storage, helpers) {
+        const now = Number(helpers.now || 0) || 0;
+        let until = Number(bot.pursuitReloginUntil || 0);
+        const persistent = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
+        if (Number(persistent?.reloginUntil || 0) > until) {
+          until = Number(persistent.reloginUntil);
+          bot.pursuitReloginUntil = until;
+          bot.lastEnemyLeaveResult = persistent;
+        }
+        try {
+          const suppressUntil = Number(storage.getItem(helpers.loginSuppressKey) || 0) || 0;
+          const suppressReason = String(storage.getItem(helpers.loginSuppressReasonKey) || "");
+          if ((suppressReason === "enemy leave" || suppressReason === "pursuit leave" || suppressReason === "combat leave") && suppressUntil > until) {
+            until = suppressUntil;
+            bot.pursuitReloginUntil = suppressUntil;
+          }
+        } catch (_) {
+        }
+        const remaining = Math.max(0, until - now);
+        if (!remaining && bot.pursuitReloginUntil) {
+          bot.pursuitReloginUntil = 0;
+        }
+        return Math.round(remaining);
+      }
+      function offlineReloginHoldRemainingMsCore(bot, storage, helpers) {
+        const now = Number(helpers.now || 0) || 0;
+        let until = Number(bot.offlineReloginUntil || 0);
+        const persistent = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
+        if (Number(persistent?.reloginUntil || 0) > until) {
+          until = Number(persistent.reloginUntil);
+          bot.offlineReloginUntil = until;
+          bot.lastOfflineLeaveResult = persistent;
+        }
+        if (until > now && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+          helpers.clearOfflineReloginHold("stale stamina hold contradicted by known stamina");
+          return 0;
+        }
+        try {
+          const suppressUntil = Number(storage.getItem(helpers.loginSuppressKey) || 0) || 0;
+          const suppressReason = String(storage.getItem(helpers.loginSuppressReasonKey) || "");
+          if (/offline.*leave/i.test(suppressReason) && suppressUntil > until) {
+            until = suppressUntil;
+            bot.offlineReloginUntil = suppressUntil;
+          }
+        } catch (_) {
+        }
+        if (until > now && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+          helpers.clearOfflineReloginHold("stale offline suppress contradicted by known stamina");
+          return 0;
+        }
+        const remaining = Math.max(0, until - now);
+        if (!remaining && bot.offlineReloginUntil) {
+          bot.offlineReloginUntil = 0;
+        }
+        return Math.round(remaining);
+      }
+      function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern) {
+        try {
+          const suppressReason = String(storage.getItem(suppressReasonKey) || "");
+          if (!pattern.test(suppressReason)) return false;
+          storage.removeItem(suppressKey);
+          storage.removeItem(suppressReasonKey);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
       module.exports = {
         leaveWaitDisplayCore,
         finalizeLeaveDisplayReasonCore,
@@ -1676,7 +1743,10 @@
         pendingExitSuppressReasonCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
-        offlineExitRequiresUnsafeReloginDelayCore
+        offlineExitRequiresUnsafeReloginDelayCore,
+        enemyReloginHoldRemainingMsCore,
+        offlineReloginHoldRemainingMsCore,
+        clearLoginSuppressMatchingCore
       };
     }
   });
@@ -4283,7 +4353,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.427" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.428" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10119,70 +10189,33 @@
       }
       return until;
     }
+    const {
+      enemyReloginHoldRemainingMsCore,
+      offlineReloginHoldRemainingMsCore,
+      clearLoginSuppressMatchingCore
+    } = require_exit_relogin();
     function enemyReloginHoldRemainingMs() {
-      let until = Number(bot.pursuitReloginUntil || 0);
-      const persistent = readPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-      if (Number(persistent?.reloginUntil || 0) > until) {
-        until = Number(persistent.reloginUntil);
-        bot.pursuitReloginUntil = until;
-        bot.lastEnemyLeaveResult = persistent;
-      }
-      try {
-        const suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-        const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-        if ((suppressReason === "enemy leave" || suppressReason === "pursuit leave" || suppressReason === "combat leave") && suppressUntil > until) {
-          until = suppressUntil;
-          bot.pursuitReloginUntil = suppressUntil;
-        }
-      } catch (_) {
-      }
-      const remaining = Math.max(0, until - Date.now());
-      if (!remaining && bot.pursuitReloginUntil) {
-        bot.pursuitReloginUntil = 0;
-      }
-      return Math.round(remaining);
+      return enemyReloginHoldRemainingMsCore(bot, localStorage, {
+        loginSuppressKey: LOGIN_SUPPRESS_KEY,
+        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+        readPersistentExitState,
+        enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+        now: Date.now()
+      });
     }
     function offlineReloginHoldRemainingMs() {
-      let until = Number(bot.offlineReloginUntil || 0);
-      const persistent = readPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-      if (Number(persistent?.reloginUntil || 0) > until) {
-        until = Number(persistent.reloginUntil);
-        bot.offlineReloginUntil = until;
-        bot.lastOfflineLeaveResult = persistent;
-      }
-      if (until > Date.now() && staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
-        clearOfflineReloginHold("stale stamina hold contradicted by known stamina");
-        return 0;
-      }
-      try {
-        const suppressUntil = Number(localStorage.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-        const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-        if (/offline.*leave/i.test(suppressReason) && suppressUntil > until) {
-          until = suppressUntil;
-          bot.offlineReloginUntil = suppressUntil;
-        }
-      } catch (_) {
-      }
-      if (until > Date.now() && staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
-        clearOfflineReloginHold("stale offline suppress contradicted by known stamina");
-        return 0;
-      }
-      const remaining = Math.max(0, until - Date.now());
-      if (!remaining && bot.offlineReloginUntil) {
-        bot.offlineReloginUntil = 0;
-      }
-      return Math.round(remaining);
+      return offlineReloginHoldRemainingMsCore(bot, localStorage, {
+        loginSuppressKey: LOGIN_SUPPRESS_KEY,
+        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+        readPersistentExitState,
+        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+        staleOfflineStaminaHoldContradicted,
+        clearOfflineReloginHold,
+        now: Date.now()
+      });
     }
     function clearLoginSuppressMatching(pattern) {
-      try {
-        const suppressReason = String(localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-        if (!pattern.test(suppressReason)) return false;
-        localStorage.removeItem(LOGIN_SUPPRESS_KEY);
-        localStorage.removeItem(LOGIN_SUPPRESS_REASON_KEY);
-        return true;
-      } catch (_) {
-        return false;
-      }
+      return clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern);
     }
     function clearEnemyReloginHold(reason = "online self restored") {
       const t = Date.now();
