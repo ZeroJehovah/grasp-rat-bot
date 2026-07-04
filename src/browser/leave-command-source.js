@@ -9,11 +9,20 @@ const {
 } = require('./pending-exit-summary-call-source');
 
 function leaveCommandSource(options = {}) {
-  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand', options);
+  const pendingExitLeaveCommandPrelude = options.bundledRuntime
+    ? "  const { pendingExitDisplayReasonCore: pendingExitDisplayReasonForLeaveCommandCore, leaveDetailHasHttp403Core: leaveDetailHasHttp403ForLeaveCommandCore, leaveDetailSucceededCore: leaveDetailSucceededForLeaveCommandCore } = require('./src/browser/runtime/pending-exit');\n"
+    : '';
+  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand', options) + pendingExitLeaveCommandPrelude;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   const pendingExitDisplayReason = summary => options.bundledRuntime
-    ? `pendingExitDisplayReasonCore(${summary})`
+    ? `pendingExitDisplayReasonForLeaveCommandCore(${summary})`
     : `pendingExitDisplayReason(${summary})`;
+  const leaveDetailHasHttp403Call = detail => options.bundledRuntime
+    ? `leaveDetailHasHttp403ForLeaveCommandCore(${detail})`
+    : `leaveDetailHasHttp403(${detail})`;
+  const leaveDetailSucceededCall = detail => options.bundledRuntime
+    ? `leaveDetailSucceededForLeaveCommandCore(${detail})`
+    : `leaveDetailSucceeded(${detail})`;
   return String.raw`${runtimePrelude}  function waitWithTimeout(promise, timeoutMs, label) {
     const ms = Math.max(100, Number(timeoutMs) || 0);
     return new Promise((resolve, reject) => {
@@ -84,9 +93,9 @@ function leaveCommandSource(options = {}) {
     if (!detail || typeof detail !== 'object') return false;
     if (!detail.attempted || detail.leaveRequestPending) return false;
     if (detail.exitConfirmed) return false;
-    const http403 = leaveDetailHasHttp403(detail);
+    const http403 = ${leaveDetailHasHttp403Call('detail')};
     if (!detail.error && !http403) return false;
-    if (leaveDetailSucceeded(detail)) return false;
+    if (${leaveDetailSucceededCall('detail')}) return false;
     return Boolean(clashLeaveRescueHook());
   }
 
@@ -319,7 +328,7 @@ function leaveCommandSource(options = {}) {
     if (pendingAuditId && pendingAuditId !== detail.exitAuditId) return null;
     const self = getSelf();
     const baseState = pendingExitSelfState(self);
-    if (leaveDetailHasHttp403(detail)) {
+    if (${leaveDetailHasHttp403Call('detail')}) {
       if (scheduleClashLeaveRescueRetry(detail)) return null;
       return confirmPendingExit(pending, {
         ...baseState,
@@ -330,7 +339,7 @@ function leaveCommandSource(options = {}) {
         self: null
       });
     }
-    if (leaveDetailSucceeded(detail)) {
+    if (${leaveDetailSucceededCall('detail')}) {
       requestPendingExitLeaveSuccessReload(detail, 'leave-success');
       return null;
     }
@@ -355,9 +364,9 @@ function leaveCommandSource(options = {}) {
 	    detail.leaveRequests.push(request);
     detail.leaveRequests = detail.leaveRequests.slice(-20);
     detail.lastLeaveRequest = request;
-    const http403 = leaveDetailHasHttp403(detail);
+    const http403 = ${leaveDetailHasHttp403Call('detail')};
     const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail));
-    if (leaveDetailSucceeded(detail) || http403) {
+    if (${leaveDetailSucceededCall('detail')} || http403) {
       stopMotionAfterExit(http403 ? 'leave-http-403' : 'leave-success');
       if (http403 && !clashRescuePending) {
         noteImportantSessionExit('leave-http-403:' + (detail.reason || ''), detail.self || bot.lastSelf, request.completedAt, { exit: detail });
@@ -370,7 +379,7 @@ function leaveCommandSource(options = {}) {
       source: detail.exitAuditSource || detail.reason || 'leave-command',
       scope: detail.exitAuditScope || ''
     });
-    if (leaveDetailSucceeded(detail)) requestPendingExitLeaveSuccessReload(detail, 'leave-success');
+    if (${leaveDetailSucceededCall('detail')}) requestPendingExitLeaveSuccessReload(detail, 'leave-success');
     const rescueScheduled = scheduleClashLeaveRescueRetry(detail);
     if (!rescueScheduled) maybeConfirmPendingExitFromLeaveDetail(detail);
     return detail;

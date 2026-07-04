@@ -109,6 +109,8 @@ async function selfTest() {
   assert(source.includes('function clearPersistentStorageKey'), 'persistent-clear helper was not bundled');
   assert(source.includes('function normalizePendingExitStateForStorageCore'), 'pending-exit persistence helper was not bundled');
   assert(source.includes('function pendingExitRetryMsCore'), 'pending-exit helper was not bundled');
+  assert(source.includes('function leaveRequestHasHttp403Core'), 'pending-exit leave request 403 helper was not bundled');
+  assert(source.includes('function leaveSuccessReloadConfirmationForDetailCore'), 'pending-exit leave success reload helper was not bundled');
   assert(source.includes('function refreshExitDetailCore'), 'refresh-exit-detail helper was not bundled');
   assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
   assert(source.includes('function restoreRuntimeStateCore'), 'restored runtime state helper was not bundled');
@@ -232,6 +234,12 @@ async function selfTest() {
   assert(status.pendingExitCoreDisplayReason === 'core summary，等待退出确认，未退出会继续补发', 'spike did not execute pending-exit display core');
   assert(status.pendingExitCoreRetryRemainingMs === 400, 'spike did not execute pending-exit summary retry core');
   assert(status.pendingExitCoreCombatDx === 1, 'spike did not clamp pending-exit combat cover');
+  assert(status.pendingExitCoreHttp403 === true, 'spike did not execute pending-exit request 403 helper');
+  assert(status.pendingExitCoreDetailHttp403 === true, 'spike did not execute pending-exit detail 403 helper');
+  assert(status.pendingExitCoreLeaveSucceeded === true, 'spike did not execute pending-exit leave success helper');
+  assert(status.pendingExitCoreReloadRequestId === 'spike-leave', 'spike did not execute pending-exit leave reload helper');
+  assert(status.pendingExitCoreReloadSatisfied === true, 'spike did not execute pending-exit reload satisfied helper');
+  assert(status.pendingExitCoreWaitReason === 'pursuit-leave-retry', 'spike did not execute pending-exit wait reason helper');
   assert(status.refreshExitHoldRemainingMs === 1400, 'spike did not refresh exit hold remaining time');
   assert(status.refreshExitSummary === 'summary:stamina budget coin leave', 'spike did not refresh stamina-budget exit summary');
   assert(status.refreshExitDisplayReason === 'summary:stamina budget coin leave', 'spike did not finalize refreshed exit display reason');

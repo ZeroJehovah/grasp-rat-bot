@@ -1459,6 +1459,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 218. Removed grouped production bundled opportunity-choice and post-attack picker wrappers by routing missing-held choice construction, stable choice selection, choice persistence, drop-coin picking, and drop-wait picking directly through strategy/runtime cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.490`
 219. Removed grouped production bundled opportunity-candidate wrappers by routing route coin de-duplication, best coin score comparison, and enemy candidate filtering directly through strategy/runtime cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.491`
 220. Removed grouped production bundled coin-runtime wrappers by routing coin movement direction, coin-progress state transitions, native coin snapshots, tracked visibility, pickup session accounting, snapshot pruning, and snapshot memory refresh through direct strategy/runtime core snippets while preserving local/CDP fallback: integrated in `bootstrap-0.4.492`
+221. Removed grouped production pending-exit leave helper wrappers by routing leave HTTP 403 detection, leave success detection, leave-success reload-confirmation construction/satisfaction, and wait-reason selection through `src/strategy/pending-exit.js` / `src/browser/runtime/pending-exit.js` cores while preserving local/CDP fallback: integrated in `bootstrap-0.4.496`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
@@ -1527,3 +1528,9 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/pending-exit-summary-call-source.js` generates direct `summarizePendingExitCore(...)` call expressions with explicit retry/reload options and unique runtime aliases per fragment.
 - Bundled bot status, combat-log, control-login, tick, leave-command, and pending-exit internals no longer call a production `summarizePendingExit()` function.
 - The local CDP/inline generation path still keeps the wrapper fallback, while the production verifier rejects `function summarizePendingExit(` in generated/final dist.
+
+`bootstrap-0.4.496` broadens the pending-exit migration in a single grouped slice:
+
+- `src/strategy/pending-exit.js` now owns leave HTTP 403 detection, leave success detection, leave-success reload-confirmation construction/satisfaction, and pending-exit wait-reason selection.
+- `src/browser/pending-exit-source.js` and `src/browser/leave-command-source.js` generate direct bundled calls to those cores, with explicit reload-normalization dependency injection where needed.
+- Final production dist no longer declares the removed pending-exit leave helper wrappers, and verifier rejects those wrapper declarations in generated/final output.

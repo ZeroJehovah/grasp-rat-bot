@@ -17,7 +17,13 @@ const {
 const {
   pendingExitRetryMsCore,
   pendingExitDisplayReasonCore,
-  summarizePendingExitCore
+  summarizePendingExitCore,
+  leaveRequestHasHttp403Core,
+  leaveDetailHasHttp403Core,
+  leaveDetailSucceededCore,
+  leaveSuccessReloadConfirmationForDetailCore,
+  leaveSuccessReloadConfirmationSatisfiedCore,
+  pendingExitWaitReasonCore
 } = require('./runtime/pending-exit');
 
 function pendingExitRetryMsCall(pendingExpr, options = {}) {
@@ -32,7 +38,7 @@ function pendingExitDisplayReasonCall(summaryExpr, options = {}) {
 
 function pendingExitSource(options = {}) {
   const offlineSuppressPrelude = options.bundledRuntime
-    ? "  const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore } = require('./src/browser/runtime/pending-exit');\n  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore, leaveRequestHasHttp403Core, leaveDetailHasHttp403Core, leaveDetailSucceededCore, leaveSuccessReloadConfirmationForDetailCore, leaveSuccessReloadConfirmationSatisfiedCore, pendingExitWaitReasonCore } = require('./src/browser/runtime/pending-exit');\n  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const enemyHoldRemainingMsCall = options.bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForPendingExitBoundCore')
@@ -58,6 +64,24 @@ function pendingExitSource(options = {}) {
   const normalizePendingExitReloadConfirmationCall = args => options.bundledRuntime
     ? `normalizePendingExitReloadConfirmationCore(${args})`
     : `normalizePendingExitReloadConfirmation(${args})`;
+  const leaveRequestHasHttp403Call = request => options.bundledRuntime
+    ? `leaveRequestHasHttp403Core(${request})`
+    : `leaveRequestHasHttp403(${request})`;
+  const leaveDetailHasHttp403Call = detail => options.bundledRuntime
+    ? `leaveDetailHasHttp403Core(${detail})`
+    : `leaveDetailHasHttp403(${detail})`;
+  const leaveDetailSucceededCall = detail => options.bundledRuntime
+    ? `leaveDetailSucceededCore(${detail})`
+    : `leaveDetailSucceeded(${detail})`;
+  const leaveSuccessReloadConfirmationForDetailCall = (detail, pending, t) => options.bundledRuntime
+    ? `leaveSuccessReloadConfirmationForDetailCore(${detail}, ${pending}, ${t}, { normalizeReloadConfirmation: normalizePendingExitReloadConfirmationCore })`
+    : `leaveSuccessReloadConfirmationForDetail(${detail}, ${pending}, ${t})`;
+  const leaveSuccessReloadConfirmationSatisfiedCall = reloadConfirmation => options.bundledRuntime
+    ? `leaveSuccessReloadConfirmationSatisfiedCore(${reloadConfirmation})`
+    : `leaveSuccessReloadConfirmationSatisfied(${reloadConfirmation})`;
+  const pendingExitWaitReasonCall = (pending, confirmed) => options.bundledRuntime
+    ? `pendingExitWaitReasonCore(${pending}, ${confirmed})`
+    : `pendingExitWaitReason(${pending}, ${confirmed})`;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   const summarizePendingExitExpr = pending => summarizePendingExitCall(pending || 'bot.pendingExit', {
     ...options,
@@ -73,7 +97,13 @@ function pendingExitSource(options = {}) {
   const pendingExitHelperSource = options.bundledRuntime ? '' : [
     pendingExitRetryMsCore,
     pendingExitDisplayReasonCore,
-    summarizePendingExitCore
+    summarizePendingExitCore,
+    leaveRequestHasHttp403Core,
+    leaveDetailHasHttp403Core,
+    leaveDetailSucceededCore,
+    leaveSuccessReloadConfirmationForDetailCore,
+    leaveSuccessReloadConfirmationSatisfiedCore,
+    pendingExitWaitReasonCore
   ].map(fn => `  ${fn.toString()}`).join('\n\n') + '\n\n';
   const localPendingExitHelperWrappers = options.bundledRuntime ? '' : String.raw`
   function pendingExitRetryMs(pending) {
@@ -93,6 +123,32 @@ function pendingExitSource(options = {}) {
       retryMs: pendingExitRetryMs(pending),
       reloadConfirmation
     });
+  }
+
+  function leaveRequestHasHttp403(request) {
+    return leaveRequestHasHttp403Core(request);
+  }
+
+  function leaveDetailHasHttp403(detail) {
+    return leaveDetailHasHttp403Core(detail);
+  }
+
+  function leaveDetailSucceeded(detail) {
+    return leaveDetailSucceededCore(detail);
+  }
+
+  function leaveSuccessReloadConfirmationForDetail(detail, pending = null, t = Date.now()) {
+    return leaveSuccessReloadConfirmationForDetailCore(detail, pending, t, {
+      normalizeReloadConfirmation: normalizePendingExitReloadConfirmation
+    });
+  }
+
+  function leaveSuccessReloadConfirmationSatisfied(reloadConfirmation) {
+    return leaveSuccessReloadConfirmationSatisfiedCore(reloadConfirmation);
+  }
+
+  function pendingExitWaitReason(pending, confirmed = false) {
+    return pendingExitWaitReasonCore(pending, confirmed);
   }
 
 `;
@@ -215,7 +271,7 @@ ${localPendingExitHelperWrappers}
 	    detail.pendingExit = ${summarizePendingExitExpr('pending')};
 	    detail.displayReason = pending.displayReason;
 	    ${writePendingExit('pending')};
-	    if (leaveDetailSucceeded(detail) && !leaveDetailHasHttp403(detail)) {
+	    if (${leaveDetailSucceededCall('detail')} && !${leaveDetailHasHttp403Call('detail')}) {
 	      requestPendingExitLeaveSuccessReload(detail, 'leave-success');
 	    }
 	    return pending;
@@ -365,55 +421,9 @@ ${localPendingExitHelperWrappers}
     };
   }
 
-  function leaveRequestHasHttp403(request) {
-    if (!request || typeof request !== 'object') return false;
-    const status = Number(request.status ?? request.statusCode ?? request.result?.status ?? request.result?.statusCode ?? NaN);
-    if (status === 403) return true;
-    const fields = [
-      request.error,
-      request.message,
-      request.statusText,
-      request.result?.error,
-      request.result?.message,
-      request.result?.statusText
-    ];
-    return fields.some(value => /(?:^|D)403(?:D|$)|forbidden/i.test(String(value || '')));
-  }
-
-  function leaveDetailHasHttp403(detail) {
-    if (!detail || typeof detail !== 'object') return false;
-    if (leaveRequestHasHttp403(detail) || leaveRequestHasHttp403(detail.lastLeaveRequest)) return true;
-    return Array.isArray(detail.leaveRequests) && detail.leaveRequests.some(leaveRequestHasHttp403);
-  }
-
-	  function leaveDetailSucceeded(detail) {
-	    if (!detail || typeof detail !== 'object') return false;
-	    if (!detail.attempted || detail.leaveRequestPending || detail.error || leaveDetailHasHttp403(detail)) return false;
-	    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
-	    return !request || Boolean(request.completedAt || request.method || detail.method);
-	  }
-
-	  function leaveSuccessReloadConfirmationForDetail(detail, pending = null, t = Date.now()) {
-	    if (!leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return ${normalizePendingExitReloadConfirmationCall('pending?.reloadConfirmation, pending, t')};
-	    const existing = ${normalizePendingExitReloadConfirmationCall('detail.reloadConfirmation || pending?.reloadConfirmation, pending, t')};
-	    const request = detail.lastLeaveRequest || (Array.isArray(detail.leaveRequests) ? detail.leaveRequests[detail.leaveRequests.length - 1] : null);
-	    return {
-	      required: true,
-	      reason: 'leave-success',
-	      leaveSucceededAt: Number(existing?.leaveSucceededAt || request?.completedAt || detail.at || t) || t,
-	      requestId: String(existing?.requestId || request?.requestId || ''),
-	      requestedAt: Number(existing?.requestedAt || 0) || 0,
-	      reloadedAt: Number(existing?.reloadedAt || 0) || 0,
-	      restoredAfterReload: Boolean(existing?.restoredAfterReload),
-	      count: Math.max(0, Math.round(Number(existing?.count || 0) || 0)),
-	      lastResult: existing?.lastResult || null,
-	      lastBlocked: existing?.lastBlocked || null
-	    };
-	  }
-
 	  function attachLeaveSuccessReloadConfirmation(pending, detail, t = Date.now()) {
-	    if (!pending || !leaveDetailSucceeded(detail) || leaveDetailHasHttp403(detail)) return null;
-	    const reloadConfirmation = leaveSuccessReloadConfirmationForDetail(detail, pending, t);
+	    if (!pending || !${leaveDetailSucceededCall('detail')} || ${leaveDetailHasHttp403Call('detail')}) return null;
+	    const reloadConfirmation = ${leaveSuccessReloadConfirmationForDetailCall('detail', 'pending', 't')};
 	    pending.reloadConfirmation = reloadConfirmation;
 	    pending.updatedAt = t;
 	    if (pending.lastResult && typeof pending.lastResult === 'object') {
@@ -453,10 +463,6 @@ ${localPendingExitHelperWrappers}
 	    return requestLeaveConfirmationReload(label, pending);
 	  }
 
-	  function leaveSuccessReloadConfirmationSatisfied(reloadConfirmation) {
-	    return Boolean(reloadConfirmation?.restoredAfterReload || Number(reloadConfirmation?.reloadedAt || 0) > 0);
-	  }
-
 	  function leaveSuccessReloadUnknownGraceMs() {
 	    return Math.max(0, Number(cfg.leaveSuccessReloadUnknownGraceMs || 12000) || 0);
 	  }
@@ -475,7 +481,7 @@ ${localPendingExitHelperWrappers}
       detail.http403RiskControl
         || detail.http403RiskControlCleared
         || String(detail.reloginMinimumReason || '').includes('leave HTTP 403')
-        || leaveDetailHasHttp403(detail)
+        || ${leaveDetailHasHttp403Call('detail')}
     );
   }
 
@@ -627,7 +633,7 @@ ${localPendingExitHelperWrappers}
 	    );
 	    detail.pendingExitAgeMs = pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0;
     detail.pendingExitRetryCount = Number(pending.retryCount || 0);
-    const http403 = Boolean(state?.http403 || leaveDetailHasHttp403(detail));
+    const http403 = Boolean(state?.http403 || ${leaveDetailHasHttp403Call('detail')});
     const suppressOptions = http403
       ? {
         minimumUntil: t + leave403ReloginDelayMs(),
@@ -664,20 +670,13 @@ ${enemyLeaveSuppressCall}
     return detail;
   }
 
-  function pendingExitWaitReason(pending, confirmed = false) {
-    if (confirmed) return pending.scope === 'offline' ? 'offline-leave-wait' : 'enemy-leave-wait';
-    if (pending.scope === 'offline') return 'offline-leave';
-    if (pending.source === 'pursuit') return 'pursuit-leave-retry';
-    return 'combat-leave-retry';
-  }
-
   function pendingExitWaitDecision(pending, self, leaveResult, state, confirmed = false) {
     const activeDetail = pending.scope === 'offline' ? activeOfflineLeaveDetail() : activeEnemyLeaveDetail();
     const currentSummary = state?.self || (self && isAlive(self) ? summarizeSelf(self) : (pending.self || bot.lastSelf || null));
     const cover = !confirmed && pending.source === 'combat' ? pending.combatCover : null;
     return {
       kind: 'wait',
-      reason: pendingExitWaitReason(pending, confirmed),
+      reason: ${pendingExitWaitReasonCall('pending', 'confirmed')},
       dx: cover ? clamp(Math.round(Number(cover.dx) || 0), -1, 1) : 0,
       dy: cover ? clamp(Math.round(Number(cover.dy) || 0), -1, 1) : 0,
       self: currentSummary,
@@ -806,7 +805,7 @@ ${enemyLeaveSuppressCall}
     }
     const state = pendingExitSelfState(self);
     const lastDetail = pending.lastResult || {};
-    if (leaveDetailHasHttp403(lastDetail)) {
+    if (${leaveDetailHasHttp403Call('lastDetail')}) {
       if (scheduleClashLeaveRescueRetry(lastDetail)) {
         bot.pursuit = null;
         if (!applyCombatExitCover(pending, self)) stopMotionSafely('pending-exit-http-403-clash-rescue');
@@ -832,9 +831,9 @@ ${enemyLeaveSuppressCall}
       });
       return pendingExitWaitDecision(pending, self, detail, detail.exitConfirmation, true);
     }
-    if (leaveDetailSucceeded(lastDetail)) {
+    if (${leaveDetailSucceededCall('lastDetail')}) {
       const reloadConfirmation = attachLeaveSuccessReloadConfirmation(pending, lastDetail) || ${normalizePendingExitReloadConfirmationCall('pending.reloadConfirmation, pending')};
-      if (!leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)) {
+      if (!${leaveSuccessReloadConfirmationSatisfiedCall('reloadConfirmation')}) {
         requestLeaveConfirmationReload('leave-success', pending);
         const detail = pendingExitLeaveSuccessReloadWaitDetail(
           pending,

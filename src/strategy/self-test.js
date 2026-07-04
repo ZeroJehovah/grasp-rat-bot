@@ -17,7 +17,13 @@ const {
 const {
   pendingExitRetryMsCore,
   pendingExitDisplayReasonCore,
-  summarizePendingExitCore
+  summarizePendingExitCore,
+  leaveRequestHasHttp403Core,
+  leaveDetailHasHttp403Core,
+  leaveDetailSucceededCore,
+  leaveSuccessReloadConfirmationForDetailCore,
+  leaveSuccessReloadConfirmationSatisfiedCore,
+  pendingExitWaitReasonCore
 } = require('./pending-exit');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const {
@@ -233,6 +239,70 @@ function runStrategyModuleSelfTests() {
       && pendingExitSummary.combatCover?.dx === 1
       && pendingExitSummary.combatCover?.dy === -1
       && pendingExitSummary.lastError === 'timeout'
+  });
+  results.push({
+    name: 'pending-exit-leave-request-http-403-core-detects-status-and-text',
+    passed: leaveRequestHasHttp403Core({ status: 403 }) === true
+      && leaveRequestHasHttp403Core({ result: { statusCode: 403 } }) === true
+      && leaveRequestHasHttp403Core({ message: 'HTTP 403 Forbidden' }) === true
+      && leaveRequestHasHttp403Core({ message: 'HTTP 4030' }) === false
+  });
+  results.push({
+    name: 'pending-exit-leave-detail-http-403-core-scans-request-history',
+    passed: leaveDetailHasHttp403Core({ lastLeaveRequest: { statusCode: 403 } }) === true
+      && leaveDetailHasHttp403Core({ leaveRequests: [{ status: 500 }, { statusText: 'Forbidden' }] }) === true
+      && leaveDetailHasHttp403Core({ leaveRequests: [{ status: 500 }] }) === false
+  });
+  results.push({
+    name: 'pending-exit-leave-detail-success-core-rejects-error-pending-and-403',
+    passed: leaveDetailSucceededCore({ attempted: true, method: 'leave', lastLeaveRequest: { completedAt: 1000 } }) === true
+      && leaveDetailSucceededCore({ attempted: true, leaveRequestPending: true, method: 'leave' }) === false
+      && leaveDetailSucceededCore({ attempted: true, error: 'timeout', method: 'leave' }) === false
+      && leaveDetailSucceededCore({ attempted: true, method: 'leave', lastLeaveRequest: { status: 403 } }) === false
+  });
+  const existingReloadConfirmation = {
+    required: true,
+    requestedAt: 1100,
+    count: 2,
+    restoredAfterReload: true
+  };
+  const normalizeReloadConfirmation = value => value?.required ? value : null;
+  const leaveSuccessReloadConfirmation = leaveSuccessReloadConfirmationForDetailCore({
+    attempted: true,
+    at: 900,
+    lastLeaveRequest: {
+      completedAt: 1000,
+      requestId: 'leave-request-1'
+    }
+  }, {
+    reloadConfirmation: existingReloadConfirmation
+  }, 1200, {
+    normalizeReloadConfirmation
+  });
+  results.push({
+    name: 'pending-exit-leave-success-reload-confirmation-core-preserves-existing-state',
+    passed: leaveSuccessReloadConfirmation.required === true
+      && leaveSuccessReloadConfirmation.reason === 'leave-success'
+      && leaveSuccessReloadConfirmation.leaveSucceededAt === 1000
+      && leaveSuccessReloadConfirmation.requestId === 'leave-request-1'
+      && leaveSuccessReloadConfirmation.requestedAt === 1100
+      && leaveSuccessReloadConfirmation.count === 2
+      && leaveSuccessReloadConfirmationForDetailCore({ attempted: false }, {
+        reloadConfirmation: existingReloadConfirmation
+      }, 1200, { normalizeReloadConfirmation }) === existingReloadConfirmation
+  });
+  results.push({
+    name: 'pending-exit-leave-success-reload-confirmation-satisfied-core-checks-reload-marker',
+    passed: leaveSuccessReloadConfirmationSatisfiedCore({ restoredAfterReload: true }) === true
+      && leaveSuccessReloadConfirmationSatisfiedCore({ reloadedAt: 1200 }) === true
+      && leaveSuccessReloadConfirmationSatisfiedCore({ requestedAt: 1100 }) === false
+  });
+  results.push({
+    name: 'pending-exit-wait-reason-core-preserves-source-reasons',
+    passed: pendingExitWaitReasonCore({ scope: 'offline', source: 'offline' }, false) === 'offline-leave'
+      && pendingExitWaitReasonCore({ scope: 'offline', source: 'offline' }, true) === 'offline-leave-wait'
+      && pendingExitWaitReasonCore({ scope: 'enemy', source: 'pursuit' }, false) === 'pursuit-leave-retry'
+      && pendingExitWaitReasonCore({ scope: 'enemy', source: 'combat' }, true) === 'enemy-leave-wait'
   });
 
   // Test action focus building
