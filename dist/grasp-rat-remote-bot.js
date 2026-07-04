@@ -5659,7 +5659,7 @@
   // grasp-rat-virtual-entry:grasp-rat-remote-runtime-entry.js
   (() => {
     const { createRuntimeBootstrapBindings } = require_runtime_bootstrap_bindings();
-    const runtimeBootstrapBindings = createRuntimeBootstrapBindings({ "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.512" });
+    const runtimeBootstrapBindings = createRuntimeBootstrapBindings({ "bundledRuntime": true, "dryRun": false, "once": false, "statusEvery": 3e4, "version": "bootstrap-0.4.513" });
     const {
       pageGlobalObject,
       resolvePageGlobal,

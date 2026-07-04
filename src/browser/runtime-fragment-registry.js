@@ -36,7 +36,7 @@ const { chooseActionSource } = require('./choose-action-source');
 const { tickSource } = require('./tick-source');
 const { startupSource } = require('./startup-source');
 const { botObjectSource } = require('./bot-object-source');
-const { controlLoginRuntimeSource } = require('./control-login-runtime-source');
+const { controlLoginSource } = require('./control-login-source');
 const { nativeStateSource } = require('./native-state-source');
 const { nativeControlSource } = require('./native-control-source');
 const { coinMotionRuntimeSource } = require('./coin-motion-runtime-source');
@@ -108,7 +108,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 			`],
-    ['control-login-runtime', () => controlLoginRuntimeSource(config)],
+    ['control-login-runtime', () => controlLoginSource(config)],
     ['separator-after-control-login-runtime',
     `
 
