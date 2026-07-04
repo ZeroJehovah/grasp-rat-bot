@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.482" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.483" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5776,7 +5776,10 @@
       bot.coinApproachLock = null;
       removeTargetOverlay();
       if (bot.lastDecision && typeof bot.lastDecision === "object") {
-        bot.lastDecision = postExitDecisionWithoutTarget(bot.lastDecision, reason);
+        bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
+          lastExitMotionStopReason: bot.lastExitMotionStopReason,
+          exitMotionLockRemainingMs
+        });
         try {
           updateBotPanel(bot.lastDecision);
         } catch (_) {
@@ -20769,6 +20772,7 @@
         }
       };
     }
+    const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require_exit_motion2();
     const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
@@ -20833,7 +20837,7 @@
           refreshGlobalState(false).catch((err) => {
             bot.globalState.error = err.message || String(err);
           });
-          bot.lastDecision = postExitDecisionWithoutTarget({
+          bot.lastDecision = postExitDecisionWithoutTargetForTickCore({
             kind: "wait",
             reason: bot.lastExitMotionStopReason || "exit-motion-stopped",
             dx: 0,
@@ -20842,7 +20846,7 @@
             currentUserId: getCurrentUserId(),
             control: summarizeControl(),
             holdRemainingMs: exitMotionLockRemainingMs2
-          }, bot.lastExitMotionStopReason || "exit-motion-stopped");
+          }, bot.lastExitMotionStopReason || "exit-motion-stopped", { lastExitMotionStopReason: bot.lastExitMotionStopReason, exitMotionLockRemainingMs: exitMotionLockRemainingMs2 });
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop("once");
           return;
