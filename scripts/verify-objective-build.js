@@ -1723,6 +1723,8 @@ function main() {
     assert(exitReloginRuntimeModule.includes('helpers.setLoginSuppress(storageReason, reloginDelayMs);'), 'exit-relogin hold runtime suppress writer does not set login suppress');
     assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.enemyLeaveStateKey, detail);'), 'exit-relogin hold runtime suppress writer does not persist enemy leave detail');
     assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);'), 'exit-relogin hold runtime suppress writer does not persist offline leave detail');
+    assert(exitReloginRuntimeModule.includes('function setExitReloginSuppressBoundCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers)'), 'exit-relogin hold runtime suppress writer bound core not found');
+    assert(exitReloginRuntimeModule.includes('return setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options, {') && exitReloginRuntimeModule.includes('isExitLoginSuppressReason: isExitLoginSuppressReasonCore'), 'exit-relogin hold runtime suppress writer bound core does not preserve helper binding');
     assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress core not found');
     assert(exitReloginRuntimeModule.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve longest-delay rule');
     assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressReason = suppressReason;'), 'exit-relogin hold runtime pending unsafe suppress core does not write suppress reason');
@@ -1803,6 +1805,7 @@ function main() {
       'startExitAuditCore',
       'startExitAuditBoundCore',
       'setExitReloginSuppressCore',
+      'setExitReloginSuppressBoundCore',
       'primePendingUnsafeExitLoginSuppressCore',
       'primePendingUnsafeExitLoginSuppressBoundCore',
       'staminaBudgetExitHoldUntilCore',
@@ -1833,10 +1836,13 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("options.bundledRuntime"), 'pending-exit source does not select bundled enemy suppress call from runtime config');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setExitReloginSuppressBoundCore'), 'pending-exit source does not import runtime suppress writer bound core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setOfflineLeaveSuppressBoundCore'), 'pending-exit source does not import runtime offline suppress bound core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('staminaBudgetReloginDelayMs, staminaResetHoldUntil, finalizeLeaveDisplayReason, writePersistentExitState, setExitReloginSuppress, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind offline suppress helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppress(detail.reason || 'websocket offline'"), 'pending-exit source does not preserve inline offline suppress wrapper call');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppress('enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through fixed reason writer');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through bound runtime writer');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('hpInfoForRelogin, reloginDelayForHp, updateEnemyLeaveStreak, clearLoginSuppressMatching, finalizeLeaveDisplayReason, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
     assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
@@ -1979,6 +1985,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute the stamina budget helper module');
     assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute the opportunity constants helper module');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.setExitReloginSuppressCore('), 'bundler spike does not execute the exit-relogin suppress writer core');
+    assert(bundlerSpikeEntrySource.includes('exitRelogin.setExitReloginSuppressBoundCore('), 'bundler spike does not execute the exit-relogin bound suppress writer core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.primePendingUnsafeExitLoginSuppressBoundCore('), 'bundler spike does not execute the exit-relogin bound pending unsafe suppress core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.startExitAuditBoundCore('), 'bundler spike does not execute the exit-relogin bound start audit core');
     assert(bundlerSpikeEntrySource.includes('exitRelogin.staminaExitHoldUntilForDetailBoundCore('), 'bundler spike does not execute the exit-relogin bound stamina hold selector core');
@@ -2023,7 +2030,8 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressReuseUntil === 9000'), 'bundler spike self-test does not assert suppress reuse execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressZeroSkipped === true'), 'bundler spike self-test does not assert suppress zero-delay execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressNewUntil === 7000'), 'bundler spike self-test does not assert suppress new-hold execution');
-    assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressEventCount === 6'), 'bundler spike self-test does not assert suppress writer side-effect count');
+    assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressBoundUntil === 6000'), 'bundler spike self-test does not assert bound suppress writer execution');
+    assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressEventCount === 9'), 'bundler spike self-test does not assert suppress writer side-effect count');
     assert(bundlerSpikeBuildSource.includes("status.exitReloginStaminaHoldBoundReason === 'stamina reset'"), 'bundler spike self-test does not assert bound stamina hold selector execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginOfflineSuppressBoundReturn === 4000'), 'bundler spike self-test does not assert bound offline suppress execution');
     assert(bundlerSpikeBuildSource.includes("version: 'window-self-test'"), 'bundler spike self-test does not cover window runtime globals');
