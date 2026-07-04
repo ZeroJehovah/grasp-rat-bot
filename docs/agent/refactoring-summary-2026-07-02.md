@@ -1413,6 +1413,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 172. Bundled `exit-relogin` suppress reason wrapper cleanup for remote builds: integrated in `bootstrap-0.4.444`
 173. Removed `exit-relogin` enemy suppress fixed-reason wrapper in favor of direct suppress writer calls: integrated in `bootstrap-0.4.445`
 174. Removed bundled `exit-relogin` offline unsafe predicate wrapper by routing `leave-flow` directly to the runtime core: integrated in `bootstrap-0.4.446`
+175. Removed bundled `exit-relogin` stamina hold selector wrapper after suppress/pending-stamina paths moved to runtime-bound cores: integrated in `bootstrap-0.4.447`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
