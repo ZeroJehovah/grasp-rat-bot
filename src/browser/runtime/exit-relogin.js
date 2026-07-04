@@ -568,6 +568,39 @@ function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey,
   }
 }
 
+function enemyReloginHoldRemainingMsBoundCore(bot, storage, helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return enemyReloginHoldRemainingMsCore(bot, storage, {
+    loginSuppressKey: helpers.loginSuppressKey,
+    loginSuppressReasonKey: helpers.loginSuppressReasonKey,
+    readPersistentExitState: helpers.readPersistentExitState,
+    enemyLeaveStateKey: helpers.enemyLeaveStateKey,
+    now: nowFn()
+  });
+}
+
+function offlineReloginHoldRemainingMsBoundCore(bot, storage, helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return offlineReloginHoldRemainingMsCore(bot, storage, {
+    loginSuppressKey: helpers.loginSuppressKey,
+    loginSuppressReasonKey: helpers.loginSuppressReasonKey,
+    readPersistentExitState: helpers.readPersistentExitState,
+    offlineLeaveStateKey: helpers.offlineLeaveStateKey,
+    staleOfflineStaminaHoldContradicted: helpers.staleOfflineStaminaHoldContradicted,
+    clearOfflineReloginHold: helpers.clearOfflineReloginHold,
+    now: nowFn()
+  });
+}
+
+function clearLoginSuppressMatchingBoundCore(storage, pattern, helpers) {
+  return clearLoginSuppressMatchingCore(
+    storage,
+    helpers.loginSuppressKey,
+    helpers.loginSuppressReasonKey,
+    pattern
+  );
+}
+
 function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
   const now = Number(helpers.now || 0) || 0;
   const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);
@@ -722,6 +755,9 @@ module.exports = {
   enemyReloginHoldRemainingMsCore,
   offlineReloginHoldRemainingMsCore,
   clearLoginSuppressMatchingCore,
+  enemyReloginHoldRemainingMsBoundCore,
+  offlineReloginHoldRemainingMsBoundCore,
+  clearLoginSuppressMatchingBoundCore,
   setOfflineLeaveSuppressCore,
   setOfflineLeaveSuppressBoundCore,
   primePendingStaminaExitLoginSuppressCore,

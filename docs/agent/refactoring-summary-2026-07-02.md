@@ -1404,6 +1404,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 163. Bundler-owned `exit-relogin` stamina hold selector binding for remote builds: integrated in `bootstrap-0.4.435`
 164. Bundler-owned `exit-relogin` offline suppress binding for remote builds: integrated in `bootstrap-0.4.436`
 165. Bundler-owned `exit-relogin` pending stamina suppress binding for remote builds: integrated in `bootstrap-0.4.437`
+166. Bundler-owned `exit-relogin` hold read/clear binding for remote builds: integrated in `bootstrap-0.4.438`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
