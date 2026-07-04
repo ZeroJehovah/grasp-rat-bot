@@ -1964,39 +1964,6 @@
     }
   });
 
-  // src/strategy/attack-worth.js
-  var require_attack_worth = __commonJS({
-    "src/strategy/attack-worth.js"(exports, module) {
-      "use strict";
-      function attackWorthTakingCore(self, target, options = {}) {
-        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
-        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
-        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
-        if (isWhitelistedTarget(target)) return false;
-        const targetDrop = dropValue(target);
-        if (isAfkProfitTarget(target)) {
-          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
-        }
-        const ownDrop = dropValue(self);
-        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
-      }
-      module.exports = { attackWorthTakingCore };
-    }
-  });
-
-  // src/browser/runtime/attack-worth.js
-  var require_attack_worth2 = __commonJS({
-    "src/browser/runtime/attack-worth.js"(exports, module) {
-      "use strict";
-      var {
-        attackWorthTakingCore
-      } = require_attack_worth();
-      module.exports = {
-        attackWorthTakingCore
-      };
-    }
-  });
-
   // src/strategy/exit-motion.js
   var require_exit_motion = __commonJS({
     "src/strategy/exit-motion.js"(exports, module) {
@@ -2046,6 +2013,39 @@
       module.exports = {
         exitMotionStopLockRemainingMsCore,
         postExitDecisionWithoutTargetCore
+      };
+    }
+  });
+
+  // src/strategy/attack-worth.js
+  var require_attack_worth = __commonJS({
+    "src/strategy/attack-worth.js"(exports, module) {
+      "use strict";
+      function attackWorthTakingCore(self, target, options = {}) {
+        const isWhitelistedTarget = typeof options.isWhitelistedTarget === "function" ? options.isWhitelistedTarget : () => false;
+        const dropValue = typeof options.dropValue === "function" ? options.dropValue : (item) => Number(item?.drop ?? item?.Drop ?? 0);
+        const isAfkProfitTarget = typeof options.isAfkProfitTarget === "function" ? options.isAfkProfitTarget : () => false;
+        if (isWhitelistedTarget(target)) return false;
+        const targetDrop = dropValue(target);
+        if (isAfkProfitTarget(target)) {
+          return targetDrop >= Math.max(0, Number(options.attackMinAfkDrop ?? options.attackMinDrop));
+        }
+        const ownDrop = dropValue(self);
+        return targetDrop >= Number(options.attackMinDrop) && (!ownDrop || targetDrop >= ownDrop * Number(options.attackMinRewardRatio));
+      }
+      module.exports = { attackWorthTakingCore };
+    }
+  });
+
+  // src/browser/runtime/attack-worth.js
+  var require_attack_worth2 = __commonJS({
+    "src/browser/runtime/attack-worth.js"(exports, module) {
+      "use strict";
+      var {
+        attackWorthTakingCore
+      } = require_attack_worth();
+      module.exports = {
+        attackWorthTakingCore
       };
     }
   });
@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.483" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.484" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4929,6 +4929,7 @@
       normalizeLoginSnapshotGateStateCore
     } = require_login_snapshot_gate();
     const { recordRuntimeDiagnosticsCore } = require_runtime_diagnostics();
+    const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require_exit_motion2();
     const { readEnemyLeaveStreakBoundCore } = require_exit_relogin();
     const bot = {
       running: true,
@@ -5282,7 +5283,7 @@
         const enemyLeaveDetail = activeEnemyLeaveDetail();
         const offlineLeaveDetail = activeOfflineLeaveDetail();
         const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs();
-        const displayLastDecision = exitMotionLockRemainingMs2 > 0 ? postExitDecisionWithoutTarget(this.lastDecision, this.lastExitMotionStopReason || "exit-motion-stopped") : this.lastDecision;
+        const displayLastDecision = exitMotionLockRemainingMs2 > 0 ? postExitDecisionWithoutTargetForStatusCore(this.lastDecision, this.lastExitMotionStopReason || "exit-motion-stopped", { lastExitMotionStopReason: this.lastExitMotionStopReason, exitMotionLockRemainingMs: exitMotionLockRemainingMs2 }) : this.lastDecision;
         return {
           version: cfg.version,
           sourceHash: cfg.sourceHash,
@@ -5760,12 +5761,6 @@
     } = require_exit_motion2();
     function exitMotionStopLockRemainingMs(t = Date.now()) {
       return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
-    }
-    function postExitDecisionWithoutTarget(decision, reason = "") {
-      return postExitDecisionWithoutTargetCore(decision, reason, {
-        lastExitMotionStopReason: bot.lastExitMotionStopReason,
-        exitMotionLockRemainingMs
-      });
     }
     function clearPostExitTargetState(reason = "exit-confirmed") {
       bot.lastTarget = null;

@@ -1247,6 +1247,7 @@ function main() {
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now()') && functionBody(botObjectSourceModule, 'botObjectSource').includes('enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'bot-object source factory does not bind bundled enemy streak status through runtime bound core');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("? 'loginSnapshotSuccessRequiredCore()'"), 'bot-object source factory does not route bundled login snapshot required count through core');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})'), 'bot-object source factory does not route bundled login snapshot normalization through core');
+    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('postExitDecisionWithoutTargetForStatusCore'), 'bot-object source factory does not route bundled post-exit display through core alias');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['bot-object', () => botObjectSource(config)]"), 'runtime fragment registry does not pass config into bot-object source');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('const bot = {'), 'bot-object source factory does not include bot object');
     assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('pendingExit: initialPendingExitState'), 'bot-object source factory does not preserve pending exit initialization');
@@ -1358,7 +1359,7 @@ function main() {
     assert(exitMotionBundledBody.includes("require('./src/browser/runtime/exit-motion')"), 'exit-motion bundled source does not hand exit-motion core to the bundler');
     assert(exitMotionBundledBody.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'exit-motion bundled source does not call lock core with runtime state/config');
     assert(!exitMotionBundledBody.includes('function exitMotionStopActive'), 'exit-motion bundled source still keeps stop-active alias');
-    assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'exit-motion bundled source does not call decision core');
+    assert(!exitMotionBundledBody.includes('function postExitDecisionWithoutTarget('), 'exit-motion bundled source still keeps post-exit decision wrapper');
     assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(bot.lastDecision, reason'), 'exit-motion bundled cleanup does not sanitize last decision through core directly');
     assert(exitMotionBundledBody.includes('removeTargetOverlay()'), 'exit-motion bundled source does not retain target overlay cleanup');
     assert(functionBody(targetOverlaySourceModule, 'targetOverlaySuppressedAfterExit').includes('exitMotionStopLockRemainingMs() > 0'), 'target overlay still relies on exit-motion stop-active alias');
@@ -4126,7 +4127,8 @@ function main() {
     assert(distSource.includes('function exitMotionStopLockRemainingMsCore'), 'bundled dist does not contain exit-motion lock core');
     assert(distSource.includes('function postExitDecisionWithoutTargetCore'), 'bundled dist does not contain exit-motion decision core');
     assert(distSource.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'bundled dist exit-motion lock wrapper does not call strategy core');
-    assert(distSource.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'bundled dist exit-motion decision wrapper does not call strategy core');
+    assert(!distSource.includes('function postExitDecisionWithoutTarget('), 'bundled dist still keeps post-exit decision wrapper');
+    assert(distSource.includes('postExitDecisionWithoutTargetForStatusCore(this.lastDecision'), 'bundled dist bot status does not call decision core alias directly');
     assert(distSource.includes('postExitDecisionWithoutTargetCore(bot.lastDecision, reason'), 'bundled dist exit-motion cleanup does not call decision core directly');
     assert(distSource.includes('postExitDecisionWithoutTargetForTickCore({'), 'bundled dist tick does not call decision core alias directly');
     assert(!distSource.includes('function exitMotionStopActive('), 'dist remote bot still keeps exit-motion stop-active alias');

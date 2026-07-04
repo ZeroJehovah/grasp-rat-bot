@@ -1,8 +1,8 @@
 'use strict';
 
 function botObjectSource(options = {}) {
-  const streakPrelude = options.bundledRuntime
-    ? "  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+  const runtimePrelude = options.bundledRuntime
+    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require('./src/browser/runtime/exit-motion');\n  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const enemyLeaveStreakStatus = options.bundledRuntime
     ? 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })'
@@ -13,7 +13,10 @@ function botObjectSource(options = {}) {
   const normalizeLoginSnapshotGateStateCall = state => options.bundledRuntime
     ? `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`
     : `normalizeLoginSnapshotGateState(${state})`;
-  return String.raw`${streakPrelude}		  const bot = {
+  const postExitDecisionWithoutTargetCall = (decision, reason) => options.bundledRuntime
+    ? `postExitDecisionWithoutTargetForStatusCore(${decision}, ${reason}, { lastExitMotionStopReason: this.lastExitMotionStopReason, exitMotionLockRemainingMs })`
+    : `postExitDecisionWithoutTarget(${decision}, ${reason})`;
+  return String.raw`${runtimePrelude}		  const bot = {
 	    running: true,
 	    version: cfg.version,
 	    sourceHash: cfg.sourceHash,
@@ -369,7 +372,7 @@ function botObjectSource(options = {}) {
 	      const offlineLeaveDetail = activeOfflineLeaveDetail();
 	      const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
 	      const displayLastDecision = exitMotionLockRemainingMs > 0
-	        ? postExitDecisionWithoutTarget(this.lastDecision, this.lastExitMotionStopReason || 'exit-motion-stopped')
+	        ? ${postExitDecisionWithoutTargetCall('this.lastDecision', "this.lastExitMotionStopReason || 'exit-motion-stopped'")}
 	        : this.lastDecision;
 		      return {
 	        version: cfg.version,

@@ -1450,6 +1450,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 209. Removed the unused production bundled patrol direction wrapper by keeping only the `patrolDirectionCore` binding while preserving local/CDP wrapper fallback: integrated in `bootstrap-0.4.481`
 210. Removed the obsolete `exitMotionStopActive()` alias by routing target-overlay suppression directly through `exitMotionStopLockRemainingMs() > 0`: integrated in `bootstrap-0.4.482`
 211. Routed bundled post-exit cleanup and tick post-exit wait publishing directly through `postExitDecisionWithoutTargetCore()` while keeping the earlier bot-status display wrapper boundary: integrated in `bootstrap-0.4.483`
+212. Removed the production bundled post-exit decision wrapper by routing bot-status display, post-exit cleanup, and tick post-exit wait publishing directly through `postExitDecisionWithoutTargetCore()` while preserving local/CDP wrapper fallback: integrated in `bootstrap-0.4.484`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
