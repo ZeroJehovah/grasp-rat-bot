@@ -1,9 +1,20 @@
 'use strict';
 
+const {
+  enemyReloginHoldRemainingMsBoundCall,
+  offlineReloginHoldRemainingMsBoundCall
+} = require('./exit-relogin-hold-read-call-source');
+
 function pendingExitSource(options = {}) {
   const offlineSuppressPrelude = options.bundledRuntime
-    ? "  const { clearLoginSuppressMatchingBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
+  const enemyHoldRemainingMsCall = options.bundledRuntime
+    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForPendingExitBoundCore')
+    : 'enemyReloginHoldRemainingMs()';
+  const offlineHoldRemainingMsCall = options.bundledRuntime
+    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForPendingExitBoundCore', 'clearOfflineReloginHoldForPendingExitBoundCore')
+    : 'offlineReloginHoldRemainingMs()';
   const clearLoginSuppressMatchingBinding = options.bundledRuntime
     ? "clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY })"
     : 'clearLoginSuppressMatching';
@@ -667,7 +678,7 @@ ${enemyLeaveSuppressCall}
       leave: leaveResult,
       pendingExit: summarizePendingExit(bot.pendingExit || pending),
       exitConfirmation: state || null,
-      holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === 'offline' ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs())
+      holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === 'offline' ? ${offlineHoldRemainingMsCall} : ${enemyHoldRemainingMsCall})
     };
   }
 
@@ -769,7 +780,7 @@ ${enemyLeaveSuppressCall}
   async function handlePendingExit(self) {
     const pending = bot.pendingExit;
     if (!pending) return null;
-    const existingHoldMs = pending.scope === 'offline' ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs();
+    const existingHoldMs = pending.scope === 'offline' ? ${offlineHoldRemainingMsCall} : ${enemyHoldRemainingMsCall};
     if (existingHoldMs > 0) {
       bot.pendingExit = null;
       clearPersistentPendingExitState();

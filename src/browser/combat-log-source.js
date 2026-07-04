@@ -1,13 +1,28 @@
 'use strict';
 
+const {
+  enemyReloginHoldRemainingMsBoundCall,
+  offlineReloginHoldRemainingMsBoundCall
+} = require('./exit-relogin-hold-read-call-source');
+
 function combatLogSource(helpers = {}) {
   const {
+    bundledRuntime = false,
     combatLogExitSummaryFromDecision
   } = helpers;
+  const holdPrelude = bundledRuntime
+    ? "      const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require('./src/browser/runtime/exit-relogin');\n"
+    : '';
+  const enemyHoldRemainingMsCall = bundledRuntime
+    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForCombatLogBoundCore')
+    : 'enemyReloginHoldRemainingMs()';
+  const offlineHoldRemainingMsCall = bundledRuntime
+    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForCombatLogBoundCore', 'clearOfflineReloginHoldForCombatLogBoundCore')
+    : 'offlineReloginHoldRemainingMs()';
   const combatLogExitSummarySource = typeof combatLogExitSummaryFromDecision === 'function'
     ? `      const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};`
     : '';
-  return String.raw`      function combatLogEntryFailureKey(entry) {
+  return String.raw`${holdPrelude}      function combatLogEntryFailureKey(entry) {
         if (!entry || typeof entry !== 'object') return '';
         return [
           entry.exitAuditLogId || '',
@@ -985,9 +1000,9 @@ function combatLogSource(helpers = {}) {
           suppressRemainingMs: Math.max(0, Math.round(suppressUntil - t)),
           suppressReason,
           enemyHoldUntil: Number(bot.pursuitReloginUntil || 0),
-          enemyHoldRemainingMs: enemyReloginHoldRemainingMs(),
+          enemyHoldRemainingMs: ${enemyHoldRemainingMsCall},
 	          offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
-	          offlineHoldRemainingMs: offlineReloginHoldRemainingMs(),
+	          offlineHoldRemainingMs: ${offlineHoldRemainingMsCall},
 	          snapshotGate: snapshotLoginGateStatus(),
 	          lastLoginAt: Number(bot.lastLoginAt || 0),
           lastLogin: combatLogLoginResultSummary(bot.lastLoginResult),

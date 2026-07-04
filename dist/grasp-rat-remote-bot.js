@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.465" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.466" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -6593,6 +6593,7 @@
     const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
     const { arrayCount } = require_array_count();
     const { combatLogExitSummaryFromDecision } = require_exit_summary2();
+    const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require_exit_relogin();
     function combatLogEntryFailureKey(entry) {
       if (!entry || typeof entry !== "object") return "";
       return [
@@ -7472,9 +7473,9 @@
         suppressRemainingMs: Math.max(0, Math.round(suppressUntil - t)),
         suppressReason,
         enemyHoldUntil: Number(bot.pursuitReloginUntil || 0),
-        enemyHoldRemainingMs: enemyReloginHoldRemainingMs(),
+        enemyHoldRemainingMs: enemyReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }),
         offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
-        offlineHoldRemainingMs: offlineReloginHoldRemainingMs(),
+        offlineHoldRemainingMs: offlineReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForCombatLogBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
         snapshotGate: snapshotLoginGateStatus(),
         lastLoginAt: Number(bot.lastLoginAt || 0),
         lastLogin: combatLogLoginResultSummary(bot.lastLoginResult),
@@ -8165,6 +8166,7 @@
       };
     }
     const { staminaExhaustedWindowLabel } = require_exit_summary2();
+    const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require_exit_relogin();
     function requestReload(reason) {
       if (cfg.dryRun || cfg.once) return;
       if (bot.reloadRequestedAt) return;
@@ -8705,8 +8707,8 @@
       } catch (_) {
       }
       const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs(t);
-      const enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
-      const offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+      const enemyHoldRemainingMs = enemyReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
+      const offlineHoldRemainingMs = offlineReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForControlLoginBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
       const gate = snapshotLoginGateStatus(t);
       const resetReason = String(gate?.resetReason || "");
       const exitGateReset = Boolean(
@@ -10336,40 +10338,7 @@
     function finalizeLeaveDisplayReason(detail) {
       return finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs));
     }
-    const {
-      enemyReloginHoldRemainingMsBoundCore,
-      offlineReloginHoldRemainingMsBoundCore,
-      clearOfflineReloginHoldBoundCore
-    } = require_exit_relogin();
-    function enemyReloginHoldRemainingMs() {
-      return enemyReloginHoldRemainingMsBoundCore(bot, localStorage, {
-        loginSuppressKey: LOGIN_SUPPRESS_KEY,
-        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-        readPersistentExitState,
-        enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-        now: Date.now
-      });
-    }
-    function offlineReloginHoldRemainingMs() {
-      return offlineReloginHoldRemainingMsBoundCore(bot, localStorage, {
-        loginSuppressKey: LOGIN_SUPPRESS_KEY,
-        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-        readPersistentExitState,
-        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-        staleOfflineStaminaHoldContradicted,
-        clearOfflineReloginHold: (reason) => clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
-          now: Date.now,
-          writePersistentPendingExitState,
-          clearPersistentPendingExitState,
-          clearPersistentExitState,
-          loginSuppressKey: LOGIN_SUPPRESS_KEY,
-          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
-        }),
-        now: Date.now
-      });
-    }
-    const { clearLoginSuppressMatchingBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
+    const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
     function summarizePursuit(pursuit = bot.pursuit) {
       if (!pursuit) return null;
       const t = now();
@@ -10980,7 +10949,7 @@
         leave: leaveResult,
         pendingExit: summarizePendingExit(bot.pendingExit || pending),
         exitConfirmation: state2 || null,
-        holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === "offline" ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs())
+        holdRemainingMs: activeDetail?.holdRemainingMs ?? (pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }))
       };
     }
     function applyCombatExitCover(pending, self = null) {
@@ -11076,7 +11045,7 @@
     async function handlePendingExit(self) {
       const pending = bot.pendingExit;
       if (!pending) return null;
-      const existingHoldMs = pending.scope === "offline" ? offlineReloginHoldRemainingMs() : enemyReloginHoldRemainingMs();
+      const existingHoldMs = pending.scope === "offline" ? offlineReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForPendingExitBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }) : enemyReloginHoldRemainingMsForPendingExitBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
       if (existingHoldMs > 0) {
         bot.pendingExit = null;
         clearPersistentPendingExitState();
@@ -12032,6 +12001,7 @@
     }
     const {
       combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,
+      enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,
       injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
       offlineExitRequiresUnsafeReloginDelayCore,
       offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,
@@ -12245,7 +12215,7 @@
           attempted: false,
           reason: "cooldown",
           cooldownRemainingMs: Math.max(0, Math.round(retryMs - (t - Number(bot.lastEnemyLeaveRetryAt || 0)))),
-          holdRemainingMs: enemyReloginHoldRemainingMs(),
+          holdRemainingMs: enemyReloginHoldRemainingMsForLeaveFlowBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }),
           summary: active?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || "",
           reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
           reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0
@@ -12258,7 +12228,7 @@
         reason,
         at: t,
         userId: getCurrentUserId() || null,
-        holdRemainingMs: enemyReloginHoldRemainingMs(),
+        holdRemainingMs: enemyReloginHoldRemainingMsForLeaveFlowBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }),
         summary: active?.summary || bot.lastCombatLeaveResult?.summary || bot.lastPursuitLeaveResult?.summary || bot.lastInjuryLeaveResult?.summary || "",
         reloginUntil: active?.reloginUntil || bot.pursuitReloginUntil || 0,
         reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0,
@@ -12268,7 +12238,7 @@
       bot.lastEnemyLeaveRetryAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
-      detail.holdRemainingMs = enemyReloginHoldRemainingMs();
+      detail.holdRemainingMs = enemyReloginHoldRemainingMsForLeaveFlowBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
       finalizeLeaveDisplayReason(detail);
       bot.lastEnemyLeaveRetryResult = detail;
       return detail;
@@ -20852,7 +20822,7 @@
         }
       };
     }
-    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
+    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -20931,7 +20901,7 @@
           return;
         }
         const enemyHoldControl = summarizeControl();
-        let enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
+        let enemyHoldRemainingMs = enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
         if (enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen) {
           clearEnemyReloginHoldForTickBoundCore(bot, localStorage, "online self restored during enemy hold", { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY });
           enemyHoldRemainingMs = 0;
@@ -20951,7 +20921,7 @@
             self: self ? summarizeSelf(self) : null,
             currentUserId: getCurrentUserId(),
             control: enemyHoldControl,
-            holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs(),
+            holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }),
             displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
             leave: null,
             pursuit: enemyLeaveDetail?.pursuit || bot.lastPursuitLeaveResult?.pursuit || null,
@@ -20970,7 +20940,7 @@
           return;
         }
         const offlineHoldControl = summarizeControl();
-        let offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+        let offlineHoldRemainingMs = offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
         if (offlineHoldRemainingMs > 0 && self && isAlive(self) && offlineHoldControl.wsOpen) {
           clearOfflineReloginHoldForTickBoundCore(bot, localStorage, "online self restored during offline hold", { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });
           offlineHoldRemainingMs = 0;
@@ -20992,7 +20962,7 @@
             self: currentSummary2,
             currentUserId: getCurrentUserId(),
             control: offlineHoldControl,
-            holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs(),
+            holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
             displayReason: offlineLeaveDetail?.displayReason || offlineLeaveSummaryForTickCore("offline leave wait", offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
             offlineSafety,
             leave: null,
@@ -21347,7 +21317,7 @@
             pendingCombatLeave: summarizePendingCombatLeave(),
             displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || pendingCombatLeave.displayReason || pendingCombatLeave.exitSummary || "",
             leave: leaveResult,
-            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now })
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop("once");
@@ -21395,7 +21365,7 @@
             pendingCombatLeave: summarizePendingCombatLeave(),
             displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || action.displayReason || action.exitSummary || "",
             leave: leaveResult,
-            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now })
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop("once");
@@ -21448,7 +21418,7 @@
             offlineSafety,
             displayReason: currentOfflineDisplayReasonForTickCore(action.reason || "stamina budget coin leave", offlineSafety, leaveResult, offlineDetail, action.displayReason || "", { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
             leave: leaveResult,
-            holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
+            holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForTickBoundCore(bot, localStorage, reason, { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now })
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop("once");
@@ -21528,7 +21498,7 @@
                 displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || "",
                 leave: leaveResult,
                 reloginDelayMs: leaveResult.reloginDelayMs,
-                holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+                holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now })
               };
               updateBotPanel(bot.lastDecision);
               if (cfg.once) bot.stop("once");
@@ -21543,7 +21513,7 @@
               pursuit: pursuitSummary,
               displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || "",
               leave: leaveResult,
-              holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+              holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMsForTickBoundCore(bot, localStorage, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now })
             };
             updateBotPanel(bot.lastDecision);
             if (cfg.once) bot.stop("once");

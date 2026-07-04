@@ -1,9 +1,20 @@
 'use strict';
 
+const {
+  enemyReloginHoldRemainingMsBoundCall,
+  offlineReloginHoldRemainingMsBoundCall
+} = require('./exit-relogin-hold-read-call-source');
+
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
+  const enemyHoldRemainingMsCall = options.bundledRuntime
+    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForTickBoundCore')
+    : 'enemyReloginHoldRemainingMs()';
+  const offlineHoldRemainingMsCall = options.bundledRuntime
+    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForTickBoundCore', 'clearOfflineReloginHoldForTickBoundCore')
+    : 'offlineReloginHoldRemainingMs()';
   const clearEnemyOnlineRestore = options.bundledRuntime
     ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
     : "clearEnemyReloginHold('online self restored during enemy hold')";
@@ -100,7 +111,7 @@ function tickSource(options = {}) {
         return;
       }
 	      const enemyHoldControl = summarizeControl();
-	      let enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
+	      let enemyHoldRemainingMs = ${enemyHoldRemainingMsCall};
 	      if (enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen) {
 	        ${clearEnemyOnlineRestore};
 	        enemyHoldRemainingMs = 0;
@@ -120,7 +131,7 @@ function tickSource(options = {}) {
 	          self: self ? summarizeSelf(self) : null,
 		          currentUserId: getCurrentUserId(),
 		          control: enemyHoldControl,
-	          holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs(),
+	          holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? ${enemyHoldRemainingMsCall},
 	          displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
 	          leave: null,
 	          pursuit: enemyLeaveDetail?.pursuit || bot.lastPursuitLeaveResult?.pursuit || null,
@@ -139,7 +150,7 @@ function tickSource(options = {}) {
         return;
       }
       const offlineHoldControl = summarizeControl();
-      let offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
+      let offlineHoldRemainingMs = ${offlineHoldRemainingMsCall};
       if (offlineHoldRemainingMs > 0 && self && isAlive(self) && offlineHoldControl.wsOpen) {
         ${clearOfflineOnlineRestore};
         offlineHoldRemainingMs = 0;
@@ -161,7 +172,7 @@ function tickSource(options = {}) {
           self: currentSummary,
           currentUserId: getCurrentUserId(),
 	          control: offlineHoldControl,
-	          holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs(),
+	          holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? ${offlineHoldRemainingMsCall},
 	          displayReason: offlineLeaveDetail?.displayReason || ${offlineLeaveSummaryCall("'offline leave wait'", 'offlineSafety')},
 	          offlineSafety,
 	          leave: null,
@@ -583,7 +594,7 @@ function tickSource(options = {}) {
           pendingCombatLeave: summarizePendingCombatLeave(),
           displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || pendingCombatLeave.displayReason || pendingCombatLeave.exitSummary || '',
           leave: leaveResult,
-          holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+          holdRemainingMs: enemyDetail?.holdRemainingMs ?? ${enemyHoldRemainingMsCall}
         };
         updateBotPanel(bot.lastDecision);
         if (cfg.once) bot.stop('once');
@@ -634,7 +645,7 @@ function tickSource(options = {}) {
             pendingCombatLeave: summarizePendingCombatLeave(),
             displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || action.displayReason || action.exitSummary || '',
             leave: leaveResult,
-            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+            holdRemainingMs: enemyDetail?.holdRemainingMs ?? ${enemyHoldRemainingMsCall}
           };
         updateBotPanel(bot.lastDecision);
 	        if (cfg.once) bot.stop('once');
@@ -687,7 +698,7 @@ function tickSource(options = {}) {
 	          offlineSafety,
 	          displayReason: ${currentOfflineDisplayReasonCall("action.reason || 'stamina budget coin leave'", 'offlineSafety', 'leaveResult', 'offlineDetail', "action.displayReason || ''")},
 	          leave: leaveResult,
-	          holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
+	          holdRemainingMs: offlineDetail?.holdRemainingMs ?? ${offlineHoldRemainingMsCall}
 	        };
 	        updateBotPanel(bot.lastDecision);
 	        if (cfg.once) bot.stop('once');
@@ -769,7 +780,7 @@ function tickSource(options = {}) {
             displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || '',
             leave: leaveResult,
             reloginDelayMs: leaveResult.reloginDelayMs,
-            holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+            holdRemainingMs: enemyDetail?.holdRemainingMs ?? ${enemyHoldRemainingMsCall}
           };
           updateBotPanel(bot.lastDecision);
           if (cfg.once) bot.stop('once');
@@ -784,7 +795,7 @@ function tickSource(options = {}) {
           pursuit: pursuitSummary,
           displayReason: leaveResult?.displayReason || enemyDetail?.displayReason || '',
           leave: leaveResult,
-          holdRemainingMs: enemyDetail?.holdRemainingMs ?? enemyReloginHoldRemainingMs()
+          holdRemainingMs: enemyDetail?.holdRemainingMs ?? ${enemyHoldRemainingMsCall}
         };
 	        updateBotPanel(bot.lastDecision);
 	        if (cfg.once) bot.stop('once');
