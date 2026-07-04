@@ -1722,6 +1722,51 @@
           return false;
         }
       }
+      function clearEnemyReloginHoldCore(bot, reason = "online self restored", helpers) {
+        const t = Number(helpers.now || 0) || 0;
+        const details = [
+          helpers.activeEnemyLeaveDetail(t),
+          bot.lastEnemyLeaveResult,
+          bot.lastPursuitLeaveResult,
+          bot.lastCombatLeaveResult,
+          bot.lastInjuryLeaveResult
+        ].filter(Boolean);
+        bot.pursuitReloginUntil = 0;
+        bot.lastEnemyLeaveWaitMs = 0;
+        bot.pendingExit = bot.pendingExit?.scope === "offline" ? bot.pendingExit : null;
+        if (bot.pendingExit) helpers.writePersistentPendingExitState(bot.pendingExit);
+        else helpers.clearPersistentPendingExitState();
+        for (const detail of details) {
+          if (!detail || typeof detail !== "object") continue;
+          detail.onlineRecoveryAt = t;
+          detail.onlineRecoveryReason = String(reason || "online self restored");
+          helpers.clearExitHoldDetail(detail, reason, t);
+        }
+        bot.lastEnemyLeaveResult = null;
+        bot.lastPursuitLeaveResult = null;
+        bot.lastCombatLeaveResult = null;
+        bot.lastInjuryLeaveResult = null;
+        helpers.clearPersistentExitState(helpers.enemyLeaveStateKey);
+        helpers.clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
+      }
+      function clearOfflineReloginHoldCore(bot, reason = "online self restored", helpers) {
+        const t = Number(helpers.now || 0) || 0;
+        bot.offlineReloginUntil = 0;
+        bot.lastOfflineLeaveWaitMs = 0;
+        bot.pendingExit = bot.pendingExit?.scope === "offline" ? null : bot.pendingExit;
+        if (bot.pendingExit) helpers.writePersistentPendingExitState(bot.pendingExit);
+        else helpers.clearPersistentPendingExitState();
+        if (bot.lastOfflineLeaveResult && typeof bot.lastOfflineLeaveResult === "object") {
+          bot.lastOfflineLeaveResult.onlineRecoveryAt = t;
+          bot.lastOfflineLeaveResult.onlineRecoveryReason = String(reason || "online self restored");
+          bot.lastOfflineLeaveResult.reloginUntil = 0;
+          bot.lastOfflineLeaveResult.holdRemainingMs = 0;
+          bot.lastOfflineLeaveResult.reloginDelayMs = 0;
+        }
+        bot.lastOfflineLeaveResult = null;
+        helpers.clearPersistentExitState(helpers.offlineLeaveStateKey);
+        helpers.clearLoginSuppressMatching(/offline.*leave/i);
+      }
       module.exports = {
         leaveWaitDisplayCore,
         finalizeLeaveDisplayReasonCore,
@@ -1746,7 +1791,9 @@
         offlineExitRequiresUnsafeReloginDelayCore,
         enemyReloginHoldRemainingMsCore,
         offlineReloginHoldRemainingMsCore,
-        clearLoginSuppressMatchingCore
+        clearLoginSuppressMatchingCore,
+        clearEnemyReloginHoldCore,
+        clearOfflineReloginHoldCore
       };
     }
   });
@@ -4353,7 +4400,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.428" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.429" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10217,50 +10264,31 @@
     function clearLoginSuppressMatching(pattern) {
       return clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern);
     }
+    const {
+      clearEnemyReloginHoldCore,
+      clearOfflineReloginHoldCore
+    } = require_exit_relogin();
     function clearEnemyReloginHold(reason = "online self restored") {
-      const t = Date.now();
-      const details = [
-        activeEnemyLeaveDetail(t),
-        bot.lastEnemyLeaveResult,
-        bot.lastPursuitLeaveResult,
-        bot.lastCombatLeaveResult,
-        bot.lastInjuryLeaveResult
-      ].filter(Boolean);
-      bot.pursuitReloginUntil = 0;
-      bot.lastEnemyLeaveWaitMs = 0;
-      bot.pendingExit = bot.pendingExit?.scope === "offline" ? bot.pendingExit : null;
-      if (bot.pendingExit) writePersistentPendingExitState(bot.pendingExit);
-      else clearPersistentPendingExitState();
-      for (const detail of details) {
-        if (!detail || typeof detail !== "object") continue;
-        detail.onlineRecoveryAt = t;
-        detail.onlineRecoveryReason = String(reason || "online self restored");
-        clearExitHoldDetail(detail, reason, t);
-      }
-      bot.lastEnemyLeaveResult = null;
-      bot.lastPursuitLeaveResult = null;
-      bot.lastCombatLeaveResult = null;
-      bot.lastInjuryLeaveResult = null;
-      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-      clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
+      return clearEnemyReloginHoldCore(bot, reason, {
+        now: Date.now(),
+        activeEnemyLeaveDetail,
+        writePersistentPendingExitState,
+        clearPersistentPendingExitState,
+        clearExitHoldDetail,
+        clearPersistentExitState,
+        clearLoginSuppressMatching,
+        enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY
+      });
     }
     function clearOfflineReloginHold(reason = "online self restored") {
-      const t = Date.now();
-      bot.offlineReloginUntil = 0;
-      bot.lastOfflineLeaveWaitMs = 0;
-      bot.pendingExit = bot.pendingExit?.scope === "offline" ? null : bot.pendingExit;
-      if (bot.pendingExit) writePersistentPendingExitState(bot.pendingExit);
-      else clearPersistentPendingExitState();
-      if (bot.lastOfflineLeaveResult && typeof bot.lastOfflineLeaveResult === "object") {
-        bot.lastOfflineLeaveResult.onlineRecoveryAt = t;
-        bot.lastOfflineLeaveResult.onlineRecoveryReason = String(reason || "online self restored");
-        bot.lastOfflineLeaveResult.reloginUntil = 0;
-        bot.lastOfflineLeaveResult.holdRemainingMs = 0;
-        bot.lastOfflineLeaveResult.reloginDelayMs = 0;
-      }
-      bot.lastOfflineLeaveResult = null;
-      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-      clearLoginSuppressMatching(/offline.*leave/i);
+      return clearOfflineReloginHoldCore(bot, reason, {
+        now: Date.now(),
+        writePersistentPendingExitState,
+        clearPersistentPendingExitState,
+        clearPersistentExitState,
+        clearLoginSuppressMatching,
+        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
+      });
     }
     function summarizePursuit(pursuit = bot.pursuit) {
       if (!pursuit) return null;

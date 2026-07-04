@@ -119,6 +119,7 @@ async function selfTest() {
   assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
   assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
   assert(source.includes('function enemyReloginHoldRemainingMsCore'), 'exit-relogin hold read helper was not bundled');
+  assert(source.includes('function clearEnemyReloginHoldCore'), 'exit-relogin hold clear helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -263,6 +264,16 @@ async function selfTest() {
   assert(status.exitReloginOfflineHoldBotUntil === 4500, 'spike did not update bot offline relogin hold');
   assert(status.exitReloginClearedSuppress === true, 'spike did not execute exit relogin suppress clear helper');
   assert(status.exitReloginClearRemovedCount === 2, 'spike did not remove both exit relogin suppress keys');
+  assert(status.exitReloginEnemyClearUntil === 0, 'spike did not clear enemy relogin hold');
+  assert(status.exitReloginEnemyClearPendingReason === 'keep-offline', 'spike did not preserve offline pending exit during enemy hold clear');
+  assert(status.exitReloginEnemyClearDetailAt === 6000, 'spike did not stamp enemy hold recovery detail');
+  assert(status.exitReloginEnemyClearDetailHold === 0, 'spike did not clear enemy hold detail wait fields');
+  assert(status.exitReloginEnemyClearEventCount === 7, 'spike did not execute all enemy hold clear side effects');
+  assert(status.exitReloginOfflineClearUntil === 0, 'spike did not clear offline relogin hold');
+  assert(status.exitReloginOfflineClearPendingReason === 'keep-enemy', 'spike did not preserve non-offline pending exit during offline hold clear');
+  assert(status.exitReloginOfflineClearDetailAt === 7000, 'spike did not stamp offline hold recovery detail');
+  assert(status.exitReloginOfflineClearDetailHold === 0, 'spike did not clear offline hold detail wait fields');
+  assert(status.exitReloginOfflineClearEventCount === 3, 'spike did not execute all offline hold clear side effects');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

@@ -747,6 +747,51 @@ function helperStatus(config = {}) {
     'suppressReason',
     /offline.*leave/i
   );
+  const exitReloginClearEnemyEvents = [];
+  const exitReloginClearEnemyDetail = { reloginUntil: 7000, holdRemainingMs: 5000, reloginDelayMs: 6000 };
+  const exitReloginClearActiveEnemyDetail = { reloginUntil: 6500, holdRemainingMs: 4500, reloginDelayMs: 5500 };
+  const exitReloginClearEnemyBot = {
+    pursuitReloginUntil: 7000,
+    lastEnemyLeaveWaitMs: 5000,
+    lastEnemyLeaveResult: exitReloginClearEnemyDetail,
+    lastPursuitLeaveResult: { reloginUntil: 6200 },
+    lastCombatLeaveResult: null,
+    lastInjuryLeaveResult: { reloginUntil: 6100 },
+    pendingExit: { scope: 'offline', reason: 'keep-offline' }
+  };
+  exitRelogin.clearEnemyReloginHoldCore(exitReloginClearEnemyBot, 'spike enemy recovery', {
+    now: 6000,
+    activeEnemyLeaveDetail: () => exitReloginClearActiveEnemyDetail,
+    writePersistentPendingExitState: pending => exitReloginClearEnemyEvents.push(['write-pending', pending.reason]),
+    clearPersistentPendingExitState: () => exitReloginClearEnemyEvents.push(['clear-pending']),
+    clearExitHoldDetail: (detail, reason, t) => {
+      detail.reloginUntil = 0;
+      detail.holdRemainingMs = 0;
+      detail.reloginDelayMs = 0;
+      detail.clearedReason = reason;
+      detail.clearedAt = t;
+      exitReloginClearEnemyEvents.push(['clear-detail', reason, t]);
+    },
+    clearPersistentExitState: key => exitReloginClearEnemyEvents.push(['clear-exit', key]),
+    clearLoginSuppressMatching: pattern => exitReloginClearEnemyEvents.push(['clear-suppress', pattern.test('combat leave')]),
+    enemyLeaveStateKey: 'enemy-state'
+  });
+  const exitReloginClearOfflineEvents = [];
+  const exitReloginClearOfflineDetail = { reloginUntil: 8000, holdRemainingMs: 4000, reloginDelayMs: 3000 };
+  const exitReloginClearOfflineBot = {
+    offlineReloginUntil: 8000,
+    lastOfflineLeaveWaitMs: 4000,
+    lastOfflineLeaveResult: exitReloginClearOfflineDetail,
+    pendingExit: { scope: 'enemy', reason: 'keep-enemy' }
+  };
+  exitRelogin.clearOfflineReloginHoldCore(exitReloginClearOfflineBot, 'spike offline recovery', {
+    now: 7000,
+    writePersistentPendingExitState: pending => exitReloginClearOfflineEvents.push(['write-pending', pending.reason]),
+    clearPersistentPendingExitState: () => exitReloginClearOfflineEvents.push(['clear-pending']),
+    clearPersistentExitState: key => exitReloginClearOfflineEvents.push(['clear-exit', key]),
+    clearLoginSuppressMatching: pattern => exitReloginClearOfflineEvents.push(['clear-suppress', pattern.test('offline leave')]),
+    offlineLeaveStateKey: 'offline-state'
+  });
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -862,6 +907,16 @@ function helperStatus(config = {}) {
     exitReloginOfflineHoldBotUntil: exitReloginHoldBot.offlineReloginUntil,
     exitReloginClearedSuppress,
     exitReloginClearRemovedCount: arrayCountRuntime.arrayCount(exitReloginClearStorage.removed || []),
+    exitReloginEnemyClearUntil: exitReloginClearEnemyBot.pursuitReloginUntil,
+    exitReloginEnemyClearPendingReason: exitReloginClearEnemyBot.pendingExit?.reason,
+    exitReloginEnemyClearDetailAt: exitReloginClearEnemyDetail.onlineRecoveryAt,
+    exitReloginEnemyClearDetailHold: exitReloginClearEnemyDetail.holdRemainingMs,
+    exitReloginEnemyClearEventCount: arrayCountRuntime.arrayCount(exitReloginClearEnemyEvents),
+    exitReloginOfflineClearUntil: exitReloginClearOfflineBot.offlineReloginUntil,
+    exitReloginOfflineClearPendingReason: exitReloginClearOfflineBot.pendingExit?.reason,
+    exitReloginOfflineClearDetailAt: exitReloginClearOfflineDetail.onlineRecoveryAt,
+    exitReloginOfflineClearDetailHold: exitReloginClearOfflineDetail.holdRemainingMs,
+    exitReloginOfflineClearEventCount: arrayCountRuntime.arrayCount(exitReloginClearOfflineEvents),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
