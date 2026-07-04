@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.486" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.487" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19808,12 +19808,7 @@
       opportunityChoiceKey,
       opportunityPairKey,
       opportunityByKey,
-      opportunityMatchesChoiceCore,
-      lockedOpportunityChoiceCore,
-      applyOpportunityOscillationLockCore,
       chooseStableOpportunityCore,
-      opportunityMissingHoldUntilCore,
-      missingHeldCoinCoveredByVisibleAuthorityCore,
       buildMissingHeldOpportunityCore,
       opportunityRouteIds,
       rememberOpportunityChoiceCore
@@ -19834,27 +19829,8 @@
     function resetOpportunitySwitchLock() {
       bot.opportunitySwitchLock = null;
     }
-    function lockedOpportunityChoice(sorted) {
-      const result = lockedOpportunityChoiceCore(sorted, bot.opportunitySwitchLock);
-      bot.opportunitySwitchLock = result.switchLock;
-      return result.choice;
-    }
-    function applyOpportunityOscillationLock(sorted, current, chosen) {
-      const result = applyOpportunityOscillationLockCore(sorted, current, chosen, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
-      bot.opportunitySwitchLock = result.switchLock;
-      return result.chosen;
-    }
     function opportunitySameCoinRadius() {
       return Math.max(0, Number(cfg.opportunitySameCoinRadius || cfg.coinCollectedPruneRadius || 900));
-    }
-    function opportunityMatchesChoice(item, choice) {
-      return opportunityMatchesChoiceCore(item, choice, opportunityChoiceCoreOptions());
-    }
-    function opportunityMissingHoldUntil(choice, t) {
-      return opportunityMissingHoldUntilCore(choice, opportunityChoiceCoreOptions({
-        nowMs: t,
-        missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs
-      }));
     }
     function currentVisibleCoinListForMissingHold() {
       if (typeof getNativeCoinSources !== "function") return null;
@@ -19884,11 +19860,6 @@
       const visibleCoins = currentVisibleCoinListForMissingHold();
       if (!Array.isArray(visibleCoins)) return false;
       return !visibleCoins.some((coin) => coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions()));
-    }
-    function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
-      return missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, opportunityChoiceCoreOptions({
-        nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === "function" ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius
-      }));
     }
     function clearMissingVisibleCoinTarget(choice, coin, reason, t) {
       const id = opportunityChoiceId(choice);

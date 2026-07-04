@@ -1453,6 +1453,7 @@ This is a source-organization split only. It keeps coin/enemy opportunity candid
 212. Removed the production bundled post-exit decision wrapper by routing bot-status display, post-exit cleanup, and tick post-exit wait publishing directly through `postExitDecisionWithoutTargetCore()` while preserving local/CDP wrapper fallback: integrated in `bootstrap-0.4.484`
 213. Removed the production bundled opportunity-clear wrapper by routing choose-action, opportunity-choice, coin-progress, and coin-target cleanup sites directly through `shouldClearOpportunityChoiceCore()` while preserving local/CDP wrapper fallback: integrated in `bootstrap-0.4.485`
 214. Removed unused production bundled opportunity-choice high-value helper wrappers while keeping the actual high-value hold behavior in `chooseStableOpportunityCore()` / `highValueCoinHoldBlocksEnemySwitchCore()`: integrated in `bootstrap-0.4.486`
+215. Removed unused production bundled opportunity-choice wrapper declarations for locked choice, oscillation lock, choice matching, missing-hold time, and missing-visible authority while preserving local/CDP fallback and strategy core behavior: integrated in `bootstrap-0.4.487`
 138. Combat/profit/safety helpers: integrate only in small, replay-validated slices
 139. Run live validation sessions after each behavior-touching replacement
 
