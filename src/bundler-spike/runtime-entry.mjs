@@ -661,6 +661,26 @@ function helperStatus(config = {}) {
     unsafeExitReloginMinDelayMs: 1234
   });
   const exitReloginPendingReason = exitRelogin.pendingExitSuppressReasonCore('enemy leave');
+  const exitReloginPendingUnsafeEvents = [];
+  const exitReloginPendingUnsafeDetail = { attempted: true };
+  const exitReloginPendingUnsafeUntil = exitRelogin.primePendingUnsafeExitLoginSuppressCore(
+    'enemy leave',
+    'combat leave',
+    exitReloginPendingUnsafeDetail,
+    { hp: 65 },
+    { minimumDelayMs: 4000 },
+    {
+      hpInfoForRelogin: selfLike => ({ hp: selfLike?.hp, ratio: 0.65 }),
+      reloginDelayForHp: () => ({ delayMs: 2000, hpDelayMs: 2000, hp: { hp: 65, ratio: 0.65 } }),
+      unsafeExitReloginMinDelayMs: () => 1234,
+      pendingExitSuppressReason: exitRelogin.pendingExitSuppressReasonCore,
+      setLoginSuppress: (reason, delayMs) => {
+        exitReloginPendingUnsafeEvents.push(['set-login-suppress', reason, delayMs]);
+        return 5000 + delayMs;
+      },
+      now: () => 5000
+    }
+  );
   const exitReloginBudgetHold = exitRelogin.staminaBudgetExitHoldUntilCore(
     { coin: { id: 'budget-coin' } },
     1000,
@@ -946,6 +966,13 @@ function helperStatus(config = {}) {
     exitReloginSuppressMatch,
     exitReloginUnsafeMin,
     exitReloginPendingReason,
+    exitReloginPendingUnsafeUntil,
+    exitReloginPendingUnsafeDelay: exitReloginPendingUnsafeDetail.pendingLoginSuppressDelayMs,
+    exitReloginPendingUnsafeReason: exitReloginPendingUnsafeDetail.pendingLoginSuppressReason,
+    exitReloginPendingUnsafeMinimum: exitReloginPendingUnsafeDetail.pendingLoginSuppressMinimumDelayMs,
+    exitReloginPendingUnsafeHpDelay: exitReloginPendingUnsafeDetail.pendingLoginSuppressHpDelayMs,
+    exitReloginPendingUnsafeEnemyReason: exitReloginPendingUnsafeDetail.enemyLeaveReason,
+    exitReloginPendingUnsafeEventCount: arrayCountRuntime.arrayCount(exitReloginPendingUnsafeEvents),
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,
     exitReloginOfflineUnsafe,

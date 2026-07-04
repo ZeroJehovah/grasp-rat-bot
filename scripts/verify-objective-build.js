@@ -1581,6 +1581,7 @@ function main() {
     assert(exitReloginHoldInlineBody.includes('function setExitReloginSuppress'), 'exit-relogin hold inline source does not include suppress writer');
     assert(exitReloginHoldInlineBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold inline source does not include unsafe minimum helper');
     assert(exitReloginHoldInlineBody.includes('function pendingExitSuppressReason'), 'exit-relogin hold inline source does not include pending suppress helper');
+    assert(exitReloginHoldInlineBody.includes('function primePendingUnsafeExitLoginSuppress'), 'exit-relogin hold inline source does not include pending unsafe suppress helper');
     assert(exitReloginHoldInlineBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold inline source does not include stamina budget hold helper');
     assert(exitReloginHoldInlineBody.includes('function staminaExitHoldUntilForDetail'), 'exit-relogin hold inline source does not include stamina hold selector');
     assert(exitReloginHoldInlineBody.includes('function offlineExitRequiresUnsafeReloginDelay'), 'exit-relogin hold inline source does not include offline unsafe predicate');
@@ -1591,6 +1592,8 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('isExitLoginSuppressReasonCore(reason)'), 'exit-relogin hold bundled source does not bind suppress reason matcher');
     assert(exitReloginHoldBundledBody.includes('unsafeExitReloginMinDelayMsCore(cfg)'), 'exit-relogin hold bundled source does not bind unsafe minimum helper');
     assert(exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore(storageReason)'), 'exit-relogin hold bundled source does not bind pending suppress helper');
+    assert(exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind pending unsafe suppress core');
+    assert(exitReloginHoldBundledBody.includes('hpInfoForRelogin') && exitReloginHoldBundledBody.includes('reloginDelayForHp') && exitReloginHoldBundledBody.includes('setLoginSuppress'), 'exit-relogin hold bundled source does not pass required pending unsafe suppress bindings');
     assert(exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs)'), 'exit-relogin hold bundled source does not bind stamina budget hold helper');
     assert(exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailCore(detail, t'), 'exit-relogin hold bundled source does not bind stamina hold selector');
     assert(exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold bundled source does not bind offline unsafe predicate');
@@ -1682,6 +1685,10 @@ function main() {
     assert(exitReloginRuntimeModule.includes('function unsafeExitReloginMinDelayMsCore(cfg)'), 'exit-relogin hold runtime unsafe minimum core not found');
     assert(exitReloginRuntimeModule.includes('function pendingExitSuppressReasonCore(storageReason)'), 'exit-relogin hold runtime pending suppress core not found');
     assert(exitReloginRuntimeModule.includes('pending unsafe hostile exit'), 'exit-relogin hold runtime pending suppress core does not preserve hostile reason');
+    assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress core not found');
+    assert(exitReloginRuntimeModule.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve longest-delay rule');
+    assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressReason = suppressReason;'), 'exit-relogin hold runtime pending unsafe suppress core does not write suppress reason');
+    assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve HP delay metadata');
     assert(exitReloginRuntimeModule.includes('function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs)'), 'exit-relogin hold runtime stamina budget core not found');
     assert(exitReloginRuntimeModule.includes("reason: 'stamina budget'"), 'exit-relogin hold runtime stamina budget core does not preserve reason');
     assert(exitReloginRuntimeModule.includes('function staminaExitHoldUntilForDetailCore(detail, t, helpers)'), 'exit-relogin hold runtime stamina selector core not found');
@@ -1717,7 +1724,7 @@ function main() {
     assert(exitReloginRuntimeModule.includes('bot.lastOfflineLeaveResult.reloginUntil = 0;'), 'exit-relogin clear runtime offline core does not clear reloginUntil');
     assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.offlineLeaveStateKey)'), 'exit-relogin clear runtime offline core does not clear persistent offline state');
     assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear runtime offline core does not clear offline login suppress');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  setOfflineLeaveSuppressCore,\n  primePendingStaminaExitLoginSuppressCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  primePendingUnsafeExitLoginSuppressCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  setOfflineLeaveSuppressCore,\n  primePendingStaminaExitLoginSuppressCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
@@ -2385,9 +2392,16 @@ function main() {
         confirmedBody.includes('const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'),
         'confirmed exit suppress does not take max(delay, minimum)'
       );
-      const pendingBody = functionBody(text, 'primePendingUnsafeExitLoginSuppress');
+      const pendingSource = finalRuntimeText.includes('function primePendingUnsafeExitLoginSuppressCore')
+        ? finalRuntimeText
+        : text;
+      const pendingBody = pendingSource.includes('function primePendingUnsafeExitLoginSuppressCore')
+        ? functionBody(pendingSource, 'primePendingUnsafeExitLoginSuppressCore')
+        : functionBody(pendingSource, 'primePendingUnsafeExitLoginSuppress');
       assert(
-        pendingBody.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'),
+        pendingBody.includes('Math.max(Number(')
+          && pendingBody.includes('delayMs || 0')
+          && pendingBody.includes('minimumDelayMs'),
         'pending unsafe exit suppress does not take max(delay, minimum)'
       );
       assert(

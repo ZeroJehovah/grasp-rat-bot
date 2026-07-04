@@ -287,6 +287,32 @@ function pendingExitSuppressReasonCore(storageReason) {
   return 'pending unsafe exit';
 }
 
+function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
+  if (!detail || !detail.attempted) return 0;
+  const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
+  const fixedDelayMs = Number.isFinite(fixedDelayRaw) && fixedDelayRaw > 0 ? Math.max(1000, Math.round(fixedDelayRaw)) : 0;
+  const delay = fixedDelayMs
+    ? { delayMs: fixedDelayMs, hpDelayMs: fixedDelayMs, hp: helpers.hpInfoForRelogin(selfLike, detail) }
+    : helpers.reloginDelayForHp(selfLike, detail);
+  const minimumDelayMs = Math.max(
+    helpers.unsafeExitReloginMinDelayMs(),
+    Math.max(0, Number(options.minimumDelayMs || 0) || 0)
+  );
+  const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);
+  if (!(delayMs > 0)) return 0;
+  const suppressReason = helpers.pendingExitSuppressReason(storageReason);
+  const until = helpers.setLoginSuppress(suppressReason, delayMs);
+  const now = typeof helpers.now === 'function' ? helpers.now() : (Number(helpers.now || 0) || Date.now());
+  detail.pendingLoginSuppressReason = suppressReason;
+  detail.pendingLoginSuppressUntil = until;
+  detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));
+  detail.pendingLoginSuppressMinimumDelayMs = minimumDelayMs;
+  detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;
+  detail.pendingLoginSuppressHp = delay.hp || null;
+  if (reason) detail.enemyLeaveReason = detail.enemyLeaveReason || reason;
+  return until;
+}
+
 function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs) {
   if (!staminaBudgetExit) return null;
   const delayMs = staminaBudgetReloginDelayMs();
@@ -498,6 +524,7 @@ module.exports = {
   isExitLoginSuppressReasonCore,
   unsafeExitReloginMinDelayMsCore,
   pendingExitSuppressReasonCore,
+  primePendingUnsafeExitLoginSuppressCore,
   staminaBudgetExitHoldUntilCore,
   staminaExitHoldUntilForDetailCore,
   offlineExitRequiresUnsafeReloginDelayCore,
