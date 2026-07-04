@@ -65,7 +65,7 @@ function assert(condition, message) {
 async function bundleRemoteBot(options) {
   return writeRemoteBotBundle(options, {
     production: false,
-    mode: 'full-generated-remote-candidate'
+    mode: 'runtime-entry-source-candidate'
   });
 }
 
@@ -83,7 +83,7 @@ function verifyBundledCandidate(source, manifest, expected = {}) {
   assert(!/\bfrom\s+['"]\.\.?\//.test(source), 'bundled candidate still contains unresolved relative import');
   assert(manifest && manifest.production === false, 'candidate manifest must not mark itself as production');
   assert(manifest.bundler?.name === 'esbuild', 'candidate manifest does not record esbuild');
-  assert(manifest.bundler?.mode === 'full-generated-remote-candidate', 'candidate manifest does not record the candidate mode');
+  assert(manifest.bundler?.mode === 'runtime-entry-source-candidate', 'candidate manifest does not record the candidate mode');
   assert(manifest.bundler?.directSha256 === expected.directSha256, 'candidate manifest direct hash mismatch');
   assert(manifest.sha256 === expected.sha256, 'candidate manifest bundled hash mismatch');
   new vm.Script(source, { filename: expected.outFile || 'grasp-rat-remote-bot.bundled-candidate.js' });

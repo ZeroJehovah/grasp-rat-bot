@@ -273,6 +273,7 @@ async function main() {
   const targetWhitelistConfig = readJson('dist/target-whitelist.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
+  const runtimeEntrySourceModule = readText('src/browser/runtime-entry-source.js');
   const runtimeSourceModule = readText('src/browser/runtime-source.js');
   const runtimeFragmentsSourceModule = readText('src/browser/runtime-fragments-source.js');
   const runtimeFragmentRegistryModule = readText('src/browser/runtime-fragment-registry.js');
@@ -422,6 +423,7 @@ async function main() {
   const sharedTargetWhitelistSource = readText('src/shared/target-whitelist.js');
   const sourceRuntimeText = [
     sourceBot,
+    runtimeEntrySourceModule,
     runtimeSourceModule,
     runtimeFragmentsSourceModule,
     runtimeFragmentRegistryModule,
@@ -575,7 +577,7 @@ async function main() {
   check('production remote bot is generated through esbuild bundling', () => {
     assert(manifest.production === true, 'production manifest does not mark the bundled build as production');
     assert(manifest.bundler?.name === 'esbuild', 'production manifest does not record esbuild');
-    assert(manifest.bundler?.mode === 'production-full-generated-remote', 'production manifest mode is not the production bundle mode');
+    assert(manifest.bundler?.mode === 'production-runtime-entry-source', 'production manifest mode is not the production runtime entry-source mode');
     assert(manifest.bundler?.directSha256 === generatedBuild.directSha256, `direct source hash mismatch: manifest=${manifest.bundler?.directSha256 || '(empty)'} generated=${generatedBuild.directSha256}`);
     assert(manifest.bundler?.format === 'iife', 'production manifest bundler format is not iife');
     assert(manifest.bundler?.platform === 'browser', 'production manifest bundler platform is not browser');
@@ -629,8 +631,8 @@ async function main() {
     assert(buildRemoteSource.includes('writeRemoteBotBundle'), 'production build does not write through the shared remote bundler');
     assert(!buildRemoteSource.includes('browserBotSource'), 'production build should not bypass the shared remote bundler');
     assert(remoteBundleSource.includes("const esbuild = require('esbuild')"), 'shared remote bundler does not use esbuild');
-    assert(remoteBundleSource.includes("const { remoteBrowserRuntimeSource } = require('../src/browser/runtime-source')"), 'shared remote bundler does not use the browser runtime source boundary');
-    assert(remoteBundleSource.includes('remoteBrowserRuntimeSource(options)'), 'shared remote bundler does not get direct source through the runtime source boundary');
+    assert(remoteBundleSource.includes("require('../src/browser/runtime-entry-source')"), 'shared remote bundler does not use the browser runtime entry-source boundary');
+    assert(remoteBundleSource.includes('remoteRuntimeEntrySource(options)'), 'shared remote bundler does not get direct source through the runtime entry-source boundary');
     assert(remoteBundleSource.includes("const VIRTUAL_ENTRY_NAMESPACE = 'grasp-rat-virtual-entry'"), 'shared remote bundler does not define the virtual entry namespace');
     assert(remoteBundleSource.includes("const REMOTE_RUNTIME_ENTRY = 'grasp-rat-remote-runtime-entry.js'"), 'shared remote bundler does not name the remote runtime virtual entry');
     assert(remoteBundleSource.includes("const RUNTIME_EVAL_ENTRY = 'grasp-rat-runtime-eval-entry.js'"), 'shared remote bundler does not name the runtime eval virtual entry');
@@ -642,10 +644,12 @@ async function main() {
     assert(remoteBundleSource.includes('entryPoints: [entryPath]'), 'shared remote bundler does not build through explicit entryPoints');
     assert(remoteBundleSource.includes('plugins: [virtualEntryPlugin(entryPath, contents)]'), 'shared remote bundler does not install the virtual entry plugin');
     assert(!remoteBundleSource.includes('stdin: {'), 'shared remote bundler still feeds generated runtime source through esbuild stdin');
-    assert(remoteBundleSource.includes('function bundleRuntimeEvalSource(directSource)'), 'shared remote bundler does not expose the CDP/runtime eval bundle path');
-    assert(remoteBundleSource.includes('export default ${directSource};'), 'runtime eval bundle does not preserve startup result as a default export');
+    assert(remoteBundleSource.includes('function bundleRuntimeEvalSource(entrySource)'), 'shared remote bundler does not expose the CDP/runtime eval bundle path');
+    assert(runtimeEntrySourceModule.includes('function runtimeEvalEntrySource(options = {})'), 'runtime eval entry-source factory not found');
+    assert(runtimeEntrySourceModule.includes('return `export default ${directSource};`;'), 'runtime eval entry-source does not preserve startup result as a default export');
     assert(remoteBundleSource.includes('return ${globalName}.default;'), 'runtime eval bundle does not return the default startup result');
     assert(!remoteBundleSource.includes("require('../src/browser/bot-source')"), 'shared remote bundler should not depend directly on the old browser source builder');
+    assert(!remoteBundleSource.includes("require('../src/browser/runtime-source')"), 'shared remote bundler should not bypass runtime entry-source');
     assert(remoteBundleSource.includes('write: false'), 'shared remote bundler should generate source through esbuild outputFiles');
     assert(remoteBundleSource.includes("format: BUNDLER_INFO.format"), 'shared remote bundler does not centralize IIFE format');
     assert(remoteBundleSource.includes("platform: BUNDLER_INFO.platform"), 'shared remote bundler does not centralize browser platform');
@@ -670,6 +674,12 @@ async function main() {
     assert(!sourceBot.includes("require('./src/browser/bot-source')"), 'main bot should not import the old browser source builder directly');
     assert(!fs.existsSync(path.join(ROOT, 'src/browser/bot-source.js')), 'legacy bot-source.js should no longer exist');
     assert(!fs.existsSync(path.join(ROOT, 'src/browser/runtime-assembly-source.js')), 'legacy runtime-assembly-source.js should no longer exist');
+    assert(runtimeEntrySourceModule.includes("require('./runtime-source')"), 'runtime entry-source boundary does not own the runtime-source dependency');
+    assert(runtimeEntrySourceModule.includes('function remoteRuntimeEntrySource(options = {})'), 'remote runtime entry-source factory not found');
+    assert(runtimeEntrySourceModule.includes('return remoteBrowserRuntimeSource(options);'), 'remote runtime entry-source does not delegate to runtime source');
+    assert(runtimeEntrySourceModule.includes('function runtimeEvalEntrySource(options = {})'), 'runtime eval entry-source factory not found');
+    assert(runtimeEntrySourceModule.includes('browserRuntimeSource({'), 'runtime eval entry-source does not build local runtime source');
+    assert(runtimeEntrySourceModule.includes('bundledRuntime: true'), 'runtime eval entry-source does not force bundled-runtime fragments');
     assert(runtimeSourceModule.includes("const { browserRuntimeFragments } = require('./runtime-fragments-source')"), 'runtime source boundary does not own the runtime fragment registry dependency');
     assert(runtimeSourceModule.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime source boundary does not render the runtime fragment registry');
     assert(runtimeSourceModule.includes('function browserRuntimeConfig(options = {})'), 'browser runtime config adapter not found');
@@ -1311,7 +1321,7 @@ async function main() {
     assert(remoteBundleSource.includes('function writeRemoteBotBundle'), 'shared remote bundler does not write bundle outputs');
     assert(remoteBundledBuildSource.includes('writeRemoteBotBundle(options'), 'remote bundled candidate does not write through the shared bundler');
     assert(remoteBundledBuildSource.includes('production: false'), 'remote bundled candidate manifest must stay non-production');
-    assert(remoteBundledBuildSource.includes("mode: 'full-generated-remote-candidate'"), 'remote bundled candidate manifest mode not found');
+    assert(remoteBundledBuildSource.includes("mode: 'runtime-entry-source-candidate'"), 'remote bundled candidate manifest mode not found');
     assert(remoteBundleSource.includes('directSha256'), 'shared remote bundler does not record direct source hash');
     assert(remoteBundledBuildSource.includes('verifyBundledCandidate(source, manifest, result);'), 'remote bundled candidate self-test does not verify the built output');
     assert(remoteBundledBuildSource.includes("new vm.Script(source"), 'remote bundled candidate self-test does not parse the bundled output');
