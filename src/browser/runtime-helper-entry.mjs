@@ -1,47 +1,47 @@
 'use strict';
 
-import runtimeUtils from '../browser/runtime/runtime-utils.js';
-import displayFormat from '../browser/runtime/display-format.js';
-import targetWhitelist from '../browser/runtime/target-whitelist.js';
-import exitSummary from '../browser/runtime/exit-summary.js';
-import preservedState from '../browser/runtime/browser-preserved-state.js';
-import persistentExit from '../browser/runtime/persistent-exit.js';
-import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
-import persistentClear from '../browser/runtime/persistent-clear.js';
-import pendingExitPersistence from '../browser/runtime/pending-exit-persistence.js';
-import pendingExit from '../browser/runtime/pending-exit.js';
-import leaveCommand from '../browser/runtime/leave-command.js';
-import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
-import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
-import restoredRuntimeState from '../browser/runtime/restored-runtime-state.js';
-import loginSnapshotGate from '../browser/runtime/login-snapshot-gate.js';
-import runtimeDiagnostics from '../browser/runtime/runtime-diagnostics.js';
-import exitRelogin from '../browser/runtime/exit-relogin.js';
-import runtimeDefaults from '../browser/runtime/runtime-defaults.js';
-import actionPriority from '../browser/runtime/action-priority.js';
-import actionArbitration from '../browser/runtime/action-arbitration.js';
-import actionSwitchDiagnostics from '../browser/runtime/action-switch-diagnostics.js';
-import attackWorth from '../browser/runtime/attack-worth.js';
-import exitMotion from '../browser/runtime/exit-motion.js';
-import coinDiagnostics from '../browser/runtime/coin-diagnostics.js';
-import coinMotion from '../browser/runtime/coin-motion.js';
-import coinTarget from '../browser/runtime/coin-target.js';
-import coinProgress from '../browser/runtime/coin-progress.js';
-import coinRoute from '../browser/runtime/coin-route.js';
-import opportunityChoice from '../browser/runtime/opportunity-choice.js';
-import opportunityClear from '../browser/runtime/opportunity-clear.js';
-import opportunityCandidates from '../browser/runtime/opportunity-candidates.js';
-import opportunityPick from '../browser/runtime/opportunity-pick.js';
-import patrol from '../browser/runtime/patrol.js';
-import postAttackDrop from '../browser/runtime/post-attack-drop.js';
-import dropMatchedKill from '../browser/runtime/drop-matched-kill.js';
-import staminaBudget from '../browser/runtime/stamina-budget.js';
-import opportunityConstants from '../browser/runtime/opportunity-constants.js';
-import pageAdapter from '../browser/page-global-core.js';
-import arrayCountRuntime from '../browser/runtime/array-count.js';
+import runtimeUtils from './runtime/runtime-utils.js';
+import displayFormat from './runtime/display-format.js';
+import targetWhitelist from './runtime/target-whitelist.js';
+import exitSummary from './runtime/exit-summary.js';
+import preservedState from './runtime/browser-preserved-state.js';
+import persistentExit from './runtime/persistent-exit.js';
+import persistentLastSelf from './runtime/persistent-last-self.js';
+import persistentClear from './runtime/persistent-clear.js';
+import pendingExitPersistence from './runtime/pending-exit-persistence.js';
+import pendingExit from './runtime/pending-exit.js';
+import leaveCommand from './runtime/leave-command.js';
+import refreshExitDetail from './runtime/refresh-exit-detail.js';
+import restoredCoinFailures from './runtime/restored-coin-failures.js';
+import restoredRuntimeState from './runtime/restored-runtime-state.js';
+import loginSnapshotGate from './runtime/login-snapshot-gate.js';
+import runtimeDiagnostics from './runtime/runtime-diagnostics.js';
+import exitRelogin from './runtime/exit-relogin.js';
+import runtimeDefaults from './runtime/runtime-defaults.js';
+import actionPriority from './runtime/action-priority.js';
+import actionArbitration from './runtime/action-arbitration.js';
+import actionSwitchDiagnostics from './runtime/action-switch-diagnostics.js';
+import attackWorth from './runtime/attack-worth.js';
+import exitMotion from './runtime/exit-motion.js';
+import coinDiagnostics from './runtime/coin-diagnostics.js';
+import coinMotion from './runtime/coin-motion.js';
+import coinTarget from './runtime/coin-target.js';
+import coinProgress from './runtime/coin-progress.js';
+import coinRoute from './runtime/coin-route.js';
+import opportunityChoice from './runtime/opportunity-choice.js';
+import opportunityClear from './runtime/opportunity-clear.js';
+import opportunityCandidates from './runtime/opportunity-candidates.js';
+import opportunityPick from './runtime/opportunity-pick.js';
+import patrol from './runtime/patrol.js';
+import postAttackDrop from './runtime/post-attack-drop.js';
+import dropMatchedKill from './runtime/drop-matched-kill.js';
+import staminaBudget from './runtime/stamina-budget.js';
+import opportunityConstants from './runtime/opportunity-constants.js';
+import pageAdapter from './page-global-core.js';
+import arrayCountRuntime from './runtime/array-count.js';
 
-const SPIKE_KEY = '__graspRatBundlerSpike';
-const CONFIG_KEY = '__GRASP_RAT_BUNDLER_SPIKE_CONFIG__';
+const HELPER_ENTRY_KEY = '__graspRatRuntimeHelperEntry';
+const CONFIG_KEY = '__GRASP_RAT_RUNTIME_HELPER_ENTRY_CONFIG__';
 
 function normalizeConfig(value) {
   return value && typeof value === 'object' ? value : {};
@@ -50,13 +50,13 @@ function normalizeConfig(value) {
 function helperStatus(config = {}) {
   const sampleAction = {
     kind: 'coin',
-    reason: 'bundler-spike',
+    reason: 'runtime-helper-entry',
     target: { id: 'coin-spike', x: 100, y: 200 },
     coin: { id: 'coin-spike', amount: 3 }
   };
   const nextAction = {
     kind: 'coin',
-    reason: 'bundler-spike-next',
+    reason: 'runtime-helper-entry-next',
     target: { id: 'coin-spike-next', x: 300, y: 400 },
     coin: { id: 'coin-spike-next', amount: 4 }
   };
@@ -609,7 +609,7 @@ function helperStatus(config = {}) {
   const runtimeDiagnosticsBot = { runtimeDiagnostics: null };
   runtimeDiagnostics.recordRuntimeDiagnosticsCore(runtimeDiagnosticsBot, {
     lastTickDurationMs: 12.3,
-    lastTickSource: 'bundler-spike'
+    lastTickSource: 'runtime-helper-entry'
   });
   runtimeDiagnostics.recordRuntimeDiagnosticsCore(null, { ignored: true });
   const exitReloginDisplay = exitRelogin.leaveWaitDisplayCore(
@@ -1199,7 +1199,7 @@ function helperStatus(config = {}) {
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
   return {
-    version: String(config.version || 'bundler-spike'),
+    version: String(config.version || 'runtime-helper-entry'),
     distance: displayFormat.formatDistance(12345),
     names,
     nameCount: arrayCountRuntime.arrayCount(names),
@@ -1395,7 +1395,7 @@ function helperStatus(config = {}) {
       killHistory: ['a', 'b', 'c']
     }).killHistory),
     defaultStatusEvery: runtimeDefaults.buildRuntimeDefaults({ statusEvery: 0 }, false).statusEvery,
-    storageProbe: pageAdapter.readPageLocalStorageJson('graspRatBundlerSpikeProbe', { ok: false }),
+    storageProbe: pageAdapter.readPageLocalStorageJson('graspRatRuntimeHelperEntryProbe', { ok: false }),
     json: runtimeUtils.safeStringify({
       ok: true,
       bigint: BigInt(7)
@@ -1403,7 +1403,7 @@ function helperStatus(config = {}) {
   };
 }
 
-function installBundlerSpike(config = {}) {
+function installRuntimeHelperEntry(config = {}) {
   const installed = {
     installedAt: Date.now(),
     status() {
@@ -1415,16 +1415,16 @@ function installBundlerSpike(config = {}) {
       return this.status();
     }
   };
-  pageAdapter.installPageGlobal(SPIKE_KEY, installed);
+  pageAdapter.installPageGlobal(HELPER_ENTRY_KEY, installed);
   return installed.status();
 }
 
 const runtimeConfig = normalizeConfig(pageAdapter.readPageGlobal(CONFIG_KEY, {}));
 
-installBundlerSpike(runtimeConfig);
+installRuntimeHelperEntry(runtimeConfig);
 
 export {
-  SPIKE_KEY,
+  HELPER_ENTRY_KEY,
   helperStatus,
-  installBundlerSpike
+  installRuntimeHelperEntry
 };

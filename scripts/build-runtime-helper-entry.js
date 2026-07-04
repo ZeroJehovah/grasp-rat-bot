@@ -9,11 +9,11 @@ const vm = require('vm');
 const esbuild = require('esbuild');
 
 const ROOT = path.resolve(__dirname, '..');
-const ENTRY = path.join(ROOT, 'src', 'bundler-spike', 'runtime-entry.mjs');
+const ENTRY = path.join(ROOT, 'src', 'browser', 'runtime-helper-entry.mjs');
 
 function parseArgs(args) {
   const out = {
-    outFile: path.join(ROOT, 'dist', 'spikes', 'bundler-spike.js'),
+    outFile: path.join(ROOT, 'dist', 'spikes', 'runtime-helper-entry.js'),
     selfTest: false
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -31,12 +31,12 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/build-bundler-spike.js [options]
+  console.log(`Usage: node scripts/build-runtime-helper-entry.js [options]
 
-Builds a non-production esbuild IIFE spike for browser-module migration.
+Builds a non-production esbuild IIFE smoke test for browser runtime helper modules.
 
 Options:
-  --out-file <file>       Output file. Default: dist/spikes/bundler-spike.js
+  --out-file <file>       Output file. Default: dist/spikes/runtime-helper-entry.js
   --self-test             Build into a temp directory and verify the output shape
 `);
 }
@@ -52,7 +52,7 @@ async function buildSpike(outFile) {
     outfile: outFile,
     bundle: true,
     format: 'iife',
-    globalName: '__graspRatBundlerSpikeBundle',
+    globalName: '__graspRatRuntimeHelperEntryBundle',
     platform: 'browser',
     target: ['es2020'],
     minify: false,
@@ -83,16 +83,16 @@ function runSpikeOutput(source, globals = {}, rootSelector = context => context)
   vm.createContext(context);
   vm.runInContext(source, context, { timeout: 1000 });
   const root = rootSelector(context);
-  return root?.__graspRatBundlerSpike?.status?.();
+  return root?.__graspRatRuntimeHelperEntry?.status?.();
 }
 
 async function selfTest() {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-bundler-spike-'));
-  const outFile = path.join(tempRoot, 'bundler-spike.js');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-runtime-helper-entry-'));
+  const outFile = path.join(tempRoot, 'runtime-helper-entry.js');
   const result = await buildSpike(outFile);
   const source = fs.readFileSync(outFile, 'utf8');
-  assert(source.includes('__graspRatBundlerSpike'), 'spike global key is not present');
-  assert(source.includes('__graspRatBundlerSpikeBundle'), 'IIFE globalName wrapper is not present');
+  assert(source.includes('__graspRatRuntimeHelperEntry'), 'spike global key is not present');
+  assert(source.includes('__graspRatRuntimeHelperEntryBundle'), 'IIFE globalName wrapper is not present');
   assert(source.includes('function resolvePageGlobal'), 'page-global adapter was not bundled');
   assert(source.includes('function installPageGlobal'), 'page-global installer was not bundled');
   assert(source.includes('function readPageGlobal'), 'page-global reader was not bundled');
@@ -161,10 +161,10 @@ async function selfTest() {
   assert(source.includes('function arrayCount'), 'browser runtime helper was not bundled');
   new vm.Script(source, { filename: outFile });
   const status = runSpikeOutput(source, {
-    __GRASP_RAT_BUNDLER_SPIKE_CONFIG__: { version: 'self-test' },
+    __GRASP_RAT_RUNTIME_HELPER_ENTRY_CONFIG__: { version: 'self-test' },
     localStorage: {
       getItem(key) {
-        return key === 'graspRatBundlerSpikeProbe' ? '{"ok":true,"scope":"globalThis"}' : null;
+        return key === 'graspRatRuntimeHelperEntryProbe' ? '{"ok":true,"scope":"globalThis"}' : null;
       },
       removeItem(key) {
         this.removedKey = key;
@@ -268,7 +268,7 @@ async function selfTest() {
   assert(status.loginSnapshotLastSampleAt === 900, 'spike did not preserve login snapshot last-sample fallback');
   assert(status.loginSnapshotResetReason === 'spike-reset', 'spike did not preserve login snapshot reset reason');
   assert(status.runtimeDiagnosticsTickMs === 12.3, 'spike did not merge runtime diagnostics values');
-  assert(status.runtimeDiagnosticsSource === 'bundler-spike', 'spike did not preserve runtime diagnostics source');
+  assert(status.runtimeDiagnosticsSource === 'runtime-helper-entry', 'spike did not preserve runtime diagnostics source');
   assert(status.exitReloginDisplay === '离线退出，等待3秒', 'spike did not append exit relogin wait display');
   assert(status.exitReloginSummary === '离线退出', 'spike did not preserve exit relogin summary');
   assert(status.exitReloginDisplayReason === '离线退出，等待2秒', 'spike did not finalize exit relogin display reason');
@@ -367,10 +367,10 @@ async function selfTest() {
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');
   assert(String(status.json || '').includes('"bigint":"7"'), 'spike did not execute safeStringify helper');
   const windowRoot = {
-    __GRASP_RAT_BUNDLER_SPIKE_CONFIG__: { version: 'window-self-test' },
+    __GRASP_RAT_RUNTIME_HELPER_ENTRY_CONFIG__: { version: 'window-self-test' },
     localStorage: {
       getItem(key) {
-        return key === 'graspRatBundlerSpikeProbe' ? '{"ok":true,"scope":"window"}' : null;
+        return key === 'graspRatRuntimeHelperEntryProbe' ? '{"ok":true,"scope":"window"}' : null;
       },
       removeItem(key) {
         this.removedKey = key;
@@ -380,7 +380,7 @@ async function selfTest() {
   const windowStatus = runSpikeOutput(source, { window: windowRoot }, context => context.window);
   assert(windowStatus?.version === 'window-self-test', 'spike status did not read window runtime config');
   assert(windowStatus.storageProbe?.scope === 'window', 'spike did not read window localStorage through adapter');
-  assert(windowRoot.__graspRatBundlerSpike, 'spike did not install on window root');
+  assert(windowRoot.__graspRatRuntimeHelperEntry, 'spike did not install on window root');
   return result;
 }
 
