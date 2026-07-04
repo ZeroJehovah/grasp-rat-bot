@@ -383,6 +383,53 @@ function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey,
   }
 }
 
+function clearEnemyReloginHoldCore(bot, reason = 'online self restored', helpers) {
+  const t = Number(helpers.now || 0) || 0;
+  const details = [
+    helpers.activeEnemyLeaveDetail(t),
+    bot.lastEnemyLeaveResult,
+    bot.lastPursuitLeaveResult,
+    bot.lastCombatLeaveResult,
+    bot.lastInjuryLeaveResult
+  ].filter(Boolean);
+  bot.pursuitReloginUntil = 0;
+  bot.lastEnemyLeaveWaitMs = 0;
+  bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;
+  if (bot.pendingExit) helpers.writePersistentPendingExitState(bot.pendingExit);
+  else helpers.clearPersistentPendingExitState();
+  for (const detail of details) {
+    if (!detail || typeof detail !== 'object') continue;
+    detail.onlineRecoveryAt = t;
+    detail.onlineRecoveryReason = String(reason || 'online self restored');
+    helpers.clearExitHoldDetail(detail, reason, t);
+  }
+  bot.lastEnemyLeaveResult = null;
+  bot.lastPursuitLeaveResult = null;
+  bot.lastCombatLeaveResult = null;
+  bot.lastInjuryLeaveResult = null;
+  helpers.clearPersistentExitState(helpers.enemyLeaveStateKey);
+  helpers.clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i);
+}
+
+function clearOfflineReloginHoldCore(bot, reason = 'online self restored', helpers) {
+  const t = Number(helpers.now || 0) || 0;
+  bot.offlineReloginUntil = 0;
+  bot.lastOfflineLeaveWaitMs = 0;
+  bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;
+  if (bot.pendingExit) helpers.writePersistentPendingExitState(bot.pendingExit);
+  else helpers.clearPersistentPendingExitState();
+  if (bot.lastOfflineLeaveResult && typeof bot.lastOfflineLeaveResult === 'object') {
+    bot.lastOfflineLeaveResult.onlineRecoveryAt = t;
+    bot.lastOfflineLeaveResult.onlineRecoveryReason = String(reason || 'online self restored');
+    bot.lastOfflineLeaveResult.reloginUntil = 0;
+    bot.lastOfflineLeaveResult.holdRemainingMs = 0;
+    bot.lastOfflineLeaveResult.reloginDelayMs = 0;
+  }
+  bot.lastOfflineLeaveResult = null;
+  helpers.clearPersistentExitState(helpers.offlineLeaveStateKey);
+  helpers.clearLoginSuppressMatching(/offline.*leave/i);
+}
+
 module.exports = {
   leaveWaitDisplayCore,
   finalizeLeaveDisplayReasonCore,
@@ -407,5 +454,7 @@ module.exports = {
   offlineExitRequiresUnsafeReloginDelayCore,
   enemyReloginHoldRemainingMsCore,
   offlineReloginHoldRemainingMsCore,
-  clearLoginSuppressMatchingCore
+  clearLoginSuppressMatchingCore,
+  clearEnemyReloginHoldCore,
+  clearOfflineReloginHoldCore
 };

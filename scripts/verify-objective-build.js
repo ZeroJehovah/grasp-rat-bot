@@ -1492,6 +1492,8 @@ function main() {
     assert(exitReloginSourceModule.includes('function bundledExitReloginHoldSource() {'), 'exit-relogin hold bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginHoldReadInlineSource() {'), 'exit-relogin hold-read inline source factory not found');
     assert(exitReloginSourceModule.includes('function bundledExitReloginHoldReadSource() {'), 'exit-relogin hold-read bundled source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginClearInlineSource() {'), 'exit-relogin clear inline source factory not found');
+    assert(exitReloginSourceModule.includes('function bundledExitReloginClearSource() {'), 'exit-relogin clear bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginRemainderPrefixSource() {'), 'exit-relogin remainder prefix source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
@@ -1509,6 +1511,8 @@ function main() {
       'bundledExitReloginHoldSource',
       'exitReloginHoldReadInlineSource',
       'bundledExitReloginHoldReadSource',
+      'exitReloginClearInlineSource',
+      'bundledExitReloginClearSource',
       'exitReloginRemainderPrefixSource',
       'exitReloginRemainderSource',
       'exitReloginSource'
@@ -1608,12 +1612,27 @@ function main() {
     assert(exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind offline hold reader');
     assert(exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern)'), 'exit-relogin hold-read bundled source does not bind suppress clear helper');
     assert(exitReloginHoldReadBundledBody.includes('readPersistentExitState') && exitReloginHoldReadBundledBody.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadBundledBody.includes('clearOfflineReloginHold'), 'exit-relogin hold-read bundled source does not pass required runtime helper bindings');
+    const exitReloginClearInlineBody = functionBody(exitReloginSourceModule, 'exitReloginClearInlineSource');
+    assert(exitReloginClearInlineBody.includes('function clearEnemyReloginHold'), 'exit-relogin clear inline source does not include enemy hold cleanup helper');
+    assert(exitReloginClearInlineBody.includes('function clearOfflineReloginHold'), 'exit-relogin clear inline source does not include offline hold cleanup helper');
+    assert(exitReloginClearInlineBody.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;"), 'exit-relogin clear inline source does not preserve enemy pending-exit scope rule');
+    assert(exitReloginClearInlineBody.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;"), 'exit-relogin clear inline source does not preserve offline pending-exit scope rule');
+    assert(exitReloginClearInlineBody.includes('clearExitHoldDetail(detail, reason, t);'), 'exit-relogin clear inline source does not clear enemy detail hold fields');
+    assert(exitReloginClearInlineBody.includes('clearPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'exit-relogin clear inline source does not clear persistent enemy leave state');
+    assert(exitReloginClearInlineBody.includes('clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'exit-relogin clear inline source does not clear persistent offline leave state');
+    assert(exitReloginClearInlineBody.includes('clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'exit-relogin clear inline source does not clear enemy login suppress');
+    assert(exitReloginClearInlineBody.includes('clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear inline source does not clear offline login suppress');
+    const exitReloginClearBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginClearSource');
+    assert(exitReloginClearBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin clear bundled source does not hand helpers to the bundler');
+    assert(exitReloginClearBundledBody.includes('clearEnemyReloginHoldCore(bot, reason'), 'exit-relogin clear bundled source does not bind enemy hold cleanup core');
+    assert(exitReloginClearBundledBody.includes('clearOfflineReloginHoldCore(bot, reason'), 'exit-relogin clear bundled source does not bind offline hold cleanup core');
+    assert(exitReloginClearBundledBody.includes('activeEnemyLeaveDetail') && exitReloginClearBundledBody.includes('clearExitHoldDetail') && exitReloginClearBundledBody.includes('clearLoginSuppressMatching'), 'exit-relogin clear bundled source does not pass required cleanup bindings');
     const exitReloginRemainderBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderSource');
     assert(!exitReloginRemainderBody.includes('function combatExitSummary'), 'exit-relogin remainder source still owns combat summary helper');
     assert(!exitReloginRemainderBody.includes('function setExitReloginSuppress'), 'exit-relogin remainder source still owns suppress helper');
     assert(!exitReloginRemainderBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin remainder source still owns enemy hold reader');
-    assert(exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source does not include enemy hold cleanup helper');
-    assert(exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source does not include offline hold cleanup helper');
+    assert(!exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source still owns enemy hold cleanup helper');
+    assert(!exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source still owns offline hold cleanup helper');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('options.bundledRuntime'), 'exit-relogin source selector does not switch on bundled runtime mode');
     assert(exitReloginRuntimeModule.includes('function leaveWaitDisplayCore(base, detail, formatDurationMs)'), 'exit-relogin display runtime core not found');
     assert(exitReloginRuntimeModule.includes('return summary + \'，等待\' + formatDurationMs(waitMs);'), 'exit-relogin display runtime core does not append wait duration');
@@ -1670,7 +1689,18 @@ function main() {
     assert(exitReloginRuntimeModule.includes("helpers.clearOfflineReloginHold('stale offline suppress contradicted by known stamina')"), 'exit-relogin hold-read runtime offline reader does not preserve stale suppress cleanup');
     assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern)'), 'exit-relogin hold-read runtime suppress clear core not found');
     assert(exitReloginRuntimeModule.includes('storage.removeItem(suppressKey)') && exitReloginRuntimeModule.includes('storage.removeItem(suppressReasonKey)'), 'exit-relogin hold-read runtime suppress clear core does not remove both keys');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('function clearEnemyReloginHoldCore(bot, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime enemy core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.activeEnemyLeaveDetail(t)'), 'exit-relogin clear runtime enemy core does not read active leave detail');
+    assert(exitReloginRuntimeModule.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;"), 'exit-relogin clear runtime enemy core does not preserve pending-exit scope rule');
+    assert(exitReloginRuntimeModule.includes('helpers.clearExitHoldDetail(detail, reason, t);'), 'exit-relogin clear runtime enemy core does not clear detail hold fields');
+    assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.enemyLeaveStateKey)'), 'exit-relogin clear runtime enemy core does not clear persistent enemy state');
+    assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'exit-relogin clear runtime enemy core does not clear enemy login suppress');
+    assert(exitReloginRuntimeModule.includes('function clearOfflineReloginHoldCore(bot, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime offline core not found');
+    assert(exitReloginRuntimeModule.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;"), 'exit-relogin clear runtime offline core does not preserve pending-exit scope rule');
+    assert(exitReloginRuntimeModule.includes('bot.lastOfflineLeaveResult.reloginUntil = 0;'), 'exit-relogin clear runtime offline core does not clear reloginUntil');
+    assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.offlineLeaveStateKey)'), 'exit-relogin clear runtime offline core does not clear persistent offline state');
+    assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear runtime offline core does not clear offline login suppress');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
@@ -3105,10 +3135,22 @@ function main() {
     });
     check(`${file} clears stale enemy relogin hold after online recovery`, () => {
       const clearBody = functionBody(text, 'clearEnemyReloginHold');
-      assert(clearBody.includes('bot.pursuitReloginUntil = 0'), 'enemy online recovery does not clear enemy hold until');
-      assert(clearBody.includes('bot.lastEnemyLeaveWaitMs = 0'), 'enemy online recovery does not clear stale wait duration');
-      assert(clearBody.includes('clearPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'enemy online recovery does not clear persistent hold state');
-      assert(clearBody.includes('clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'enemy online recovery does not clear matching login suppress');
+      if (text.includes('function clearEnemyReloginHoldCore')) {
+        const clearCoreBody = functionBody(text, 'clearEnemyReloginHoldCore');
+        assert(clearCoreBody.includes('bot.pursuitReloginUntil = 0'), 'enemy online recovery does not clear enemy hold until');
+        assert(clearCoreBody.includes('bot.lastEnemyLeaveWaitMs = 0'), 'enemy online recovery does not clear stale wait duration');
+        assert(clearCoreBody.includes('helpers.clearPersistentExitState(helpers.enemyLeaveStateKey)'), 'enemy online recovery does not clear persistent hold state');
+        assert(clearCoreBody.includes('helpers.clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'enemy online recovery does not clear matching login suppress');
+      } else if (clearBody.includes('clearEnemyReloginHoldCore')) {
+        assert(clearBody.includes('clearEnemyReloginHoldCore(bot, reason'), 'enemy online recovery wrapper does not call clear core');
+        assert(clearBody.includes('clearPersistentExitState') && clearBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'enemy online recovery wrapper does not bind persistent hold cleanup');
+        assert(clearBody.includes('clearLoginSuppressMatching'), 'enemy online recovery wrapper does not bind login suppress cleanup');
+      } else {
+        assert(clearBody.includes('bot.pursuitReloginUntil = 0'), 'enemy online recovery does not clear enemy hold until');
+        assert(clearBody.includes('bot.lastEnemyLeaveWaitMs = 0'), 'enemy online recovery does not clear stale wait duration');
+        assert(clearBody.includes('clearPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'enemy online recovery does not clear persistent hold state');
+        assert(clearBody.includes('clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'enemy online recovery does not clear matching login suppress');
+      }
       const manualBody = functionBody(text, 'clearCurrentReloginHold');
       assert(manualBody.includes('bot.lastEnemyLeaveWaitMs = 0'), 'manual login hold clear leaves stale enemy wait duration');
       assert(manualBody.includes('bot.lastOfflineLeaveWaitMs = 0'), 'manual login hold clear leaves stale offline wait duration');
