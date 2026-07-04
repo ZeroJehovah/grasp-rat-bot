@@ -1621,3 +1621,13 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - The new eval bundle wraps the generated browser runtime as an esbuild IIFE, exports the startup promise as default, and returns that default so CDP `Runtime.evaluate(... awaitPromise: true)` still receives startup status.
 - `src/browser/runtime-source.js` defaults `bundledRuntime: true`, so local, print-source, and production paths all select the same bundled-runtime fragment shape.
 - Static verification now generates the eval bundle, syntax-checks it, rejects unresolved relative imports/requires, and checks that the main file no longer imports the direct runtime source boundary.
+
+## 2026-07-05 Follow-up: Runtime Bootstrap Binding Collapse
+
+`bootstrap-0.4.506` continues the structural bundler migration after the runtime shell and state-binding collapses:
+
+- `src/browser/runtime/runtime-bootstrap-bindings.js` now owns runtime bootstrap initialization as executable code: page-global access, runtime config merging, runtime key constants, previous-bot preservation, runtime defaults, opportunity constants, exit-summary stamina helpers, and target-whitelist initial state.
+- `src/browser/runtime-bootstrap-source.js` now emits a single bundled `createRuntimeBootstrapBindings(...)` call and destructures runtime locals from that binding object instead of inlining/importing each bootstrap helper itself.
+- `src/browser/runtime-helper-entry.mjs` and `scripts/build-runtime-helper-entry.js` now smoke-test the bootstrap binding path, including runtime config merge and preserved target-whitelist state.
+- `scripts/verify-objective-build.js` now treats `runtime-bootstrap-bindings.js` as the source of truth for page-global/config/default/whitelist helper wiring and verifies final bundled output through `require_runtime_bootstrap_bindings`.
+- The `.506` manifest records bundled SHA-256 `8417860cc4d3b71aa682edf08d3425dafe2ee6fccb5bf397f7601e067d333bdb` and pre-bundle remote direct SHA-256 `e8382d2412ff505f228bc322a38696df24431cad2fe5ca9b8a3b71351467a419`.
