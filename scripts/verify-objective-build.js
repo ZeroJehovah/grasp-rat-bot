@@ -1494,7 +1494,8 @@ function main() {
     assert(exitReloginSourceModule.includes('function bundledExitReloginHoldReadSource() {'), 'exit-relogin hold-read bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginClearInlineSource() {'), 'exit-relogin clear inline source factory not found');
     assert(exitReloginSourceModule.includes('function bundledExitReloginClearSource() {'), 'exit-relogin clear bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginRemainderPrefixSource() {'), 'exit-relogin remainder prefix source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginRemainderPrefixInlineSource() {'), 'exit-relogin remainder prefix inline source factory not found');
+    assert(exitReloginSourceModule.includes('function bundledExitReloginRemainderPrefixSource() {'), 'exit-relogin remainder prefix bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
     assert(exitReloginSourceModule.includes('module.exports = {'), 'exit-relogin source module exports not found');
@@ -1513,7 +1514,8 @@ function main() {
       'bundledExitReloginHoldReadSource',
       'exitReloginClearInlineSource',
       'bundledExitReloginClearSource',
-      'exitReloginRemainderPrefixSource',
+      'exitReloginRemainderPrefixInlineSource',
+      'bundledExitReloginRemainderPrefixSource',
       'exitReloginRemainderSource',
       'exitReloginSource'
     ]) {
@@ -1593,11 +1595,16 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailCore(detail, t'), 'exit-relogin hold bundled source does not bind stamina hold selector');
     assert(exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold bundled source does not bind offline unsafe predicate');
     assert(exitReloginHoldBundledBody.includes('function setExitReloginSuppress'), 'exit-relogin hold bundled source does not preserve suppress writer wrapper');
-    const exitReloginRemainderPrefixBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderPrefixSource');
-    assert(exitReloginRemainderPrefixBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix source does not include offline suppress helper');
-    assert(exitReloginRemainderPrefixBody.includes('function primePendingStaminaExitLoginSuppress'), 'exit-relogin remainder prefix source does not include pending stamina suppress helper');
-    assert(exitReloginRemainderPrefixBody.includes('staminaExitHoldUntilForDetail(detail)'), 'exit-relogin remainder prefix source does not preserve stamina hold lookup');
-    assert(exitReloginRemainderPrefixBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix source does not preserve unsafe offline predicate call');
+    const exitReloginRemainderPrefixInlineBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderPrefixInlineSource');
+    assert(exitReloginRemainderPrefixInlineBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix inline source does not include offline suppress helper');
+    assert(exitReloginRemainderPrefixInlineBody.includes('function primePendingStaminaExitLoginSuppress'), 'exit-relogin remainder prefix inline source does not include pending stamina suppress helper');
+    assert(exitReloginRemainderPrefixInlineBody.includes('staminaExitHoldUntilForDetail(detail)'), 'exit-relogin remainder prefix inline source does not preserve stamina hold lookup');
+    assert(exitReloginRemainderPrefixInlineBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix inline source does not preserve unsafe offline predicate call');
+    const exitReloginRemainderPrefixBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginRemainderPrefixSource');
+    assert(exitReloginRemainderPrefixBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin remainder prefix bundled source does not hand helpers to the bundler');
+    assert(exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options'), 'exit-relogin remainder prefix bundled source does not bind offline suppress core');
+    assert(exitReloginRemainderPrefixBundledBody.includes('primePendingStaminaExitLoginSuppressCore(detail'), 'exit-relogin remainder prefix bundled source does not bind pending stamina suppress core');
+    assert(exitReloginRemainderPrefixBundledBody.includes('staminaExitHoldUntilForDetail') && exitReloginRemainderPrefixBundledBody.includes('offlineExitRequiresUnsafeReloginDelay') && exitReloginRemainderPrefixBundledBody.includes('writePersistentExitState'), 'exit-relogin remainder prefix bundled source does not pass required offline suppress bindings');
     const exitReloginHoldReadInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldReadInlineSource');
     assert(exitReloginHoldReadInlineBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include enemy hold reader');
     assert(exitReloginHoldReadInlineBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include offline hold reader');
@@ -1689,6 +1696,16 @@ function main() {
     assert(exitReloginRuntimeModule.includes("helpers.clearOfflineReloginHold('stale offline suppress contradicted by known stamina')"), 'exit-relogin hold-read runtime offline reader does not preserve stale suppress cleanup');
     assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern)'), 'exit-relogin hold-read runtime suppress clear core not found');
     assert(exitReloginRuntimeModule.includes('storage.removeItem(suppressKey)') && exitReloginRuntimeModule.includes('storage.removeItem(suppressReasonKey)'), 'exit-relogin hold-read runtime suppress clear core does not remove both keys');
+    assert(exitReloginRuntimeModule.includes('function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin prefix runtime offline suppress core not found');
+    assert(exitReloginRuntimeModule.includes('const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);'), 'exit-relogin prefix runtime offline suppress core does not read stamina hold');
+    assert(exitReloginRuntimeModule.includes('detail.safeReloginAllowed = !unsafeOfflineExit;'), 'exit-relogin prefix runtime offline suppress core does not preserve safe marker');
+    assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);'), 'exit-relogin prefix runtime offline suppress core does not persist zero-hold detail');
+    assert(exitReloginRuntimeModule.includes("return helpers.setExitReloginSuppress('offline leave', reason, detail, selfLike"), 'exit-relogin prefix runtime offline suppress core does not call suppress writer');
+    assert(exitReloginRuntimeModule.includes('minimumUntil: Math.max(Number(options.minimumUntil || 0) || 0, staminaHold?.until || 0)'), 'exit-relogin prefix runtime offline suppress core does not preserve minimumUntil selection');
+    assert(exitReloginRuntimeModule.includes('function primePendingStaminaExitLoginSuppressCore(detail, helpers)'), 'exit-relogin prefix runtime pending stamina core not found');
+    assert(exitReloginRuntimeModule.includes("const until = helpers.setLoginSuppress('stamina leave pending', delayMs);"), 'exit-relogin prefix runtime pending stamina core does not set login suppress');
+    assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));'), 'exit-relogin prefix runtime pending stamina core does not preserve pending delay');
+    assert(exitReloginRuntimeModule.includes('if (hold.staminaBudgetExit) detail.staminaBudgetHold = hold;'), 'exit-relogin prefix runtime pending stamina core does not preserve budget hold metadata');
     assert(exitReloginRuntimeModule.includes('function clearEnemyReloginHoldCore(bot, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime enemy core not found');
     assert(exitReloginRuntimeModule.includes('helpers.activeEnemyLeaveDetail(t)'), 'exit-relogin clear runtime enemy core does not read active leave detail');
     assert(exitReloginRuntimeModule.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;"), 'exit-relogin clear runtime enemy core does not preserve pending-exit scope rule');
@@ -1700,7 +1717,7 @@ function main() {
     assert(exitReloginRuntimeModule.includes('bot.lastOfflineLeaveResult.reloginUntil = 0;'), 'exit-relogin clear runtime offline core does not clear reloginUntil');
     assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.offlineLeaveStateKey)'), 'exit-relogin clear runtime offline core does not clear persistent offline state');
     assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear runtime offline core does not clear offline login suppress');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  setOfflineLeaveSuppressCore,\n  primePendingStaminaExitLoginSuppressCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
@@ -2057,7 +2074,17 @@ function main() {
       const leaveOfflineBody = functionBody(text, 'leaveOffline');
       assert(leaveOfflineBody.includes('const summary = offlineLeaveSummary(reason, offlineSafety);'), 'offline leave retry cooldown does not compute the current offline summary');
       assert(leaveOfflineBody.includes('summary: summary || active?.summary'), 'offline leave retry cooldown can still prefer a stale active summary over the current reason');
-      assert(functionBody(text, 'setOfflineLeaveSuppress').includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))'), 'ordinary unsafe offline exits still require a defensive relogin delay');
+      const offlineSuppressSource = finalRuntimeText.includes('function setOfflineLeaveSuppressCore')
+        ? finalRuntimeText
+        : text;
+      const offlineSuppressBody = offlineSuppressSource.includes('function setOfflineLeaveSuppressCore')
+        ? functionBody(offlineSuppressSource, 'setOfflineLeaveSuppressCore')
+        : functionBody(offlineSuppressSource, 'setOfflineLeaveSuppress');
+      assert(
+        offlineSuppressBody.includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))')
+          || offlineSuppressBody.includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > now))'),
+        'ordinary unsafe offline exits still require a defensive relogin delay'
+      );
       assert(text.includes('function combatLogRuntimeSummary'), 'combat log runtime diagnostic summary not found');
       assert(text.includes('runtime: combatLogRuntimeSummary'), 'exit audit logs do not include runtime diagnostics');
       assert(functionBody(text, 'buildCombatLogEntry').includes('const runtime = combatLogRuntimeSummary(entryAt, decision || {})'), 'combat frames do not compute runtime diagnostics');
@@ -3122,15 +3149,29 @@ function main() {
       assert(functionBody(text, 'endCombatLogSession').includes('sourceHash: cfg.sourceHash'), 'combat-end does not include sourceHash');
     });
     check(`${file} allows immediate relogin after safe or ordinary unsafe offline exits`, () => {
-      const body = functionBody(text, 'setOfflineLeaveSuppress');
+      const offlineSuppressSource = finalRuntimeText.includes('function setOfflineLeaveSuppressCore')
+        ? finalRuntimeText
+        : text;
+      const body = offlineSuppressSource.includes('function setOfflineLeaveSuppressCore')
+        ? functionBody(offlineSuppressSource, 'setOfflineLeaveSuppressCore')
+        : functionBody(offlineSuppressSource, 'setOfflineLeaveSuppress');
       assert(
-        body.includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))'),
+        body.includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now()))')
+          || body.includes('if (!staminaHold && !(Number(options.minimumUntil || 0) > now))'),
         'offline zero-hold path still depends on unsafe-delay classification'
       );
-      assert(body.includes('const unsafeOfflineExit = offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'offline zero-hold path does not preserve unsafe classification');
+      assert(
+        body.includes('const unsafeOfflineExit = offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)')
+          || body.includes('const unsafeOfflineExit = helpers.offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'),
+        'offline zero-hold path does not preserve unsafe classification'
+      );
       assert(body.includes('detail.safeReloginAllowed = !unsafeOfflineExit'), 'safe offline relogin marker is not limited to safe exits');
       assert(body.includes('if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true'), 'unsafe offline zero-hold path is not marked');
-      assert(body.includes('writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail)'), 'safe offline path does not preserve last exit detail');
+      assert(
+        body.includes('writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail)')
+          || body.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail)'),
+        'safe offline path does not preserve last exit detail'
+      );
       assert(body.includes('return 0'), 'safe offline path does not return without suppress');
     });
     check(`${file} clears stale enemy relogin hold after online recovery`, () => {

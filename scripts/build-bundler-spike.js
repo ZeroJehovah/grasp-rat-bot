@@ -119,6 +119,7 @@ async function selfTest() {
   assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
   assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
   assert(source.includes('function enemyReloginHoldRemainingMsCore'), 'exit-relogin hold read helper was not bundled');
+  assert(source.includes('function setOfflineLeaveSuppressCore'), 'exit-relogin offline suppress helper was not bundled');
   assert(source.includes('function clearEnemyReloginHoldCore'), 'exit-relogin hold clear helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
@@ -264,6 +265,16 @@ async function selfTest() {
   assert(status.exitReloginOfflineHoldBotUntil === 4500, 'spike did not update bot offline relogin hold');
   assert(status.exitReloginClearedSuppress === true, 'spike did not execute exit relogin suppress clear helper');
   assert(status.exitReloginClearRemovedCount === 2, 'spike did not remove both exit relogin suppress keys');
+  assert(status.exitReloginOfflineSuppressReturn === 0, 'spike did not execute zero-hold offline suppress branch');
+  assert(status.exitReloginOfflineSuppressUntil === 0, 'spike did not clear offline suppress hold until');
+  assert(status.exitReloginOfflineSuppressWaitMs === 0, 'spike did not clear offline suppress wait duration');
+  assert(status.exitReloginOfflineSuppressSafe === false, 'spike did not mark unsafe zero-hold offline suppress');
+  assert(status.exitReloginOfflineSuppressSkipped === true, 'spike did not preserve defensive delay skipped marker');
+  assert(status.exitReloginOfflineSuppressFinalized === true, 'spike did not finalize zero-hold offline suppress detail');
+  assert(status.exitReloginPendingStaminaUntil === 6000, 'spike did not prime pending stamina login suppress');
+  assert(status.exitReloginPendingStaminaDelay === 5000, 'spike did not preserve pending stamina delay');
+  assert(status.exitReloginPendingStaminaBudgetCoin === 'stamina-spike', 'spike did not attach pending stamina budget hold');
+  assert(status.exitReloginPrefixEventCount === 2, 'spike did not execute exit relogin prefix side effects');
   assert(status.exitReloginEnemyClearUntil === 0, 'spike did not clear enemy relogin hold');
   assert(status.exitReloginEnemyClearPendingReason === 'keep-offline', 'spike did not preserve offline pending exit during enemy hold clear');
   assert(status.exitReloginEnemyClearDetailAt === 6000, 'spike did not stamp enemy hold recovery detail');

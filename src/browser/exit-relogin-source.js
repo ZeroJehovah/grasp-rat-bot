@@ -923,7 +923,7 @@ function bundledExitReloginHoldReadSource() {
 `;
 }
 
-function exitReloginRemainderPrefixSource() {
+function exitReloginRemainderPrefixInlineSource() {
   return String.raw`
 	  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
 		    const staminaHold = staminaExitHoldUntilForDetail(detail);
@@ -971,6 +971,34 @@ function exitReloginRemainderPrefixSource() {
 	    }
 	    return until;
 	  }
+`;
+}
+
+function bundledExitReloginRemainderPrefixSource() {
+  return `	  const {
+	    setOfflineLeaveSuppressCore,
+	    primePendingStaminaExitLoginSuppressCore
+	  } = require('./src/browser/runtime/exit-relogin');
+
+\t  function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
+\t    return setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options, {
+\t      now: Date.now(),
+\t      staminaExitHoldUntilForDetail,
+\t      offlineExitRequiresUnsafeReloginDelay,
+\t      finalizeLeaveDisplayReason,
+\t      writePersistentExitState,
+\t      setExitReloginSuppress,
+\t      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
+\t    });
+\t  }
+
+\t  function primePendingStaminaExitLoginSuppress(detail) {
+\t    return primePendingStaminaExitLoginSuppressCore(detail, {
+\t      now: Date.now(),
+\t      staminaExitHoldUntilForDetail,
+\t      setLoginSuppress
+\t    });
+\t  }
 `;
 }
 
@@ -1080,10 +1108,13 @@ function exitReloginSource(options = {}) {
   const holdReadSource = options.bundledRuntime
     ? bundledExitReloginHoldReadSource()
     : exitReloginHoldReadInlineSource();
+  const prefixSource = options.bundledRuntime
+    ? bundledExitReloginRemainderPrefixSource()
+    : exitReloginRemainderPrefixInlineSource();
   const clearSource = options.bundledRuntime
     ? bundledExitReloginClearSource()
     : exitReloginClearInlineSource();
-  return displaySource + actorSource + streakSource + summarySource + holdSource + exitReloginRemainderPrefixSource() + holdReadSource + clearSource + exitReloginRemainderSource();
+  return displaySource + actorSource + streakSource + summarySource + holdSource + prefixSource + holdReadSource + clearSource + exitReloginRemainderSource();
 }
 
 module.exports = {
@@ -1101,7 +1132,8 @@ module.exports = {
   bundledExitReloginHoldReadSource,
   exitReloginClearInlineSource,
   bundledExitReloginClearSource,
-  exitReloginRemainderPrefixSource,
+  exitReloginRemainderPrefixInlineSource,
+  bundledExitReloginRemainderPrefixSource,
   exitReloginRemainderSource,
   exitReloginSource
 };
