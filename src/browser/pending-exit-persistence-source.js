@@ -104,7 +104,6 @@ function pendingExitPersistenceInlineSource() {
 function bundledPendingExitPersistenceSource() {
   return `const {
 		    normalizePendingExitReloadConfirmationCore,
-		    normalizePendingExitStateForStorageCore,
 		    readPersistedPendingExitStateCore,
 		    writePersistentPendingExitStateCore,
 		    chooseInitialPendingExitStateCore
@@ -119,10 +118,6 @@ function bundledPendingExitPersistenceSource() {
 		      stringify: safeStringify,
 		      clearPersistentPendingExitState
 		    };
-		  }
-
-		  function normalizePendingExitStateForStorage(value, t = Date.now(), options = {}) {
-		    return normalizePendingExitStateForStorageCore(value, t, options, pendingExitPersistenceCoreHelpers());
 		  }
 
 		  function readPersistedPendingExitState(t = Date.now(), options = {}) {

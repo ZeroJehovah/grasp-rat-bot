@@ -1417,6 +1417,7 @@ function main() {
     assert(pendingExitPersistenceBundledBody.includes('readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY'), 'pending-exit persistence bundled source does not bind storage reader');
     assert(pendingExitPersistenceBundledBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit'), 'pending-exit persistence bundled source does not bind storage writer');
     assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitReloadConfirmation('), 'pending-exit persistence bundled source still keeps reload-confirmation wrapper');
+    assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitStateForStorage('), 'pending-exit persistence bundled source still keeps storage-normalizer wrapper');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(controlLoginSourceModule, 'controlLoginSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'control-login source does not route reload-confirmation normalization directly to core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'pending-exit source does not route reload-confirmation normalization directly to core for bundled builds');
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('options.bundledRuntime'), 'pending-exit persistence source selector does not switch on bundled runtime mode');
@@ -1431,6 +1432,7 @@ function main() {
     assert(pendingExitPersistenceRuntimeModule.includes('return storedStamp > memoryStamp ? stored : memory;'), 'pending-exit persistence runtime core does not choose newest state');
     assert(pendingExitPersistenceRuntimeModule.includes('normalizePendingExitReloadConfirmationCore,\n  normalizePendingExitStateForStorageCore,\n  readPersistedPendingExitStateCore,\n  writePersistentPendingExitStateCore,\n  chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime exports are incomplete');
     assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
+    assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
@@ -2766,7 +2768,8 @@ function main() {
     check(`${file} confirms leave success through reload and durable pending state`, () => {
       assert(text.includes("const COMBAT_LOG_PENDING_ENTRIES_KEY = 'graspRatCombatLogPendingEntries'"), 'ordinary combat pending log storage key not found');
       assert(text.includes("const PENDING_EXIT_STATE_KEY = 'graspRatPendingExitState'"), 'pending exit storage key not found');
-      assert(text.includes('function normalizePendingExitStateForStorage'), 'pending exit storage normalizer not found');
+      const pendingExitNormalizerSource = `${text}\n${finalRuntimeText}`;
+      assert(pendingExitNormalizerSource.includes('function normalizePendingExitStateForStorage') || pendingExitNormalizerSource.includes('function normalizePendingExitStateForStorageCore'), 'pending exit storage normalizer not found');
       assert(text.includes('function readPersistedPendingExitState'), 'pending exit storage reader not found');
       const pendingExitRestoreSource = `${text}\n${finalRuntimeText}`;
       const restoresPendingExitWithReloadMarker = pendingExitRestoreSource.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot })')
