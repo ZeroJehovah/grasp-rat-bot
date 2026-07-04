@@ -30,10 +30,6 @@ function bundledLoginSnapshotGateSource() {
 
 			  function loginSnapshotSuccessRequired() {
 			    return loginSnapshotSuccessRequiredCore();
-			  }
-
-		  function normalizeLoginSnapshotGateState(state = null) {
-		    return normalizeLoginSnapshotGateStateCore(state, loginSnapshotSuccessRequired());
 		  }`;
 }
 

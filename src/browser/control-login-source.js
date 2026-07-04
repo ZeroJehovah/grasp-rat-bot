@@ -25,6 +25,9 @@ function controlLoginSource(helpers = {}) {
   const normalizePendingExitReloadConfirmationCall = args => bundledRuntime
     ? `normalizePendingExitReloadConfirmationCore(${args})`
     : `normalizePendingExitReloadConfirmation(${args})`;
+  const normalizeLoginSnapshotGateStateCall = state => bundledRuntime
+    ? `normalizeLoginSnapshotGateStateCore(${state}, loginSnapshotSuccessRequired())`
+    : `normalizeLoginSnapshotGateState(${state})`;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, { bundledRuntime });
   const enemyHoldRemainingMsCall = bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore')
@@ -1751,7 +1754,7 @@ function controlLoginSource(helpers = {}) {
   }
 
 	  function snapshotLoginGateStatus(t = Date.now()) {
-	    const state = normalizeLoginSnapshotGateState(bot.loginSnapshotGate);
+	    const state = ${normalizeLoginSnapshotGateStateCall('bot.loginSnapshotGate')};
 	    const required = loginSnapshotSuccessRequired();
 	    state.required = required;
 	    if (state.streak > required) state.streak = required;
@@ -1777,7 +1780,7 @@ function controlLoginSource(helpers = {}) {
 	  function resetLoginSnapshotGate(reason = 'exit', exitSelfLike = null) {
 	    const t = Date.now();
 	    bot.loginSnapshotGate = {
-	      ...normalizeLoginSnapshotGateState(bot.loginSnapshotGate),
+	      ...${normalizeLoginSnapshotGateStateCall('bot.loginSnapshotGate')},
 	      streak: 0,
 	      required: loginSnapshotSuccessRequired(),
 	      lastError: '',
@@ -1791,7 +1794,7 @@ function controlLoginSource(helpers = {}) {
 	  function noteLoginSnapshotProbe(success, detail = {}) {
 	    const t = Date.now();
 	    const required = loginSnapshotSuccessRequired();
-	    const state = normalizeLoginSnapshotGateState(bot.loginSnapshotGate);
+	    const state = ${normalizeLoginSnapshotGateStateCall('bot.loginSnapshotGate')};
 	    state.required = required;
 	    state.lastSampleAt = t;
 	    if (success) {

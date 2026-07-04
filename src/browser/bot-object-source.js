@@ -7,6 +7,9 @@ function botObjectSource(options = {}) {
   const enemyLeaveStreakStatus = options.bundledRuntime
     ? 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })'
     : 'readEnemyLeaveStreak()';
+  const normalizeLoginSnapshotGateStateCall = state => options.bundledRuntime
+    ? `normalizeLoginSnapshotGateStateCore(${state}, loginSnapshotSuccessRequired())`
+    : `normalizeLoginSnapshotGateState(${state})`;
   return String.raw`${streakPrelude}		  const bot = {
 	    running: true,
 	    version: cfg.version,
@@ -109,7 +112,7 @@ function botObjectSource(options = {}) {
 	      localWriteError: String(preserved.importantLogging?.localWriteError || ''),
 	      lastRemoteError: String(preserved.importantLogging?.lastRemoteError || '')
 	    },
-		    loginSnapshotGate: normalizeLoginSnapshotGateState(preserved.loginSnapshotGate),
+		    loginSnapshotGate: ${normalizeLoginSnapshotGateStateCall('preserved.loginSnapshotGate')},
 		    loginPointSafety: preserved.loginPointSafety && typeof preserved.loginPointSafety === 'object' ? { ...preserved.loginPointSafety } : null,
 		    sessionMismatchRecovery: null,
 		    leave403SnapshotRecovery: {
