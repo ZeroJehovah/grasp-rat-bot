@@ -315,6 +315,74 @@ function offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety) {
   return text.includes('reconnect churn') || text.includes('server position') || text.includes('stamina') || text.includes('missing self') || text.includes('sampling outage') || text.includes('combat tick gap');
 }
 
+function enemyReloginHoldRemainingMsCore(bot, storage, helpers) {
+  const now = Number(helpers.now || 0) || 0;
+  let until = Number(bot.pursuitReloginUntil || 0);
+  const persistent = helpers.readPersistentExitState(helpers.enemyLeaveStateKey);
+  if (Number(persistent?.reloginUntil || 0) > until) {
+    until = Number(persistent.reloginUntil);
+    bot.pursuitReloginUntil = until;
+    bot.lastEnemyLeaveResult = persistent;
+  }
+  try {
+    const suppressUntil = Number(storage.getItem(helpers.loginSuppressKey) || 0) || 0;
+    const suppressReason = String(storage.getItem(helpers.loginSuppressReasonKey) || '');
+    if ((suppressReason === 'enemy leave' || suppressReason === 'pursuit leave' || suppressReason === 'combat leave') && suppressUntil > until) {
+      until = suppressUntil;
+      bot.pursuitReloginUntil = suppressUntil;
+    }
+  } catch (_) {}
+  const remaining = Math.max(0, until - now);
+  if (!remaining && bot.pursuitReloginUntil) {
+    bot.pursuitReloginUntil = 0;
+  }
+  return Math.round(remaining);
+}
+
+function offlineReloginHoldRemainingMsCore(bot, storage, helpers) {
+  const now = Number(helpers.now || 0) || 0;
+  let until = Number(bot.offlineReloginUntil || 0);
+  const persistent = helpers.readPersistentExitState(helpers.offlineLeaveStateKey);
+  if (Number(persistent?.reloginUntil || 0) > until) {
+    until = Number(persistent.reloginUntil);
+    bot.offlineReloginUntil = until;
+    bot.lastOfflineLeaveResult = persistent;
+  }
+  if (until > now && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+    helpers.clearOfflineReloginHold('stale stamina hold contradicted by known stamina');
+    return 0;
+  }
+  try {
+    const suppressUntil = Number(storage.getItem(helpers.loginSuppressKey) || 0) || 0;
+    const suppressReason = String(storage.getItem(helpers.loginSuppressReasonKey) || '');
+    if (/offline.*leave/i.test(suppressReason) && suppressUntil > until) {
+      until = suppressUntil;
+      bot.offlineReloginUntil = suppressUntil;
+    }
+  } catch (_) {}
+  if (until > now && helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)) {
+    helpers.clearOfflineReloginHold('stale offline suppress contradicted by known stamina');
+    return 0;
+  }
+  const remaining = Math.max(0, until - now);
+  if (!remaining && bot.offlineReloginUntil) {
+    bot.offlineReloginUntil = 0;
+  }
+  return Math.round(remaining);
+}
+
+function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern) {
+  try {
+    const suppressReason = String(storage.getItem(suppressReasonKey) || '');
+    if (!pattern.test(suppressReason)) return false;
+    storage.removeItem(suppressKey);
+    storage.removeItem(suppressReasonKey);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 module.exports = {
   leaveWaitDisplayCore,
   finalizeLeaveDisplayReasonCore,
@@ -336,5 +404,8 @@ module.exports = {
   pendingExitSuppressReasonCore,
   staminaBudgetExitHoldUntilCore,
   staminaExitHoldUntilForDetailCore,
-  offlineExitRequiresUnsafeReloginDelayCore
+  offlineExitRequiresUnsafeReloginDelayCore,
+  enemyReloginHoldRemainingMsCore,
+  offlineReloginHoldRemainingMsCore,
+  clearLoginSuppressMatchingCore
 };

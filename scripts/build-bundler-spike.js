@@ -118,6 +118,7 @@ async function selfTest() {
   assert(source.includes('function readEnemyLeaveStreakCore'), 'exit-relogin streak helper was not bundled');
   assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
   assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
+  assert(source.includes('function enemyReloginHoldRemainingMsCore'), 'exit-relogin hold read helper was not bundled');
   assert(source.includes('function buildBrowserPreservedState'), 'preserved-state helper was not bundled');
   assert(source.includes('function buildRuntimeDefaults'), 'runtime-defaults helper was not bundled');
   assert(source.includes('function actionFocusSummary'), 'strategy helper was not bundled');
@@ -256,6 +257,12 @@ async function selfTest() {
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
   assert(status.exitReloginOfflineUnsafe === true, 'spike did not execute exit relogin unsafe offline delay predicate');
+  assert(status.exitReloginEnemyHoldRemaining === 2000, 'spike did not execute exit relogin enemy hold reader');
+  assert(status.exitReloginEnemyHoldBotUntil === 3000, 'spike did not update bot enemy relogin hold');
+  assert(status.exitReloginOfflineHoldRemaining === 3500, 'spike did not execute exit relogin offline hold reader');
+  assert(status.exitReloginOfflineHoldBotUntil === 4500, 'spike did not update bot offline relogin hold');
+  assert(status.exitReloginClearedSuppress === true, 'spike did not execute exit relogin suppress clear helper');
+  assert(status.exitReloginClearRemovedCount === 2, 'spike did not remove both exit relogin suppress keys');
   assert(status.preservedKills === 3, 'spike did not execute preserved-state helper');
   assert(status.defaultStatusEvery === 0, 'spike did not execute runtime-defaults helper');
   assert(status.storageProbe?.scope === 'globalThis', 'spike did not read globalThis localStorage through adapter');

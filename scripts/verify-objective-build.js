@@ -1490,6 +1490,9 @@ function main() {
     assert(exitReloginSourceModule.includes('function bundledExitReloginSummarySource() {'), 'exit-relogin summary bundled source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginHoldInlineSource() {'), 'exit-relogin hold inline source factory not found');
     assert(exitReloginSourceModule.includes('function bundledExitReloginHoldSource() {'), 'exit-relogin hold bundled source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginHoldReadInlineSource() {'), 'exit-relogin hold-read inline source factory not found');
+    assert(exitReloginSourceModule.includes('function bundledExitReloginHoldReadSource() {'), 'exit-relogin hold-read bundled source factory not found');
+    assert(exitReloginSourceModule.includes('function exitReloginRemainderPrefixSource() {'), 'exit-relogin remainder prefix source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
     assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
     assert(exitReloginSourceModule.includes('module.exports = {'), 'exit-relogin source module exports not found');
@@ -1504,6 +1507,9 @@ function main() {
       'bundledExitReloginSummarySource',
       'exitReloginHoldInlineSource',
       'bundledExitReloginHoldSource',
+      'exitReloginHoldReadInlineSource',
+      'bundledExitReloginHoldReadSource',
+      'exitReloginRemainderPrefixSource',
       'exitReloginRemainderSource',
       'exitReloginSource'
     ]) {
@@ -1583,10 +1589,29 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailCore(detail, t'), 'exit-relogin hold bundled source does not bind stamina hold selector');
     assert(exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold bundled source does not bind offline unsafe predicate');
     assert(exitReloginHoldBundledBody.includes('function setExitReloginSuppress'), 'exit-relogin hold bundled source does not preserve suppress writer wrapper');
+    const exitReloginRemainderPrefixBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderPrefixSource');
+    assert(exitReloginRemainderPrefixBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix source does not include offline suppress helper');
+    assert(exitReloginRemainderPrefixBody.includes('function primePendingStaminaExitLoginSuppress'), 'exit-relogin remainder prefix source does not include pending stamina suppress helper');
+    assert(exitReloginRemainderPrefixBody.includes('staminaExitHoldUntilForDetail(detail)'), 'exit-relogin remainder prefix source does not preserve stamina hold lookup');
+    assert(exitReloginRemainderPrefixBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix source does not preserve unsafe offline predicate call');
+    const exitReloginHoldReadInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldReadInlineSource');
+    assert(exitReloginHoldReadInlineBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include enemy hold reader');
+    assert(exitReloginHoldReadInlineBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include offline hold reader');
+    assert(exitReloginHoldReadInlineBody.includes('function clearLoginSuppressMatching'), 'exit-relogin hold-read inline source does not include login suppress clear helper');
+    assert(exitReloginHoldReadInlineBody.includes('readPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'exit-relogin hold-read inline source does not read persistent enemy leave state');
+    assert(exitReloginHoldReadInlineBody.includes('readPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'exit-relogin hold-read inline source does not read persistent offline leave state');
+    assert(exitReloginHoldReadInlineBody.includes('staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)'), 'exit-relogin hold-read inline source does not preserve stale offline contradiction check');
+    assert(exitReloginHoldReadInlineBody.includes('localStorage.removeItem(LOGIN_SUPPRESS_KEY)'), 'exit-relogin hold-read inline source does not clear login suppress key');
+    const exitReloginHoldReadBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldReadSource');
+    assert(exitReloginHoldReadBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold-read bundled source does not hand helpers to the bundler');
+    assert(exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind enemy hold reader');
+    assert(exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsCore(bot, localStorage'), 'exit-relogin hold-read bundled source does not bind offline hold reader');
+    assert(exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingCore(localStorage, LOGIN_SUPPRESS_KEY, LOGIN_SUPPRESS_REASON_KEY, pattern)'), 'exit-relogin hold-read bundled source does not bind suppress clear helper');
+    assert(exitReloginHoldReadBundledBody.includes('readPersistentExitState') && exitReloginHoldReadBundledBody.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadBundledBody.includes('clearOfflineReloginHold'), 'exit-relogin hold-read bundled source does not pass required runtime helper bindings');
     const exitReloginRemainderBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderSource');
     assert(!exitReloginRemainderBody.includes('function combatExitSummary'), 'exit-relogin remainder source still owns combat summary helper');
     assert(!exitReloginRemainderBody.includes('function setExitReloginSuppress'), 'exit-relogin remainder source still owns suppress helper');
-    assert(exitReloginRemainderBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder source does not include offline suppress helper');
+    assert(!exitReloginRemainderBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin remainder source still owns enemy hold reader');
     assert(exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source does not include enemy hold cleanup helper');
     assert(exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source does not include offline hold cleanup helper');
     assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('options.bundledRuntime'), 'exit-relogin source selector does not switch on bundled runtime mode');
@@ -1637,7 +1662,15 @@ function main() {
     assert(exitReloginRuntimeModule.includes('helpers.staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted, t)'), 'exit-relogin hold runtime stamina selector does not preserve reset hold branch');
     assert(exitReloginRuntimeModule.includes('function offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold runtime offline unsafe core not found');
     assert(exitReloginRuntimeModule.includes('offlineSafety.samplingOutage || offlineSafety.combatTickGap'), 'exit-relogin hold runtime offline unsafe core does not preserve sampling/tick branches');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('function enemyReloginHoldRemainingMsCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime enemy reader core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.readPersistentExitState(helpers.enemyLeaveStateKey)'), 'exit-relogin hold-read runtime enemy reader does not read persistent state');
+    assert(exitReloginRuntimeModule.includes("suppressReason === 'enemy leave' || suppressReason === 'pursuit leave' || suppressReason === 'combat leave'"), 'exit-relogin hold-read runtime enemy reader does not preserve suppress reasons');
+    assert(exitReloginRuntimeModule.includes('function offlineReloginHoldRemainingMsCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime offline reader core not found');
+    assert(exitReloginRuntimeModule.includes('helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)'), 'exit-relogin hold-read runtime offline reader does not preserve stale hold check');
+    assert(exitReloginRuntimeModule.includes("helpers.clearOfflineReloginHold('stale offline suppress contradicted by known stamina')"), 'exit-relogin hold-read runtime offline reader does not preserve stale suppress cleanup');
+    assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern)'), 'exit-relogin hold-read runtime suppress clear core not found');
+    assert(exitReloginRuntimeModule.includes('storage.removeItem(suppressKey)') && exitReloginRuntimeModule.includes('storage.removeItem(suppressReasonKey)'), 'exit-relogin hold-read runtime suppress clear core does not remove both keys');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');

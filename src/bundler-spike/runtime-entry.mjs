@@ -679,6 +679,74 @@ function helperStatus(config = {}) {
     'global sampling outage',
     { samplingOutage: true }
   );
+  const exitReloginHoldBot = {
+    pursuitReloginUntil: 0,
+    offlineReloginUntil: 0,
+    lastEnemyLeaveResult: null,
+    lastOfflineLeaveResult: null
+  };
+  const exitReloginHoldStorage = {
+    values: {
+      suppress: '3000',
+      suppressReason: 'combat leave'
+    },
+    getItem(key) {
+      return this.values[key] ?? null;
+    },
+    removeItem(key) {
+      this.removed = this.removed || [];
+      this.removed.push(key);
+      delete this.values[key];
+    }
+  };
+  const exitReloginEnemyHoldRemaining = exitRelogin.enemyReloginHoldRemainingMsCore(
+    exitReloginHoldBot,
+    exitReloginHoldStorage,
+    {
+      loginSuppressKey: 'suppress',
+      loginSuppressReasonKey: 'suppressReason',
+      enemyLeaveStateKey: 'enemy-state',
+      readPersistentExitState: () => ({ reloginUntil: 2500, reason: 'enemy-leave' }),
+      now: 1000
+    }
+  );
+  exitReloginHoldStorage.values.suppress = '4500';
+  exitReloginHoldStorage.values.suppressReason = 'offline leave';
+  const exitReloginOfflineHoldRemaining = exitRelogin.offlineReloginHoldRemainingMsCore(
+    exitReloginHoldBot,
+    exitReloginHoldStorage,
+    {
+      loginSuppressKey: 'suppress',
+      loginSuppressReasonKey: 'suppressReason',
+      offlineLeaveStateKey: 'offline-state',
+      readPersistentExitState: () => ({ reloginUntil: 2000, reason: 'offline-leave' }),
+      staleOfflineStaminaHoldContradicted: () => false,
+      clearOfflineReloginHold: reason => {
+        exitReloginHoldBot.clearedOfflineReason = reason;
+      },
+      now: 1000
+    }
+  );
+  const exitReloginClearStorage = {
+    values: {
+      suppress: '5000',
+      suppressReason: 'offline leave'
+    },
+    getItem(key) {
+      return this.values[key] ?? null;
+    },
+    removeItem(key) {
+      this.removed = this.removed || [];
+      this.removed.push(key);
+      delete this.values[key];
+    }
+  };
+  const exitReloginClearedSuppress = exitRelogin.clearLoginSuppressMatchingCore(
+    exitReloginClearStorage,
+    'suppress',
+    'suppressReason',
+    /offline.*leave/i
+  );
   const names = targetWhitelist.parseTargetWhitelistNames({
     names: [' Firefox\u200e ', 'Firefox', '文月']
   }, 10);
@@ -788,6 +856,12 @@ function helperStatus(config = {}) {
     exitReloginBudgetHoldUntil: exitReloginBudgetHold?.until,
     exitReloginStaminaHoldReason: exitReloginStaminaHold?.reason,
     exitReloginOfflineUnsafe,
+    exitReloginEnemyHoldRemaining,
+    exitReloginEnemyHoldBotUntil: exitReloginHoldBot.pursuitReloginUntil,
+    exitReloginOfflineHoldRemaining,
+    exitReloginOfflineHoldBotUntil: exitReloginHoldBot.offlineReloginUntil,
+    exitReloginClearedSuppress,
+    exitReloginClearRemovedCount: arrayCountRuntime.arrayCount(exitReloginClearStorage.removed || []),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
