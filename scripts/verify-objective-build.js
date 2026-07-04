@@ -1116,10 +1116,10 @@ function main() {
     assert(postAttackInlineBody.includes('postAttackDropHelperSource'), 'post-attack inline source factory does not inject drop helpers');
     assert(postAttackInlineBody.includes('coinMotionMetaCore(dir)'), 'post-attack source factory does not use coin motion metadata core directly');
     assert(functionBody(postAttackSourceModule, 'bundledPostAttackSource').includes("require('./src/browser/runtime/post-attack-drop')"), 'post-attack bundled source does not hand post-attack-drop helpers to the bundler');
-    assert(opportunityActionsSourceModule.includes('function opportunityActionsSource() {'), 'opportunity-actions source factory not found');
+    assert(opportunityActionsSourceModule.includes('function opportunityActionsSource(options = {}) {'), 'opportunity-actions source factory not found');
     assert(opportunityActionsSourceModule.includes('module.exports = { opportunityActionsSource }'), 'opportunity-actions source module export not found');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('String.raw`'), 'opportunity-actions source factory does not return raw browser source');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function enemyOpportunityCandidates'), 'opportunity-actions source factory does not include enemy candidate helper');
+    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('localEnemyOpportunityCandidatesSource'), 'opportunity-actions source factory does not keep local enemy candidate fallback');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('coinMotionMetaCore(dir)'), 'opportunity-actions source factory does not use coin motion metadata core directly');
     assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
@@ -2495,7 +2495,7 @@ function main() {
     check(`${file} plans bounded native visible coin routes inside opportunity scoring`, () => {
       const routeCoreSource = file === 'grasp-rat-bot.js' ? strategyCoinRouteSource : finalRuntimeText;
       const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
-      const bestBody = functionBody(text, 'bestCoinOpportunityScore');
+      const bestBody = file === 'grasp-rat-bot.js' ? functionBody(text, 'bestCoinOpportunityScore') : '';
       const pickBody = file === 'grasp-rat-bot.js' ? functionBody(text, 'pickBestOpportunity') : '';
       const pickCoreSource = file === 'grasp-rat-bot.js' ? strategyOpportunityPickSource : finalRuntimeText;
       const pickCoreBody = functionBody(pickCoreSource, 'pickBestOpportunityCore');
@@ -2541,10 +2541,14 @@ function main() {
           assert(!text.includes(`function ${wrapperName}(`), `generated runtime still declares unused ${wrapperName} wrapper`);
           assert(!finalRuntimeText.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
         }
-        assert(text.includes('pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {'), 'generated profitable combat comparison does not call coin route core directly');
+        assert(text.includes('pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey }), activeThreats, {'), 'generated profitable combat comparison does not call coin route core directly');
         assert(text.includes('pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {'), 'generated opportunity pick option does not bind coin route core directly');
-        assert(finalRuntimeText.includes('pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {'), 'bundled dist profitable combat comparison does not call coin route core directly');
+        assert(finalRuntimeText.includes('pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey }), activeThreats, {'), 'bundled dist profitable combat comparison does not call coin route core directly');
         assert(finalRuntimeText.includes('pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {'), 'bundled dist opportunity pick option does not bind coin route core directly');
+        for (const wrapperName of ['uniqueVisibleRouteCoins', 'bestCoinOpportunityScore']) {
+          assert(!text.includes(`function ${wrapperName}(`), `generated runtime still declares unused ${wrapperName} wrapper`);
+          assert(!finalRuntimeText.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+        }
       }
       assert(pickBody.includes('pickCoinRouteOpportunity') || pickCoreBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
       assert(pickBody.includes('buildOpportunityCandidatesCore') || pickCoreBody.includes('buildOpportunityCandidatesCore'), 'visible opportunity selection does not use opportunity candidate core');
@@ -4192,9 +4196,17 @@ function main() {
     assert(!generatedRuntimeSource.includes('function attackWorthTakingCore'), 'generated remote runtime still inlines attack-worth core before bundling');
     assert(distSource.includes('function attackWorthTakingCore'), 'bundled dist does not contain attack-worth core');
     assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('attackWorthTakingCore(self, e, {'), 'target-selection source does not call attack-worth core directly');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('attackWorthTakingCore(self, { ...raw, drop }, {'), 'opportunity-actions source does not call attack-worth core directly');
+    assert(
+      functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('attackWorthTakingCore(self, { ...raw, drop }, {')
+        || functionBody(chooseActionSourceModule, 'chooseActionSource').includes('attackWorthTakingCore(candidateSelf, { ...raw, drop }, {'),
+      'opportunity-actions/choose-action source does not call attack-worth core directly'
+    );
     assert(distSource.includes('attackWorthTakingCore(self, e, {'), 'bundled dist target-selection does not call attack-worth core directly');
-    assert(distSource.includes('attackWorthTakingCore(self, { ...raw, drop }, {'), 'bundled dist opportunity-actions does not call attack-worth core directly');
+    assert(
+      distSource.includes('attackWorthTakingCore(self, { ...raw, drop }, {')
+        || distSource.includes('attackWorthTakingCore(candidateSelf, { ...raw, drop }, {'),
+      'bundled dist opportunity candidate path does not call attack-worth core directly'
+    );
     assert(!distSource.includes('const attackWorthTaking ='), 'dist remote bot still keeps attack-worth wrapper');
   });
 
@@ -4328,6 +4340,16 @@ function main() {
     assert(sourceRuntimeText.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-candidates')"), 'generated remote runtime does not hand opportunity candidate helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function buildOpportunityCandidatesCore'), 'generated remote runtime still inlines opportunity candidate core before bundling');
+    for (const wrapperName of ['uniqueVisibleRouteCoins', 'bestCoinOpportunityScore', 'enemyOpportunityCandidates']) {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
+      assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+    }
+    assert(generatedRuntimeSource.includes('uniqueVisibleRouteCoinsCore(routeCoinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })'), 'generated opportunity pick options do not bind route coin core directly');
+    assert(generatedRuntimeSource.includes('bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self))'), 'generated profitable combat comparison does not bind best coin score core directly');
+    assert(generatedRuntimeSource.includes('attackWorthTakingCore(candidateSelf, { ...raw, drop }, {'), 'generated opportunity pick options do not bind enemy candidate filter directly');
+    assert(distSource.includes('uniqueVisibleRouteCoinsCore(routeCoinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })'), 'bundled dist opportunity pick options do not bind route coin core directly');
+    assert(distSource.includes('bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self))'), 'bundled dist profitable combat comparison does not bind best coin score core directly');
+    assert(distSource.includes('attackWorthTakingCore(candidateSelf, { ...raw, drop }, {'), 'bundled dist opportunity pick options do not bind enemy candidate filter directly');
     assert(distSource.includes('function buildOpportunityCandidatesCore'), 'bundled dist does not contain opportunity candidate combiner core');
     assert(distSource.includes('function buildCoinOpportunityCandidatesCore'), 'bundled dist does not contain coin opportunity candidate core');
     assert(distSource.includes('function buildEnemyOpportunityCandidatesCore'), 'bundled dist does not contain enemy opportunity candidate core');

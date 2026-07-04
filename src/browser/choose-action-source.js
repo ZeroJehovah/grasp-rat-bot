@@ -50,6 +50,38 @@ function chooseActionSource(options = {}) {
           heldRouteChoice: currentHeldCoinRouteChoice()
         })`
     : 'pickCoinRouteOpportunity';
+  const uniqueVisibleRouteCoinsOption = options.bundledRuntime
+    ? String.raw`routeCoinGroups => uniqueVisibleRouteCoinsCore(routeCoinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })`
+    : 'uniqueVisibleRouteCoins';
+  const enemyOpportunityCandidatesOption = options.bundledRuntime
+    ? String.raw`(candidateSelf, targets, candidateThreats) => {
+          const byId = new Map();
+          for (const raw of targets) {
+            const id = raw?.user_id;
+            if (!id && id !== 0) continue;
+            const drop = Number(raw.drop ?? dropValue(raw) ?? 0);
+            const distance = Number(raw.distance ?? Infinity);
+            if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
+            if (isWhitelistedTarget(raw)) continue;
+            if (isInvulnerable(raw)) continue;
+            if (!attackWorthTakingCore(candidateSelf, { ...raw, drop }, {
+              isWhitelistedTarget,
+              dropValue,
+              isAfkProfitTarget,
+              attackMinAfkDrop: cfg.attackMinAfkDrop,
+              attackMinDrop: cfg.attackMinDrop,
+              attackMinRewardRatio: cfg.attackMinRewardRatio
+            })) continue;
+            if (candidateThreats.some(threat => dist(raw, threat) <= cfg.attackDangerRadius)) continue;
+            const item = { ...raw, drop, distance };
+            const previous = byId.get(String(id));
+            if (!previous || item.drop > previous.drop || item.distance < previous.distance || !item.minimapOnly) {
+              byId.set(String(id), item);
+            }
+          }
+          return Array.from(byId.values());
+        }`
+    : 'enemyOpportunityCandidates';
   const snapshotCoinNavigationReasonCall = options.bundledRuntime
     ? 'snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'
     : 'snapshotCoinNavigationReason(localRealtimeCoin)';
@@ -520,8 +552,8 @@ function chooseActionSource(options = {}) {
       : [realtimeInactiveTargets, realtimeGlobalTargets];
     const opportunity = typeof pickBestOpportunityCore === 'function'
       ? pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups, {
-        enemyOpportunityCandidates,
-        uniqueVisibleRouteCoins,
+        enemyOpportunityCandidates: ${enemyOpportunityCandidatesOption},
+        uniqueVisibleRouteCoins: ${uniqueVisibleRouteCoinsOption},
         pickCoinRouteOpportunity: ${pickCoinRouteOpportunityOption},
         opportunityCandidateCoreOptions,
         buildCoinAction,
