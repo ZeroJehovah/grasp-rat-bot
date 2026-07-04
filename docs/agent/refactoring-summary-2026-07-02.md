@@ -1521,3 +1521,9 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - Bundled pending-exit, pending-exit persistence, and Clash leave retry display paths now call the pending-exit cores directly; local CDP generation keeps wrapper fallbacks.
 - Final production dist no longer declares `pendingExitRetryMs()` or `pendingExitDisplayReason()`, and verifier now rejects those production wrappers.
 - Strategy self-tests cover pending-exit retry floors, display fallback, reload/combat-cover summary normalization, and last-error propagation.
+
+`bootstrap-0.4.495` removes the remaining bundled pending-exit summary wrapper:
+
+- `src/browser/pending-exit-summary-call-source.js` generates direct `summarizePendingExitCore(...)` call expressions with explicit retry/reload options and unique runtime aliases per fragment.
+- Bundled bot status, combat-log, control-login, tick, leave-command, and pending-exit internals no longer call a production `summarizePendingExit()` function.
+- The local CDP/inline generation path still keeps the wrapper fallback, while the production verifier rejects `function summarizePendingExit(` in generated/final dist.

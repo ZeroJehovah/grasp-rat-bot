@@ -1,8 +1,14 @@
 'use strict';
 
+const {
+  pendingExitSummaryPreludeSource,
+  summarizePendingExitCall
+} = require('./pending-exit-summary-call-source');
+
 function botObjectSource(options = {}) {
+  const pendingExitSummaryPrelude = pendingExitSummaryPreludeSource('BotObject', options);
   const runtimePrelude = options.bundledRuntime
-    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require('./src/browser/runtime/exit-motion');\n  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForStatusCore } = require('./src/browser/runtime/exit-motion');\n  const { readEnemyLeaveStreakBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPrelude + "\n"
     : '';
   const enemyLeaveStreakStatus = options.bundledRuntime
     ? 'readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY })'
@@ -493,7 +499,7 @@ function botObjectSource(options = {}) {
           lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
           lastResult: this.lastLoginResult
         },
-        pendingExit: summarizePendingExit(this.pendingExit),
+        pendingExit: ${summarizePendingExitCall('this.pendingExit', { ...options, alias: 'BotObject' })},
         offlineLeave: {
           lastAt: this.lastOfflineLeaveAt || 0,
           lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
