@@ -263,6 +263,12 @@ async function selfTest() {
   assert(status.exitReloginPendingUnsafeHpDelay === 2000, 'spike did not preserve pending unsafe hp delay');
   assert(status.exitReloginPendingUnsafeEnemyReason === 'combat leave', 'spike did not preserve pending unsafe enemy leave reason');
   assert(status.exitReloginPendingUnsafeEventCount === 1, 'spike did not execute pending unsafe suppress side effect');
+  assert(status.exitReloginAuditId === 'audit-spike', 'spike did not return exit audit id');
+  assert(status.exitReloginAuditResetReason === 'exit-trigger:offline unsafe', 'spike did not reset login snapshot gate for exit trigger');
+  assert(status.exitReloginAuditResetSelfHp === 77, 'spike did not pass last self into exit audit reset');
+  assert(status.exitReloginAuditMetaSource === 'spike', 'spike did not preserve exit audit meta');
+  assert(status.exitReloginAuditEventAt === 4321, 'spike did not preserve exit audit trigger timestamp');
+  assert(status.exitReloginAuditEventCount === 2, 'spike did not execute exit audit reset and event side effects');
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
   assert(status.exitReloginOfflineUnsafe === true, 'spike did not execute exit relogin unsafe offline delay predicate');

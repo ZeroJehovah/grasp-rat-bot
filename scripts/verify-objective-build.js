@@ -1581,6 +1581,7 @@ function main() {
     assert(exitReloginHoldInlineBody.includes('function setExitReloginSuppress'), 'exit-relogin hold inline source does not include suppress writer');
     assert(exitReloginHoldInlineBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold inline source does not include unsafe minimum helper');
     assert(exitReloginHoldInlineBody.includes('function pendingExitSuppressReason'), 'exit-relogin hold inline source does not include pending suppress helper');
+    assert(exitReloginHoldInlineBody.includes('function startExitAudit'), 'exit-relogin hold inline source does not include start exit audit helper');
     assert(exitReloginHoldInlineBody.includes('function primePendingUnsafeExitLoginSuppress'), 'exit-relogin hold inline source does not include pending unsafe suppress helper');
     assert(exitReloginHoldInlineBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold inline source does not include stamina budget hold helper');
     assert(exitReloginHoldInlineBody.includes('function staminaExitHoldUntilForDetail'), 'exit-relogin hold inline source does not include stamina hold selector');
@@ -1592,6 +1593,8 @@ function main() {
     assert(exitReloginHoldBundledBody.includes('isExitLoginSuppressReasonCore(reason)'), 'exit-relogin hold bundled source does not bind suppress reason matcher');
     assert(exitReloginHoldBundledBody.includes('unsafeExitReloginMinDelayMsCore(cfg)'), 'exit-relogin hold bundled source does not bind unsafe minimum helper');
     assert(exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore(storageReason)'), 'exit-relogin hold bundled source does not bind pending suppress helper');
+    assert(exitReloginHoldBundledBody.includes('startExitAuditCore(detail, meta'), 'exit-relogin hold bundled source does not bind start exit audit core');
+    assert(exitReloginHoldBundledBody.includes('resetLoginSnapshotGate') && exitReloginHoldBundledBody.includes('loginPointSafetyExitSelfForDetail') && exitReloginHoldBundledBody.includes('recordExitAuditEvent'), 'exit-relogin hold bundled source does not pass required exit audit bindings');
     assert(exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options'), 'exit-relogin hold bundled source does not bind pending unsafe suppress core');
     assert(exitReloginHoldBundledBody.includes('hpInfoForRelogin') && exitReloginHoldBundledBody.includes('reloginDelayForHp') && exitReloginHoldBundledBody.includes('setLoginSuppress'), 'exit-relogin hold bundled source does not pass required pending unsafe suppress bindings');
     assert(exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs)'), 'exit-relogin hold bundled source does not bind stamina budget hold helper');
@@ -1685,6 +1688,10 @@ function main() {
     assert(exitReloginRuntimeModule.includes('function unsafeExitReloginMinDelayMsCore(cfg)'), 'exit-relogin hold runtime unsafe minimum core not found');
     assert(exitReloginRuntimeModule.includes('function pendingExitSuppressReasonCore(storageReason)'), 'exit-relogin hold runtime pending suppress core not found');
     assert(exitReloginRuntimeModule.includes('pending unsafe hostile exit'), 'exit-relogin hold runtime pending suppress core does not preserve hostile reason');
+    assert(exitReloginRuntimeModule.includes('function startExitAuditCore(detail, meta = {}, helpers)'), 'exit-relogin hold runtime start exit audit core not found');
+    assert(exitReloginRuntimeModule.includes("'exit-trigger:' + (meta.reason || detail.reason || '')"), 'exit-relogin hold runtime start exit audit core does not preserve reset reason');
+    assert(exitReloginRuntimeModule.includes('helpers.loginPointSafetyExitSelfForDetail(detail, meta, helpers.lastSelf)'), 'exit-relogin hold runtime start exit audit core does not pass self HP into login-point safety reset');
+    assert(exitReloginRuntimeModule.includes("helpers.recordExitAuditEvent('exit-trigger', detail"), 'exit-relogin hold runtime start exit audit core does not record trigger event');
     assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress core not found');
     assert(exitReloginRuntimeModule.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve longest-delay rule');
     assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressReason = suppressReason;'), 'exit-relogin hold runtime pending unsafe suppress core does not write suppress reason');
@@ -1724,7 +1731,7 @@ function main() {
     assert(exitReloginRuntimeModule.includes('bot.lastOfflineLeaveResult.reloginUntil = 0;'), 'exit-relogin clear runtime offline core does not clear reloginUntil');
     assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.offlineLeaveStateKey)'), 'exit-relogin clear runtime offline core does not clear persistent offline state');
     assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear runtime offline core does not clear offline login suppress');
-    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  primePendingUnsafeExitLoginSuppressCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  setOfflineLeaveSuppressCore,\n  primePendingStaminaExitLoginSuppressCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
+    assert(exitReloginRuntimeModule.includes('leaveWaitDisplayCore,\n  finalizeLeaveDisplayReasonCore,\n  normalizeEnemyActorCore,\n  enemyActorFromLeaveDetailCore,\n  enemyRepeatDelayMsForCountCore,\n  readEnemyLeaveStreakCore,\n  writeEnemyLeaveStreakCore,\n  updateEnemyLeaveStreakCore,\n  combatExitSummaryCore,\n  combatLeaveActionCore,\n  pursuitLeaveSummaryCore,\n  injuryLeaveSummaryCore,\n  offlineLeaveSummaryCore,\n  currentOfflineDisplayReasonCore,\n  reloginDelayForHpCore,\n  isExitLoginSuppressReasonCore,\n  unsafeExitReloginMinDelayMsCore,\n  pendingExitSuppressReasonCore,\n  startExitAuditCore,\n  primePendingUnsafeExitLoginSuppressCore,\n  staminaBudgetExitHoldUntilCore,\n  staminaExitHoldUntilForDetailCore,\n  offlineExitRequiresUnsafeReloginDelayCore,\n  enemyReloginHoldRemainingMsCore,\n  offlineReloginHoldRemainingMsCore,\n  clearLoginSuppressMatchingCore,\n  setOfflineLeaveSuppressCore,\n  primePendingStaminaExitLoginSuppressCore,\n  clearEnemyReloginHoldCore,\n  clearOfflineReloginHoldCore'), 'exit-relogin runtime core exports not found');
     assert(pendingExitSourceModule.includes('function pendingExitSource() {'), 'pending-exit source factory not found');
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
@@ -2410,9 +2417,14 @@ function main() {
       );
     });
     check(`${file} records exit audit events and blocks login/reload until flushed`, () => {
+      const auditTriggerSource = `${text}\n${finalRuntimeText}`;
       assert(text.includes('EXIT_AUDIT_PENDING_LOGS_KEY'), 'exit audit persistence key not found');
       assert(text.includes("type: 'exit-audit'"), 'exit audit event type not found');
-      assert(text.includes("recordExitAuditEvent('exit-trigger'"), 'exit trigger audit event not recorded');
+      assert(
+        auditTriggerSource.includes('recordExitAuditEvent')
+          && auditTriggerSource.includes('exit-trigger'),
+        'exit trigger audit event not recorded'
+      );
       assert(text.includes("recordExitAuditEvent('leave-request'"), 'leave request audit event not recorded');
       assert(text.includes("recordExitAuditEvent('exit-confirmed'"), 'exit confirmation audit event not recorded');
       const queueBody = functionBody(text, 'queueCombatLogEntry');
@@ -3052,9 +3064,16 @@ function main() {
       assert(functionBody(text, 'blockNativeLoginEventIfNeeded').includes('event?.isTrusted'), 'trusted native manual login events can still be blocked');
       assert(functionBody(text, 'installStartLinuxDoLoginGate').includes('manualLoginBypassActive()'), 'startLinuxDoLogin gate does not honor manual login bypass');
       assert(text.includes('installNativeLoginGateInterceptors();'), 'remote bot does not install native login gate interceptors on startup');
-      const triggerBody = functionBody(text, 'startExitAudit');
-      assert(triggerBody.includes('resetLoginSnapshotGate') && triggerBody.includes("'exit-trigger:'"), 'exit trigger does not reset login snapshot gate');
-      assert(triggerBody.includes('loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)'), 'exit trigger does not pass self HP into login-point safety reset');
+      const triggerSource = finalRuntimeText.includes('function startExitAuditCore')
+        ? `${functionBody(text, 'startExitAudit')}\n${functionBody(finalRuntimeText, 'startExitAuditCore')}`
+        : `${functionBody(text, 'startExitAudit')}\n${exitReloginRuntimeModule}`;
+      const triggerBody = triggerSource;
+      assert(triggerBody.includes('resetLoginSnapshotGate') && triggerBody.includes('exit-trigger:'), 'exit trigger does not reset login snapshot gate');
+      assert(
+        triggerBody.includes('loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)')
+          || triggerBody.includes('helpers.loginPointSafetyExitSelfForDetail(detail, meta, helpers.lastSelf)'),
+        'exit trigger does not pass self HP into login-point safety reset'
+      );
       const confirmBody = functionBody(text, 'confirmPendingExit');
       assert(confirmBody.includes('resetLoginSnapshotGate') && confirmBody.includes("'exit-confirmed:'"), 'exit confirmation does not reset login snapshot gate');
       assert(confirmBody.includes('loginPointSafetyExitSelfForDetail(detail, { self: pending.self || state?.self || null }, bot.lastSelf)'), 'exit confirmation does not pass self HP into login-point safety reset');

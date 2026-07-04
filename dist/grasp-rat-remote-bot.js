@@ -1630,6 +1630,20 @@
         }
         return "pending unsafe exit";
       }
+      function startExitAuditCore(detail, meta = {}, helpers) {
+        if (!detail || typeof detail !== "object") return null;
+        detail.loginSnapshotGateReset = helpers.resetLoginSnapshotGate(
+          "exit-trigger:" + (meta.reason || detail.reason || ""),
+          helpers.loginPointSafetyExitSelfForDetail(detail, meta, helpers.lastSelf)
+        );
+        helpers.ensureExitAuditDetail(detail, meta);
+        const now = typeof helpers.now === "function" ? helpers.now() : Number(helpers.now || 0) || Date.now();
+        helpers.recordExitAuditEvent("exit-trigger", detail, {
+          ...meta,
+          at: Number(detail.exitTriggeredAt || detail.at || now)
+        });
+        return detail.exitAuditId;
+      }
       function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers) {
         if (!detail || !detail.attempted) return 0;
         const fixedDelayRaw = Number(options.fixedDelayMs ?? NaN);
@@ -1854,6 +1868,7 @@
         isExitLoginSuppressReasonCore,
         unsafeExitReloginMinDelayMsCore,
         pendingExitSuppressReasonCore,
+        startExitAuditCore,
         primePendingUnsafeExitLoginSuppressCore,
         staminaBudgetExitHoldUntilCore,
         staminaExitHoldUntilForDetailCore,
@@ -4471,7 +4486,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.431" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.432" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10075,6 +10090,7 @@
       isExitLoginSuppressReasonCore,
       unsafeExitReloginMinDelayMsCore,
       pendingExitSuppressReasonCore,
+      startExitAuditCore,
       primePendingUnsafeExitLoginSuppressCore,
       staminaBudgetExitHoldUntilCore,
       staminaExitHoldUntilForDetailCore,
@@ -10216,17 +10232,14 @@
       return pendingExitSuppressReasonCore(storageReason);
     }
     function startExitAudit(detail, meta = {}) {
-      if (!detail || typeof detail !== "object") return null;
-      detail.loginSnapshotGateReset = resetLoginSnapshotGate(
-        "exit-trigger:" + (meta.reason || detail.reason || ""),
-        loginPointSafetyExitSelfForDetail(detail, meta, bot.lastSelf)
-      );
-      ensureExitAuditDetail(detail, meta);
-      recordExitAuditEvent("exit-trigger", detail, {
-        ...meta,
-        at: Number(detail.exitTriggeredAt || detail.at || Date.now())
+      return startExitAuditCore(detail, meta, {
+        resetLoginSnapshotGate,
+        loginPointSafetyExitSelfForDetail,
+        ensureExitAuditDetail,
+        recordExitAuditEvent,
+        lastSelf: bot.lastSelf,
+        now: Date.now
       });
-      return detail.exitAuditId;
     }
     function primePendingUnsafeExitLoginSuppress(storageReason, reason, detail, selfLike = null, options = {}) {
       return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {
