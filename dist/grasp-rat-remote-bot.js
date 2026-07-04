@@ -4746,7 +4746,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.443" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.444" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10356,16 +10356,13 @@
       staminaExitHoldUntilForDetailBoundCore,
       offlineExitRequiresUnsafeReloginDelayCore
     } = require_exit_relogin();
-    function isExitLoginSuppressReason(reason) {
-      return isExitLoginSuppressReasonCore(reason);
-    }
     function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
       return setExitReloginSuppressCore(bot, localStorage, storageReason, reason, detail, selfLike, options, {
         loginSuppressKey: LOGIN_SUPPRESS_KEY,
         loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
         enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
         offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-        isExitLoginSuppressReason,
+        isExitLoginSuppressReason: isExitLoginSuppressReasonCore,
         hpInfoForRelogin,
         reloginDelayForHp,
         updateEnemyLeaveStreak,

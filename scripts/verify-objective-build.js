@@ -1590,7 +1590,8 @@ function main() {
     assert(exitReloginHoldInlineBody.includes('pending unsafe hostile exit'), 'exit-relogin hold inline source does not preserve pending hostile suppress reason');
     const exitReloginHoldBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldSource');
     assert(exitReloginHoldBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold bundled source does not hand hold helpers to the bundler');
-    assert(exitReloginHoldBundledBody.includes('isExitLoginSuppressReasonCore(reason)'), 'exit-relogin hold bundled source does not bind suppress reason matcher');
+    assert(exitReloginHoldBundledBody.includes('isExitLoginSuppressReason: isExitLoginSuppressReasonCore'), 'exit-relogin hold bundled source does not bind suppress reason matcher core directly');
+    assert(!exitReloginHoldBundledBody.includes('function isExitLoginSuppressReason'), 'exit-relogin hold bundled source should not keep unused suppress reason wrapper');
     assert(!exitReloginHoldBundledBody.includes('unsafeExitReloginMinDelayMsCore,'), 'exit-relogin hold bundled source should not import unused unsafe minimum helper');
     assert(!exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore,'), 'exit-relogin hold bundled source should not import unused pending suppress helper');
     assert(!exitReloginHoldBundledBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold bundled source should not keep unused unsafe minimum wrapper');
