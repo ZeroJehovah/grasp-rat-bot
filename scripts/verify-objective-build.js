@@ -382,7 +382,6 @@ async function main() {
   const startupSourceModule = readText('src/browser/startup-source.js');
   const botObjectSourceModule = readText('src/browser/bot-object-source.js');
   const controlLoginSourceModule = readText('src/browser/control-login-source.js');
-  const controlLoginRuntimeSourceModule = readText('src/browser/control-login-runtime-source.js');
   const exitReloginDisplayCallSourceModule = readText('src/browser/exit-relogin-display-call-source.js');
   const exitReloginHoldReadCallSourceModule = readText('src/browser/exit-relogin-hold-read-call-source.js');
   const nativeStateSourceModule = readText('src/browser/native-state-source.js');
@@ -496,7 +495,6 @@ async function main() {
     startupSourceModule,
     botObjectSourceModule,
     controlLoginSourceModule,
-    controlLoginRuntimeSourceModule,
     nativeStateSourceModule,
     nativeControlSourceModule,
     coinMotionRuntimeSourceModule,
@@ -694,7 +692,7 @@ async function main() {
     assert(exitSummaryRuntimeModule.includes('staminaExhaustedLongWindows') && exitSummaryRuntimeModule.includes('staminaExhaustedWindowLabel') && exitSummaryRuntimeModule.includes('staminaEvidenceRemaining') && exitSummaryRuntimeModule.includes('staminaHoldContradictedByStaminaEvidence') && exitSummaryRuntimeModule.includes('offlineLeaveSummaryText') && exitSummaryRuntimeModule.includes('combatLogExitSummaryFromDecision'), 'browser exit-summary helper module exports are incomplete');
     assert(!fs.existsSync(path.join(ROOT, 'src/browser/combat-log-runtime-source.js')), 'obsolete combat-log runtime wrapper still exists');
     assert(combatLogSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log source does not expose a bundler-owned exit-summary require');
-    assert(controlLoginRuntimeSourceModule.includes("require('./control-login-source')"), 'control-login runtime source module import not found');
+    assert(!fs.existsSync(path.join(ROOT, 'src/browser/control-login-runtime-source.js')), 'obsolete control-login runtime wrapper still exists');
     assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-bootstrap-bindings')"), 'runtime bootstrap source does not expose the bundled bootstrap binding require');
     assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./exit-summary')"), 'runtime bootstrap bindings do not import exit-summary');
     assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./browser-preserved-state')"), 'runtime bootstrap bindings do not import preserved-state');
@@ -753,7 +751,8 @@ async function main() {
     assert(runtimeFragmentRegistryModule.includes("require('./tick-source')"), 'tick source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./startup-source')"), 'startup source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./bot-object-source')"), 'bot-object source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("require('./control-login-runtime-source')"), 'control-login runtime source module import not found');
+    assert(runtimeFragmentRegistryModule.includes("require('./control-login-source')"), 'control-login source module import not found');
+    assert(!runtimeFragmentRegistryModule.includes("require('./control-login-runtime-source')"), 'runtime fragment registry still imports obsolete control-login runtime wrapper');
     assert(runtimeFragmentRegistryModule.includes("require('./native-state-source')"), 'native-state source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./native-control-source')"), 'native-control source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./coin-motion-runtime-source')"), 'coin-motion runtime source module import not found');
@@ -803,7 +802,7 @@ async function main() {
     assert(!fragmentEntriesBody.includes('runtime-utility-clone'), 'obsolete empty runtime-utility-clone fragment is still registered');
     assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['combat-history', () => combatHistorySource(config)]"), 'combat-history fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['control-login-runtime', () => controlLoginRuntimeSource(config)]"), 'control-login-runtime fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['control-login-runtime', () => controlLoginSource(config)]"), 'control-login-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-motion-runtime', () => coinMotionRuntimeSource(config)]"), 'coin-motion-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-target-runtime', () => coinTargetRuntimeSource(config)]"), 'coin-target-runtime fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['coin-progress-runtime', () => coinProgressRuntimeSource(config)]"), 'coin-progress-runtime fragment is not config-aware for bundled runtime migration');
@@ -822,7 +821,7 @@ async function main() {
       ['runtime-utils', runtimeUtilsSourceModule],
       ['status-panel-runtime', statusPanelSourceModule],
       ['combat-log-runtime', combatLogSourceModule],
-      ['control-login-runtime', controlLoginRuntimeSourceModule],
+      ['control-login-runtime', controlLoginSourceModule],
       ['combat-history', combatHistorySourceModule],
       ['entity-refresh', entityRefreshSourceModule],
       ['coin-safety', coinSafetySourceModule],
@@ -887,12 +886,12 @@ async function main() {
     assert(combatLogSourceModule.includes('module.exports = {\n  combatLogSource\n}'), 'combat-log source export not found');
     assert(combatLogSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log source does not expose a bundler-owned exit-summary require');
     assert(!combatLogSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log source still keeps inline exit-summary binding');
-    assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
-    assert(!controlLoginRuntimeSourceModule.includes('bundledControlLoginRuntimeSource'), 'control-login runtime bundled selector wrapper should be removed');
-    assert(!controlLoginRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'control-login runtime should not import stamina helper for inline injection');
-    assert(controlLoginRuntimeSourceModule.includes('module.exports = {\n  controlLoginRuntimeSource\n}'), 'control-login runtime source export not found');
-    assert(!controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime still keeps inline stamina helper binding');
-    assert(controlLoginRuntimeSourceModule.includes('controlLoginSource()'), 'control-login runtime source does not use bundled-only source factory');
+    assert(controlLoginSourceModule.includes('function controlLoginSource()'), 'control-login source factory not found');
+    assert(!controlLoginSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login source should not keep obsolete runtime wrapper factory');
+    assert(!controlLoginSourceModule.includes('bundledControlLoginRuntimeSource'), 'control-login bundled selector wrapper should be removed');
+    assert(!controlLoginSourceModule.includes("require('./runtime/exit-summary')"), 'control-login source should not import stamina helper for inline injection');
+    assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource\n}'), 'control-login source export not found');
+    assert(!controlLoginSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login source still keeps inline stamina helper binding');
     assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-bootstrap-bindings')"), 'runtime-bootstrap source does not require bootstrap binding module');
     assert(runtimeBootstrapSourceModule.includes('createRuntimeBootstrapBindings('), 'runtime-bootstrap source does not create bootstrap bindings');
     assert(runtimeBootstrapSourceModule.includes('pageGlobalObject') && runtimeBootstrapSourceModule.includes('targetWhitelistState') && runtimeBootstrapSourceModule.includes('runtimeBootstrapBindings'), 'runtime-bootstrap source does not destructure bootstrap bindings');
@@ -973,7 +972,7 @@ async function main() {
       'tickSource',
       'startupSource',
       'botObjectSource',
-      'controlLoginRuntimeSource',
+      'controlLoginSource',
       'nativeStateSource',
       'nativeControlSource',
       'coinMotionRuntimeSource',
@@ -1115,7 +1114,6 @@ async function main() {
       ['startup', startupSourceModule, 'startupSource'],
       ['bot-object', botObjectSourceModule, 'botObjectSource'],
       ['control-login', controlLoginSourceModule, 'controlLoginSource'],
-      ['control-login-runtime', controlLoginRuntimeSourceModule, 'controlLoginRuntimeSource'],
       ['native-state', nativeStateSourceModule, 'nativeStateSource'],
       ['native-control', nativeControlSourceModule, 'nativeControlSource'],
       ['coin-motion-runtime', coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource'],
