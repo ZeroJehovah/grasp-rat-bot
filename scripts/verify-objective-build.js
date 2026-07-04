@@ -278,6 +278,7 @@ async function main() {
   const runtimeFragmentsSourceModule = readText('src/browser/runtime-fragments-source.js');
   const runtimeFragmentRegistryModule = readText('src/browser/runtime-fragment-registry.js');
   const runtimeBootstrapSourceModule = readText('src/browser/runtime-bootstrap-source.js');
+  const runtimeBootstrapBindingsRuntimeModule = readText('src/browser/runtime/runtime-bootstrap-bindings.js');
   const nodeSelfTestSource = readText('src/node/run-self-test.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
   const remoteBundleSource = readText('scripts/remote-bot-bundle.js');
@@ -421,6 +422,7 @@ async function main() {
     runtimeFragmentsSourceModule,
     runtimeFragmentRegistryModule,
     runtimeBootstrapSourceModule,
+    runtimeBootstrapBindingsRuntimeModule,
     browserPageGlobalCoreSource,
     targetWhitelistRuntimeModule,
     exitSummaryRuntimeModule,
@@ -699,15 +701,16 @@ async function main() {
     assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
     assert(combatLogRuntimeSourceModule.includes("require('./combat-log-source')"), 'combat-log runtime source module import not found');
     assert(controlLoginRuntimeSourceModule.includes("require('./control-login-source')"), 'control-login runtime source module import not found');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'runtime bootstrap source does not expose a bundler-owned exit-summary require');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/browser-preserved-state')"), 'runtime bootstrap source does not expose a bundler-owned preserved-state require');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-bootstrap-bindings')"), 'runtime bootstrap source does not expose the bundled bootstrap binding require');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./exit-summary')"), 'runtime bootstrap bindings do not import exit-summary');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./browser-preserved-state')"), 'runtime bootstrap bindings do not import preserved-state');
     assert(browserPreservedStateRuntimeModule.includes("require('../../shared/browser-preserved-state')"), 'browser preserved-state helper module does not reuse shared preserved-state helper');
     assert(browserPreservedStateRuntimeModule.includes('buildBrowserPreservedState'), 'browser preserved-state helper module export is incomplete');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-defaults')"), 'runtime bootstrap source does not expose a bundler-owned runtime-defaults require');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./runtime-defaults')"), 'runtime bootstrap bindings do not import runtime-defaults');
     assert(runtimeDefaultsRuntimeModule.includes("require('../../shared/runtime-defaults')"), 'browser runtime-defaults helper module does not reuse shared runtime defaults helper');
     assert(runtimeDefaultsRuntimeModule.includes('buildRuntimeDefaults'), 'browser runtime-defaults helper module export is incomplete');
-    assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/target-whitelist')"), 'runtime bootstrap source does not expose a bundler-owned target-whitelist require');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("require('../page-global-core')"), 'runtime bootstrap bindings do not import page-global core');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./target-whitelist')"), 'runtime bootstrap bindings do not import target-whitelist');
     assert(targetWhitelistRuntimeModule.includes("require('../../shared/target-whitelist')"), 'browser target-whitelist helper module does not reuse shared target-whitelist helpers');
     assert(targetWhitelistRuntimeModule.includes('normalizeTargetWhitelistName') && targetWhitelistRuntimeModule.includes('parseTargetWhitelistNames') && targetWhitelistRuntimeModule.includes('deriveTargetWhitelistUrl'), 'browser target-whitelist helper module exports are incomplete');
     assert(runtimeFragmentRegistryModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
@@ -892,19 +895,23 @@ async function main() {
     assert(controlLoginRuntimeSourceModule.includes('module.exports = {\n  controlLoginRuntimeSource\n}'), 'control-login runtime source export not found');
     assert(!controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime still keeps inline stamina helper binding');
     assert(controlLoginRuntimeSourceModule.includes('controlLoginSource()'), 'control-login runtime source does not use bundled-only source factory');
-    assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapHelperSource()'), 'runtime-bootstrap helper source factory not found');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-bootstrap-bindings')"), 'runtime-bootstrap source does not require bootstrap binding module');
+    assert(runtimeBootstrapSourceModule.includes('createRuntimeBootstrapBindings('), 'runtime-bootstrap source does not create bootstrap bindings');
+    assert(runtimeBootstrapSourceModule.includes('pageGlobalObject') && runtimeBootstrapSourceModule.includes('targetWhitelistState') && runtimeBootstrapSourceModule.includes('runtimeBootstrapBindings'), 'runtime-bootstrap source does not destructure bootstrap bindings');
+    assert(!runtimeBootstrapSourceModule.includes('function runtimeBootstrapHelperSource()'), 'runtime-bootstrap source still exposes helper source factory');
     assert(!runtimeBootstrapSourceModule.includes('function bundledRuntimeBootstrapHelperSource()'), 'runtime-bootstrap source still exposes bundled selector helper');
     assert(!runtimeBootstrapSourceModule.includes('function inlineRuntimeBootstrapHelperSource()'), 'runtime-bootstrap source still exposes inline helper');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
-    assert(runtimeBootstrapSourceModule.includes('module.exports = {\n  runtimeBootstrapHelperSource,\n  runtimeBootstrapSource\n}'), 'runtime-bootstrap source module export not found');
-    assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
+    assert(runtimeBootstrapSourceModule.includes('module.exports = {\n  runtimeBootstrapSource\n}'), 'runtime-bootstrap source module export not found');
+    assert(!runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'runtime-bootstrap source still injects page-global adapter text directly');
     assert(!runtimeBootstrapSourceModule.includes('config?.bundledRuntime'), 'runtime-bootstrap source still switches on bundled runtime mode');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/browser-preserved-state')"), 'runtime-bootstrap bundled source does not require preserved-state runtime module');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-defaults')"), 'runtime-bootstrap bundled source does not require runtime-defaults runtime module');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/target-whitelist')"), 'runtime-bootstrap bundled source does not require target-whitelist runtime module');
-    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'runtime-bootstrap bundled source does not require exit-summary runtime module');
-    assert(runtimeBootstrapSourceModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
-    assert(runtimeBootstrapSourceModule.includes('const previousBot = readPageGlobal(BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes('function createRuntimeBootstrapBindings(baseConfig = {}, options = {})'), 'runtime-bootstrap bindings factory not found');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("const value = readPageGlobal('__graspRatBotRuntimeConfig', {}, pageGlobal);"), 'runtime config is not read through page-global adapter');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes('const previousBot = readPageGlobal(RUNTIME_KEYS.BOT_KEY, null, pageGlobal);'), 'previous bot is not read through page-global adapter');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes('const preserved = buildBrowserPreservedState(previousBot);'), 'runtime bootstrap bindings do not preserve previous bot state');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes('const cfg = buildRuntimeDefaults(config, combatLogEndpointConfigured);'), 'runtime bootstrap bindings do not build runtime defaults');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes('const targetWhitelistState = {'), 'runtime bootstrap bindings do not construct target whitelist state');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes('module.exports = {\n  RUNTIME_KEYS,\n  createRuntimeBootstrapBindings,\n  readRuntimeConfig\n}'), 'runtime-bootstrap bindings module export not found');
     assert(sourceRuntimeText.includes('installPageGlobal(BOT_KEY, bot, pageGlobal);'), 'bot is not installed through page-global adapter');
     assert(autoLoginSourceModule.includes("const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'login availability does not read startLinuxDoLogin through page-global adapter');
     assert(autoLoginSourceModule.includes("readPageGlobal('__graspRatBotRawStartLinuxDoLogin', null, pageGlobal)"), 'manual login does not read raw startLinuxDoLogin through page-global adapter');
@@ -983,12 +990,18 @@ async function main() {
     ].forEach(name => {
       assert(fragmentEntriesBody.includes(name), `${name} is not listed in the runtime fragment entries registry`);
     });
-    const generatedRuntimeHasBundledBootstrapHelpers = generatedRuntimeSource.includes("require('./src/browser/runtime/browser-preserved-state')")
-      && generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-defaults')")
-      && generatedRuntimeSource.includes("require('./src/browser/runtime/target-whitelist')")
-      && generatedRuntimeSource.includes("require('./src/browser/runtime/exit-summary')");
+    const generatedRuntimeHasBundledBootstrapHelpers = generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-bootstrap-bindings')")
+      || distSource.includes('var require_runtime_bootstrap_bindings = __commonJS')
+      || (generatedRuntimeSource.includes("require('./src/browser/runtime/browser-preserved-state')")
+        && generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-defaults')")
+        && generatedRuntimeSource.includes("require('./src/browser/runtime/target-whitelist')")
+        && generatedRuntimeSource.includes("require('./src/browser/runtime/exit-summary')"));
     assert((generatedRuntimeSource.includes('function safeStringify') || generatedRuntimeSource.includes("require('./src/browser/runtime/runtime-utils')")) && (generatedRuntimeSource.includes('function formatDistance') || generatedRuntimeSource.includes("require('./src/browser/runtime/display-format')")) && (generatedRuntimeSource.includes('function buildRuntimeDefaults') || generatedRuntimeHasBundledBootstrapHelpers), 'generated runtime does not expose shared helper functions');
-    assert(generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'), 'generated runtime does not inline page-global adapter helpers');
+    assert(
+      (generatedRuntimeSource.includes('function resolvePageGlobal') && generatedRuntimeSource.includes('function installPageGlobal'))
+        || (distSource.includes('function resolvePageGlobal') && distSource.includes('function installPageGlobal')),
+      'generated runtime does not inline page-global adapter helpers'
+    );
     assert((generatedRuntimeSource.includes('function normalizeTargetWhitelistName') && generatedRuntimeSource.includes('function parseTargetWhitelistNames') && generatedRuntimeSource.includes('function deriveTargetWhitelistUrl')) || generatedRuntimeHasBundledBootstrapHelpers, 'generated runtime does not expose target whitelist helpers');
     assert(generatedRuntimeSource.includes('const now = () => performance.now();'), 'generated runtime does not include entity clock helper');
     assert(generatedRuntimeSource.includes('function recentlyActionedForAfk'), 'generated runtime does not include recent-activity helper');
@@ -1210,6 +1223,7 @@ async function main() {
     assert(bundlerSpikeEntrySource.includes("import exitSummary from './runtime/exit-summary.js'"), 'bundler spike does not import exit-summary helpers through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import preservedState from './runtime/browser-preserved-state.js'"), 'bundler spike does not import preserved-state helper through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import runtimeDefaults from './runtime/runtime-defaults.js'"), 'bundler spike does not import runtime-defaults helper through the browser runtime helper module');
+    assert(bundlerSpikeEntrySource.includes("import runtimeBootstrapBindings from './runtime/runtime-bootstrap-bindings.js'"), 'bundler spike does not import runtime-bootstrap bindings through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionPriority from './runtime/action-priority.js'"), 'bundler spike does not import action-priority through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionArbitration from './runtime/action-arbitration.js'"), 'bundler spike does not import action-arbitration through the browser runtime helper module');
     assert(bundlerSpikeEntrySource.includes("import actionSwitchDiagnostics from './runtime/action-switch-diagnostics.js'"), 'bundler spike does not import action-switch diagnostics through the browser runtime helper module');
@@ -1227,6 +1241,8 @@ async function main() {
     assert(bundlerSpikeEntrySource.includes("offlineSummary: exitSummary.offlineLeaveSummaryText('sampling outage', { samplingOutage: true })"), 'bundler spike does not execute the exit-summary helper module');
     assert(bundlerSpikeEntrySource.includes('preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({'), 'bundler spike does not execute the preserved-state helper module');
     assert(bundlerSpikeEntrySource.includes('defaultStatusEvery: runtimeDefaults.buildRuntimeDefaults({ statusEvery: 0 }, false).statusEvery'), 'bundler spike does not execute the runtime-defaults helper module');
+    assert(bundlerSpikeEntrySource.includes('runtimeBootstrapBindings.createRuntimeBootstrapBindings('), 'bundler spike does not execute the runtime-bootstrap binding helper module');
+    assert(bundlerSpikeBuildSource.includes("status.runtimeBootstrapVersion === 'bootstrap-runtime'"), 'bundler spike self-test does not assert runtime-bootstrap binding execution');
     assert(bundlerSpikeEntrySource.includes('actionArbitration.applyFinalActionArbitrationCore(sampleAction, arbitrationState, { nowMs: 1000, holdMs: 1000 })'), 'bundler spike does not execute the action-arbitration helper module');
     assert(bundlerSpikeEntrySource.includes('actionSwitchDiagnostics.recordActionSwitchDiagnosticsCore(sampleAction, switchState, { nowMs: 1000 })'), 'bundler spike does not execute the action-switch diagnostics helper module');
     assert(bundlerSpikeEntrySource.includes('coinDiagnostics.buildCoinDiagnostics({ x: 0, y: 0 }, {'), 'bundler spike does not execute the coin diagnostics helper module');
@@ -1323,6 +1339,7 @@ async function main() {
   for (const file of REMOTE_BOT_FILES) {
     const text = generatedRuntimeSource;
     const finalRuntimeText = distSource;
+    const completeRuntimeText = [text, finalRuntimeText, runtimeBootstrapBindingsRuntimeModule].join('\n');
     const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : finalRuntimeText;
     for (const invariant of NUMERIC_INVARIANTS) {
       check(`${file} has ${invariant.key}=${invariant.value}`, () => {
@@ -1338,7 +1355,7 @@ async function main() {
       assert(!defaultConfigSource.includes('targetWhitelistNames:'), 'runtime defaults still include built-in target whitelist names');
       assert(!defaultConfigSource.includes('targetWhitelistIds:'), 'runtime defaults still include built-in target whitelist ids');
       assert(!text.includes('targetWhitelistIds'), 'runtime still references targetWhitelistIds');
-      assert(text.includes('const targetWhitelistUrl = deriveTargetWhitelistUrl(cfg.sourceUrl, cfg.targetWhitelistUrl)'), 'runtime does not derive target whitelist URL from source URL');
+      assert(completeRuntimeText.includes('const targetWhitelistUrl = deriveTargetWhitelistUrl(cfg.sourceUrl, cfg.targetWhitelistUrl)'), 'runtime does not derive target whitelist URL from source URL');
       assert(text.includes('targetWhitelist: targetWhitelistState'), 'bot status/state does not attach target whitelist state');
       assert(functionBody(text, 'summarizeTargetWhitelistStatus').includes('loaded: Boolean(state?.lastOkAt)'), 'target whitelist status does not expose loaded state');
       assert(functionBody(text, 'targetWhitelistFetchUrl').includes("_graspRatWhitelistTs"), 'target whitelist fetch URL is not cache-busted');
@@ -1928,7 +1945,7 @@ async function main() {
     });
     check(`${file} persists important daily summary logs locally and remotely`, () => {
       assert(text.includes('IMPORTANT_LOGS_KEY'), 'important local log key not found');
-      assert(text.includes("'graspRatImportantLogs'"), 'important logs are not stored under the expected localStorage key');
+      assert(completeRuntimeText.includes("'graspRatImportantLogs'") || completeRuntimeText.includes('"graspRatImportantLogs"'), 'important logs are not stored under the expected localStorage key');
       assert(text.includes("recordImportantEvent('session-start'"), 'session-start important log not recorded');
       assert(text.includes("recordImportantEvent('session-end'"), 'session-end important log not recorded');
       assert(text.includes("recordImportantEvent('kill'"), 'kill important log not recorded');
@@ -1989,8 +2006,8 @@ async function main() {
       assert(text.includes('下一次登录时发现上一局已结束，按下一次登录时间收口'), 'next-login inferred session closure still uses the old missing-exit wording');
     });
     check(`${file} confirms leave success through reload and durable pending state`, () => {
-      assert(text.includes("const COMBAT_LOG_PENDING_ENTRIES_KEY = 'graspRatCombatLogPendingEntries'"), 'ordinary combat pending log storage key not found');
-      assert(text.includes("const PENDING_EXIT_STATE_KEY = 'graspRatPendingExitState'"), 'pending exit storage key not found');
+      assert(completeRuntimeText.includes('COMBAT_LOG_PENDING_ENTRIES_KEY') && (completeRuntimeText.includes("'graspRatCombatLogPendingEntries'") || completeRuntimeText.includes('"graspRatCombatLogPendingEntries"')), 'ordinary combat pending log storage key not found');
+      assert(completeRuntimeText.includes('PENDING_EXIT_STATE_KEY') && (completeRuntimeText.includes("'graspRatPendingExitState'") || completeRuntimeText.includes('"graspRatPendingExitState"')), 'pending exit storage key not found');
       const pendingExitNormalizerSource = `${text}\n${finalRuntimeText}`;
       assert(pendingExitNormalizerSource.includes('function normalizePendingExitStateForStorage') || pendingExitNormalizerSource.includes('function normalizePendingExitStateForStorageCore'), 'pending exit storage normalizer not found');
       assert(pendingExitNormalizerSource.includes('function readPersistedPendingExitState') || pendingExitNormalizerSource.includes('function readPersistedPendingExitStateCore'), 'pending exit storage reader not found');
@@ -2666,7 +2683,7 @@ async function main() {
       );
       assert(takeoverBody.includes('recentUnsafeExitContext(bot.lastOfflineLeaveResult'), 'live session takeover does not block recent unsafe offline exits');
       assert(text.includes('SESSION_MISMATCH_RECOVERY_KEY'), 'session mismatch recovery persistence key not found');
-      assert(text.includes("'graspRatSessionMismatchRecovery'"), 'session mismatch recovery state is not stored under the expected localStorage key');
+      assert(completeRuntimeText.includes("'graspRatSessionMismatchRecovery'") || completeRuntimeText.includes('"graspRatSessionMismatchRecovery"'), 'session mismatch recovery state is not stored under the expected localStorage key');
       const recoveryReloadBody = functionBody(text, 'requestSessionMismatchRecoveryReload');
       assert(recoveryReloadBody.includes('liveSessionTakeover?.allowed'), 'session mismatch refresh can run without allowed takeover state');
       assert(recoveryReloadBody.includes("reason: 'session-mismatch-refresh'"), 'session mismatch refresh wait reason not reported');
@@ -3640,15 +3657,15 @@ async function main() {
   check('opportunity constants use browser runtime adapter', () => {
     assert(strategyOpportunityConstantsSource.includes('const OPPORTUNITY_CONSTANTS = {'), 'strategy opportunity constants object not found');
     assert(strategyOpportunityConstantsSource.includes('function calculateOpportunityROI'), 'strategy opportunity ROI helper not found');
-    assert(runtimeBootstrapSourceModule.includes("require('./runtime/opportunity-constants')"), 'runtime bootstrap source does not import opportunity constants through browser runtime adapter');
-    assert(!runtimeBootstrapSourceModule.includes("require('../strategy/opportunity-constants')"), 'runtime bootstrap source still imports opportunity constants directly from strategy');
+    assert(runtimeBootstrapBindingsRuntimeModule.includes("require('./opportunity-constants')"), 'runtime bootstrap bindings do not import opportunity constants through browser runtime adapter');
+    assert(!runtimeBootstrapBindingsRuntimeModule.includes("require('../strategy/opportunity-constants')"), 'runtime bootstrap bindings still import opportunity constants directly from strategy');
     assert(opportunityConstantsRuntimeModule.includes("require('../../strategy/opportunity-constants')"), 'opportunity-constants runtime adapter does not reuse strategy module core');
     assert(opportunityConstantsRuntimeModule.includes('OPPORTUNITY_CONSTANTS') && opportunityConstantsRuntimeModule.includes('calculateOpportunityROI') && opportunityConstantsRuntimeModule.includes('validateOpportunityConstants'), 'opportunity-constants runtime adapter does not export expected helpers');
     assert(bundlerSpikeEntrySource.includes("from './runtime/opportunity-constants.js'"), 'bundler spike does not import opportunity constants runtime adapter');
     assert(bundlerSpikeEntrySource.includes('opportunityConstants.calculateOpportunityROI('), 'bundler spike does not execute opportunity constants helper');
     assert(bundlerSpikeBuildSource.includes('status.opportunityConstantRoi === 5'), 'bundler spike self-test does not assert opportunity constants execution');
-    assert(sourceRuntimeText.includes('const OPPORTUNITY_CONSTANTS = ${JSON.stringify(OPPORTUNITY_CONSTANTS)}'), 'source modules do not inject opportunity constants object');
-    assert(generatedRuntimeSource.includes('const OPPORTUNITY_CONSTANTS = {'), 'generated runtime does not inline opportunity constants object');
+    assert(strategyOpportunityConstantsSource.includes('const OPPORTUNITY_CONSTANTS = {') && runtimeBootstrapBindingsRuntimeModule.includes('OPPORTUNITY_CONSTANTS'), 'source modules do not expose opportunity constants object');
+    assert(generatedRuntimeSource.includes('const OPPORTUNITY_CONSTANTS = {') || distSource.includes('var OPPORTUNITY_CONSTANTS = {'), 'generated runtime does not inline opportunity constants object');
   });
 
   check('target switch diagnostics expose final action focus changes', () => {

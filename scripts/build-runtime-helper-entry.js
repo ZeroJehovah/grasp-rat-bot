@@ -159,6 +159,7 @@ async function selfTest() {
   assert(source.includes('function buildDropMatchedKillCore'), 'drop-matched kill helper was not bundled');
   assert(source.includes('function dailyStaminaBudgetIsLimitingCore'), 'stamina budget helper was not bundled');
   assert(source.includes('function calculateOpportunityROI'), 'opportunity constants helper was not bundled');
+  assert(source.includes('function createRuntimeBootstrapBindings'), 'runtime-bootstrap binding helper was not bundled');
   assert(source.includes('function arrayCount'), 'browser runtime helper was not bundled');
   new vm.Script(source, { filename: outFile });
   const status = runSpikeOutput(source, {
@@ -216,6 +217,10 @@ async function selfTest() {
   assert(status.staminaBudgetExitShortageMs === 50, 'spike did not execute nearest coin stamina budget helper');
   assert(status.opportunityConstantHighValue === 10, 'spike did not read opportunity constants');
   assert(status.opportunityConstantRoi === 5, 'spike did not execute opportunity constants helper');
+  assert(status.runtimeBootstrapVersion === 'bootstrap-runtime', 'spike did not merge runtime bootstrap config');
+  assert(status.runtimeBootstrapBotKey === '__graspRatBot', 'spike did not expose runtime bootstrap keys');
+  assert(status.runtimeBootstrapWhitelistCount === 2, 'spike did not preserve runtime bootstrap whitelist names');
+  assert(status.runtimeBootstrapWhitelistLastOkAt === 1234, 'spike did not preserve runtime bootstrap whitelist status');
   assert(String(status.offlineSummary || '').includes('网络采样超时'), 'spike did not execute exit-summary helper');
   assert(status.persistentLastSelfId === 'last-self-spike', 'spike did not execute persistent-last-self read helper');
   assert(status.persistentLastSelfWrite === true, 'spike did not execute persistent-last-self write helper');
