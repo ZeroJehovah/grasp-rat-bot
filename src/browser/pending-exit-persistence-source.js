@@ -104,9 +104,7 @@ function pendingExitPersistenceInlineSource() {
 function bundledPendingExitPersistenceSource() {
   return `const {
 		    normalizePendingExitReloadConfirmationCore,
-		    readPersistedPendingExitStateCore,
-		    writePersistentPendingExitStateCore,
-		    chooseInitialPendingExitStateCore
+		    writePersistentPendingExitStateCore
 		  } = require('./src/browser/runtime/pending-exit-persistence');
 
 		  function pendingExitPersistenceCoreHelpers() {
@@ -120,16 +118,8 @@ function bundledPendingExitPersistenceSource() {
 		    };
 		  }
 
-		  function readPersistedPendingExitState(t = Date.now(), options = {}) {
-		    return readPersistedPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers());
-		  }
-
 		  function writePersistentPendingExitState(pending = null) {
 		    return writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
-		  }
-
-		  function chooseInitialPendingExitState(memoryState, storedState, t = Date.now(), options = {}) {
-		    return chooseInitialPendingExitStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers());
 		  }`;
 }
 

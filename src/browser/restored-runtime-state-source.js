@@ -13,12 +13,16 @@ function restoredRuntimeStateInlineSource() {
 
 function bundledRestoredRuntimeStateSource() {
   return `const { restoreRuntimeStateCore } = require('./src/browser/runtime/restored-runtime-state');
+			  const {
+			    readPersistedPendingExitStateCore: readPersistedPendingExitStateForRestoredRuntimeStateCore,
+			    chooseInitialPendingExitStateCore: chooseInitialPendingExitStateForRestoredRuntimeStateCore
+			  } = require('./src/browser/runtime/pending-exit-persistence');
 
 			  const restoredRuntimeState = restoreRuntimeStateCore(preserved, previousBot, {
 			    restoredCoinFailures,
 			    readPersistentExitState,
-			    readPersistedPendingExitState,
-			    chooseInitialPendingExitState,
+			    readPersistedPendingExitState: (t, options) => readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY, t, options, pendingExitPersistenceCoreHelpers()),
+			    chooseInitialPendingExitState: (memoryState, storedState, t, options) => chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options, pendingExitPersistenceCoreHelpers()),
 			    enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
 			    offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
 			    nowMs: () => Date.now()
