@@ -69,6 +69,7 @@ const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
+const { buildDropMatchedKillCore } = require('./drop-matched-kill');
 const {
   dailyStaminaBudgetIsLimitingCore,
   summarizeBlockedStaminaOpportunityCore,
@@ -653,6 +654,52 @@ function runStrategyModuleSelfTests() {
     name: 'coin-target-snapshot-navigation-visible-distance',
     passed: snapshotCoinNavigationReasonCore({ distance: 800 }, snapshotHelperOptions) === 'best-opportunity-coin'
       && snapshotCoinNavigationReasonCore({ distance: 801 }, snapshotHelperOptions) === 'best-opportunity-visible-coin'
+  });
+
+  const dropMatchedKill = buildDropMatchedKillCore({
+    id: 'drop-coin-1',
+    amount: 5,
+    x: 10.4,
+    y: 20.6,
+    distance: 33.3,
+    postAttackTarget: {
+      id: 'enemy-1',
+      name: 'Enemy One',
+      drop: 5,
+      playerCategory: 'active',
+      active: true,
+      combat: true,
+      battleStartedAt: 1000,
+      battleStaminaSpentStartMs: 200
+    }
+  }, 5, { id: 'self', coins: 12 }, 'post-attack-drop-visible', {
+    nowMs: 2500,
+    sessionId: 'session-1',
+    sessionStaminaSpentMs: 650,
+    seenKillKeys: new Set(),
+    coinTargetKey: coinTargetKeyCore
+  });
+  results.push({
+    name: 'drop-matched-kill-core-builds-confirmed-kill',
+    passed: dropMatchedKill?.seenKey === 'drop-coin-match|id:enemy-1|id:drop-coin-1|5'
+      && dropMatchedKill?.kill?.victim === 'Enemy One'
+      && dropMatchedKill?.kill?.rewardConfirmed === true
+      && dropMatchedKill?.kill?.dropMatched === true
+      && dropMatchedKill?.kill?.active === true
+      && dropMatchedKill?.kill?.battleDurationMs === 1500
+      && dropMatchedKill?.kill?.battleStaminaSpentMs === 450
+      && dropMatchedKill?.kill?.sessionId === 'session-1'
+      && dropMatchedKill?.kill?.coin?.x === 10
+      && dropMatchedKill?.kill?.coin?.y === 21
+      && dropMatchedKill?.kill?.attributionReason === 'post-attack-drop-visible'
+  });
+  results.push({
+    name: 'drop-matched-kill-core-rejects-mismatch-and-seen-key',
+    passed: buildDropMatchedKillCore({ postAttackTarget: { id: 'enemy', drop: 6 } }, 5, null, '', {}) === null
+      && buildDropMatchedKillCore({ id: 'drop-coin-1', amount: 5, x: 10, y: 20, postAttackTarget: { id: 'enemy-1', drop: 5 } }, 5, null, '', {
+        seenKillKeys: new Set(['drop-coin-match|id:enemy-1|id:drop-coin-1|5']),
+        coinTargetKey: coinTargetKeyCore
+      }) === null
   });
 
   // Test coin progress/failure helpers

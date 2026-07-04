@@ -2194,6 +2194,102 @@
     }
   });
 
+  // src/strategy/drop-matched-kill.js
+  var require_drop_matched_kill = __commonJS({
+    "src/strategy/drop-matched-kill.js"(exports, module) {
+      "use strict";
+      function roundedNonNegative(value) {
+        return Math.max(0, Math.round(Number(value || 0)));
+      }
+      function roundedFiniteOrNull(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.round(number) : null;
+      }
+      function finiteNumberOrNull(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+      }
+      function buildDropMatchedKillCore(target, amount, currentSummary = null, reason = "", options = {}) {
+        const postAttackTarget = target?.postAttackTarget || null;
+        if (!postAttackTarget) return null;
+        const reward = roundedNonNegative(amount);
+        const targetDrop = roundedNonNegative(postAttackTarget.drop);
+        if (!reward || !targetDrop || reward !== targetDrop) return null;
+        const coinTargetKey = typeof options.coinTargetKey === "function" ? options.coinTargetKey(target) : "";
+        const coinKey = coinTargetKey || "xy:" + Math.round(Number(target?.x) || 0) + ":" + Math.round(Number(target?.y) || 0) + ":" + reward;
+        const targetKey = postAttackTarget.id !== void 0 && postAttackTarget.id !== null && postAttackTarget.id !== "" ? "id:" + String(postAttackTarget.id) : "name:" + String(postAttackTarget.name || "");
+        const seenKey = "drop-coin-match|" + targetKey + "|" + coinKey + "|" + reward;
+        const seenKillKeys = options.seenKillKeys;
+        if (seenKillKeys && typeof seenKillKeys.has === "function" && seenKillKeys.has(seenKey)) return null;
+        const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+        const battleStartedAt = Number(postAttackTarget.battleStartedAt || 0) || 0;
+        const rawBattleStaminaStart = postAttackTarget.battleStaminaSpentStartMs;
+        const battleStaminaSpentStartMs = rawBattleStaminaStart !== null && rawBattleStaminaStart !== void 0 && rawBattleStaminaStart !== "" ? Number(rawBattleStaminaStart) : NaN;
+        const battleStaminaSpentEndMs = finiteNumberOrNull(options.sessionStaminaSpentMs);
+        return {
+          seenKey,
+          kill: {
+            at: t,
+            time: "",
+            victim: postAttackTarget.name || "",
+            id: postAttackTarget.id ?? null,
+            drop: targetDrop,
+            rewardCoins: reward,
+            reportedRewardCoins: reward,
+            playerCategory: postAttackTarget.playerCategory || (postAttackTarget.afk === false ? "active" : "afk"),
+            afk: postAttackTarget.afk !== false,
+            active: postAttackTarget.active === true || postAttackTarget.playerCategory === "active",
+            combat: Boolean(postAttackTarget.combat),
+            combatIntent: postAttackTarget.combatIntent || "",
+            mode: postAttackTarget.mode || "",
+            currentlyActive: Boolean(postAttackTarget.currentlyActive),
+            moving: Boolean(postAttackTarget.moving),
+            firing: Boolean(postAttackTarget.firing),
+            matchedAttack: true,
+            dropMatched: true,
+            rewardConfirmed: true,
+            chatConfirmed: false,
+            source: "drop-coin-match",
+            targetDrop,
+            attackDistance: roundedFiniteOrNull(postAttackTarget.distance),
+            battleStartedAt,
+            battleEndedAt: t,
+            battleDurationMs: battleStartedAt ? Math.max(0, Math.round(t - battleStartedAt)) : 0,
+            battleStaminaSpentStartMs: Number.isFinite(battleStaminaSpentStartMs) ? Math.max(0, Math.round(battleStaminaSpentStartMs)) : null,
+            battleStaminaSpentEndMs: Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs)) : null,
+            battleStaminaSpentMs: Number.isFinite(battleStaminaSpentStartMs) && Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs - battleStaminaSpentStartMs)) : null,
+            sessionId: String(options.sessionId || ""),
+            coin: {
+              id: target?.id ?? target?.drop_id ?? target?.coin_id ?? null,
+              amount: reward,
+              x: roundedFiniteOrNull(target?.x),
+              y: roundedFiniteOrNull(target?.y),
+              distance: roundedFiniteOrNull(target?.distance)
+            },
+            attributionReason: reason || "coin-pickup",
+            self: currentSummary || null
+          }
+        };
+      }
+      module.exports = {
+        buildDropMatchedKillCore
+      };
+    }
+  });
+
+  // src/browser/runtime/drop-matched-kill.js
+  var require_drop_matched_kill2 = __commonJS({
+    "src/browser/runtime/drop-matched-kill.js"(exports, module) {
+      "use strict";
+      var {
+        buildDropMatchedKillCore
+      } = require_drop_matched_kill();
+      module.exports = {
+        buildDropMatchedKillCore
+      };
+    }
+  });
+
   // src/strategy/coin-motion.js
   var require_coin_motion = __commonJS({
     "src/strategy/coin-motion.js"(exports, module) {
@@ -4796,7 +4892,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.492" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.493" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -14411,6 +14507,7 @@
         lastRemoteError: bot.importantLogging?.lastRemoteError || ""
       };
     }
+    const { buildDropMatchedKillCore } = require_drop_matched_kill2();
     function attackPlayerCategory(target, action = {}) {
       if (!target) return "unknown";
       const afkProfit = isAfkProfitTarget(target);
@@ -14710,63 +14807,6 @@
         }
       }
       return null;
-    }
-    function recordDropMatchedKill(target, amount, currentSummary, reason = "") {
-      const postAttackTarget = target?.postAttackTarget || null;
-      if (!postAttackTarget) return null;
-      const reward = Math.max(0, Math.round(Number(amount || 0)));
-      const targetDrop = Math.max(0, Math.round(Number(postAttackTarget.drop || 0)));
-      if (!reward || !targetDrop || reward !== targetDrop) return null;
-      const coinKey = coinTargetKeyCore(target) || "xy:" + Math.round(Number(target.x) || 0) + ":" + Math.round(Number(target.y) || 0) + ":" + reward;
-      const targetKey = postAttackTarget.id !== void 0 && postAttackTarget.id !== null && postAttackTarget.id !== "" ? "id:" + String(postAttackTarget.id) : "name:" + String(postAttackTarget.name || "");
-      const seenKey = "drop-coin-match|" + targetKey + "|" + coinKey + "|" + reward;
-      if (bot.seenKillKeys.has(seenKey)) return null;
-      const t = Date.now();
-      const battleStartedAt = Number(postAttackTarget.battleStartedAt || 0) || 0;
-      const rawBattleStaminaStart = postAttackTarget.battleStaminaSpentStartMs;
-      const battleStaminaSpentStartMs = rawBattleStaminaStart !== null && rawBattleStaminaStart !== void 0 && rawBattleStaminaStart !== "" ? Number(rawBattleStaminaStart) : NaN;
-      const battleStaminaSpentEndMs = importantSessionStaminaSpentMs(bot.session);
-      return recordKillHistoryItem({
-        at: t,
-        time: "",
-        victim: postAttackTarget.name || "",
-        id: postAttackTarget.id ?? null,
-        drop: targetDrop,
-        rewardCoins: reward,
-        reportedRewardCoins: reward,
-        playerCategory: postAttackTarget.playerCategory || (postAttackTarget.afk === false ? "active" : "afk"),
-        afk: postAttackTarget.afk !== false,
-        active: postAttackTarget.active === true || postAttackTarget.playerCategory === "active",
-        combat: Boolean(postAttackTarget.combat),
-        combatIntent: postAttackTarget.combatIntent || "",
-        mode: postAttackTarget.mode || "",
-        currentlyActive: Boolean(postAttackTarget.currentlyActive),
-        moving: Boolean(postAttackTarget.moving),
-        firing: Boolean(postAttackTarget.firing),
-        matchedAttack: true,
-        dropMatched: true,
-        rewardConfirmed: true,
-        chatConfirmed: false,
-        source: "drop-coin-match",
-        targetDrop,
-        attackDistance: Number.isFinite(Number(postAttackTarget.distance)) ? Math.round(Number(postAttackTarget.distance)) : null,
-        battleStartedAt,
-        battleEndedAt: t,
-        battleDurationMs: battleStartedAt ? Math.max(0, Math.round(t - battleStartedAt)) : 0,
-        battleStaminaSpentStartMs: Number.isFinite(battleStaminaSpentStartMs) ? Math.max(0, Math.round(battleStaminaSpentStartMs)) : null,
-        battleStaminaSpentEndMs: Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs)) : null,
-        battleStaminaSpentMs: Number.isFinite(battleStaminaSpentStartMs) && Number.isFinite(battleStaminaSpentEndMs) ? Math.max(0, Math.round(battleStaminaSpentEndMs - battleStaminaSpentStartMs)) : null,
-        sessionId: bot.session?.importantSessionId || "",
-        coin: {
-          id: target.id ?? target.drop_id ?? target.coin_id ?? null,
-          amount: reward,
-          x: Number.isFinite(Number(target.x)) ? Math.round(Number(target.x)) : null,
-          y: Number.isFinite(Number(target.y)) ? Math.round(Number(target.y)) : null,
-          distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
-        },
-        attributionReason: reason || "coin-pickup",
-        self: currentSummary || null
-      }, seenKey);
     }
     function updateKillHistory(self) {
       const ownName = self?.name || "";
@@ -19828,17 +19868,6 @@
       if (!Array.isArray(bot.targetSwitchDiagnostics.events)) bot.targetSwitchDiagnostics.events = [];
       return bot.targetSwitchDiagnostics;
     }
-    function recordActionSwitchDiagnostics(action, source = "") {
-      const state2 = ensureTargetSwitchDiagnostics();
-      return recordActionSwitchDiagnosticsCore(action, state2, {
-        source,
-        tickCount: bot.tickCount,
-        previousDecision: bot.lastDecision,
-        historyLimit: targetSwitchHistoryLimit(),
-        oscillationWindowMs: targetSwitchOscillationWindowMs(),
-        clone: safeJsonClone
-      }).action;
-    }
     function finalActionArbitrationHoldMs() {
       return Math.max(0, Math.round(Number(cfg.finalActionArbitrationHoldMs || 0) || 0));
     }
@@ -19851,15 +19880,6 @@
       }
       if (!Array.isArray(bot.finalActionArbitration.history)) bot.finalActionArbitration.history = [];
       return bot.finalActionArbitration;
-    }
-    function applyFinalActionArbitration(action, source = "") {
-      const state2 = ensureFinalActionArbitration();
-      return applyFinalActionArbitrationCore(action, state2, {
-        source,
-        holdMs: finalActionArbitrationHoldMs(),
-        historyLimit: finalActionArbitrationHistoryLimit(),
-        clone: safeJsonClone
-      }).action;
     }
     const {
       coinTargetKeyCore,
@@ -19954,7 +19974,16 @@
             return false;
           }
           if (sessionKey) pushBounded(session.coinPickupKeys, { key: sessionKey, at: sessionAt, amount: sessionValue, reason: sessionReason || "" }, 80);
-          recordDropMatchedKill(sessionTarget, sessionValue, sessionSummary, sessionReason);
+          (() => {
+            const dropMatchedKill = buildDropMatchedKillCore(sessionTarget, sessionValue, sessionSummary, sessionReason, {
+              nowMs: Date.now(),
+              seenKillKeys: bot.seenKillKeys,
+              sessionId: bot.session?.importantSessionId || "",
+              sessionStaminaSpentMs: importantSessionStaminaSpentMs(bot.session),
+              coinTargetKey: coinTargetKeyCore
+            });
+            return dropMatchedKill ? recordKillHistoryItem(dropMatchedKill.kill, dropMatchedKill.seenKey) : null;
+          })();
           session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + sessionValue;
           const sessionCoinDiff = Math.max(0, Math.round(Number(sessionSummary?.coins || 0) - Number(sessionPreviousCoins || 0)));
           session.coinsGained = Math.max(
@@ -20056,7 +20085,16 @@
           return false;
         }
         if (sessionKey) pushBounded(session.coinPickupKeys, { key: sessionKey, at: sessionAt, amount: sessionValue, reason: sessionReason || "" }, 80);
-        recordDropMatchedKill(sessionTarget, sessionValue, sessionSummary, sessionReason);
+        (() => {
+          const dropMatchedKill = buildDropMatchedKillCore(sessionTarget, sessionValue, sessionSummary, sessionReason, {
+            nowMs: Date.now(),
+            seenKillKeys: bot.seenKillKeys,
+            sessionId: bot.session?.importantSessionId || "",
+            sessionStaminaSpentMs: importantSessionStaminaSpentMs(bot.session),
+            coinTargetKey: coinTargetKeyCore
+          });
+          return dropMatchedKill ? recordKillHistoryItem(dropMatchedKill.kill, dropMatchedKill.seenKey) : null;
+        })();
         session.coinPickupTotal = Math.max(0, Number(session.coinPickupTotal || 0) || 0) + sessionValue;
         const sessionCoinDiff = Math.max(0, Math.round(Number(sessionSummary?.coins || 0) - Number(sessionPreviousCoins || 0)));
         session.coinsGained = Math.max(
@@ -20346,7 +20384,16 @@
           scoreCoin: scoreCoinOpportunity
         });
         for (const candidate of result.candidates || []) {
-          recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), "post-attack-drop-visible");
+          (() => {
+            const dropMatchedKill = buildDropMatchedKillCore(candidate, candidate.amount, summarizeSelf(self), "post-attack-drop-visible", {
+              nowMs: Date.now(),
+              seenKillKeys: bot.seenKillKeys,
+              sessionId: bot.session?.importantSessionId || "",
+              sessionStaminaSpentMs: importantSessionStaminaSpentMs(bot.session),
+              coinTargetKey: coinTargetKeyCore
+            });
+            return dropMatchedKill ? recordKillHistoryItem(dropMatchedKill.kill, dropMatchedKill.seenKey) : null;
+          })();
         }
         return result.selected || null;
       })();
@@ -21560,8 +21607,26 @@
             pursuit: pursuitSummary
           };
         }
-        action = applyFinalActionArbitration(action, source);
-        action = recordActionSwitchDiagnostics(action, source);
+        action = (() => {
+          const finalActionState = ensureFinalActionArbitration();
+          return applyFinalActionArbitrationCore(action, finalActionState, {
+            source,
+            holdMs: finalActionArbitrationHoldMs(),
+            historyLimit: finalActionArbitrationHistoryLimit(),
+            clone: safeJsonClone
+          }).action;
+        })();
+        action = (() => {
+          const targetSwitchState = ensureTargetSwitchDiagnostics();
+          return recordActionSwitchDiagnosticsCore(action, targetSwitchState, {
+            source,
+            tickCount: bot.tickCount,
+            previousDecision: bot.lastDecision,
+            historyLimit: targetSwitchHistoryLimit(),
+            oscillationWindowMs: targetSwitchOscillationWindowMs(),
+            clone: safeJsonClone
+          }).action;
+        })();
         const canMove = true;
         const canAttack = true;
         if (!isSnapshotCoinWaitAction(action)) {

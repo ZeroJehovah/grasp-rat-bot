@@ -18,7 +18,39 @@ const {
   recordActionSwitchDiagnosticsCore
 } = require('./runtime/action-switch-diagnostics');
 
-function actionArbitrationInlineSource(helpers = {}) {
+function recordActionSwitchDiagnosticsCall(actionExpr, sourceExpr = 'source', options = {}) {
+  if (!options.bundledRuntime) {
+    return `recordActionSwitchDiagnostics(${actionExpr}, ${sourceExpr})`;
+  }
+  return String.raw`(() => {
+        const targetSwitchState = ensureTargetSwitchDiagnostics();
+        return recordActionSwitchDiagnosticsCore(${actionExpr}, targetSwitchState, {
+          source: ${sourceExpr},
+          tickCount: bot.tickCount,
+          previousDecision: bot.lastDecision,
+          historyLimit: targetSwitchHistoryLimit(),
+          oscillationWindowMs: targetSwitchOscillationWindowMs(),
+          clone: safeJsonClone
+        }).action;
+      })()`;
+}
+
+function applyFinalActionArbitrationCall(actionExpr, sourceExpr = 'source', options = {}) {
+  if (!options.bundledRuntime) {
+    return `applyFinalActionArbitration(${actionExpr}, ${sourceExpr})`;
+  }
+  return String.raw`(() => {
+        const finalActionState = ensureFinalActionArbitration();
+        return applyFinalActionArbitrationCore(${actionExpr}, finalActionState, {
+          source: ${sourceExpr},
+          holdMs: finalActionArbitrationHoldMs(),
+          historyLimit: finalActionArbitrationHistoryLimit(),
+          clone: safeJsonClone
+        }).action;
+      })()`;
+}
+
+function actionArbitrationInlineSource(helpers = {}, options = {}) {
   const {
     actionPriorityBand,
     actionFocusTargetType,
@@ -49,6 +81,32 @@ function actionArbitrationInlineSource(helpers = {}) {
     shouldHoldPreviousFinalAction,
     applyFinalActionArbitrationCore
   ].map(fn => typeof fn === 'function' ? `  ${fn.toString()}` : '').join('\n\n');
+  const localActionSwitchWrapperSource = options.bundledRuntime ? '' : String.raw`
+  function recordActionSwitchDiagnostics(action, source = '') {
+    const state = ensureTargetSwitchDiagnostics();
+    return recordActionSwitchDiagnosticsCore(action, state, {
+      source,
+      tickCount: bot.tickCount,
+      previousDecision: bot.lastDecision,
+      historyLimit: targetSwitchHistoryLimit(),
+      oscillationWindowMs: targetSwitchOscillationWindowMs(),
+      clone: safeJsonClone
+    }).action;
+  }
+
+`;
+  const localFinalActionWrapperSource = options.bundledRuntime ? '' : String.raw`
+  function applyFinalActionArbitration(action, source = '') {
+    const state = ensureFinalActionArbitration();
+    return applyFinalActionArbitrationCore(action, state, {
+      source,
+      holdMs: finalActionArbitrationHoldMs(),
+      historyLimit: finalActionArbitrationHistoryLimit(),
+      clone: safeJsonClone
+    }).action;
+  }
+
+`;
   return String.raw`
   function targetSwitchHistoryLimit() {
     return Math.max(4, Math.round(Number(cfg.targetSwitchDiagnosticsHistoryLimit || 24) || 24));
@@ -75,17 +133,7 @@ ${actionPriorityHelperSource}
 
 ${actionSwitchHelperSource}
 
-  function recordActionSwitchDiagnostics(action, source = '') {
-    const state = ensureTargetSwitchDiagnostics();
-    return recordActionSwitchDiagnosticsCore(action, state, {
-      source,
-      tickCount: bot.tickCount,
-      previousDecision: bot.lastDecision,
-      historyLimit: targetSwitchHistoryLimit(),
-      oscillationWindowMs: targetSwitchOscillationWindowMs(),
-      clone: safeJsonClone
-    }).action;
-  }
+${localActionSwitchWrapperSource}
 
   function finalActionArbitrationHoldMs() {
     return Math.max(0, Math.round(Number(cfg.finalActionArbitrationHoldMs || 0) || 0));
@@ -105,15 +153,7 @@ ${actionSwitchHelperSource}
 
 ${finalActionHelperSource}
 
-  function applyFinalActionArbitration(action, source = '') {
-    const state = ensureFinalActionArbitration();
-    return applyFinalActionArbitrationCore(action, state, {
-      source,
-      holdMs: finalActionArbitrationHoldMs(),
-      historyLimit: finalActionArbitrationHistoryLimit(),
-      clone: safeJsonClone
-    }).action;
-  }
+${localFinalActionWrapperSource}
 `;
 }
 
@@ -136,7 +176,7 @@ const {
   applyFinalActionArbitrationCore
 } = require('./src/browser/runtime/action-arbitration');
 
-${actionArbitrationInlineSource()}`;
+${actionArbitrationInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function actionArbitrationSource(options = {}) {
@@ -157,6 +197,8 @@ function actionArbitrationSource(options = {}) {
 }
 
 module.exports = {
+  recordActionSwitchDiagnosticsCall,
+  applyFinalActionArbitrationCall,
   actionArbitrationInlineSource,
   bundledActionArbitrationSource,
   actionArbitrationSource

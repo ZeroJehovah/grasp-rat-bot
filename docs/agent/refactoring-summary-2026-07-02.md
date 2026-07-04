@@ -1505,3 +1505,12 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 **Lines Added**: 1,686  
 **Tests**: 13/13 passing  
 **Risk Level**: Low (additive changes only)
+
+## 2026-07-04 Follow-up: Production Direct-Call Acceleration
+
+`bootstrap-0.4.493` follows the faster production-bundle migration direction:
+
+- Bundled `tick()` now expands final-action arbitration and target-switch diagnostics through direct `applyFinalActionArbitrationCore(...)` / `recordActionSwitchDiagnosticsCore(...)` snippets with explicit runtime state, instead of declaring production wrapper functions.
+- Drop-matched kill attribution was extracted to `src/strategy/drop-matched-kill.js` and exposed through `src/browser/runtime/drop-matched-kill.js`.
+- Bundled post-attack and coin-pickup paths now call `buildDropMatchedKillCore(...)` directly and pass the returned kill record into `recordKillHistoryItem(...)`; final dist no longer declares `recordDropMatchedKill()`.
+- Local CDP/`--print-source` compatibility keeps the old wrapper source shape where useful, while production build verification rejects the removed wrapper declarations.

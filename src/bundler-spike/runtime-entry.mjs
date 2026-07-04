@@ -32,6 +32,7 @@ import opportunityCandidates from '../browser/runtime/opportunity-candidates.js'
 import opportunityPick from '../browser/runtime/opportunity-pick.js';
 import patrol from '../browser/runtime/patrol.js';
 import postAttackDrop from '../browser/runtime/post-attack-drop.js';
+import dropMatchedKill from '../browser/runtime/drop-matched-kill.js';
 import staminaBudget from '../browser/runtime/stamina-budget.js';
 import opportunityConstants from '../browser/runtime/opportunity-constants.js';
 import pageAdapter from '../browser/page-global-core.js';
@@ -298,6 +299,25 @@ function helperStatus(config = {}) {
       scoreCoin: coin => Number(coin.amount || 0) * 10
     }
   );
+  const dropMatchedKillResult = dropMatchedKill.buildDropMatchedKillCore({
+    id: 'post-attack-coin',
+    amount: 6,
+    x: 12,
+    y: 0,
+    distance: 10,
+    postAttackTarget: {
+      id: 'post-attack-target',
+      name: 'Post Target',
+      drop: 6,
+      battleStartedAt: 900,
+      battleStaminaSpentStartMs: 100
+    }
+  }, 6, { id: 'self-spike' }, 'post-attack-drop-visible', {
+    nowMs: 1000,
+    sessionId: 'spike-session',
+    sessionStaminaSpentMs: 250,
+    coinTargetKey: coinTarget.coinTargetKeyCore
+  });
   const staminaBudgetDailyLimited = staminaBudget.dailyStaminaBudgetIsLimitingCore(1200, 2000, 1000);
   const staminaBudgetExit = staminaBudget.summarizeNearestCoinStaminaBudgetExitCore(
     { x: 0, y: 0 },
@@ -1124,6 +1144,8 @@ function helperStatus(config = {}) {
     patrolClearHeading: patrolScanResult.clearPatrolHeading,
     postAttackVisibleCoinExists,
     postAttackDropSelectedId: postAttackDropResult.selected?.drop_id,
+    dropMatchedKillVictim: dropMatchedKillResult?.kill?.victim,
+    dropMatchedKillStaminaMs: dropMatchedKillResult?.kill?.battleStaminaSpentMs,
     staminaBudgetDailyLimited,
     staminaBudgetExitShortageMs: staminaBudgetExit?.shortageMs,
     opportunityConstantHighValue,
