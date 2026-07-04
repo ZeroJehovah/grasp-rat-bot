@@ -1660,3 +1660,11 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - `src/browser/runtime-fragment-registry.js` no longer registers a standalone `array-count` fragment.
 - Static verification checks the merged prelude, rejects the old standalone registry entry, and still verifies final `require_array_count` bundling.
 - The `.510` manifest records bundled SHA-256 `a24ce60dd08ce4d50c5d78de47da69919e1b5fc35168832575f62d9e815155c0` and pre-bundle remote direct SHA-256 `0a5524591c923e061b79fba9c44aa2299ddf00da8cc8f43de07f5688ee638845`.
+
+`bootstrap-0.4.511` removes the status-panel runtime wrapper:
+
+- `src/browser/status-panel-runtime-source.js` is removed.
+- `src/browser/status-panel-source.js` now emits the bundled `require('./src/browser/runtime/display-format')` prelude directly before the status-panel source body.
+- `src/browser/runtime-fragment-registry.js` keeps the stable `status-panel-runtime` fragment name, but imports `statusPanelSource` directly and calls `statusPanelSource(config)`.
+- Static verification rejects reintroducing the deleted wrapper, requires the direct registry import, and still verifies the final bundled display-format helper path.
+- The `.511` manifest records bundled SHA-256 `35b180182e1d35b1eea19e4c7a53a46e41ef7043fa3aca35fb1300984d1de999` and pre-bundle remote direct SHA-256 `ae397bbc2bbfa14644e417bd1469e5cb2c899f8a5a5d032a4fa2bb15cb6b7d17`.
