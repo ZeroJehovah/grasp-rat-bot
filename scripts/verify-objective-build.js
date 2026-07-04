@@ -281,6 +281,7 @@ function main() {
   const persistentLastSelfRuntimeModule = readText('src/browser/runtime/persistent-last-self.js');
   const persistentClearRuntimeModule = readText('src/browser/runtime/persistent-clear.js');
   const pendingExitPersistenceRuntimeModule = readText('src/browser/runtime/pending-exit-persistence.js');
+  const pendingExitRuntimeModule = readText('src/browser/runtime/pending-exit.js');
   const refreshExitDetailRuntimeModule = readText('src/browser/runtime/refresh-exit-detail.js');
   const restoredCoinFailuresRuntimeModule = readText('src/browser/runtime/restored-coin-failures.js');
   const restoredRuntimeStateRuntimeModule = readText('src/browser/runtime/restored-runtime-state.js');
@@ -312,6 +313,7 @@ function main() {
   const strategyActionSwitchDiagnosticsSource = readText('src/strategy/action-switch-diagnostics.js');
   const strategyAttackWorthSource = readText('src/strategy/attack-worth.js');
   const strategyExitMotionSource = readText('src/strategy/exit-motion.js');
+  const strategyPendingExitSource = readText('src/strategy/pending-exit.js');
   const strategyCoinDiagnosticsSource = readText('src/strategy/coin-diagnostics.js');
   const strategyCoinMotionSource = readText('src/strategy/coin-motion.js');
   const strategyCoinTargetSource = readText('src/strategy/coin-target.js');
@@ -573,6 +575,7 @@ function main() {
     assert(distSource.includes('var require_persistent_last_self = __commonJS'), 'bundled production dist does not bundle the persistent-last-self runtime module through esbuild');
     assert(distSource.includes('var require_persistent_clear = __commonJS'), 'bundled production dist does not bundle the persistent-clear runtime module through esbuild');
     assert(distSource.includes('var require_pending_exit_persistence = __commonJS'), 'bundled production dist does not bundle the pending-exit-persistence runtime module through esbuild');
+    assert(distSource.includes('var require_pending_exit = __commonJS'), 'bundled production dist does not bundle the pending-exit runtime module through esbuild');
     assert(distSource.includes('var require_refresh_exit_detail = __commonJS'), 'bundled production dist does not bundle the refresh-exit-detail runtime module through esbuild');
     assert(distSource.includes('var require_restored_coin_failures = __commonJS'), 'bundled production dist does not bundle the restored-coin-failures runtime module through esbuild');
     assert(distSource.includes('var require_restored_runtime_state = __commonJS'), 'bundled production dist does not bundle the restored-runtime-state runtime module through esbuild');
@@ -920,6 +923,11 @@ function main() {
       'generated runtime does not include offline relogin hold cleanup helper'
     );
     assert(generatedRuntimeSource.includes('function summarizePendingExit'), 'generated runtime does not include pending-exit summary helper');
+    assert(generatedRuntimeSource.includes("require('./src/browser/runtime/pending-exit')"), 'generated runtime does not bind pending-exit runtime helper module');
+    assert(generatedRuntimeSource.includes('pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions())'), 'generated runtime does not route pending-exit retry durations through core');
+    assert(generatedRuntimeSource.includes('pendingExitDisplayReasonCore(summary)'), 'generated runtime does not route pending-exit display reasons through core');
+    assert(!generatedRuntimeSource.includes('function pendingExitRetryMs('), 'generated runtime still keeps pendingExitRetryMs wrapper');
+    assert(!generatedRuntimeSource.includes('function pendingExitDisplayReason('), 'generated runtime still keeps pendingExitDisplayReason wrapper');
     assert(generatedRuntimeSource.includes('async function handlePendingExit'), 'generated runtime does not include pending-exit handler');
     assert(generatedRuntimeSource.includes('function updatePursuitTracking'), 'generated runtime does not include pursuit tracking helper');
     assert(generatedRuntimeSource.includes('function waitWithTimeout'), 'generated runtime does not include wait-with-timeout helper');
@@ -1455,8 +1463,9 @@ function main() {
     assert(pendingExitPersistenceInlineBody.includes('PENDING_EXIT_STATE_KEY'), 'pending-exit persistence inline source factory does not use pending-exit storage key');
     const pendingExitPersistenceBundledBody = functionBody(pendingExitPersistenceSourceModule, 'bundledPendingExitPersistenceSource');
     assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit-persistence')"), 'pending-exit persistence bundled source does not hand helpers to the bundler');
+    assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit')"), 'pending-exit persistence bundled source does not bind pending-exit retry/display cores');
     assert(pendingExitPersistenceBundledBody.includes('pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs'), 'pending-exit persistence bundled source does not bind config max age');
-    assert(pendingExitPersistenceBundledBody.includes('cloneForPendingExit') && pendingExitPersistenceBundledBody.includes('pendingExitDisplayReason') && pendingExitPersistenceBundledBody.includes('pendingExitRetryMs'), 'pending-exit persistence bundled source does not bind runtime helper dependencies');
+    assert(pendingExitPersistenceBundledBody.includes('cloneForPendingExit') && pendingExitPersistenceBundledBody.includes('pendingExitDisplayReason: summary => pendingExitDisplayReasonForPersistenceCore(summary)') && pendingExitPersistenceBundledBody.includes('pendingExitRetryMs: pending => pendingExitRetryMsForPersistenceCore(pending, pendingExitRetryCoreOptionsForPersistence())'), 'pending-exit persistence bundled source does not bind runtime helper dependencies');
     assert(pendingExitPersistenceCallSourceModule.includes('function writePersistentPendingExitStateCall') && pendingExitPersistenceCallSourceModule.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY'), 'pending-exit persistence call source does not generate direct writer core calls');
     assert(pendingExitPersistenceCallSourceModule.includes('function writePersistentPendingExitStateCallback') && pendingExitPersistenceCallSourceModule.includes('pending => writePersistentPendingExitStateCore'), 'pending-exit persistence call source does not generate direct writer callbacks');
     assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitReloadConfirmation('), 'pending-exit persistence bundled source still keeps reload-confirmation wrapper');
@@ -1482,11 +1491,16 @@ function main() {
     assert(pendingExitPersistenceRuntimeModule.includes('storage.setItem(key, resolved.stringify(normalized))'), 'pending-exit persistence runtime core does not write normalized state');
     assert(pendingExitPersistenceRuntimeModule.includes('return storedStamp > memoryStamp ? stored : memory;'), 'pending-exit persistence runtime core does not choose newest state');
     assert(pendingExitPersistenceRuntimeModule.includes('normalizePendingExitReloadConfirmationCore,\n  normalizePendingExitStateForStorageCore,\n  readPersistedPendingExitStateCore,\n  writePersistentPendingExitStateCore,\n  chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime exports are incomplete');
+    assert(strategyPendingExitSource.includes('function pendingExitRetryMsCore') && strategyPendingExitSource.includes('function pendingExitDisplayReasonCore') && strategyPendingExitSource.includes('function summarizePendingExitCore'), 'pending-exit strategy module does not expose retry/display/summary cores');
+    assert(pendingExitRuntimeModule.includes("require('../../strategy/pending-exit')"), 'browser pending-exit runtime module does not reuse the strategy pending-exit helpers');
+    assert(pendingExitRuntimeModule.includes('pendingExitRetryMsCore,\n  pendingExitDisplayReasonCore,\n  summarizePendingExitCore'), 'browser pending-exit runtime exports are incomplete');
     assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
     assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
     assert(!distSource.includes('function readPersistedPendingExitState('), 'dist remote bot still keeps pending-exit storage-reader wrapper');
     assert(!distSource.includes('function writePersistentPendingExitState('), 'dist remote bot still keeps pending-exit storage-writer wrapper');
     assert(!distSource.includes('function chooseInitialPendingExitState('), 'dist remote bot still keeps pending-exit initial-state chooser wrapper');
+    assert(!distSource.includes('function pendingExitRetryMs('), 'dist remote bot still keeps pending-exit retry wrapper');
+    assert(!distSource.includes('function pendingExitDisplayReason('), 'dist remote bot still keeps pending-exit display wrapper');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
@@ -1956,6 +1970,11 @@ function main() {
     assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function summarizePendingExit'), 'pending-exit source factory does not include summary helper');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("require('./src/browser/runtime/pending-exit')"), 'pending-exit source does not import retry/display/summary runtime cores for bundled builds');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function pendingExitRetryCoreOptions()'), 'pending-exit source does not bind retry core options');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('summarizePendingExitCore(pending'), 'pending-exit source does not route summary helper through core');
+    assert(pendingExitSourceModule.includes('pendingExitRetryMsCore(${pendingExpr}, pendingExitRetryCoreOptions())'), 'pending-exit source does not generate direct retry core calls');
+    assert(pendingExitSourceModule.includes('pendingExitDisplayReasonCore(${summaryExpr})'), 'pending-exit source does not generate direct display core calls');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("options.bundledRuntime"), 'pending-exit source does not select bundled enemy suppress call from runtime config');
@@ -2172,6 +2191,9 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.opportunityClearExact === true'), 'bundler spike self-test does not assert opportunity clear execution');
     assert(bundlerSpikeBuildSource.includes('status.staminaBudgetExitShortageMs === 50'), 'bundler spike self-test does not assert stamina budget execution');
     assert(bundlerSpikeBuildSource.includes('status.opportunityConstantRoi === 5'), 'bundler spike self-test does not assert opportunity constants execution');
+    assert(bundlerSpikeEntrySource.includes("import pendingExit from '../browser/runtime/pending-exit.js'"), 'bundler spike entry does not import pending-exit runtime adapter');
+    assert(bundlerSpikeBuildSource.includes('status.pendingExitCoreRetryMs === 4500'), 'bundler spike self-test does not assert pending-exit retry core execution');
+    assert(bundlerSpikeBuildSource.includes('status.pendingExitCoreCombatDx === 1'), 'bundler spike self-test does not assert pending-exit summary core execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressReuseUntil === 9000'), 'bundler spike self-test does not assert suppress reuse execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressZeroSkipped === true'), 'bundler spike self-test does not assert suppress zero-delay execution');
     assert(bundlerSpikeBuildSource.includes('status.exitReloginSuppressNewUntil === 7000'), 'bundler spike self-test does not assert suppress new-hold execution');
@@ -3029,8 +3051,23 @@ function main() {
       assert(pendingBody.includes('if (state.known && state.alive)'), 'alive pending exit does not have a non-blocking path');
       assert(pendingBody.includes('schedulePendingExitRetry(pending, self, state)'), 'alive pending exit does not schedule retry in background');
       assert(pendingBody.includes('return null'), 'alive pending exit does not return to normal action selection');
-      const retryBody = functionBody(text, 'pendingExitRetryMs');
-      assert(retryBody.includes('cfg.leaveRetryMinMs ?? cfg.leaveCommandTimeoutMs ?? 10000'), 'pending exit retry floor does not use 10s leave timeout');
+      const retryBody = /function\s+pendingExitRetryMs\s*\(/.test(text) ? functionBody(text, 'pendingExitRetryMs') : '';
+      if (retryBody) {
+        assert(
+          retryBody.includes('pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions())')
+            || retryBody.includes('cfg.leaveRetryMinMs ?? cfg.leaveCommandTimeoutMs ?? 10000'),
+          'pending exit retry wrapper does not delegate to core or preserve the old floor'
+        );
+      }
+      const retryCoreText = file === 'grasp-rat-bot.js' ? strategyPendingExitSource : finalRuntimeText;
+      assert(
+        /Number\(options\.leaveRetryMinMs\s*\?\?\s*options\.leaveCommandTimeoutMs\s*\?\?\s*(?:10000|1e4)\)/.test(retryCoreText),
+        'pending exit retry core does not use 10s leave timeout'
+      );
+      if (file !== 'grasp-rat-bot.js') {
+        assert(finalRuntimeText.includes('pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions())'), 'pending exit retry path does not call core directly');
+        assert(!finalRuntimeText.includes('function pendingExitRetryMs('), 'pending exit retry wrapper should not be emitted in production dist');
+      }
       assert(text.includes('const pendingExitAlive = Boolean(bot.pendingExit && self && isAlive(self))'), 'pending alive exit guard not found before offline branch');
       assert(text.includes('controlOffline && !pendingExitAlive'), 'offline branch can still block live pending exits');
       assert(text.includes("pendingExitIntent:") && text.includes("reason: 'injury-leave'"), 'injury leave no longer preserves normal control action');

@@ -1024,6 +1024,95 @@
     }
   });
 
+  // src/strategy/pending-exit.js
+  var require_pending_exit = __commonJS({
+    "src/strategy/pending-exit.js"(exports, module) {
+      "use strict";
+      function pendingExitRetryMsCore(pending, options = {}) {
+        const source = String(pending?.source || "");
+        const retryFloorMs = Math.max(
+          1e3,
+          Number(options.leaveRetryMinMs ?? options.leaveCommandTimeoutMs ?? 1e4) || 1e4
+        );
+        if (pending?.scope === "offline" || source === "offline") {
+          return Math.max(retryFloorMs, Number(options.offlineLeaveRetryMs || options.combatLeaveRetryMs || 1e3));
+        }
+        if (source === "pursuit") {
+          return Math.max(retryFloorMs, Number(options.pursuitLeaveRetryMs || options.combatLeaveRetryMs || 1e3));
+        }
+        return Math.max(retryFloorMs, Number(options.combatLeaveRetryMs || options.pursuitLeaveRetryMs || 1e3));
+      }
+      function pendingExitDisplayReasonCore(summary) {
+        const base = String(summary || "\u9000\u51FA\u8BF7\u6C42\u5DF2\u53D1\u9001").trim();
+        return base + "\uFF0C\u7B49\u5F85\u9000\u51FA\u786E\u8BA4\uFF0C\u672A\u9000\u51FA\u4F1A\u7EE7\u7EED\u8865\u53D1";
+      }
+      function clampSignedStep(value) {
+        return Math.max(-1, Math.min(1, Math.round(Number(value) || 0)));
+      }
+      function summarizePendingExitCore(pending, options = {}) {
+        if (!pending) return null;
+        const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+        const retryMs = Number.isFinite(Number(options.retryMs)) ? Math.max(0, Math.round(Number(options.retryMs))) : pendingExitRetryMsCore(pending, options);
+        const lastAttemptAt = Number(pending.lastAttemptAt || 0);
+        const reloadConfirmation = options.reloadConfirmation || null;
+        return {
+          scope: pending.scope || "",
+          source: pending.source || "",
+          reason: pending.reason || "",
+          summary: pending.summary || "",
+          displayReason: pending.displayReason || "",
+          at: Number(pending.at || 0),
+          ageMs: pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0,
+          lastAttemptAt,
+          lastAttemptAgeMs: lastAttemptAt ? Math.max(0, Math.round(t - lastAttemptAt)) : null,
+          retryMs,
+          retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
+          retryCount: Number(pending.retryCount || 0),
+          leaveRequestPending: Boolean(pending.lastResult?.leaveRequestPending),
+          reloadConfirmation: reloadConfirmation ? {
+            required: Boolean(reloadConfirmation.required),
+            requestedAt: Number(reloadConfirmation.requestedAt || 0),
+            reloadedAt: Number(reloadConfirmation.reloadedAt || 0),
+            restoredAfterReload: Boolean(reloadConfirmation.restoredAfterReload),
+            ageAfterReloadMs: reloadConfirmation.reloadedAt ? Math.max(0, Math.round(t - Number(reloadConfirmation.reloadedAt || t))) : null,
+            count: Number(reloadConfirmation.count || 0),
+            reason: reloadConfirmation.reason || ""
+          } : null,
+          userId: pending.userId || null,
+          combatCover: pending.combatCover ? {
+            reason: pending.combatCover.reason || "",
+            dx: clampSignedStep(pending.combatCover.dx),
+            dy: clampSignedStep(pending.combatCover.dy),
+            shoot: Boolean(pending.combatCover.shoot)
+          } : null,
+          lastError: pending.lastResult?.error || ""
+        };
+      }
+      module.exports = {
+        pendingExitRetryMsCore,
+        pendingExitDisplayReasonCore,
+        summarizePendingExitCore
+      };
+    }
+  });
+
+  // src/browser/runtime/pending-exit.js
+  var require_pending_exit2 = __commonJS({
+    "src/browser/runtime/pending-exit.js"(exports, module) {
+      "use strict";
+      var {
+        pendingExitRetryMsCore,
+        pendingExitDisplayReasonCore,
+        summarizePendingExitCore
+      } = require_pending_exit();
+      module.exports = {
+        pendingExitRetryMsCore,
+        pendingExitDisplayReasonCore,
+        summarizePendingExitCore
+      };
+    }
+  });
+
   // src/browser/runtime/refresh-exit-detail.js
   var require_refresh_exit_detail = __commonJS({
     "src/browser/runtime/refresh-exit-detail.js"(exports, module) {
@@ -4892,7 +4981,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.493" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.494" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -4976,12 +5065,25 @@
       normalizePendingExitReloadConfirmationCore,
       writePersistentPendingExitStateCore
     } = require_pending_exit_persistence();
+    const {
+      pendingExitDisplayReasonCore: pendingExitDisplayReasonForPersistenceCore,
+      pendingExitRetryMsCore: pendingExitRetryMsForPersistenceCore
+    } = require_pending_exit2();
+    function pendingExitRetryCoreOptionsForPersistence() {
+      return {
+        leaveRetryMinMs: cfg.leaveRetryMinMs,
+        leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+        offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+        combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+        pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+      };
+    }
     function pendingExitPersistenceCoreHelpers() {
       return {
         pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs,
         cloneForPendingExit,
-        pendingExitDisplayReason,
-        pendingExitRetryMs,
+        pendingExitDisplayReason: (summary) => pendingExitDisplayReasonForPersistenceCore(summary),
+        pendingExitRetryMs: (pending) => pendingExitRetryMsForPersistenceCore(pending, pendingExitRetryCoreOptionsForPersistence()),
         stringify: safeStringify,
         clearPersistentPendingExitState
       };
@@ -10392,6 +10494,7 @@
         };
       }
     }
+    const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore } = require_pending_exit2();
     const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
     function summarizePursuit(pursuit = bot.pursuit) {
       if (!pursuit) return null;
@@ -10420,62 +10523,24 @@
       if (!value || typeof value !== "object") return value || null;
       return safeJsonClone(value) || { ...value };
     }
-    function pendingExitRetryMs(pending) {
-      const source = String(pending?.source || "");
-      const retryFloorMs = Math.max(
-        1e3,
-        Number(cfg.leaveRetryMinMs ?? cfg.leaveCommandTimeoutMs ?? 1e4) || 1e4
-      );
-      if (pending?.scope === "offline" || source === "offline") {
-        return Math.max(retryFloorMs, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1e3));
-      }
-      if (source === "pursuit") {
-        return Math.max(retryFloorMs, Number(cfg.pursuitLeaveRetryMs || cfg.combatLeaveRetryMs || 1e3));
-      }
-      return Math.max(retryFloorMs, Number(cfg.combatLeaveRetryMs || cfg.pursuitLeaveRetryMs || 1e3));
-    }
-    function pendingExitDisplayReason(summary) {
-      const base = String(summary || "\u9000\u51FA\u8BF7\u6C42\u5DF2\u53D1\u9001").trim();
-      return base + "\uFF0C\u7B49\u5F85\u9000\u51FA\u786E\u8BA4\uFF0C\u672A\u9000\u51FA\u4F1A\u7EE7\u7EED\u8865\u53D1";
+    function pendingExitRetryCoreOptions() {
+      return {
+        leaveRetryMinMs: cfg.leaveRetryMinMs,
+        leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+        offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+        combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+        pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+      };
     }
     function summarizePendingExit(pending = bot.pendingExit) {
       if (!pending) return null;
       const t = Date.now();
-      const retryMs = pendingExitRetryMs(pending);
-      const lastAttemptAt = Number(pending.lastAttemptAt || 0);
       const reloadConfirmation = normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending, t);
-      return {
-        scope: pending.scope || "",
-        source: pending.source || "",
-        reason: pending.reason || "",
-        summary: pending.summary || "",
-        displayReason: pending.displayReason || "",
-        at: Number(pending.at || 0),
-        ageMs: pending.at ? Math.max(0, Math.round(t - Number(pending.at || t))) : 0,
-        lastAttemptAt,
-        lastAttemptAgeMs: lastAttemptAt ? Math.max(0, Math.round(t - lastAttemptAt)) : null,
-        retryMs,
-        retryRemainingMs: lastAttemptAt ? Math.max(0, Math.round(retryMs - (t - lastAttemptAt))) : 0,
-        retryCount: Number(pending.retryCount || 0),
-        leaveRequestPending: Boolean(pending.lastResult?.leaveRequestPending),
-        reloadConfirmation: reloadConfirmation ? {
-          required: Boolean(reloadConfirmation.required),
-          requestedAt: Number(reloadConfirmation.requestedAt || 0),
-          reloadedAt: Number(reloadConfirmation.reloadedAt || 0),
-          restoredAfterReload: Boolean(reloadConfirmation.restoredAfterReload),
-          ageAfterReloadMs: reloadConfirmation.reloadedAt ? Math.max(0, Math.round(t - Number(reloadConfirmation.reloadedAt || t))) : null,
-          count: Number(reloadConfirmation.count || 0),
-          reason: reloadConfirmation.reason || ""
-        } : null,
-        userId: pending.userId || null,
-        combatCover: pending.combatCover ? {
-          reason: pending.combatCover.reason || "",
-          dx: clamp(Math.round(Number(pending.combatCover.dx) || 0), -1, 1),
-          dy: clamp(Math.round(Number(pending.combatCover.dy) || 0), -1, 1),
-          shoot: Boolean(pending.combatCover.shoot)
-        } : null,
-        lastError: pending.lastResult?.error || ""
-      };
+      return summarizePendingExitCore(pending, {
+        nowMs: t,
+        retryMs: pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions()),
+        reloadConfirmation
+      });
     }
     function pendingExitSkipNewLeave(source, reason, extra = {}) {
       const pending = bot.pendingExit;
@@ -10530,12 +10595,12 @@
         source,
         reason: detail.reason || previous?.reason || "",
         summary,
-        displayReason: pendingExitDisplayReason(summary),
+        displayReason: pendingExitDisplayReasonCore(summary),
         at: Number(previous?.at || detail.at || t),
         updatedAt: t,
         lastAttemptAt: Number(detail.at || t),
         retryCount: Number(previous?.retryCount || 0) + 1,
-        retryMs: pendingExitRetryMs({ scope, source }),
+        retryMs: pendingExitRetryMsCore({ scope, source }, pendingExitRetryCoreOptions()),
         userId: detail.userId || getCurrentUserId() || previous?.userId || null,
         self: cloneForPendingExit(selfLike || detail.self || previous?.self || null),
         offlineSafety: cloneForPendingExit(detail.offlineSafety || previous?.offlineSafety || null),
@@ -11023,7 +11088,7 @@
     }
     async function retryPendingExit(pending, self, state2) {
       const t = Date.now();
-      const retryMs = pendingExitRetryMs(pending);
+      const retryMs = pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions());
       const lastAttemptAt = Number(pending.lastAttemptAt || 0);
       if (lastAttemptAt && t - lastAttemptAt < retryMs) {
         const detail2 = {
@@ -11082,7 +11147,7 @@
         bot.pendingExit = next;
         writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, next || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
         detail.pendingExit = summarizePendingExit(next);
-        detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReason(detail.summary || pending.summary || detail.reason);
+        detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReasonCore(detail.summary || pending.summary || detail.reason);
       }
       recordPendingExitResult(pending.source, detail, t);
       return detail;
@@ -11090,7 +11155,7 @@
     function schedulePendingExitRetry(pending, self, state2) {
       if (!pending) return false;
       const t = Date.now();
-      const retryMs = pendingExitRetryMs(pending);
+      const retryMs = pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions());
       const lastAttemptAt = Number(pending.lastAttemptAt || 0);
       if (lastAttemptAt && t - lastAttemptAt < retryMs) return false;
       Promise.resolve().then(() => retryPendingExit(pending, self, state2)).catch((err) => recordUnhandledTickError("pending-exit-retry", err));
@@ -11523,7 +11588,7 @@
       retryDetail.clashLeaveRescueStage = stage;
       retryDetail.clashLeaveRescueAttempts = clashLeaveRescueAttempts(detail);
       retryDetail.summary = detail.summary || detail.exitSummary || detail.reason || "";
-      retryDetail.displayReason = detail.displayReason || pendingExitDisplayReason(retryDetail.summary);
+      retryDetail.displayReason = detail.displayReason || pendingExitDisplayReasonCore(retryDetail.summary);
       return retryDetail;
     }
     function resetClashLeaveRescueRound(detail) {

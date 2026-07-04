@@ -9,6 +9,7 @@ import persistentExit from '../browser/runtime/persistent-exit.js';
 import persistentLastSelf from '../browser/runtime/persistent-last-self.js';
 import persistentClear from '../browser/runtime/persistent-clear.js';
 import pendingExitPersistence from '../browser/runtime/pending-exit-persistence.js';
+import pendingExit from '../browser/runtime/pending-exit.js';
 import refreshExitDetail from '../browser/runtime/refresh-exit-detail.js';
 import restoredCoinFailures from '../browser/runtime/restored-coin-failures.js';
 import restoredRuntimeState from '../browser/runtime/restored-runtime-state.js';
@@ -454,6 +455,30 @@ function helperStatus(config = {}) {
     {},
     pendingExitHelpers
   );
+  const pendingExitCoreRetryMs = pendingExit.pendingExitRetryMsCore({
+    scope: 'offline',
+    source: 'offline'
+  }, {
+    leaveRetryMinMs: 1000,
+    offlineLeaveRetryMs: 4500,
+    combatLeaveRetryMs: 1200
+  });
+  const pendingExitCoreDisplayReason = pendingExit.pendingExitDisplayReasonCore('core summary');
+  const pendingExitCoreSummary = pendingExit.summarizePendingExitCore({
+    scope: 'enemy',
+    source: 'combat',
+    reason: 'combat leave',
+    summary: 'combat summary',
+    displayReason: 'combat display',
+    at: 1000,
+    lastAttemptAt: 1400,
+    retryCount: 3,
+    combatCover: { dx: 2, dy: -2, shoot: true },
+    lastResult: { error: 'timeout' }
+  }, {
+    nowMs: 2000,
+    retryMs: 1000
+  });
   const refreshedExitDetail = refreshExitDetail.refreshExitDetailCore({
     reason: '',
     reloginUntil: 2400,
@@ -1167,6 +1192,10 @@ function helperStatus(config = {}) {
     pendingExitReadReason: pendingExitRead?.reason,
     pendingExitWrittenReason: pendingExitStorage.writtenValue?.reason,
     pendingExitChosenReason: pendingExitChosen?.reason,
+    pendingExitCoreRetryMs,
+    pendingExitCoreDisplayReason,
+    pendingExitCoreRetryRemainingMs: pendingExitCoreSummary.retryRemainingMs,
+    pendingExitCoreCombatDx: pendingExitCoreSummary.combatCover?.dx,
     refreshExitHoldRemainingMs: refreshedExitDetail.holdRemainingMs,
     refreshExitSummary: refreshedExitDetail.summary,
     refreshExitDisplayReason: refreshedExitDetail.displayReason,

@@ -6,6 +6,9 @@ const {
 
 function leaveCommandSource(options = {}) {
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
+  const pendingExitDisplayReason = summary => options.bundledRuntime
+    ? `pendingExitDisplayReasonCore(${summary})`
+    : `pendingExitDisplayReason(${summary})`;
   return String.raw`  function waitWithTimeout(promise, timeoutMs, label) {
     const ms = Math.max(100, Number(timeoutMs) || 0);
     return new Promise((resolve, reject) => {
@@ -147,7 +150,7 @@ function leaveCommandSource(options = {}) {
     retryDetail.clashLeaveRescueStage = stage;
     retryDetail.clashLeaveRescueAttempts = clashLeaveRescueAttempts(detail);
     retryDetail.summary = detail.summary || detail.exitSummary || detail.reason || '';
-    retryDetail.displayReason = detail.displayReason || pendingExitDisplayReason(retryDetail.summary);
+    retryDetail.displayReason = detail.displayReason || ${pendingExitDisplayReason('retryDetail.summary')};
     return retryDetail;
   }
 
