@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.480" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.481" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19977,19 +19977,6 @@
     }
     const { pickBestOpportunityCore } = require_opportunity_pick2();
     const { patrolDirectionCore } = require_patrol2();
-    function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
-      const result = patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin, {
-        directionTo,
-        dist,
-        patrolPrecisionTolerance: cfg.patrolPrecisionTolerance,
-        patrolCoinMaxDistance: cfg.patrolCoinMaxDistance,
-        dangerRadius: cfg.dangerRadius,
-        activeAvoidMaxDistance: cfg.activeAvoidMaxDistance,
-        activeCautionRadius: cfg.activeCautionRadius
-      });
-      if (result?.clearPatrolHeading) bot.patrolHeading = null;
-      return result?.direction || { dx: 0, dy: 0, distance: 0, reason: "wait-for-visible-coin-refresh" };
-    }
     const { shouldClearOpportunityChoiceCore } = require_opportunity_clear2();
     function clearOpportunityChoiceFor(type, id = null) {
       if (!shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)) return;
