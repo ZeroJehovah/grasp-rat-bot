@@ -25,12 +25,8 @@ function bundledExitReloginDisplaySource() {
 	    finalizeLeaveDisplayReasonCore
 	  } = require('./src/browser/runtime/exit-relogin');
 
-	  function leaveWaitDisplay(base, detail) {
-	    return leaveWaitDisplayCore(base, detail, formatDurationMs);
-	  }
-
 	  function finalizeLeaveDisplayReason(detail) {
-	    return finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay);
+	    return finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs));
 	  }
 `;
 }

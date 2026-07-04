@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.457" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.458" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10327,11 +10327,8 @@
       leaveWaitDisplayCore,
       finalizeLeaveDisplayReasonCore
     } = require_exit_relogin();
-    function leaveWaitDisplay(base, detail) {
-      return leaveWaitDisplayCore(base, detail, formatDurationMs);
-    }
     function finalizeLeaveDisplayReason(detail) {
-      return finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay);
+      return finalizeLeaveDisplayReasonCore(detail, (base, value) => leaveWaitDisplayCore(base, value, formatDurationMs));
     }
     const {
       combatExitSummaryCore,
