@@ -1082,7 +1082,7 @@ function main() {
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatTrendState'), 'combat-action source factory does not include combat trend wiring');
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatShootingPlan'), 'combat-action source factory does not include shooting plan wiring');
     assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatState'), 'combat-action source factory does not include combat state logging');
-    assert(opportunityStaminaSourceModule.includes('function opportunityStaminaInlineSource(helpers = {}) {'), 'opportunity-stamina inline source factory not found');
+    assert(opportunityStaminaSourceModule.includes('function opportunityStaminaInlineSource(helpers = {}, options = {}) {'), 'opportunity-stamina inline source factory not found');
     assert(opportunityStaminaSourceModule.includes('function bundledOpportunityStaminaSource() {'), 'opportunity-stamina bundled source factory not found');
     assert(opportunityStaminaSourceModule.includes('function opportunityStaminaSource(options = {}) {'), 'opportunity-stamina source selector not found');
     assert(opportunityStaminaSourceModule.includes('bundledOpportunityStaminaSource') && opportunityStaminaSourceModule.includes('opportunityStaminaInlineSource') && opportunityStaminaSourceModule.includes('opportunityStaminaSource'), 'opportunity-stamina source module exports are incomplete');
@@ -3784,7 +3784,10 @@ function main() {
     assert(sourceRuntimeText.includes('function pickNearestDailyStaminaFinalCoin'), 'daily stamina final-run coin picker not found');
     assert(sourceRuntimeText.includes("'daily-stamina-final-visible-coin'"), 'daily stamina final-run action reason not found');
     assert(sourceRuntimeText.includes('!isSnapshotOnlyCoin(coin)') || sourceRuntimeText.includes('filter(coin => !isSnapshotOnlyCoin(coin))'), 'daily stamina final-run does not exclude snapshot-only coins');
-    assert(sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') > 0 && sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin') < sourceRuntimeText.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
+    const dailyFinalWrapperIndex = sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin');
+    const dailyFinalCoreIndex = sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = ${pickNearestDailyStaminaFinalCoinCall}');
+    const dailyFinalIndex = dailyFinalWrapperIndex > 0 ? dailyFinalWrapperIndex : dailyFinalCoreIndex;
+    assert(dailyFinalIndex > 0 && dailyFinalIndex < sourceRuntimeText.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
     assert(nodeSelfTestSource.includes("name: 'low daily stamina goes to nearest visible coin instead of waiting for roi'"), 'low daily stamina final-run visible coin self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low daily stamina does not use snapshot-only final coin'"), 'low daily stamina snapshot-only exclusion self-test not found');
 	    assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
@@ -4325,6 +4328,23 @@ function main() {
     assert(sourceRuntimeText.includes('pickNearestDailyStaminaFinalCoinCore('), 'source bot daily final coin wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/stamina-budget')"), 'generated remote runtime does not hand stamina budget helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'generated remote runtime still inlines daily stamina budget core before bundling');
+    for (const wrapperName of [
+      'opportunityEffectiveStaminaCost',
+      'dailyStaminaBudgetIsLimiting',
+      'summarizeBlockedStaminaOpportunity',
+      'summarizeNearestCoinStaminaBudgetExit',
+      'pickNearestDailyStaminaFinalCoin',
+      'mergeCoinRouteDisplay'
+    ]) {
+      assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
+      assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still declares unused ${wrapperName} wrapper`);
+    }
+    assert(generatedRuntimeSource.includes('const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExitCore('), 'generated choose-action stamina exit path does not call nearest coin stamina core directly');
+    assert(generatedRuntimeSource.includes('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoinCore('), 'generated choose-action daily final coin path does not call daily final core directly');
+    assert(generatedRuntimeSource.includes('summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {'), 'generated choose-action stamina wait path does not call blocked stamina core directly');
+    assert(distSource.includes('const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExitCore('), 'bundled dist stamina exit path does not call nearest coin stamina core directly');
+    assert(distSource.includes('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoinCore('), 'bundled dist daily final coin path does not call daily final core directly');
+    assert(distSource.includes('summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {'), 'bundled dist stamina wait path does not call blocked stamina core directly');
     assert(distSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'bundled dist does not contain daily stamina budget core');
     assert(distSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'bundled dist does not contain blocked stamina summary core');
     assert(distSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'bundled dist does not contain nearest stamina exit core');

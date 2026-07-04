@@ -7,7 +7,7 @@ const {
   pickNearestDailyStaminaFinalCoinCore
 } = require('./runtime/stamina-budget');
 
-function opportunityStaminaInlineSource(helpers = {}) {
+function opportunityStaminaInlineSource(helpers = {}, options = {}) {
   const {
     dailyStaminaBudgetIsLimitingCore,
     summarizeBlockedStaminaOpportunityCore,
@@ -20,13 +20,56 @@ function opportunityStaminaInlineSource(helpers = {}) {
     summarizeNearestCoinStaminaBudgetExitCore,
     pickNearestDailyStaminaFinalCoinCore
   ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
-  return String.raw`  function opportunityEffectiveStaminaCost(staminaCost) {
+  const localEffectiveStaminaCostSource = options.bundledRuntime ? '' : String.raw`  function opportunityEffectiveStaminaCost(staminaCost) {
     return opportunityEffectiveStaminaCostCore(staminaCost, {
       distanceFloor: cfg.opportunityDistanceFloor
     });
   }
 
-  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
+`;
+  const localStaminaBudgetWrapperSource = options.bundledRuntime ? '' : String.raw`	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
+	    return dailyStaminaBudgetIsLimitingCore(
+	      staminaCost,
+	      opportunityWindowStaminaBudget(self, '1h'),
+	      opportunityWindowStaminaBudget(self, '1d')
+	    );
+	  }
+
+	  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
+	    return summarizeBlockedStaminaOpportunityCore(coins, targets, {
+	      budget: opportunityLongStaminaBudget(self),
+	      coinStaminaCost: opportunityCoinStaminaCost,
+	      enemyStaminaCost: opportunityEnemyStaminaCost,
+	      targetDrop: dropValue
+	    });
+	  }
+
+	  function summarizeNearestCoinStaminaBudgetExit(self, coins) {
+	    return summarizeNearestCoinStaminaBudgetExitCore(self, coins, {
+	      budget: opportunityWindowStaminaBudget(self, '1h'),
+	      dist,
+	      coinStaminaCost: opportunityCoinStaminaCost,
+	      reloginDelayMs: staminaBudgetReloginDelayMs()
+	    });
+	  }
+
+	  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
+	    return pickNearestDailyStaminaFinalCoinCore(
+	      safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self),
+	      {
+	        isSnapshotOnlyCoin,
+	        coinStaminaCost: opportunityCoinStaminaCost,
+	        dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimiting(self, staminaCost)
+	      }
+	    );
+	  }
+
+`;
+  const localMergeCoinRouteDisplaySource = options.bundledRuntime ? '' : String.raw`	  function mergeCoinRouteDisplay(base, routeCoin) {
+	    return mergeCoinRouteDisplayCore(base, routeCoin);
+	  }
+`;
+  return String.raw`${localEffectiveStaminaCostSource}  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
     const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
     return travel * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1));
   }
@@ -67,13 +110,7 @@ function opportunityStaminaInlineSource(helpers = {}) {
 
 ${staminaBudgetHelperSource}
 
-	  function dailyStaminaBudgetIsLimiting(self, staminaCost = 0) {
-	    return dailyStaminaBudgetIsLimitingCore(
-	      staminaCost,
-	      opportunityWindowStaminaBudget(self, '1h'),
-	      opportunityWindowStaminaBudget(self, '1d')
-	    );
-	  }
+${localStaminaBudgetWrapperSource}
 
   function opportunityStaminaAffordable(self, staminaCost) {
     const cost = Number(staminaCost);
@@ -81,35 +118,6 @@ ${staminaBudgetHelperSource}
     const budget = opportunityLongStaminaBudget(self);
     return !Number.isFinite(budget) || cost <= budget;
   }
-
-	  function summarizeBlockedStaminaOpportunity(self, coins, targets = []) {
-	    return summarizeBlockedStaminaOpportunityCore(coins, targets, {
-	      budget: opportunityLongStaminaBudget(self),
-	      coinStaminaCost: opportunityCoinStaminaCost,
-	      enemyStaminaCost: opportunityEnemyStaminaCost,
-	      targetDrop: dropValue
-	    });
-	  }
-
-	  function summarizeNearestCoinStaminaBudgetExit(self, coins) {
-	    return summarizeNearestCoinStaminaBudgetExitCore(self, coins, {
-	      budget: opportunityWindowStaminaBudget(self, '1h'),
-	      dist,
-	      coinStaminaCost: opportunityCoinStaminaCost,
-	      reloginDelayMs: staminaBudgetReloginDelayMs()
-	    });
-	  }
-
-	  function pickNearestDailyStaminaFinalCoin(self, coins, activeThreats) {
-	    return pickNearestDailyStaminaFinalCoinCore(
-	      safeCoinCandidates(coins, activeThreats, cfg.globalCoinMaxDistance, self),
-	      {
-	        isSnapshotOnlyCoin,
-	        coinStaminaCost: opportunityCoinStaminaCost,
-	        dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimiting(self, staminaCost)
-	      }
-	    );
-	  }
 
 	  function dailyStaminaFinalCoinAction(self, coin) {
 	    if (!coin) return null;
@@ -174,9 +182,7 @@ ${staminaBudgetHelperSource}
 	    return Number(a.distance || 0) - Number(b.distance || 0);
 	  }
 
-	  function mergeCoinRouteDisplay(base, routeCoin) {
-	    return mergeCoinRouteDisplayCore(base, routeCoin);
-	  }
+${localMergeCoinRouteDisplaySource}
 `;
 }
 
@@ -188,7 +194,7 @@ function bundledOpportunityStaminaSource() {
   pickNearestDailyStaminaFinalCoinCore
 } = require('./src/browser/runtime/stamina-budget');
 
-${opportunityStaminaInlineSource()}`;
+${opportunityStaminaInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function opportunityStaminaSource(options = {}) {
@@ -198,7 +204,7 @@ function opportunityStaminaSource(options = {}) {
     summarizeBlockedStaminaOpportunityCore,
     summarizeNearestCoinStaminaBudgetExitCore,
     pickNearestDailyStaminaFinalCoinCore
-  });
+  }, options);
 }
 
 module.exports = {

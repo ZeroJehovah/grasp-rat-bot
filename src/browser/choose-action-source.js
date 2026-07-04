@@ -6,6 +6,43 @@ function chooseActionSource(options = {}) {
   const clearPostAttackCoinOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackCoin.postAttackTarget?.id', options);
   const clearPostAttackWaitOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackWaitTarget.id', options);
   const clearDailyStaminaCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null', options);
+  const summarizeNearestCoinStaminaBudgetExitCall = options.bundledRuntime
+    ? String.raw`summarizeNearestCoinStaminaBudgetExitCore(
+	      self,
+	      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self),
+	      {
+	        budget: opportunityWindowStaminaBudget(self, '1h'),
+	        dist,
+	        coinStaminaCost: opportunityCoinStaminaCost,
+	        reloginDelayMs: staminaBudgetReloginDelayMs()
+	      }
+	    )`
+    : String.raw`summarizeNearestCoinStaminaBudgetExit(
+	      self,
+	      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self)
+	    )`;
+  const pickNearestDailyStaminaFinalCoinCall = options.bundledRuntime
+    ? String.raw`pickNearestDailyStaminaFinalCoinCore(
+      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self),
+      {
+        isSnapshotOnlyCoin,
+        coinStaminaCost: opportunityCoinStaminaCost,
+        dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimitingCore(
+          staminaCost,
+          opportunityWindowStaminaBudget(self, '1h'),
+          opportunityWindowStaminaBudget(self, '1d')
+        )
+      }
+    )`
+    : String.raw`pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats)`;
+  const summarizeBlockedStaminaOpportunityCall = options.bundledRuntime
+    ? String.raw`summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {
+	          budget: opportunityLongStaminaBudget(self),
+	          coinStaminaCost: opportunityCoinStaminaCost,
+	          enemyStaminaCost: opportunityEnemyStaminaCost,
+	          targetDrop: dropValue
+	        })`
+    : String.raw`summarizeBlockedStaminaOpportunity(self, realtimeCoins, [])`;
   return String.raw`  function chooseAction(self) {
     const {
       entities,
@@ -252,10 +289,7 @@ function chooseActionSource(options = {}) {
       ${clearPostAttackWaitOpportunity}
       return buildPostAttackDropWaitAction(self, postAttackWaitTarget);
     }
-	    const staminaBudgetExit = summarizeNearestCoinStaminaBudgetExit(
-	      self,
-	      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self)
-	    );
+	    const staminaBudgetExit = ${summarizeNearestCoinStaminaBudgetExitCall};
 	    if (staminaBudgetExit) {
 	      bot.fleeLock = null;
 	      return staminaBudgetCoinLeaveAction(staminaBudgetExit);
@@ -338,7 +372,7 @@ function chooseActionSource(options = {}) {
       }, self, realtimeEntities, { recovery });
     }
 
-    const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats);
+    const dailyStaminaFinalCoin = ${pickNearestDailyStaminaFinalCoinCall};
     if (dailyStaminaFinalCoin) {
       bot.fleeLock = null;
       ${clearDailyStaminaCoinOpportunity}
@@ -434,7 +468,7 @@ function chooseActionSource(options = {}) {
 	    bot.lastSnapshotCoinWaitAgeMs = 0;
 	    const hasRealtimeCoinForBudgetWait = (realtimeCoins || []).some(coin => Number(coin?.amount || 0) > 0);
 	    const staminaBlocked = hasRealtimeCoinForBudgetWait
-	      ? summarizeBlockedStaminaOpportunity(self, realtimeCoins, [])
+	      ? ${summarizeBlockedStaminaOpportunityCall}
 	      : null;
 	    const waitReason = staminaBlocked ? 'wait-for-stamina-budget' : 'wait-for-visible-coin-refresh';
 	    const sourceSummary = bot.lastCoinSourceSummary || {};
