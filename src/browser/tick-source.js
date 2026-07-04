@@ -2,7 +2,7 @@
 
 function tickSource(options = {}) {
   const clearPrelude = options.bundledRuntime
-    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const clearEnemyOnlineRestore = options.bundledRuntime
     ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
@@ -10,6 +10,9 @@ function tickSource(options = {}) {
   const clearOfflineOnlineRestore = options.bundledRuntime
     ? "clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })"
     : "clearOfflineReloginHold('online self restored during offline hold')";
+  const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
+    ? `currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })`
+    : `currentOfflineDisplayReason(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback})`;
   return String.raw`${clearPrelude}  async function tick(source = 'timer') {
     if (!bot.running) return;
     if (bot.ticking) {
@@ -310,7 +313,7 @@ function tickSource(options = {}) {
 	            noSelfGameSession: noSelfExit,
 	            liveSessionTakeover,
 	            offlineSafety,
-	            displayReason: currentOfflineDisplayReason(noSelfExit.reason, offlineSafety, leaveResult, offlineDetail, noSelfExit.displayReason),
+	            displayReason: ${currentOfflineDisplayReasonCall('noSelfExit.reason', 'offlineSafety', 'leaveResult', 'offlineDetail', 'noSelfExit.displayReason')},
 	            leave: leaveResult
 	          };
 	          updateBotPanel(bot.lastDecision);
@@ -424,7 +427,7 @@ function tickSource(options = {}) {
           leaveDelayMs: 0,
           stamina: staminaState,
           offlineSafety,
-          displayReason: currentOfflineDisplayReason('stamina exhausted', offlineSafety, leaveResult, offlineDetail, staminaDisplayReason),
+          displayReason: ${currentOfflineDisplayReasonCall("'stamina exhausted'", 'offlineSafety', 'leaveResult', 'offlineDetail', 'staminaDisplayReason')},
           leave: leaveResult
         };
         updateBotPanel(bot.lastDecision);
@@ -529,7 +532,7 @@ function tickSource(options = {}) {
           serverPositionStall,
           samplingOutage,
           combatTickGap,
-	          displayReason: currentOfflineDisplayReason(offlineLeaveReason, offlineSafety, leaveResult, offlineDetail, (samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (actionSettlementStallOffline ? '动作结算卡死，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))))),
+	          displayReason: ${currentOfflineDisplayReasonCall('offlineLeaveReason', 'offlineSafety', 'leaveResult', 'offlineDetail', "(samplingOutage ? '网络采样超时，正在退出' : (combatTickGap ? '战斗主循环断档，正在退出' : (actionSettlementStallOffline ? '动作结算卡死，正在退出' : (reconnectChurn ? '网络连接反复重连，正在退出' : ''))))")},
 	          leave: leaveResult
 	        };
 	        updateBotPanel(bot.lastDecision);
@@ -673,7 +676,7 @@ function tickSource(options = {}) {
 	          control: summarizeControl(),
 	          self: currentSummary,
 	          offlineSafety,
-	          displayReason: currentOfflineDisplayReason(action.reason || 'stamina budget coin leave', offlineSafety, leaveResult, offlineDetail, action.displayReason || ''),
+	          displayReason: ${currentOfflineDisplayReasonCall("action.reason || 'stamina budget coin leave'", 'offlineSafety', 'leaveResult', 'offlineDetail', "action.displayReason || ''")},
 	          leave: leaveResult,
 	          holdRemainingMs: offlineDetail?.holdRemainingMs ?? offlineReloginHoldRemainingMs()
 	        };

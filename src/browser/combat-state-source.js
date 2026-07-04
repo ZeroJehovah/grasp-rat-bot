@@ -1,7 +1,13 @@
 'use strict';
 
-function combatStateSource() {
-  return String.raw`  function combatTargetId(target) {
+function combatStateSource(options = {}) {
+  const offlineDisplayPrelude = options.bundledRuntime
+    ? "  const { currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    : '';
+  const currentOfflineDisplayReasonCall = (reason, offlineSafety, leaveResult, offlineDetail, fallback) => options.bundledRuntime
+    ? `currentOfflineDisplayReasonForCombatStateCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })`
+    : `currentOfflineDisplayReason(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback})`;
+  return String.raw`${offlineDisplayPrelude}  function combatTargetId(target) {
     const id = target?.user_id ?? target?.id;
     return id === null || id === undefined ? '' : String(id);
   }
@@ -530,7 +536,7 @@ function combatStateSource() {
       leaveDelayMs: 0,
       offlineSafety,
       combatTickGap,
-      displayReason: currentOfflineDisplayReason('combat tick gap', offlineSafety, leaveResult, offlineDetail, '战斗主循环断档，正在退出'),
+      displayReason: ${currentOfflineDisplayReasonCall("'combat tick gap'", 'offlineSafety', 'leaveResult', 'offlineDetail', "'战斗主循环断档，正在退出'")},
       leave: leaveResult,
       tickReentry: true
     };

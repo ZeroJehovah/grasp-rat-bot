@@ -310,7 +310,6 @@ function bundledExitReloginSummarySource() {
 \t    pursuitLeaveSummaryCore,
 \t    injuryLeaveSummaryCore,
 \t    offlineLeaveSummaryCore,
-\t    currentOfflineDisplayReasonCore,
 \t    reloginDelayForHpCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
@@ -332,10 +331,6 @@ function bundledExitReloginSummarySource() {
 
 \t  function offlineLeaveSummary(reason, offlineSafety) {
 \t    return offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
-\t  }
-
-\t  function currentOfflineDisplayReason(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = '') {
-\t    return currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary });
 \t  }
 `;
 }

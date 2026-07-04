@@ -241,7 +241,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-opportunity-stamina',
     `
 `],
-    ['combat-state', combatStateSource],
+    ['combat-state', () => combatStateSource(config)],
     ['combat-fire', combatFireSource],
     ['combat-leave-cover', combatLeaveCoverSource],
     ['combat-action', combatActionSource],

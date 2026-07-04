@@ -1022,9 +1022,11 @@ function main() {
     assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatMotionSamplesWithCurrent'), 'combat-aim source factory does not include motion history helper');
     assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatOpponentProfile'), 'combat-aim source factory does not include opponent profile helper');
     assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatTradeEstimate'), 'combat-aim source factory does not include trade estimate helper');
-    assert(combatStateSourceModule.includes('function combatStateSource() {'), 'combat-state source factory not found');
+    assert(combatStateSourceModule.includes('function combatStateSource(options = {}) {'), 'combat-state source factory not found');
     assert(combatStateSourceModule.includes('module.exports = { combatStateSource }'), 'combat-state source module export not found');
     assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('String.raw`'), 'combat-state source factory does not return raw browser source');
+    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore'), 'combat-state source factory does not import bundled offline display core alias');
+    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('currentOfflineDisplayReasonForCombatStateCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })'), 'combat-state source factory does not bind bundled offline display core directly');
     assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatTargetId'), 'combat-state source factory does not include target id helper');
     assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatDisadvantageObservationState'), 'combat-state source factory does not include disadvantage observation helper');
     assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatTrendState'), 'combat-state source factory does not include trend state helper');
@@ -1186,6 +1188,9 @@ function main() {
     assert(functionBody(tickSourceModule, 'tickSource').includes('String.raw`'), 'tick source factory does not return raw browser source');
     assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore'), 'tick source factory does not import bundled relogin hold cleanup bound cores');
     assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldForTickBoundCore(bot, localStorage') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldForTickBoundCore(bot, localStorage'), 'tick source factory does not bind bundled relogin hold cleanup through runtime bound cores');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore'), 'tick source factory does not import bundled offline display core alias');
+    assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })'), 'tick source factory does not bind bundled offline display core directly');
+    assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['combat-state', () => combatStateSource(config)]"), 'runtime fragment registry does not pass config into combat-state source');
     assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['tick', () => tickSource(config)]"), 'runtime fragment registry does not pass config into tick source');
     assert(functionBody(tickSourceModule, 'tickSource').includes("async function tick(source = 'timer')"), 'tick source factory does not include tick');
     assert(functionBody(tickSourceModule, 'tickSource').includes('handlePendingExit(self)'), 'tick source factory does not preserve pending-exit handling');
@@ -1591,7 +1596,7 @@ function main() {
     assert(exitReloginSummaryBundledBody.includes('pursuitLeaveSummaryCore(pursuit, { actorLabel, formatDurationMs, formatDistance })'), 'exit-relogin summary bundled source does not bind pursuit summary helpers');
     assert(exitReloginSummaryBundledBody.includes('injuryLeaveSummaryCore(injury, { actorLabel, hpDisplay })'), 'exit-relogin summary bundled source does not bind injury summary helpers');
     assert(exitReloginSummaryBundledBody.includes('offlineLeaveSummaryCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'exit-relogin summary bundled source does not bind offline summary helpers');
-    assert(exitReloginSummaryBundledBody.includes('currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult, offlineDetail, fallback, { offlineLeaveSummary })'), 'exit-relogin summary bundled source does not bind offline display helper');
+    assert(!exitReloginSummaryBundledBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary bundled source still keeps offline display wrapper');
     assert(!exitReloginSummaryBundledBody.includes('function reloginDelayForHp'), 'exit-relogin summary bundled source still keeps HP relogin delay wrapper');
     const exitReloginHoldInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldInlineSource');
     assert(exitReloginHoldInlineBody.includes('function isExitLoginSuppressReason'), 'exit-relogin hold inline source does not include suppress reason matcher');
