@@ -663,7 +663,8 @@ function bundledExitReloginHoldReadSource() {
   return `	  const {
 \t    enemyReloginHoldRemainingMsBoundCore,
 \t    offlineReloginHoldRemainingMsBoundCore,
-\t    clearLoginSuppressMatchingBoundCore
+\t    clearLoginSuppressMatchingBoundCore,
+\t    clearOfflineReloginHoldBoundCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
   function enemyReloginHoldRemainingMs() {
@@ -683,7 +684,15 @@ function bundledExitReloginHoldReadSource() {
       readPersistentExitState,
       offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
       staleOfflineStaminaHoldContradicted,
-      clearOfflineReloginHold,
+      clearOfflineReloginHold: reason => clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
+        now: Date.now,
+        writePersistentPendingExitState,
+        clearPersistentPendingExitState,
+        clearPersistentExitState,
+        loginSuppressKey: LOGIN_SUPPRESS_KEY,
+        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
+      }),
       now: Date.now
     });
   }
@@ -804,37 +813,7 @@ function exitReloginClearInlineSource() {
 }
 
 function bundledExitReloginClearSource() {
-  return `	  const {
-	    clearEnemyReloginHoldBoundCore,
-	    clearOfflineReloginHoldBoundCore
-	  } = require('./src/browser/runtime/exit-relogin');
-
-\t  function clearEnemyReloginHold(reason = 'online self restored') {
-\t    return clearEnemyReloginHoldBoundCore(bot, localStorage, reason, {
-\t      now: Date.now,
-\t      activeEnemyLeaveDetail,
-\t      writePersistentPendingExitState,
-\t      clearPersistentPendingExitState,
-\t      clearExitHoldDetail,
-\t      clearPersistentExitState,
-\t      loginSuppressKey: LOGIN_SUPPRESS_KEY,
-\t      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-\t      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY
-\t    });
-\t  }
-
-\t  function clearOfflineReloginHold(reason = 'online self restored') {
-\t    return clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
-\t      now: Date.now,
-\t      writePersistentPendingExitState,
-\t      clearPersistentPendingExitState,
-\t      clearPersistentExitState,
-\t      loginSuppressKey: LOGIN_SUPPRESS_KEY,
-\t      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-\t      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
-\t    });
-\t  }
-`;
+  return '';
 }
 
 function exitReloginRemainderSource() {

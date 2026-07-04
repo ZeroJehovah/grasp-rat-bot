@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.454" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.455" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10380,7 +10380,8 @@
     const {
       enemyReloginHoldRemainingMsBoundCore,
       offlineReloginHoldRemainingMsBoundCore,
-      clearLoginSuppressMatchingBoundCore
+      clearLoginSuppressMatchingBoundCore,
+      clearOfflineReloginHoldBoundCore
     } = require_exit_relogin();
     function enemyReloginHoldRemainingMs() {
       return enemyReloginHoldRemainingMsBoundCore(bot, localStorage, {
@@ -10398,7 +10399,15 @@
         readPersistentExitState,
         offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
         staleOfflineStaminaHoldContradicted,
-        clearOfflineReloginHold,
+        clearOfflineReloginHold: (reason) => clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
+          now: Date.now,
+          writePersistentPendingExitState,
+          clearPersistentPendingExitState,
+          clearPersistentExitState,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
+        }),
         now: Date.now
       });
     }
@@ -10406,34 +10415,6 @@
       return clearLoginSuppressMatchingBoundCore(localStorage, pattern, {
         loginSuppressKey: LOGIN_SUPPRESS_KEY,
         loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY
-      });
-    }
-    const {
-      clearEnemyReloginHoldBoundCore,
-      clearOfflineReloginHoldBoundCore
-    } = require_exit_relogin();
-    function clearEnemyReloginHold(reason = "online self restored") {
-      return clearEnemyReloginHoldBoundCore(bot, localStorage, reason, {
-        now: Date.now,
-        activeEnemyLeaveDetail,
-        writePersistentPendingExitState,
-        clearPersistentPendingExitState,
-        clearExitHoldDetail,
-        clearPersistentExitState,
-        loginSuppressKey: LOGIN_SUPPRESS_KEY,
-        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-        enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY
-      });
-    }
-    function clearOfflineReloginHold(reason = "online self restored") {
-      return clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
-        now: Date.now,
-        writePersistentPendingExitState,
-        clearPersistentPendingExitState,
-        clearPersistentExitState,
-        loginSuppressKey: LOGIN_SUPPRESS_KEY,
-        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
       });
     }
     const { setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require_exit_relogin();
@@ -20908,6 +20889,7 @@
         }
       };
     }
+    const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore } = require_exit_relogin();
     async function tick(source = "timer") {
       if (!bot.running) return;
       if (bot.ticking) {
@@ -20988,7 +20970,7 @@
         const enemyHoldControl = summarizeControl();
         let enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
         if (enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen) {
-          clearEnemyReloginHold("online self restored during enemy hold");
+          clearEnemyReloginHoldForTickBoundCore(bot, localStorage, "online self restored during enemy hold", { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY });
           enemyHoldRemainingMs = 0;
         }
         if (enemyHoldRemainingMs > 0) {
@@ -21027,7 +21009,7 @@
         const offlineHoldControl = summarizeControl();
         let offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
         if (offlineHoldRemainingMs > 0 && self && isAlive(self) && offlineHoldControl.wsOpen) {
-          clearOfflineReloginHold("online self restored during offline hold");
+          clearOfflineReloginHoldForTickBoundCore(bot, localStorage, "online self restored during offline hold", { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY });
           offlineHoldRemainingMs = 0;
         }
         if (offlineHoldRemainingMs > 0) {

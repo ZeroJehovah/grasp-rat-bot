@@ -274,7 +274,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
 `],
-    ['tick', tickSource],
+    ['tick', () => tickSource(config)],
     ['separator-after-tick',
     `
 
