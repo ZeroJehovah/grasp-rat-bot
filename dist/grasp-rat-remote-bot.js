@@ -1722,6 +1722,51 @@
           return false;
         }
       }
+      function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers) {
+        const now = Number(helpers.now || 0) || 0;
+        const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);
+        if (staminaHold && detail) {
+          if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
+          else detail.staminaReset = staminaHold;
+        }
+        if (!staminaHold && !(Number(options.minimumUntil || 0) > now)) {
+          const unsafeOfflineExit = helpers.offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null);
+          bot.offlineReloginUntil = 0;
+          bot.lastOfflineLeaveWaitMs = 0;
+          if (detail) {
+            detail.reloginUntil = 0;
+            detail.holdRemainingMs = 0;
+            detail.reloginDelayMs = 0;
+            detail.safeReloginAllowed = !unsafeOfflineExit;
+            if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true;
+            detail.loginSuppressReason = "";
+            helpers.finalizeLeaveDisplayReason(detail);
+            bot.lastOfflineLeaveResult = detail;
+            helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);
+          }
+          return 0;
+        }
+        return helpers.setExitReloginSuppress("offline leave", reason, detail, selfLike, {
+          existingUntil: bot.offlineReloginUntil,
+          minimumUntil: Math.max(Number(options.minimumUntil || 0) || 0, staminaHold?.until || 0),
+          minimumReason: options.minimumReason || staminaHold?.reason || (staminaHold ? "stamina reset" : ""),
+          fixedDelayMs: staminaHold?.fixed ? staminaHold.fixedDelayMs : 0
+        });
+      }
+      function primePendingStaminaExitLoginSuppressCore(detail, helpers) {
+        const now = Number(helpers.now || 0) || 0;
+        const hold = helpers.staminaExitHoldUntilForDetail(detail);
+        if (!hold) return 0;
+        const delayMs = hold.fixed ? hold.fixedDelayMs : Math.max(1e3, Math.round(Number(hold.until || 0) - now));
+        const until = helpers.setLoginSuppress("stamina leave pending", delayMs);
+        if (detail) {
+          detail.pendingLoginSuppressUntil = until;
+          detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));
+          if (hold.staminaBudgetExit) detail.staminaBudgetHold = hold;
+          else detail.staminaReset = hold;
+        }
+        return until;
+      }
       function clearEnemyReloginHoldCore(bot, reason = "online self restored", helpers) {
         const t = Number(helpers.now || 0) || 0;
         const details = [
@@ -1792,6 +1837,8 @@
         enemyReloginHoldRemainingMsCore,
         offlineReloginHoldRemainingMsCore,
         clearLoginSuppressMatchingCore,
+        setOfflineLeaveSuppressCore,
+        primePendingStaminaExitLoginSuppressCore,
         clearEnemyReloginHoldCore,
         clearOfflineReloginHoldCore
       };
@@ -4400,7 +4447,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.429" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.430" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10193,48 +10240,27 @@
     function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
       return offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety);
     }
+    const {
+      setOfflineLeaveSuppressCore,
+      primePendingStaminaExitLoginSuppressCore
+    } = require_exit_relogin();
     function setOfflineLeaveSuppress(reason, detail, selfLike = null, options = {}) {
-      const staminaHold = staminaExitHoldUntilForDetail(detail);
-      if (staminaHold && detail) {
-        if (staminaHold.staminaBudgetExit) detail.staminaBudgetHold = staminaHold;
-        else detail.staminaReset = staminaHold;
-      }
-      if (!staminaHold && !(Number(options.minimumUntil || 0) > Date.now())) {
-        const unsafeOfflineExit = offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null);
-        bot.offlineReloginUntil = 0;
-        bot.lastOfflineLeaveWaitMs = 0;
-        if (detail) {
-          detail.reloginUntil = 0;
-          detail.holdRemainingMs = 0;
-          detail.reloginDelayMs = 0;
-          detail.safeReloginAllowed = !unsafeOfflineExit;
-          if (unsafeOfflineExit) detail.defensiveReloginDelaySkipped = true;
-          detail.loginSuppressReason = "";
-          finalizeLeaveDisplayReason(detail);
-          bot.lastOfflineLeaveResult = detail;
-          writePersistentExitState(OFFLINE_LEAVE_STATE_KEY, detail);
-        }
-        return 0;
-      }
-      return setExitReloginSuppress("offline leave", reason, detail, selfLike, {
-        existingUntil: bot.offlineReloginUntil,
-        minimumUntil: Math.max(Number(options.minimumUntil || 0) || 0, staminaHold?.until || 0),
-        minimumReason: options.minimumReason || staminaHold?.reason || (staminaHold ? "stamina reset" : ""),
-        fixedDelayMs: staminaHold?.fixed ? staminaHold.fixedDelayMs : 0
+      return setOfflineLeaveSuppressCore(bot, reason, detail, selfLike, options, {
+        now: Date.now(),
+        staminaExitHoldUntilForDetail,
+        offlineExitRequiresUnsafeReloginDelay,
+        finalizeLeaveDisplayReason,
+        writePersistentExitState,
+        setExitReloginSuppress,
+        offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
       });
     }
     function primePendingStaminaExitLoginSuppress(detail) {
-      const hold = staminaExitHoldUntilForDetail(detail);
-      if (!hold) return 0;
-      const delayMs = hold.fixed ? hold.fixedDelayMs : Math.max(1e3, Math.round(Number(hold.until || 0) - Date.now()));
-      const until = setLoginSuppress("stamina leave pending", delayMs);
-      if (detail) {
-        detail.pendingLoginSuppressUntil = until;
-        detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - Date.now()));
-        if (hold.staminaBudgetExit) detail.staminaBudgetHold = hold;
-        else detail.staminaReset = hold;
-      }
-      return until;
+      return primePendingStaminaExitLoginSuppressCore(detail, {
+        now: Date.now(),
+        staminaExitHoldUntilForDetail,
+        setLoginSuppress
+      });
     }
     const {
       enemyReloginHoldRemainingMsCore,

@@ -747,6 +747,54 @@ function helperStatus(config = {}) {
     'suppressReason',
     /offline.*leave/i
   );
+  const exitReloginOfflineSuppressEvents = [];
+  const exitReloginOfflineSuppressBot = {
+    offlineReloginUntil: 4500,
+    lastOfflineLeaveWaitMs: 3500,
+    lastOfflineLeaveResult: null
+  };
+  const exitReloginOfflineSuppressDetail = {
+    offlineSafety: { unsafe: true },
+    summary: 'offline suppress spike'
+  };
+  const exitReloginOfflineSuppressReturn = exitRelogin.setOfflineLeaveSuppressCore(
+    exitReloginOfflineSuppressBot,
+    'offline unsafe spike',
+    exitReloginOfflineSuppressDetail,
+    { hp: 80 },
+    {},
+    {
+      now: 1000,
+      staminaExitHoldUntilForDetail: () => null,
+      offlineExitRequiresUnsafeReloginDelay: () => true,
+      finalizeLeaveDisplayReason: detail => {
+        detail.finalized = true;
+        return detail;
+      },
+      writePersistentExitState: (key, detail) => exitReloginOfflineSuppressEvents.push(['write-exit', key, detail.safeReloginAllowed]),
+      setExitReloginSuppress: () => {
+        throw new Error('unexpected suppress path for zero-hold spike');
+      },
+      offlineLeaveStateKey: 'offline-state'
+    }
+  );
+  const exitReloginPendingStaminaDetail = {};
+  const exitReloginPendingStaminaUntil = exitRelogin.primePendingStaminaExitLoginSuppressCore(
+    exitReloginPendingStaminaDetail,
+    {
+      now: 1000,
+      staminaExitHoldUntilForDetail: () => ({
+        until: 6000,
+        fixed: false,
+        reason: 'stamina reset',
+        staminaBudgetExit: { coin: { id: 'stamina-spike' } }
+      }),
+      setLoginSuppress: (reason, delayMs) => {
+        exitReloginOfflineSuppressEvents.push(['set-login-suppress', reason, delayMs]);
+        return 1000 + delayMs;
+      }
+    }
+  );
   const exitReloginClearEnemyEvents = [];
   const exitReloginClearEnemyDetail = { reloginUntil: 7000, holdRemainingMs: 5000, reloginDelayMs: 6000 };
   const exitReloginClearActiveEnemyDetail = { reloginUntil: 6500, holdRemainingMs: 4500, reloginDelayMs: 5500 };
@@ -907,6 +955,16 @@ function helperStatus(config = {}) {
     exitReloginOfflineHoldBotUntil: exitReloginHoldBot.offlineReloginUntil,
     exitReloginClearedSuppress,
     exitReloginClearRemovedCount: arrayCountRuntime.arrayCount(exitReloginClearStorage.removed || []),
+    exitReloginOfflineSuppressReturn,
+    exitReloginOfflineSuppressUntil: exitReloginOfflineSuppressBot.offlineReloginUntil,
+    exitReloginOfflineSuppressWaitMs: exitReloginOfflineSuppressBot.lastOfflineLeaveWaitMs,
+    exitReloginOfflineSuppressSafe: exitReloginOfflineSuppressDetail.safeReloginAllowed,
+    exitReloginOfflineSuppressSkipped: exitReloginOfflineSuppressDetail.defensiveReloginDelaySkipped,
+    exitReloginOfflineSuppressFinalized: exitReloginOfflineSuppressDetail.finalized,
+    exitReloginPendingStaminaUntil,
+    exitReloginPendingStaminaDelay: exitReloginPendingStaminaDetail.pendingLoginSuppressDelayMs,
+    exitReloginPendingStaminaBudgetCoin: exitReloginPendingStaminaDetail.staminaBudgetHold?.staminaBudgetExit?.coin?.id,
+    exitReloginPrefixEventCount: arrayCountRuntime.arrayCount(exitReloginOfflineSuppressEvents),
     exitReloginEnemyClearUntil: exitReloginClearEnemyBot.pursuitReloginUntil,
     exitReloginEnemyClearPendingReason: exitReloginClearEnemyBot.pendingExit?.reason,
     exitReloginEnemyClearDetailAt: exitReloginClearEnemyDetail.onlineRecoveryAt,
