@@ -8,6 +8,9 @@ const {
   finalizeLeaveDisplayReasonCoreBinding,
   finalizeLeaveDisplayReasonCoreCall
 } = require('./exit-relogin-display-call-source');
+const {
+  writePersistentPendingExitStateCall
+} = require('./pending-exit-persistence-call-source');
 
 function pendingExitSource(options = {}) {
   const offlineSuppressPrelude = options.bundledRuntime
@@ -37,6 +40,7 @@ function pendingExitSource(options = {}) {
   const normalizePendingExitReloadConfirmationCall = args => options.bundledRuntime
     ? `normalizePendingExitReloadConfirmationCore(${args})`
     : `normalizePendingExitReloadConfirmation(${args})`;
+  const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   const offlineSuppressCall = options.bundledRuntime
     ? `\t      setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });`
     : "\t      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);";
@@ -209,7 +213,7 @@ function pendingExitSource(options = {}) {
 	    detail.exitConfirmed = false;
 	    detail.pendingExit = summarizePendingExit(pending);
 	    detail.displayReason = pending.displayReason;
-	    writePersistentPendingExitState(pending);
+	    ${writePendingExit('pending')};
 	    if (leaveDetailSucceeded(detail) && !leaveDetailHasHttp403(detail)) {
 	      requestPendingExitLeaveSuccessReload(detail, 'leave-success');
 	    }
@@ -420,7 +424,7 @@ function pendingExitSource(options = {}) {
 	    detail.exitPending = true;
 	    detail.exitConfirmed = false;
 	    detail.pendingExit = summarizePendingExit(pending);
-	    writePersistentPendingExitState(pending);
+	    ${writePendingExit('pending')};
 	    return reloadConfirmation;
 	  }
 
@@ -755,7 +759,7 @@ ${enemyLeaveSuppressCall}
       lastAttemptAt: t,
       lastResult: cloneForPendingExit(detail)
     };
-    writePersistentPendingExitState(bot.pendingExit);
+    ${writePendingExit('bot.pendingExit')};
     detail.pendingExit = summarizePendingExit(bot.pendingExit);
     recordPendingExitResult(pending.source, detail, t);
     await issueLeaveCommand(detail);
@@ -770,7 +774,7 @@ ${enemyLeaveSuppressCall}
         lastResult: cloneForPendingExit(detail)
       };
       bot.pendingExit = next;
-      writePersistentPendingExitState(next);
+      ${writePendingExit('next')};
       detail.pendingExit = summarizePendingExit(next);
       detail.displayReason = detail.displayReason || pending.displayReason || pendingExitDisplayReason(detail.summary || pending.summary || detail.reason);
     }

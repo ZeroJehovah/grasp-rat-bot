@@ -1,6 +1,11 @@
 'use strict';
 
-function leaveCommandSource() {
+const {
+  writePersistentPendingExitStateCall
+} = require('./pending-exit-persistence-call-source');
+
+function leaveCommandSource(options = {}) {
+  const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   return String.raw`  function waitWithTimeout(promise, timeoutMs, label) {
     const ms = Math.max(100, Number(timeoutMs) || 0);
     return new Promise((resolve, reject) => {
@@ -250,7 +255,7 @@ function leaveCommandSource() {
               retryCount: Number(pending.retryCount || 0) + 1,
               lastResult: cloneForPendingExit(retryDetail)
             };
-            writePersistentPendingExitState(bot.pendingExit);
+            ${writePendingExit('bot.pendingExit')};
             retryDetail.pendingExit = summarizePendingExit(bot.pendingExit);
           }
           recordPendingExitResult(pending?.source || detail.exitAuditSource || 'offline', retryDetail, retryAt);
@@ -296,7 +301,7 @@ function leaveCommandSource() {
       lastAttemptAt: Number(detail.at || detail.lastLeaveRequest?.sentAt || pending.lastAttemptAt || Date.now()),
       lastResult: cloneForPendingExit(detail)
     };
-    writePersistentPendingExitState(bot.pendingExit);
+    ${writePendingExit('bot.pendingExit')};
   }
 
   function maybeConfirmPendingExitFromLeaveDetail(detail) {

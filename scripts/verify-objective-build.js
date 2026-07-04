@@ -380,6 +380,7 @@ function main() {
   const persistentExitSourceModule = readText('src/browser/persistent-exit-source.js');
   const persistentClearSourceModule = readText('src/browser/persistent-clear-source.js');
   const pendingExitPersistenceSourceModule = readText('src/browser/pending-exit-persistence-source.js');
+  const pendingExitPersistenceCallSourceModule = readText('src/browser/pending-exit-persistence-call-source.js');
   const refreshExitDetailSourceModule = readText('src/browser/refresh-exit-detail-source.js');
   const restoredCoinFailuresSourceModule = readText('src/browser/restored-coin-failures-source.js');
   const restoredRuntimeStateSourceModule = readText('src/browser/restored-runtime-state-source.js');
@@ -698,6 +699,7 @@ function main() {
     assert(runtimeFragmentsSourceModule.includes("require('./exit-relogin-source')"), 'exit-relogin source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./pending-exit-source')"), 'pending-exit source module import not found');
     assert(runtimeFragmentsSourceModule.includes("['pending-exit', () => pendingExitSource(config)]"), 'pending-exit source is not invoked with runtime config');
+    assert(runtimeFragmentsSourceModule.includes("['leave-command', () => leaveCommandSource(config)]"), 'leave-command source is not invoked with runtime config');
     assert(runtimeFragmentsSourceModule.includes("require('./restored-runtime-state-source')"), 'restored runtime state source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./page-native-snapshot-source')"), 'page-native snapshot source module import not found');
     assert(runtimeFragmentsSourceModule.includes("require('./action-arbitration-source')"), 'action-arbitration source module import not found');
@@ -1415,11 +1417,18 @@ function main() {
     assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit-persistence')"), 'pending-exit persistence bundled source does not hand helpers to the bundler');
     assert(pendingExitPersistenceBundledBody.includes('pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs'), 'pending-exit persistence bundled source does not bind config max age');
     assert(pendingExitPersistenceBundledBody.includes('cloneForPendingExit') && pendingExitPersistenceBundledBody.includes('pendingExitDisplayReason') && pendingExitPersistenceBundledBody.includes('pendingExitRetryMs'), 'pending-exit persistence bundled source does not bind runtime helper dependencies');
-    assert(pendingExitPersistenceBundledBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit'), 'pending-exit persistence bundled source does not bind storage writer');
+    assert(pendingExitPersistenceCallSourceModule.includes('function writePersistentPendingExitStateCall') && pendingExitPersistenceCallSourceModule.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY'), 'pending-exit persistence call source does not generate direct writer core calls');
+    assert(pendingExitPersistenceCallSourceModule.includes('function writePersistentPendingExitStateCallback') && pendingExitPersistenceCallSourceModule.includes('pending => writePersistentPendingExitStateCore'), 'pending-exit persistence call source does not generate direct writer callbacks');
     assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitReloadConfirmation('), 'pending-exit persistence bundled source still keeps reload-confirmation wrapper');
     assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitStateForStorage('), 'pending-exit persistence bundled source still keeps storage-normalizer wrapper');
     assert(!pendingExitPersistenceBundledBody.includes('function readPersistedPendingExitState('), 'pending-exit persistence bundled source still keeps storage-reader wrapper');
+    assert(!pendingExitPersistenceBundledBody.includes('function writePersistentPendingExitState('), 'pending-exit persistence bundled source still keeps storage-writer wrapper');
     assert(!pendingExitPersistenceBundledBody.includes('function chooseInitialPendingExitState('), 'pending-exit persistence bundled source still keeps initial-state chooser wrapper');
+    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes("writePersistentPendingExitStateCall(pending, { bundledRuntime })"), 'control-login source does not route pending-exit writes through direct core call helper');
+    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('writePersistentPendingExitStateCall(pending, options)'), 'pending-exit source does not route pending-exit writes through direct core call helper');
+    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('writePersistentPendingExitStateCall(pending, options)'), 'leave-command source does not route pending-exit writes through direct core call helper');
+    assert(tickSourceModule.includes('writePersistentPendingExitStateCallback(options)'), 'tick source does not route relogin-hold cleanup writes through direct core callback helper');
+    assert(exitReloginHoldReadCallSourceModule.includes('writePersistentPendingExitStateCallback({ bundledRuntime: true })'), 'exit-relogin hold-read call source does not route clear callbacks through direct core writer');
     assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(controlLoginSourceModule, 'controlLoginSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'control-login source does not route reload-confirmation normalization directly to core for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'pending-exit source does not route reload-confirmation normalization directly to core for bundled builds');
     assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('options.bundledRuntime'), 'pending-exit persistence source selector does not switch on bundled runtime mode');
@@ -1436,6 +1445,7 @@ function main() {
     assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
     assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
     assert(!distSource.includes('function readPersistedPendingExitState('), 'dist remote bot still keeps pending-exit storage-reader wrapper');
+    assert(!distSource.includes('function writePersistentPendingExitState('), 'dist remote bot still keeps pending-exit storage-writer wrapper');
     assert(!distSource.includes('function chooseInitialPendingExitState('), 'dist remote bot still keeps pending-exit initial-state chooser wrapper');
     assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
     assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
@@ -1921,7 +1931,7 @@ function main() {
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
     assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
-    assert(leaveCommandSourceModule.includes('function leaveCommandSource() {'), 'leave-command source factory not found');
+    assert(leaveCommandSourceModule.includes('function leaveCommandSource(options = {}) {'), 'leave-command source factory not found');
     assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('String.raw`'), 'leave-command source factory does not return raw browser source');
     assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function waitWithTimeout'), 'leave-command source factory does not include timeout helper');
@@ -2800,7 +2810,13 @@ function main() {
       const reloadBody = functionBody(text, 'requestLeaveConfirmationReload');
       assert(reloadBody.includes('persistCombatLogPendingEntries({ force: true })'), 'leave-success confirmation reload does not force-persist ordinary pending logs before refresh');
       assert(!reloadBody.includes('closeCurrentImportantSessionBeforeReload'), 'leave-success confirmation reload can prematurely close the important session');
-      assert(reloadBody.includes('writePersistentPendingExitState(pending)'), 'leave-success confirmation reload does not persist pending exit before refresh');
+      assert(
+        reloadBody.includes('writePersistentPendingExitState(pending)')
+          || reloadBody.includes("writePendingExit('pending')")
+          || reloadBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit')
+          || reloadBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, (pending) || bot.pendingExit'),
+        'leave-success confirmation reload does not persist pending exit before refresh'
+      );
       assert(reloadBody.includes("reason: 'leave-success-refresh-confirmation'"), 'leave-success confirmation reload reason not exposed');
       const pendingBody = functionBody(text, 'handlePendingExit');
       assert(pendingBody.includes('leaveSuccessReloadConfirmationSatisfied(reloadConfirmation)'), 'pending exit handler does not require leave-success reload marker');
@@ -2821,9 +2837,28 @@ function main() {
       const rememberBody = functionBody(text, 'rememberPendingExit');
       assert(rememberBody.includes("requestPendingExitLeaveSuccessReload(detail, 'leave-success')"), 'sync leave pending creation does not request confirmation reload');
       const updateBody = functionBody(text, 'updatePendingExitLastResult');
-      assert(updateBody.includes('writePersistentPendingExitState(bot.pendingExit)'), 'pending exit last result updates are not durable');
+      assert(
+        updateBody.includes('writePersistentPendingExitState(bot.pendingExit)')
+          || updateBody.includes("writePendingExit('bot.pendingExit')")
+          || updateBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit')
+          || updateBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, (bot.pendingExit) || bot.pendingExit'),
+        'pending exit last result updates are not durable'
+      );
       const retryBody = functionBody(text, 'retryPendingExit');
-      assert(retryBody.includes('writePersistentPendingExitState(bot.pendingExit)') && retryBody.includes('writePersistentPendingExitState(next)'), 'pending exit retry state is not durable');
+      assert(
+        (
+          retryBody.includes('writePersistentPendingExitState(bot.pendingExit)')
+          || retryBody.includes("writePendingExit('bot.pendingExit')")
+          || retryBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, bot.pendingExit || bot.pendingExit')
+          || retryBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, (bot.pendingExit) || bot.pendingExit')
+        ) && (
+          retryBody.includes('writePersistentPendingExitState(next)')
+          || retryBody.includes("writePendingExit('next')")
+          || retryBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, next || bot.pendingExit')
+          || retryBody.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, (next) || bot.pendingExit')
+        ),
+        'pending exit retry state is not durable'
+      );
       const confirmBody = functionBody(text, 'confirmPendingExit');
       assert(confirmBody.includes('clearPersistentPendingExitState()'), 'confirmed pending exit does not clear persisted pending exit state');
       const clearBody = functionBody(text, 'clearCurrentReloginHold');

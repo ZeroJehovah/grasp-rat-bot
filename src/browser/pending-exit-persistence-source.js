@@ -116,10 +116,6 @@ function bundledPendingExitPersistenceSource() {
 		      stringify: safeStringify,
 		      clearPersistentPendingExitState
 		    };
-		  }
-
-		  function writePersistentPendingExitState(pending = null) {
-		    return writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers());
 		  }`;
 }
 
