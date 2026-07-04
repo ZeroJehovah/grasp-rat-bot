@@ -940,30 +940,32 @@ function exitReloginClearInlineSource() {
 
 function bundledExitReloginClearSource() {
   return `	  const {
-	    clearEnemyReloginHoldCore,
-	    clearOfflineReloginHoldCore
+	    clearEnemyReloginHoldBoundCore,
+	    clearOfflineReloginHoldBoundCore
 	  } = require('./src/browser/runtime/exit-relogin');
 
 \t  function clearEnemyReloginHold(reason = 'online self restored') {
-\t    return clearEnemyReloginHoldCore(bot, reason, {
-\t      now: Date.now(),
+\t    return clearEnemyReloginHoldBoundCore(bot, localStorage, reason, {
+\t      now: Date.now,
 \t      activeEnemyLeaveDetail,
 \t      writePersistentPendingExitState,
 \t      clearPersistentPendingExitState,
 \t      clearExitHoldDetail,
 \t      clearPersistentExitState,
-\t      clearLoginSuppressMatching,
+\t      loginSuppressKey: LOGIN_SUPPRESS_KEY,
+\t      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
 \t      enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY
 \t    });
 \t  }
 
 \t  function clearOfflineReloginHold(reason = 'online self restored') {
-\t    return clearOfflineReloginHoldCore(bot, reason, {
-\t      now: Date.now(),
+\t    return clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
+\t      now: Date.now,
 \t      writePersistentPendingExitState,
 \t      clearPersistentPendingExitState,
 \t      clearPersistentExitState,
-\t      clearLoginSuppressMatching,
+\t      loginSuppressKey: LOGIN_SUPPRESS_KEY,
+\t      loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
 \t      offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
 \t    });
 \t  }

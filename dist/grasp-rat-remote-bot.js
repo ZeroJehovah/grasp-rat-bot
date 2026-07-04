@@ -2045,6 +2045,36 @@
         helpers.clearPersistentExitState(helpers.offlineLeaveStateKey);
         helpers.clearLoginSuppressMatching(/offline.*leave/i);
       }
+      function clearEnemyReloginHoldBoundCore(bot, storage, reason = "online self restored", helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return clearEnemyReloginHoldCore(bot, reason, {
+          now: nowFn(),
+          activeEnemyLeaveDetail: helpers.activeEnemyLeaveDetail,
+          writePersistentPendingExitState: helpers.writePersistentPendingExitState,
+          clearPersistentPendingExitState: helpers.clearPersistentPendingExitState,
+          clearExitHoldDetail: helpers.clearExitHoldDetail,
+          clearPersistentExitState: helpers.clearPersistentExitState,
+          clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(storage, pattern, {
+            loginSuppressKey: helpers.loginSuppressKey,
+            loginSuppressReasonKey: helpers.loginSuppressReasonKey
+          }),
+          enemyLeaveStateKey: helpers.enemyLeaveStateKey
+        });
+      }
+      function clearOfflineReloginHoldBoundCore(bot, storage, reason = "online self restored", helpers) {
+        const nowFn = typeof helpers.now === "function" ? helpers.now : () => Number(helpers.now || 0) || 0;
+        return clearOfflineReloginHoldCore(bot, reason, {
+          now: nowFn(),
+          writePersistentPendingExitState: helpers.writePersistentPendingExitState,
+          clearPersistentPendingExitState: helpers.clearPersistentPendingExitState,
+          clearPersistentExitState: helpers.clearPersistentExitState,
+          clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(storage, pattern, {
+            loginSuppressKey: helpers.loginSuppressKey,
+            loginSuppressReasonKey: helpers.loginSuppressReasonKey
+          }),
+          offlineLeaveStateKey: helpers.offlineLeaveStateKey
+        });
+      }
       module.exports = {
         leaveWaitDisplayCore,
         finalizeLeaveDisplayReasonCore,
@@ -2083,7 +2113,9 @@
         primePendingStaminaExitLoginSuppressCore,
         primePendingStaminaExitLoginSuppressBoundCore,
         clearEnemyReloginHoldCore,
-        clearOfflineReloginHoldCore
+        clearOfflineReloginHoldCore,
+        clearEnemyReloginHoldBoundCore,
+        clearOfflineReloginHoldBoundCore
       };
     }
   });
@@ -4690,7 +4722,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.438" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.439" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10422,28 +10454,30 @@
       });
     }
     const {
-      clearEnemyReloginHoldCore,
-      clearOfflineReloginHoldCore
+      clearEnemyReloginHoldBoundCore,
+      clearOfflineReloginHoldBoundCore
     } = require_exit_relogin();
     function clearEnemyReloginHold(reason = "online self restored") {
-      return clearEnemyReloginHoldCore(bot, reason, {
-        now: Date.now(),
+      return clearEnemyReloginHoldBoundCore(bot, localStorage, reason, {
+        now: Date.now,
         activeEnemyLeaveDetail,
         writePersistentPendingExitState,
         clearPersistentPendingExitState,
         clearExitHoldDetail,
         clearPersistentExitState,
-        clearLoginSuppressMatching,
+        loginSuppressKey: LOGIN_SUPPRESS_KEY,
+        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
         enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY
       });
     }
     function clearOfflineReloginHold(reason = "online self restored") {
-      return clearOfflineReloginHoldCore(bot, reason, {
-        now: Date.now(),
+      return clearOfflineReloginHoldBoundCore(bot, localStorage, reason, {
+        now: Date.now,
         writePersistentPendingExitState,
         clearPersistentPendingExitState,
         clearPersistentExitState,
-        clearLoginSuppressMatching,
+        loginSuppressKey: LOGIN_SUPPRESS_KEY,
+        loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
         offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
       });
     }
