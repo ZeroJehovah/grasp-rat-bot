@@ -4075,8 +4075,8 @@ function main() {
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/patrol')"), 'generated remote runtime does not hand patrol helper to the bundler');
     assert(!generatedRuntimeSource.includes('function patrolDirectionCore'), 'generated remote runtime still inlines patrol core before bundling');
     assert(distSource.includes('function patrolDirectionCore'), 'bundled dist does not contain patrol direction core');
-    assert(distSource.includes('patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin'), 'bundled dist patrol wrapper does not call patrol direction core');
-    assert(distSource.includes('if (result?.clearPatrolHeading) bot.patrolHeading = null'), 'bundled dist patrol wrapper does not preserve patrol heading clear side effect');
+    assert(!functionBody(patrolSourceModule, 'bundledPatrolSource').includes('function patrolDirection('), 'patrol bundled source still keeps patrol direction wrapper');
+    assert(!distSource.includes('function patrolDirection('), 'dist remote bot still keeps patrol direction wrapper');
   });
 
   check('attack worth uses strategy module core', () => {

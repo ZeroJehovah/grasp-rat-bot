@@ -43,21 +43,7 @@ function patrolInlineSource() {
 }
 
 function bundledPatrolSource() {
-  return `const { patrolDirectionCore } = require('./src/browser/runtime/patrol');
-
-	  function patrolDirection(self, activeThreats, nearbyHumans, scanCoin = null) {
-	    const result = patrolDirectionCore(self, activeThreats, nearbyHumans, scanCoin, {
-	      directionTo,
-	      dist,
-	      patrolPrecisionTolerance: cfg.patrolPrecisionTolerance,
-	      patrolCoinMaxDistance: cfg.patrolCoinMaxDistance,
-	      dangerRadius: cfg.dangerRadius,
-	      activeAvoidMaxDistance: cfg.activeAvoidMaxDistance,
-	      activeCautionRadius: cfg.activeCautionRadius
-	    });
-	    if (result?.clearPatrolHeading) bot.patrolHeading = null;
-	    return result?.direction || { dx: 0, dy: 0, distance: 0, reason: 'wait-for-visible-coin-refresh' };
-	  }`;
+  return `const { patrolDirectionCore } = require('./src/browser/runtime/patrol');`;
 }
 
 function patrolSource(options = {}) {
