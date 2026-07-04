@@ -248,7 +248,7 @@ function browserRuntimeFragmentEntries(config) {
     ['opportunity-snapshot', () => opportunitySnapshotSource(config)],
     ['opportunity-candidate', () => opportunityCandidateSource(config)],
     ['post-attack', () => postAttackSource(config)],
-    ['opportunity-actions', opportunityActionsSource],
+    ['opportunity-actions', () => opportunityActionsSource(config)],
     ['opportunity-choice', () => opportunityChoiceSource(config)],
     ['opportunity-pick', () => opportunityPickSource(config)],
     ['patrol', () => patrolSource(config)],

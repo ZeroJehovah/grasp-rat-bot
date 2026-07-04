@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.490" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.491" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -19514,17 +19514,6 @@
         nearbyPriorityDistance: cfg.opportunityNearbyPriorityDistance
       };
     }
-    function uniqueVisibleRouteCoins(coinGroups) {
-      return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
-    }
-    function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-      const route = pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {
-        ...coinRouteCoreOptions(self),
-        heldChoice: currentHeldCoinChoice(),
-        heldRouteChoice: currentHeldCoinRouteChoice()
-      });
-      return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
-    }
     function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
       if (!isFullHp(self)) return null;
       const target = pickCombatTarget(self, combatTargets, bullets, { mode: "profit" });
@@ -19532,7 +19521,14 @@
       const targetScore = scoreEnemyOpportunity(target);
       if (targetScore === null) return null;
       if (!opportunityStaminaAffordable(self, opportunityEnemyStaminaCost(target))) return null;
-      const coinScore = bestCoinOpportunityScore(self, coinGroups, activeThreats);
+      const coinScore = (() => {
+        const route = pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey }), activeThreats, {
+          ...coinRouteCoreOptions(self),
+          heldChoice: currentHeldCoinChoice(),
+          heldRouteChoice: currentHeldCoinRouteChoice()
+        });
+        return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
+      })();
       if (targetScore < coinScore) return null;
       return {
         ...target,
@@ -19605,33 +19601,6 @@
         },
         ...coinMotionMetaCore(dir)
       };
-    }
-    function enemyOpportunityCandidates(self, targets, activeThreats) {
-      const byId = /* @__PURE__ */ new Map();
-      for (const raw of targets) {
-        const id = raw?.user_id;
-        if (!id && id !== 0) continue;
-        const drop = Number(raw.drop ?? dropValue(raw) ?? 0);
-        const distance = Number(raw.distance ?? Infinity);
-        if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
-        if (isWhitelistedTarget(raw)) continue;
-        if (isInvulnerable(raw)) continue;
-        if (!(typeof attackWorthTakingCore === "function" ? attackWorthTakingCore(self, { ...raw, drop }, {
-          isWhitelistedTarget,
-          dropValue,
-          isAfkProfitTarget,
-          attackMinAfkDrop: cfg.attackMinAfkDrop,
-          attackMinDrop: cfg.attackMinDrop,
-          attackMinRewardRatio: cfg.attackMinRewardRatio
-        }) : attackWorthTaking(self, { ...raw, drop }))) continue;
-        if (activeThreats.some((t) => dist(raw, t) <= cfg.attackDangerRadius)) continue;
-        const item = { ...raw, drop, distance };
-        const previous = byId.get(String(id));
-        if (!previous || item.drop > previous.drop || item.distance < previous.distance || !item.minimapOnly) {
-          byId.set(String(id), item);
-        }
-      }
-      return Array.from(byId.values());
     }
     function buildCoinAction(self, coin, reason, kind = null) {
       const dir = coinDirectionTo(self, coin);
@@ -20578,8 +20547,34 @@
         realtimeGlobalTargets.filter(isAfkProfitTarget)
       ] : [realtimeInactiveTargets, realtimeGlobalTargets];
       const opportunity = typeof pickBestOpportunityCore === "function" ? pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups, {
-        enemyOpportunityCandidates,
-        uniqueVisibleRouteCoins,
+        enemyOpportunityCandidates: (candidateSelf, targets, candidateThreats) => {
+          const byId = /* @__PURE__ */ new Map();
+          for (const raw of targets) {
+            const id = raw?.user_id;
+            if (!id && id !== 0) continue;
+            const drop = Number(raw.drop ?? dropValue(raw) ?? 0);
+            const distance = Number(raw.distance ?? Infinity);
+            if (!drop || !Number.isFinite(distance) || distance > cfg.attackApproachRange) continue;
+            if (isWhitelistedTarget(raw)) continue;
+            if (isInvulnerable(raw)) continue;
+            if (!attackWorthTakingCore(candidateSelf, { ...raw, drop }, {
+              isWhitelistedTarget,
+              dropValue,
+              isAfkProfitTarget,
+              attackMinAfkDrop: cfg.attackMinAfkDrop,
+              attackMinDrop: cfg.attackMinDrop,
+              attackMinRewardRatio: cfg.attackMinRewardRatio
+            })) continue;
+            if (candidateThreats.some((threat) => dist(raw, threat) <= cfg.attackDangerRadius)) continue;
+            const item = { ...raw, drop, distance };
+            const previous = byId.get(String(id));
+            if (!previous || item.drop > previous.drop || item.distance < previous.distance || !item.minimapOnly) {
+              byId.set(String(id), item);
+            }
+          }
+          return Array.from(byId.values());
+        },
+        uniqueVisibleRouteCoins: (routeCoinGroups) => uniqueVisibleRouteCoinsCore(routeCoinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey }),
         pickCoinRouteOpportunity: (routeSelf, routeCoins, routeThreats) => pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {
           ...coinRouteCoreOptions(routeSelf),
           heldChoice: currentHeldCoinChoice(),

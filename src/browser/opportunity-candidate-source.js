@@ -36,13 +36,31 @@ function opportunityCandidateInlineSource(helpers = {}, options = {}) {
     buildOpportunityCandidatesCore,
     bestCoinOpportunityScoreCore
   ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
+  const uniqueVisibleRouteCoinsCall = 'uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })';
   const pickCoinRouteOpportunityCall = options.bundledRuntime
-    ? String.raw`pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {
+    ? String.raw`pickCoinRouteOpportunityCore(self, ${uniqueVisibleRouteCoinsCall}, activeThreats, {
       ...coinRouteCoreOptions(self),
       heldChoice: currentHeldCoinChoice(),
       heldRouteChoice: currentHeldCoinRouteChoice()
     })`
     : String.raw`pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats)`;
+  const bestCoinOpportunityScoreCall = options.bundledRuntime
+    ? String.raw`(() => {
+      const route = ${pickCoinRouteOpportunityCall};
+      return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
+    })()`
+    : 'bestCoinOpportunityScore(self, coinGroups, activeThreats)';
+  const localOpportunityCandidateWrapperSource = options.bundledRuntime ? '' : String.raw`
+  function uniqueVisibleRouteCoins(coinGroups) {
+    return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
+  }
+
+  function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
+    const route = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
+    return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
+  }
+
+`;
   return String.raw`
   function opportunityPriorityTier(item) {
     return opportunityPriorityTierCore(item, {
@@ -74,14 +92,7 @@ ${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(se
 	    };
 	  }
 
-  function uniqueVisibleRouteCoins(coinGroups) {
-    return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
-  }
-
-  function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-    const route = ${pickCoinRouteOpportunityCall};
-    return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
-  }
+${localOpportunityCandidateWrapperSource}
 
   function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
     if (!isFullHp(self)) return null;
@@ -90,7 +101,7 @@ ${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(se
     const targetScore = scoreEnemyOpportunity(target);
     if (targetScore === null) return null;
     if (!opportunityStaminaAffordable(self, opportunityEnemyStaminaCost(target))) return null;
-    const coinScore = bestCoinOpportunityScore(self, coinGroups, activeThreats);
+    const coinScore = ${bestCoinOpportunityScoreCall};
     if (targetScore < coinScore) return null;
     return {
       ...target,

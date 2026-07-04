@@ -1,7 +1,7 @@
 'use strict';
 
-function opportunityActionsSource() {
-  return String.raw`  function enemyOpportunityCandidates(self, targets, activeThreats) {
+function opportunityActionsSource(options = {}) {
+  const localEnemyOpportunityCandidatesSource = options.bundledRuntime ? '' : String.raw`  function enemyOpportunityCandidates(self, targets, activeThreats) {
     const byId = new Map();
     for (const raw of targets) {
       const id = raw?.user_id;
@@ -31,7 +31,8 @@ function opportunityActionsSource() {
     return Array.from(byId.values());
   }
 
-  function buildCoinAction(self, coin, reason, kind = null) {
+`;
+  return String.raw`${localEnemyOpportunityCandidatesSource}  function buildCoinAction(self, coin, reason, kind = null) {
     const dir = coinDirectionTo(self, coin);
     const staminaCost = opportunityCoinStaminaCost(coin);
     const routeMeta = coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance);
