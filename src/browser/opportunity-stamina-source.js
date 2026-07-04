@@ -69,6 +69,15 @@ function opportunityStaminaInlineSource(helpers = {}, options = {}) {
 	    return mergeCoinRouteDisplayCore(base, routeCoin);
 	  }
 `;
+  const localOpportunityValueScoreSource = options.bundledRuntime ? '' : String.raw`  function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
+    return opportunityValueScoreCore(value, staminaCost, {
+      weight,
+      distanceFloor: cfg.opportunityDistanceFloor,
+      distanceScoreScale: cfg.opportunityDistanceScoreScale
+    });
+  }
+
+`;
   return String.raw`${localEffectiveStaminaCostSource}  function opportunityMoveStaminaCost(distance, stopDistance = 0) {
     const travel = Math.max(0, Number(distance || 0) - Math.max(0, Number(stopDistance || 0)));
     return travel * Math.max(0, Number(cfg.opportunityMoveStaminaPerCm ?? 1));
@@ -166,13 +175,7 @@ ${localStaminaBudgetWrapperSource}
 	    };
 	  }
 
-  function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
-    return opportunityValueScoreCore(value, staminaCost, {
-      weight,
-      distanceFloor: cfg.opportunityDistanceFloor,
-      distanceScoreScale: cfg.opportunityDistanceScoreScale
-    });
-  }
+${localOpportunityValueScoreSource}
 
 	  function compareCoinOpportunity(a, b) {
 	    const scoreDiff = scoreCoinOpportunity(b) - scoreCoinOpportunity(a);

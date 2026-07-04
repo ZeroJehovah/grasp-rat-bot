@@ -7,7 +7,7 @@ const {
   buildCoinDiagnostics
 } = require('./runtime/coin-diagnostics');
 
-function coinSafetyInlineSource(helpers = {}) {
+function coinSafetyInlineSource(helpers = {}, options = {}) {
   const {
     coinDiagnosticsSummary,
     summarizeCoinDiagnosticsList,
@@ -196,7 +196,13 @@ ${coinDiagnosticsHelperSource}
       if (members.length < cfg.fieldMigrationMinCoins) return null;
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
       const staminaCost = opportunityCoinStaminaCost(coin);
-      const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+      const score = ${options.bundledRuntime
+        ? `opportunityValueScoreCore(totalAmount, staminaCost, {
+        weight: cfg.coinOpportunityValue,
+        distanceFloor: cfg.opportunityDistanceFloor,
+        distanceScoreScale: cfg.opportunityDistanceScoreScale
+      })`
+        : 'opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue)'};
       return {
         ...coin,
         fieldMigration: true,
@@ -242,7 +248,7 @@ function bundledCoinSafetySource() {
   buildCoinDiagnostics
 } = require('./src/browser/runtime/coin-diagnostics');
 
-${coinSafetyInlineSource()}`;
+${coinSafetyInlineSource({}, { bundledRuntime: true })}`;
 }
 
 function coinSafetySource(options = {}) {
@@ -252,7 +258,7 @@ function coinSafetySource(options = {}) {
     summarizeCoinDiagnosticsList,
     addCoinFilterDiagnostic,
     buildCoinDiagnostics
-  });
+  }, options);
 }
 
 module.exports = {

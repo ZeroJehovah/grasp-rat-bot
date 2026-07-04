@@ -3033,7 +3033,7 @@
         const coinStaminaCost = typeof options.coinStaminaCost === "function" ? options.coinStaminaCost : (coin) => Number(coin?.staminaCost || 0);
         const coinStaminaAffordable = typeof options.coinStaminaAffordable === "function" ? options.coinStaminaAffordable : () => true;
         const scoreCoinOpportunity = typeof options.scoreCoinOpportunity === "function" ? options.scoreCoinOpportunity : (coin) => Number(coin?.opportunityScore ?? 0);
-        const snapshotCoinNavigationReason = typeof options.snapshotCoinNavigationReason === "function" ? options.snapshotCoinNavigationReason : (coin) => Number(coin?.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? "best-opportunity-coin" : "best-opportunity-visible-coin";
+        const snapshotCoinNavigationReason2 = typeof options.snapshotCoinNavigationReason === "function" ? options.snapshotCoinNavigationReason : (coin) => Number(coin?.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? "best-opportunity-coin" : "best-opportunity-visible-coin";
         const priorityTier = typeof options.priorityTier === "function" ? options.priorityTier : (item) => opportunityPriorityTierCore(item, options);
         const byId = /* @__PURE__ */ new Map();
         for (const { coins: groupCoins, maxDistance } of coinGroups || []) {
@@ -3064,7 +3064,7 @@
           }
         }
         return Array.from(byId.values()).map((coin) => {
-          const reason = coin.route ? "best-opportunity-coin-route" : snapshotCoinNavigationReason(coin);
+          const reason = coin.route ? "best-opportunity-coin-route" : snapshotCoinNavigationReason2(coin);
           const actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance || 0) ? "coin" : "seek-coin";
           const score = Number.isFinite(Number(coin.opportunitySortScore)) ? Number(coin.opportunitySortScore) : scoreCoinOpportunity(coin);
           return {
@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.488" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.489" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -16019,7 +16019,11 @@
         if (members.length < cfg.fieldMigrationMinCoins) return null;
         const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
         const staminaCost = opportunityCoinStaminaCost(coin);
-        const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+        const score = opportunityValueScoreCore(totalAmount, staminaCost, {
+          weight: cfg.coinOpportunityValue,
+          distanceFloor: cfg.opportunityDistanceFloor,
+          distanceScoreScale: cfg.opportunityDistanceScoreScale
+        });
         return {
           ...coin,
           fieldMigration: true,
@@ -17594,13 +17598,6 @@
         staminaBudgetExit,
         reloginDelayMs: staminaBudgetExit?.reloginDelayMs || staminaBudgetReloginDelayMs()
       };
-    }
-    function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
-      return opportunityValueScoreCore(value, staminaCost, {
-        weight,
-        distanceFloor: cfg.opportunityDistanceFloor,
-        distanceScoreScale: cfg.opportunityDistanceScoreScale
-      });
     }
     function compareCoinOpportunity(a, b) {
       const scoreDiff = scoreCoinOpportunity(b) - scoreCoinOpportunity(a);
@@ -19266,7 +19263,11 @@
         const members = candidates.filter((other) => dist(coin, other) <= Number(cfg.snapshotCoinClusterRadius || cfg.fieldMigrationClusterRadius));
         const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
         const staminaCost = opportunityCoinStaminaCost(coin);
-        const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+        const score = opportunityValueScoreCore(totalAmount, staminaCost, {
+          weight: cfg.coinOpportunityValue,
+          distanceFloor: cfg.opportunityDistanceFloor,
+          distanceScoreScale: cfg.opportunityDistanceScoreScale
+        });
         return {
           ...coin,
           snapshotMembers: members.length,
@@ -19283,7 +19284,7 @@
         const sticky = candidates.find((c) => String(c.drop_id) === String(bot.lastTarget.id));
         if (sticky) {
           const stickyItem = buildSnapshotItem(sticky);
-          if (coinStaminaAffordableWithDiagnostic(self, sticky, stickyItem.opportunityStaminaCost) && snapshotCoinWorthLongTravel(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount)) return asOpportunity(stickyItem);
+          if (coinStaminaAffordableWithDiagnostic(self, sticky, stickyItem.opportunityStaminaCost) && snapshotCoinWorthLongTravelCore(sticky, stickyItem.snapshotMembers, stickyItem.snapshotAmount, coinTargetCoreOptions())) return asOpportunity(stickyItem);
           if (allowIdleFallback) stickyFallback = stickyItem;
         }
       }
@@ -19295,7 +19296,11 @@
         const members = candidates.filter((other) => dist(coin, other) <= radius);
         const totalAmount = members.reduce((sum, item2) => sum + Number(item2.amount || 0), 0);
         const staminaCost = opportunityCoinStaminaCost(coin);
-        const score = opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue);
+        const score = opportunityValueScoreCore(totalAmount, staminaCost, {
+          weight: cfg.coinOpportunityValue,
+          distanceFloor: cfg.opportunityDistanceFloor,
+          distanceScoreScale: cfg.opportunityDistanceScoreScale
+        });
         const item = {
           ...coin,
           snapshotMembers: members.length,
@@ -19305,7 +19310,7 @@
           snapshotAgeMs: ageMs
         };
         const affordable = coinStaminaAffordableWithDiagnostic(self, coin, staminaCost);
-        if (affordable && snapshotCoinWorthLongTravel(coin, members.length, totalAmount)) {
+        if (affordable && snapshotCoinWorthLongTravelCore(coin, members.length, totalAmount, coinTargetCoreOptions())) {
           if (!best || item.snapshotScore > best.snapshotScore || item.snapshotScore === best.snapshotScore && members.length >= minCoins && best.snapshotMembers < minCoins || item.snapshotScore === best.snapshotScore && item.distance < best.distance) best = item;
         }
         if (allowIdleFallback && (!idleBest || item.snapshotScore > idleBest.snapshotScore || item.snapshotScore === idleBest.snapshotScore && item.distance < idleBest.distance)) {
@@ -19315,17 +19320,15 @@
       if (best) return asOpportunity(best);
       return idleBest ? asIdleFallback(idleBest) : null;
     }
-    function snapshotCoinWorthLongTravel(coin, members = 1, totalAmount = null) {
-      return snapshotCoinWorthLongTravelCore(coin, members, totalAmount, coinTargetCoreOptions());
-    }
-    function snapshotCoinNavigationReason(coin) {
-      return snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions());
-    }
     function scoreCoinOpportunity(coin) {
       const override = Number(coin?.opportunityScore ?? coin?.snapshotScore ?? coin?.fieldScore ?? NaN);
       if (Number.isFinite(override)) return override;
       const sticky = bot.lastTarget?.kind === "coin" && String(bot.lastTarget.id) === String(coin.drop_id) && now() - bot.lastTargetAt < cfg.coinStickMs;
-      return opportunityValueScore(coin.amount, opportunityCoinStaminaCost(coin), cfg.coinOpportunityValue) + (sticky ? cfg.opportunityStickBonus : 0);
+      return opportunityValueScoreCore(coin.amount, opportunityCoinStaminaCost(coin), {
+        weight: cfg.coinOpportunityValue,
+        distanceFloor: cfg.opportunityDistanceFloor,
+        distanceScoreScale: cfg.opportunityDistanceScoreScale
+      }) + (sticky ? cfg.opportunityStickBonus : 0);
     }
     function opportunityAfkTargetId(target) {
       const id = target?.user_id ?? target?.id;
@@ -19399,11 +19402,11 @@
       if (afk && !inRange && afkOpportunityBlockedByStaminaCooldown(target)) return null;
       if (!afk && !inRange && Number(target.drop || 0) < cfg.attackApproachMinDrop) return null;
       const sticky = bot.lastTarget?.kind === "enemy" && String(bot.lastTarget.id) === String(target.user_id) && now() - bot.lastTargetAt < cfg.targetStickMs;
-      return opportunityValueScore(
-        target.drop,
-        opportunityEnemyStaminaCost(target),
-        afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue
-      ) + (sticky ? cfg.opportunityStickBonus : 0);
+      return opportunityValueScoreCore(target.drop, opportunityEnemyStaminaCost(target), {
+        weight: afk ? cfg.coinOpportunityValue : cfg.dropOpportunityValue,
+        distanceFloor: cfg.opportunityDistanceFloor,
+        distanceScoreScale: cfg.opportunityDistanceScoreScale
+      }) + (sticky ? cfg.opportunityStickBonus : 0);
     }
     const {
       opportunityEffectiveStaminaCostCore,
@@ -19474,24 +19477,6 @@
         isSnapshotOnlyCoin
       };
     }
-    function coinRouteLegStaminaCost(from, to) {
-      return coinRouteLegStaminaCostCore(from, to, coinRouteCoreOptions());
-    }
-    function coinRouteLegClear(from, to, activeThreats) {
-      return coinRouteLegClearCore(from, to, activeThreats, coinRouteCoreOptions());
-    }
-    function coinRoutePointLimit(anchor, candidates) {
-      return coinRoutePointLimitCore(anchor, candidates, coinRouteCoreOptions());
-    }
-    function coinRouteSummary(route, self) {
-      return coinRouteSummaryCore(route, self, coinRouteCoreOptions());
-    }
-    function buildCoinRouteFromAnchor(self, anchor, candidates, activeThreats) {
-      return buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, coinRouteCoreOptions(self));
-    }
-    function coinRouteSkipsCloserFirstCoin(self, route, candidates) {
-      return coinRouteSkipsCloserFirstCoinCore(self, route, candidates, coinRouteCoreOptions());
-    }
     function currentHeldCoinRouteChoice(t = now()) {
       const choice = bot.opportunityChoice;
       if (!choice || opportunityChoiceType(choice) !== "coin") return null;
@@ -19508,22 +19493,6 @@
       const id = opportunityChoiceId(choice);
       if (!id && id !== "0") return null;
       return choice;
-    }
-    function coinRouteSkipsHeldSingleCoin(self, route, choice) {
-      return coinRouteSkipsHeldSingleCoinCore(self, route, choice, coinRouteCoreOptions());
-    }
-    function coinRouteMatchesHeldChoice(route, choice) {
-      return coinRouteMatchesHeldChoiceCore(route, choice, coinRouteCoreOptions());
-    }
-    function heldCoinRouteBeatsSwitch(heldRoute, bestRoute) {
-      return heldCoinRouteBeatsSwitchCore(heldRoute, bestRoute, coinRouteCoreOptions());
-    }
-    function pickCoinRouteOpportunity(self, coins, activeThreats) {
-      return pickCoinRouteOpportunityCore(self, coins, activeThreats, {
-        ...coinRouteCoreOptions(self),
-        heldChoice: currentHeldCoinChoice(),
-        heldRouteChoice: currentHeldCoinRouteChoice()
-      });
     }
     function opportunityCandidateCoreOptions(self = null) {
       return {
@@ -19549,7 +19518,11 @@
       return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
     }
     function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-      const route = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
+      const route = pickCoinRouteOpportunityCore(self, uniqueVisibleRouteCoins(coinGroups), activeThreats, {
+        ...coinRouteCoreOptions(self),
+        heldChoice: currentHeldCoinChoice(),
+        heldRouteChoice: currentHeldCoinRouteChoice()
+      });
       return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
     }
     function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
@@ -19623,12 +19596,6 @@
         recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), "post-attack-drop-visible");
       }
       return result.selected || null;
-    }
-    function postAttackVisibleCoinExists(coins, attack) {
-      return postAttackVisibleCoinExistsCore(coins, attack, {
-        dist,
-        dropCoinRadius: cfg.postAttackDropCoinRadius
-      });
     }
     function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
       const t = Date.now();
@@ -20645,7 +20612,11 @@
       const opportunity = typeof pickBestOpportunityCore === "function" ? pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups, {
         enemyOpportunityCandidates,
         uniqueVisibleRouteCoins,
-        pickCoinRouteOpportunity,
+        pickCoinRouteOpportunity: (routeSelf, routeCoins, routeThreats) => pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {
+          ...coinRouteCoreOptions(routeSelf),
+          heldChoice: currentHeldCoinChoice(),
+          heldRouteChoice: currentHeldCoinRouteChoice()
+        }),
         opportunityCandidateCoreOptions,
         buildCoinAction,
         buildEnemyAction,
@@ -20680,7 +20651,7 @@
         const action = buildCoinAction(
           self,
           localRealtimeCoin,
-          snapshotCoinNavigationReason(localRealtimeCoin),
+          snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions()),
           localRealtimeCoin.distance <= cfg.coinMaxDistance ? "coin" : "seek-coin"
         );
         return attachOpportunisticShot(blockThreatReturnAction(self, coinThreats, action), self, realtimeEntities, { recovery });
