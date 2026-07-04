@@ -725,6 +725,38 @@ function clearOfflineReloginHoldCore(bot, reason = 'online self restored', helpe
   helpers.clearLoginSuppressMatching(/offline.*leave/i);
 }
 
+function clearEnemyReloginHoldBoundCore(bot, storage, reason = 'online self restored', helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return clearEnemyReloginHoldCore(bot, reason, {
+    now: nowFn(),
+    activeEnemyLeaveDetail: helpers.activeEnemyLeaveDetail,
+    writePersistentPendingExitState: helpers.writePersistentPendingExitState,
+    clearPersistentPendingExitState: helpers.clearPersistentPendingExitState,
+    clearExitHoldDetail: helpers.clearExitHoldDetail,
+    clearPersistentExitState: helpers.clearPersistentExitState,
+    clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(storage, pattern, {
+      loginSuppressKey: helpers.loginSuppressKey,
+      loginSuppressReasonKey: helpers.loginSuppressReasonKey
+    }),
+    enemyLeaveStateKey: helpers.enemyLeaveStateKey
+  });
+}
+
+function clearOfflineReloginHoldBoundCore(bot, storage, reason = 'online self restored', helpers) {
+  const nowFn = typeof helpers.now === 'function' ? helpers.now : () => (Number(helpers.now || 0) || 0);
+  return clearOfflineReloginHoldCore(bot, reason, {
+    now: nowFn(),
+    writePersistentPendingExitState: helpers.writePersistentPendingExitState,
+    clearPersistentPendingExitState: helpers.clearPersistentPendingExitState,
+    clearPersistentExitState: helpers.clearPersistentExitState,
+    clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(storage, pattern, {
+      loginSuppressKey: helpers.loginSuppressKey,
+      loginSuppressReasonKey: helpers.loginSuppressReasonKey
+    }),
+    offlineLeaveStateKey: helpers.offlineLeaveStateKey
+  });
+}
+
 module.exports = {
   leaveWaitDisplayCore,
   finalizeLeaveDisplayReasonCore,
@@ -763,5 +795,7 @@ module.exports = {
   primePendingStaminaExitLoginSuppressCore,
   primePendingStaminaExitLoginSuppressBoundCore,
   clearEnemyReloginHoldCore,
-  clearOfflineReloginHoldCore
+  clearOfflineReloginHoldCore,
+  clearEnemyReloginHoldBoundCore,
+  clearOfflineReloginHoldBoundCore
 };

@@ -983,8 +983,23 @@ function helperStatus(config = {}) {
     lastInjuryLeaveResult: { reloginUntil: 6100 },
     pendingExit: { scope: 'offline', reason: 'keep-offline' }
   };
-  exitRelogin.clearEnemyReloginHoldCore(exitReloginClearEnemyBot, 'spike enemy recovery', {
-    now: 6000,
+  const exitReloginClearEnemyStorage = {
+    values: {
+      suppress: '9000',
+      suppressReason: 'combat leave'
+    },
+    removed: [],
+    getItem(key) {
+      return this.values[key] ?? null;
+    },
+    removeItem(key) {
+      this.removed.push(key);
+      if (key === 'suppressReason') exitReloginClearEnemyEvents.push(['clear-suppress', true]);
+      delete this.values[key];
+    }
+  };
+  exitRelogin.clearEnemyReloginHoldBoundCore(exitReloginClearEnemyBot, exitReloginClearEnemyStorage, 'spike enemy recovery', {
+    now: () => 6000,
     activeEnemyLeaveDetail: () => exitReloginClearActiveEnemyDetail,
     writePersistentPendingExitState: pending => exitReloginClearEnemyEvents.push(['write-pending', pending.reason]),
     clearPersistentPendingExitState: () => exitReloginClearEnemyEvents.push(['clear-pending']),
@@ -997,7 +1012,8 @@ function helperStatus(config = {}) {
       exitReloginClearEnemyEvents.push(['clear-detail', reason, t]);
     },
     clearPersistentExitState: key => exitReloginClearEnemyEvents.push(['clear-exit', key]),
-    clearLoginSuppressMatching: pattern => exitReloginClearEnemyEvents.push(['clear-suppress', pattern.test('combat leave')]),
+    loginSuppressKey: 'suppress',
+    loginSuppressReasonKey: 'suppressReason',
     enemyLeaveStateKey: 'enemy-state'
   });
   const exitReloginClearOfflineEvents = [];
@@ -1008,12 +1024,28 @@ function helperStatus(config = {}) {
     lastOfflineLeaveResult: exitReloginClearOfflineDetail,
     pendingExit: { scope: 'enemy', reason: 'keep-enemy' }
   };
-  exitRelogin.clearOfflineReloginHoldCore(exitReloginClearOfflineBot, 'spike offline recovery', {
-    now: 7000,
+  const exitReloginClearOfflineStorage = {
+    values: {
+      suppress: '10000',
+      suppressReason: 'offline leave'
+    },
+    removed: [],
+    getItem(key) {
+      return this.values[key] ?? null;
+    },
+    removeItem(key) {
+      this.removed.push(key);
+      if (key === 'suppressReason') exitReloginClearOfflineEvents.push(['clear-suppress', true]);
+      delete this.values[key];
+    }
+  };
+  exitRelogin.clearOfflineReloginHoldBoundCore(exitReloginClearOfflineBot, exitReloginClearOfflineStorage, 'spike offline recovery', {
+    now: () => 7000,
     writePersistentPendingExitState: pending => exitReloginClearOfflineEvents.push(['write-pending', pending.reason]),
     clearPersistentPendingExitState: () => exitReloginClearOfflineEvents.push(['clear-pending']),
     clearPersistentExitState: key => exitReloginClearOfflineEvents.push(['clear-exit', key]),
-    clearLoginSuppressMatching: pattern => exitReloginClearOfflineEvents.push(['clear-suppress', pattern.test('offline leave')]),
+    loginSuppressKey: 'suppress',
+    loginSuppressReasonKey: 'suppressReason',
     offlineLeaveStateKey: 'offline-state'
   });
   const names = targetWhitelist.parseTargetWhitelistNames({
@@ -1181,11 +1213,13 @@ function helperStatus(config = {}) {
     exitReloginEnemyClearDetailAt: exitReloginClearEnemyDetail.onlineRecoveryAt,
     exitReloginEnemyClearDetailHold: exitReloginClearEnemyDetail.holdRemainingMs,
     exitReloginEnemyClearEventCount: arrayCountRuntime.arrayCount(exitReloginClearEnemyEvents),
+    exitReloginEnemyClearRemovedCount: arrayCountRuntime.arrayCount(exitReloginClearEnemyStorage.removed),
     exitReloginOfflineClearUntil: exitReloginClearOfflineBot.offlineReloginUntil,
     exitReloginOfflineClearPendingReason: exitReloginClearOfflineBot.pendingExit?.reason,
     exitReloginOfflineClearDetailAt: exitReloginClearOfflineDetail.onlineRecoveryAt,
     exitReloginOfflineClearDetailHold: exitReloginClearOfflineDetail.holdRemainingMs,
     exitReloginOfflineClearEventCount: arrayCountRuntime.arrayCount(exitReloginClearOfflineEvents),
+    exitReloginOfflineClearRemovedCount: arrayCountRuntime.arrayCount(exitReloginClearOfflineStorage.removed),
     preservedKills: arrayCountRuntime.arrayCount(preservedState.buildBrowserPreservedState({
       killHistory: ['a', 'b', 'c']
     }).killHistory),
