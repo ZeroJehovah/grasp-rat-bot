@@ -1,28 +1,14 @@
 'use strict';
 
-const {
+function coinSafetySource() {
+  return String.raw`const {
   coinDiagnosticsSummary,
   summarizeCoinDiagnosticsList,
   addCoinFilterDiagnostic,
   buildCoinDiagnostics
-} = require('./runtime/coin-diagnostics');
+} = require('./src/browser/runtime/coin-diagnostics');
 
-function coinSafetyInlineSource(helpers = {}, options = {}) {
-  const {
-    coinDiagnosticsSummary,
-    summarizeCoinDiagnosticsList,
-    addCoinFilterDiagnostic,
-    buildCoinDiagnostics
-  } = helpers;
-  const coinDiagnosticsSummarySource = typeof coinDiagnosticsSummary === 'function'
-    ? `\t  ${coinDiagnosticsSummary.toString()}`
-    : '';
-  const coinDiagnosticsHelperSource = [
-    summarizeCoinDiagnosticsList,
-    addCoinFilterDiagnostic,
-    buildCoinDiagnostics
-  ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n\n');
-  return String.raw`  function coinThreatDangerRadius(threat) {
+  function coinThreatDangerRadius(threat) {
 	    const base = Number(threat?.coinDangerRadius ?? cfg.coinDangerRadius);
 	    if (isInvulnerableActive(threat)) return Math.max(base, Number(cfg.invulnerableActiveCoinDangerRadius || 0));
 	    return base;
@@ -76,8 +62,6 @@ function coinSafetyInlineSource(helpers = {}, options = {}) {
 	    return Math.max(1, Math.round(Number(cfg.coinDiagnosticsMaxEntries || 8) || 8));
 	  }
 
-${coinDiagnosticsSummarySource}
-
 	  function coinThreatDiagnostics(threat) {
 	    if (!threat) return null;
 	    return {
@@ -89,8 +73,6 @@ ${coinDiagnosticsSummarySource}
 	      active: isCurrentlyActive(threat)
 	    };
 	  }
-
-${coinDiagnosticsHelperSource}
 
 	  function recordCoinFilterDiagnostic(coin, reason, detail = {}) {
 	    addCoinFilterDiagnostic(bot.coinDiagnostics, coin, reason, {
@@ -196,13 +178,11 @@ ${coinDiagnosticsHelperSource}
       if (members.length < cfg.fieldMigrationMinCoins) return null;
       const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
       const staminaCost = opportunityCoinStaminaCost(coin);
-      const score = ${options.bundledRuntime
-        ? `opportunityValueScoreCore(totalAmount, staminaCost, {
+      const score = opportunityValueScoreCore(totalAmount, staminaCost, {
         weight: cfg.coinOpportunityValue,
         distanceFloor: cfg.opportunityDistanceFloor,
         distanceScoreScale: cfg.opportunityDistanceScoreScale
-      })`
-        : 'opportunityValueScore(totalAmount, staminaCost, cfg.coinOpportunityValue)'};
+      });
       return {
         ...coin,
         fieldMigration: true,
@@ -240,29 +220,6 @@ ${coinDiagnosticsHelperSource}
 `;
 }
 
-function bundledCoinSafetySource() {
-  return `const {
-  coinDiagnosticsSummary,
-  summarizeCoinDiagnosticsList,
-  addCoinFilterDiagnostic,
-  buildCoinDiagnostics
-} = require('./src/browser/runtime/coin-diagnostics');
-
-${coinSafetyInlineSource({}, { bundledRuntime: true })}`;
-}
-
-function coinSafetySource(options = {}) {
-  if (options.bundledRuntime) return bundledCoinSafetySource();
-  return coinSafetyInlineSource({
-    coinDiagnosticsSummary,
-    summarizeCoinDiagnosticsList,
-    addCoinFilterDiagnostic,
-    buildCoinDiagnostics
-  }, options);
-}
-
 module.exports = {
-  bundledCoinSafetySource,
-  coinSafetyInlineSource,
   coinSafetySource
 };

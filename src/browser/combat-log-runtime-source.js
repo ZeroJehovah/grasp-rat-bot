@@ -1,20 +1,13 @@
 'use strict';
 
-const { combatLogExitSummaryFromDecision } = require('./runtime/exit-summary');
 const { combatLogSource } = require('./combat-log-source');
 
-function bundledCombatLogRuntimeSource() {
+function combatLogRuntimeSource() {
   return `const { combatLogExitSummaryFromDecision } = require('./src/browser/runtime/exit-summary');
 
-${combatLogSource({ bundledRuntime: true })}`;
-}
-
-function combatLogRuntimeSource(options = {}) {
-  if (options.bundledRuntime) return bundledCombatLogRuntimeSource();
-  return combatLogSource({ combatLogExitSummaryFromDecision });
+${combatLogSource()}`;
 }
 
 module.exports = {
-  bundledCombatLogRuntimeSource,
   combatLogRuntimeSource
 };

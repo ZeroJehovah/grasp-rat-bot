@@ -14,147 +14,39 @@ const {
 const {
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
-const {
-  pendingExitRetryMsCore,
-  pendingExitDisplayReasonCore,
-  summarizePendingExitCore,
-  leaveRequestHasHttp403Core,
-  leaveDetailHasHttp403Core,
-  leaveDetailSucceededCore,
-  leaveSuccessReloadConfirmationForDetailCore,
-  leaveSuccessReloadConfirmationSatisfiedCore,
-  pendingExitWaitReasonCore
-} = require('./runtime/pending-exit');
 
-function pendingExitRetryMsCall(pendingExpr, options = {}) {
-  if (!options.bundledRuntime) return `pendingExitRetryMs(${pendingExpr})`;
+function pendingExitRetryMsCall(pendingExpr) {
   return `pendingExitRetryMsCore(${pendingExpr}, pendingExitRetryCoreOptions())`;
 }
 
-function pendingExitDisplayReasonCall(summaryExpr, options = {}) {
-  if (!options.bundledRuntime) return `pendingExitDisplayReason(${summaryExpr})`;
+function pendingExitDisplayReasonCall(summaryExpr) {
   return `pendingExitDisplayReasonCore(${summaryExpr})`;
 }
 
-function pendingExitSource(options = {}) {
-  const offlineSuppressPrelude = options.bundledRuntime
-    ? "  const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore, leaveRequestHasHttp403Core, leaveDetailHasHttp403Core, leaveDetailSucceededCore, leaveSuccessReloadConfirmationForDetailCore, leaveSuccessReloadConfirmationSatisfiedCore, pendingExitWaitReasonCore } = require('./src/browser/runtime/pending-exit');\n  const { resetClashLeaveRescueRoundCore: resetClashLeaveRescueRoundForPendingExitCore } = require('./src/browser/runtime/leave-command');\n  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
-    : '';
-  const enemyHoldRemainingMsCall = options.bundledRuntime
-    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForPendingExitBoundCore')
-    : 'enemyReloginHoldRemainingMs()';
-  const offlineHoldRemainingMsCall = options.bundledRuntime
-    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForPendingExitBoundCore', 'clearOfflineReloginHoldForPendingExitBoundCore')
-    : 'offlineReloginHoldRemainingMs()';
-  const clearLoginSuppressMatchingBinding = options.bundledRuntime
-    ? "clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY })"
-    : 'clearLoginSuppressMatching';
-  const clearLoginSuppressMatchingCall = pattern => options.bundledRuntime
-    ? `clearLoginSuppressMatchingBoundCore(localStorage, ${pattern}, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY })`
-    : `clearLoginSuppressMatching(${pattern})`;
-  const reloginDelayForHpBinding = options.bundledRuntime
-    ? 'reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'
-    : 'reloginDelayForHp';
-  const finalizeLeaveDisplayReasonCall = detail => options.bundledRuntime
-    ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore')
-    : `finalizeLeaveDisplayReason(${detail})`;
-  const finalizeLeaveDisplayReasonBinding = options.bundledRuntime
-    ? finalizeLeaveDisplayReasonCoreBinding('finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore')
-    : 'finalizeLeaveDisplayReason';
-  const normalizePendingExitReloadConfirmationCall = args => options.bundledRuntime
-    ? `normalizePendingExitReloadConfirmationCore(${args})`
-    : `normalizePendingExitReloadConfirmation(${args})`;
-  const leaveRequestHasHttp403Call = request => options.bundledRuntime
-    ? `leaveRequestHasHttp403Core(${request})`
-    : `leaveRequestHasHttp403(${request})`;
-  const leaveDetailHasHttp403Call = detail => options.bundledRuntime
-    ? `leaveDetailHasHttp403Core(${detail})`
-    : `leaveDetailHasHttp403(${detail})`;
-  const leaveDetailSucceededCall = detail => options.bundledRuntime
-    ? `leaveDetailSucceededCore(${detail})`
-    : `leaveDetailSucceeded(${detail})`;
-  const leaveSuccessReloadConfirmationForDetailCall = (detail, pending, t) => options.bundledRuntime
-    ? `leaveSuccessReloadConfirmationForDetailCore(${detail}, ${pending}, ${t}, { normalizeReloadConfirmation: normalizePendingExitReloadConfirmationCore })`
-    : `leaveSuccessReloadConfirmationForDetail(${detail}, ${pending}, ${t})`;
-  const leaveSuccessReloadConfirmationSatisfiedCall = reloadConfirmation => options.bundledRuntime
-    ? `leaveSuccessReloadConfirmationSatisfiedCore(${reloadConfirmation})`
-    : `leaveSuccessReloadConfirmationSatisfied(${reloadConfirmation})`;
-  const pendingExitWaitReasonCall = (pending, confirmed) => options.bundledRuntime
-    ? `pendingExitWaitReasonCore(${pending}, ${confirmed})`
-    : `pendingExitWaitReason(${pending}, ${confirmed})`;
-  const resetClashLeaveRescueRoundCall = detail => options.bundledRuntime
-    ? `resetClashLeaveRescueRoundForPendingExitCore(${detail})`
-    : `resetClashLeaveRescueRound(${detail})`;
-  const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
+function pendingExitSource() {
+  const offlineSuppressPrelude = "  const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore, leaveRequestHasHttp403Core, leaveDetailHasHttp403Core, leaveDetailSucceededCore, leaveSuccessReloadConfirmationForDetailCore, leaveSuccessReloadConfirmationSatisfiedCore, pendingExitWaitReasonCore } = require('./src/browser/runtime/pending-exit');\n  const { resetClashLeaveRescueRoundCore: resetClashLeaveRescueRoundForPendingExitCore } = require('./src/browser/runtime/leave-command');\n  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n";
+  const enemyHoldRemainingMsCall = enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForPendingExitBoundCore');
+  const offlineHoldRemainingMsCall = offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForPendingExitBoundCore', 'clearOfflineReloginHoldForPendingExitBoundCore');
+  const clearLoginSuppressMatchingBinding = "clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(localStorage, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY })";
+  const clearLoginSuppressMatchingCall = pattern => `clearLoginSuppressMatchingBoundCore(localStorage, ${pattern}, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY })`;
+  const reloginDelayForHpBinding = 'reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })';
+  const finalizeLeaveDisplayReasonCall = detail => finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore');
+  const finalizeLeaveDisplayReasonBinding = finalizeLeaveDisplayReasonCoreBinding('finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore');
+  const normalizePendingExitReloadConfirmationCall = args => `normalizePendingExitReloadConfirmationCore(${args})`;
+  const leaveRequestHasHttp403Call = request => `leaveRequestHasHttp403Core(${request})`;
+  const leaveDetailHasHttp403Call = detail => `leaveDetailHasHttp403Core(${detail})`;
+  const leaveDetailSucceededCall = detail => `leaveDetailSucceededCore(${detail})`;
+  const leaveSuccessReloadConfirmationForDetailCall = (detail, pending, t) => `leaveSuccessReloadConfirmationForDetailCore(${detail}, ${pending}, ${t}, { normalizeReloadConfirmation: normalizePendingExitReloadConfirmationCore })`;
+  const leaveSuccessReloadConfirmationSatisfiedCall = reloadConfirmation => `leaveSuccessReloadConfirmationSatisfiedCore(${reloadConfirmation})`;
+  const pendingExitWaitReasonCall = (pending, confirmed) => `pendingExitWaitReasonCore(${pending}, ${confirmed})`;
+  const resetClashLeaveRescueRoundCall = detail => `resetClashLeaveRescueRoundForPendingExitCore(${detail})`;
+  const writePendingExit = pending => writePersistentPendingExitStateCall(pending);
   const summarizePendingExitExpr = pending => summarizePendingExitCall(pending || 'bot.pendingExit', {
-    ...options,
     retryCoreName: 'pendingExitRetryMsCore',
     summaryCoreName: 'summarizePendingExitCore'
   });
-  const offlineSuppressCall = options.bundledRuntime
-    ? `\t      setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });`
-    : "\t      setOfflineLeaveSuppress(detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions);";
-  const enemyLeaveSuppressCall = options.bundledRuntime
-    ? `\t      setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, now: Date.now });`
-    : "\t      setEnemyLeaveSuppress(detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions);";
-  const pendingExitHelperSource = options.bundledRuntime ? '' : [
-    pendingExitRetryMsCore,
-    pendingExitDisplayReasonCore,
-    summarizePendingExitCore,
-    leaveRequestHasHttp403Core,
-    leaveDetailHasHttp403Core,
-    leaveDetailSucceededCore,
-    leaveSuccessReloadConfirmationForDetailCore,
-    leaveSuccessReloadConfirmationSatisfiedCore,
-    pendingExitWaitReasonCore
-  ].map(fn => `  ${fn.toString()}`).join('\n\n') + '\n\n';
-  const localPendingExitHelperWrappers = options.bundledRuntime ? '' : String.raw`
-  function pendingExitRetryMs(pending) {
-    return pendingExitRetryMsCore(pending, pendingExitRetryCoreOptions());
-  }
-
-  function pendingExitDisplayReason(summary) {
-    return pendingExitDisplayReasonCore(summary);
-  }
-
-  function summarizePendingExit(pending = bot.pendingExit) {
-    if (!pending) return null;
-    const t = Date.now();
-    const reloadConfirmation = normalizePendingExitReloadConfirmation(pending.reloadConfirmation, pending, t);
-    return summarizePendingExitCore(pending, {
-      nowMs: t,
-      retryMs: pendingExitRetryMs(pending),
-      reloadConfirmation
-    });
-  }
-
-  function leaveRequestHasHttp403(request) {
-    return leaveRequestHasHttp403Core(request);
-  }
-
-  function leaveDetailHasHttp403(detail) {
-    return leaveDetailHasHttp403Core(detail);
-  }
-
-  function leaveDetailSucceeded(detail) {
-    return leaveDetailSucceededCore(detail);
-  }
-
-  function leaveSuccessReloadConfirmationForDetail(detail, pending = null, t = Date.now()) {
-    return leaveSuccessReloadConfirmationForDetailCore(detail, pending, t, {
-      normalizeReloadConfirmation: normalizePendingExitReloadConfirmation
-    });
-  }
-
-  function leaveSuccessReloadConfirmationSatisfied(reloadConfirmation) {
-    return leaveSuccessReloadConfirmationSatisfiedCore(reloadConfirmation);
-  }
-
-  function pendingExitWaitReason(pending, confirmed = false) {
-    return pendingExitWaitReasonCore(pending, confirmed);
-  }
-
-`;
+  const offlineSuppressCall = `\t      setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline', detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });`;
+  const enemyLeaveSuppressCall = `\t      setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave', detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, ${reloginDelayForHpBinding}, ${clearLoginSuppressMatchingBinding}, ${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, now: Date.now });`;
   return String.raw`${offlineSuppressPrelude}	  function summarizePursuit(pursuit = bot.pursuit) {
 	    if (!pursuit) return null;
 	    const t = now();
@@ -184,7 +76,7 @@ function pendingExitSource(options = {}) {
     return safeJsonClone(value) || { ...value };
   }
 
-${pendingExitHelperSource}  function pendingExitRetryCoreOptions() {
+  function pendingExitRetryCoreOptions() {
     return {
       leaveRetryMinMs: cfg.leaveRetryMinMs,
       leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
@@ -193,8 +85,6 @@ ${pendingExitHelperSource}  function pendingExitRetryCoreOptions() {
       pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
     };
   }
-
-${localPendingExitHelperWrappers}
 
   function pendingExitSkipNewLeave(source, reason, extra = {}) {
     const pending = bot.pendingExit;
@@ -252,12 +142,12 @@ ${localPendingExitHelperWrappers}
       source,
       reason: detail.reason || previous?.reason || '',
       summary,
-      displayReason: ${pendingExitDisplayReasonCall('summary', options)},
+      displayReason: ${pendingExitDisplayReasonCall('summary')},
       at: Number(previous?.at || detail.at || t),
       updatedAt: t,
       lastAttemptAt: Number(detail.at || t),
       retryCount: Number(previous?.retryCount || 0) + 1,
-      retryMs: ${pendingExitRetryMsCall('{ scope, source }', options)},
+      retryMs: ${pendingExitRetryMsCall('{ scope, source }')},
       userId: detail.userId || getCurrentUserId() || previous?.userId || null,
       self: cloneForPendingExit(selfLike || detail.self || previous?.self || null),
       offlineSafety: cloneForPendingExit(detail.offlineSafety || previous?.offlineSafety || null),
@@ -720,7 +610,7 @@ ${enemyLeaveSuppressCall}
 
   async function retryPendingExit(pending, self, state) {
     const t = Date.now();
-    const retryMs = ${pendingExitRetryMsCall('pending', options)};
+    const retryMs = ${pendingExitRetryMsCall('pending')};
     const lastAttemptAt = Number(pending.lastAttemptAt || 0);
     if (lastAttemptAt && t - lastAttemptAt < retryMs) {
       const detail = {
@@ -779,7 +669,7 @@ ${enemyLeaveSuppressCall}
       bot.pendingExit = next;
       ${writePendingExit('next')};
       detail.pendingExit = ${summarizePendingExitExpr('next')};
-      detail.displayReason = detail.displayReason || pending.displayReason || ${pendingExitDisplayReasonCall('detail.summary || pending.summary || detail.reason', options)};
+      detail.displayReason = detail.displayReason || pending.displayReason || ${pendingExitDisplayReasonCall('detail.summary || pending.summary || detail.reason')};
     }
     recordPendingExitResult(pending.source, detail, t);
     return detail;
@@ -788,7 +678,7 @@ ${enemyLeaveSuppressCall}
   function schedulePendingExitRetry(pending, self, state) {
     if (!pending) return false;
     const t = Date.now();
-    const retryMs = ${pendingExitRetryMsCall('pending', options)};
+    const retryMs = ${pendingExitRetryMsCall('pending')};
     const lastAttemptAt = Number(pending.lastAttemptAt || 0);
     if (lastAttemptAt && t - lastAttemptAt < retryMs) return false;
     Promise.resolve()

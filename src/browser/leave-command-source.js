@@ -7,111 +7,24 @@ const {
   pendingExitSummaryPreludeSource,
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
-const {
-  leaveCommandFailureMessageCore,
-  summarizeLeaveCommandResultCore,
-  leaveDetailFailedForClashRescueCore,
-  clashLeaveRescueAttemptsCore,
-  nextClashLeaveRescueStageCore,
-  summarizeClashLeaveRescueResultCore,
-  clashLeaveRescueRetryDetailCore,
-  resetClashLeaveRescueRoundCore
-} = require('./runtime/leave-command');
 
-function leaveCommandSource(options = {}) {
-  const pendingExitLeaveCommandPrelude = options.bundledRuntime
-    ? "  const { pendingExitDisplayReasonCore: pendingExitDisplayReasonForLeaveCommandCore, leaveDetailHasHttp403Core: leaveDetailHasHttp403ForLeaveCommandCore, leaveDetailSucceededCore: leaveDetailSucceededForLeaveCommandCore } = require('./src/browser/runtime/pending-exit');\n"
-    : '';
-  const leaveCommandCorePrelude = options.bundledRuntime
-    ? "  const { leaveCommandFailureMessageCore, summarizeLeaveCommandResultCore, leaveDetailFailedForClashRescueCore, clashLeaveRescueAttemptsCore, nextClashLeaveRescueStageCore, summarizeClashLeaveRescueResultCore, clashLeaveRescueRetryDetailCore, resetClashLeaveRescueRoundCore } = require('./src/browser/runtime/leave-command');\n"
-    : '';
-  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand', options) + pendingExitLeaveCommandPrelude + leaveCommandCorePrelude;
-  const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
-  const pendingExitDisplayReason = summary => options.bundledRuntime
-    ? `pendingExitDisplayReasonForLeaveCommandCore(${summary})`
-    : `pendingExitDisplayReason(${summary})`;
-  const leaveDetailHasHttp403Call = detail => options.bundledRuntime
-    ? `leaveDetailHasHttp403ForLeaveCommandCore(${detail})`
-    : `leaveDetailHasHttp403(${detail})`;
-  const leaveDetailSucceededCall = detail => options.bundledRuntime
-    ? `leaveDetailSucceededForLeaveCommandCore(${detail})`
-    : `leaveDetailSucceeded(${detail})`;
-  const leaveCommandFailureMessageCall = value => options.bundledRuntime
-    ? `leaveCommandFailureMessageCore(${value})`
-    : `leaveCommandFailureMessage(${value})`;
-  const summarizeLeaveCommandResultCall = value => options.bundledRuntime
-    ? `summarizeLeaveCommandResultCore(${value})`
-    : `summarizeLeaveCommandResult(${value})`;
-  const leaveDetailFailedForClashRescueCall = detail => options.bundledRuntime
-    ? `leaveDetailFailedForClashRescueCore(${detail}, { clashLeaveRescueEnabled: cfg.clashLeaveRescueEnabled, hasClashLeaveRescueHook: () => Boolean(clashLeaveRescueHook()) })`
-    : `leaveDetailFailedForClashRescue(${detail})`;
-  const clashLeaveRescueAttemptsCall = detail => options.bundledRuntime
-    ? `clashLeaveRescueAttemptsCore(${detail})`
-    : `clashLeaveRescueAttempts(${detail})`;
-  const nextClashLeaveRescueStageCall = detail => options.bundledRuntime
-    ? `nextClashLeaveRescueStageCore(${detail})`
-    : `nextClashLeaveRescueStage(${detail})`;
-  const summarizeClashLeaveRescueResultCall = (result, stage, error = "''") => options.bundledRuntime
-    ? `summarizeClashLeaveRescueResultCore(${result}, ${stage}, ${error})`
-    : `summarizeClashLeaveRescueResult(${result}, ${stage}, ${error})`;
-  const clashLeaveRescueRetryDetailCall = (detail, stage) => options.bundledRuntime
-    ? `clashLeaveRescueRetryDetailCore(${detail}, ${stage}, { nowMs: Date.now(), cloneForPendingExit, pendingExitDisplayReason: summary => ${pendingExitDisplayReason('summary')} })`
-    : `clashLeaveRescueRetryDetail(${detail}, ${stage})`;
-  const resetClashLeaveRescueRoundCall = detail => options.bundledRuntime
-    ? `resetClashLeaveRescueRoundCore(${detail})`
-    : `resetClashLeaveRescueRound(${detail})`;
-  const localLeaveCommandHelperSource = options.bundledRuntime ? '' : [
-    leaveCommandFailureMessageCore,
-    summarizeLeaveCommandResultCore,
-    leaveDetailFailedForClashRescueCore,
-    clashLeaveRescueAttemptsCore,
-    nextClashLeaveRescueStageCore,
-    summarizeClashLeaveRescueResultCore,
-    clashLeaveRescueRetryDetailCore,
-    resetClashLeaveRescueRoundCore
-  ].map(fn => `  ${fn.toString()}`).join('\n\n') + '\n\n';
-  const localLeaveCommandHelperWrappers = options.bundledRuntime ? '' : String.raw`
-  function leaveCommandFailureMessage(value) {
-    return leaveCommandFailureMessageCore(value);
-  }
-
-  function summarizeLeaveCommandResult(value) {
-    return summarizeLeaveCommandResultCore(value);
-  }
-
-  function leaveDetailFailedForClashRescue(detail) {
-    return leaveDetailFailedForClashRescueCore(detail, {
-      clashLeaveRescueEnabled: cfg.clashLeaveRescueEnabled,
-      hasClashLeaveRescueHook: () => Boolean(clashLeaveRescueHook())
-    });
-  }
-
-  function clashLeaveRescueAttempts(detail) {
-    return clashLeaveRescueAttemptsCore(detail);
-  }
-
-  function nextClashLeaveRescueStage(detail) {
-    return nextClashLeaveRescueStageCore(detail);
-  }
-
-  function summarizeClashLeaveRescueResult(result, stage, error = '') {
-    return summarizeClashLeaveRescueResultCore(result, stage, error);
-  }
-
-  function clashLeaveRescueRetryDetail(detail, stage) {
-    return clashLeaveRescueRetryDetailCore(detail, stage, {
-      nowMs: Date.now(),
-      cloneForPendingExit,
-      pendingExitDisplayReason
-    });
-  }
-
-  function resetClashLeaveRescueRound(detail) {
-    return resetClashLeaveRescueRoundCore(detail);
-  }
-
-`;
-  return String.raw`${runtimePrelude}${localLeaveCommandHelperSource}${localLeaveCommandHelperWrappers}  function waitWithTimeout(promise, timeoutMs, label) {
+function leaveCommandSource() {
+  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand')
+    + "  const { pendingExitDisplayReasonCore: pendingExitDisplayReasonForLeaveCommandCore, leaveDetailHasHttp403Core: leaveDetailHasHttp403ForLeaveCommandCore, leaveDetailSucceededCore: leaveDetailSucceededForLeaveCommandCore } = require('./src/browser/runtime/pending-exit');\n"
+    + "  const { leaveCommandFailureMessageCore, summarizeLeaveCommandResultCore, leaveDetailFailedForClashRescueCore, clashLeaveRescueAttemptsCore, nextClashLeaveRescueStageCore, summarizeClashLeaveRescueResultCore, clashLeaveRescueRetryDetailCore, resetClashLeaveRescueRoundCore } = require('./src/browser/runtime/leave-command');\n";
+  const writePendingExit = pending => writePersistentPendingExitStateCall(pending);
+  const pendingExitDisplayReason = summary => `pendingExitDisplayReasonForLeaveCommandCore(${summary})`;
+  const leaveDetailHasHttp403Call = detail => `leaveDetailHasHttp403ForLeaveCommandCore(${detail})`;
+  const leaveDetailSucceededCall = detail => `leaveDetailSucceededForLeaveCommandCore(${detail})`;
+  const leaveCommandFailureMessageCall = value => `leaveCommandFailureMessageCore(${value})`;
+  const summarizeLeaveCommandResultCall = value => `summarizeLeaveCommandResultCore(${value})`;
+  const leaveDetailFailedForClashRescueCall = detail => `leaveDetailFailedForClashRescueCore(${detail}, { clashLeaveRescueEnabled: cfg.clashLeaveRescueEnabled, hasClashLeaveRescueHook: () => Boolean(clashLeaveRescueHook()) })`;
+  const clashLeaveRescueAttemptsCall = detail => `clashLeaveRescueAttemptsCore(${detail})`;
+  const nextClashLeaveRescueStageCall = detail => `nextClashLeaveRescueStageCore(${detail})`;
+  const summarizeClashLeaveRescueResultCall = (result, stage, error = "''") => `summarizeClashLeaveRescueResultCore(${result}, ${stage}, ${error})`;
+  const clashLeaveRescueRetryDetailCall = (detail, stage) => `clashLeaveRescueRetryDetailCore(${detail}, ${stage}, { nowMs: Date.now(), cloneForPendingExit, pendingExitDisplayReason: summary => ${pendingExitDisplayReason('summary')} })`;
+  const resetClashLeaveRescueRoundCall = detail => `resetClashLeaveRescueRoundCore(${detail})`;
+  return String.raw`${runtimePrelude}  function waitWithTimeout(promise, timeoutMs, label) {
     const ms = Math.max(100, Number(timeoutMs) || 0);
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -255,7 +168,7 @@ function leaveCommandSource(options = {}) {
               lastResult: cloneForPendingExit(retryDetail)
             };
             ${writePendingExit('bot.pendingExit')};
-            retryDetail.pendingExit = ${summarizePendingExitCall('bot.pendingExit', { ...options, alias: 'LeaveCommand' })};
+            retryDetail.pendingExit = ${summarizePendingExitCall('bot.pendingExit', { alias: 'LeaveCommand' })};
           }
           recordPendingExitResult(pending?.source || detail.exitAuditSource || 'offline', retryDetail, retryAt);
           await issueLeaveCommand(retryDetail);

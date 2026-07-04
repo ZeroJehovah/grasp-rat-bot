@@ -1,6 +1,10 @@
 'use strict';
 
-const {
+const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
+
+function opportunityChoiceSource() {
+  const clearMissingVisibleCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'idText || null');
+  return String.raw`const {
   opportunityKey,
   opportunityChoiceType,
   opportunityChoiceId,
@@ -18,139 +22,7 @@ const {
   buildMissingHeldOpportunityCore,
   opportunityRouteIds,
   rememberOpportunityChoiceCore
-} = require('./runtime/opportunity-choice');
-const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
-
-function opportunityChoiceInlineSource(helpers = {}, options = {}) {
-  const {
-    opportunityKey,
-    opportunityChoiceType,
-    opportunityChoiceId,
-    opportunityChoiceKey,
-    opportunityPairKey,
-    opportunityByKey,
-    opportunityMatchesChoiceCore,
-    isHighValueCoinOpportunityCore,
-    highValueCoinHoldBlocksEnemySwitchCore,
-    lockedOpportunityChoiceCore,
-    applyOpportunityOscillationLockCore,
-    chooseStableOpportunityCore,
-    opportunityMissingHoldUntilCore,
-    missingHeldCoinCoveredByVisibleAuthorityCore,
-    buildMissingHeldOpportunityCore,
-    opportunityRouteIds,
-    rememberOpportunityChoiceCore
-  } = helpers;
-  const opportunityChoiceHelperSource = [
-    opportunityKey,
-    opportunityChoiceType,
-    opportunityChoiceId,
-    opportunityChoiceKey,
-    opportunityPairKey,
-    opportunityByKey,
-    opportunityMatchesChoiceCore,
-    isHighValueCoinOpportunityCore,
-    highValueCoinHoldBlocksEnemySwitchCore,
-    lockedOpportunityChoiceCore,
-    applyOpportunityOscillationLockCore,
-    chooseStableOpportunityCore,
-    opportunityMissingHoldUntilCore,
-    missingHeldCoinCoveredByVisibleAuthorityCore,
-    buildMissingHeldOpportunityCore,
-    opportunityRouteIds,
-    rememberOpportunityChoiceCore
-  ].map(fn => typeof fn === 'function' ? `\t\t\t  ${fn.toString()}` : '').join('\n');
-  const clearMissingVisibleCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'idText || null', options);
-  const highValueOpportunityWrapperSource = options.bundledRuntime ? '' : String.raw`
-		  function isHighValueCoinOpportunity(item) {
-		    return isHighValueCoinOpportunityCore(item, opportunityChoiceCoreOptions());
-		  }
-
-		  function highValueCoinHoldBlocksEnemySwitch(held, best) {
-		    return highValueCoinHoldBlocksEnemySwitchCore(held, best, opportunityChoiceCoreOptions());
-		  }
-`;
-  const localOpportunityChoiceWrapperSource = options.bundledRuntime ? '' : String.raw`
-			  function lockedOpportunityChoice(sorted) {
-			    const result = lockedOpportunityChoiceCore(sorted, bot.opportunitySwitchLock);
-			    bot.opportunitySwitchLock = result.switchLock;
-			    return result.choice;
-			  }
-
-			  function applyOpportunityOscillationLock(sorted, current, chosen) {
-			    const result = applyOpportunityOscillationLockCore(sorted, current, chosen, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
-			    bot.opportunitySwitchLock = result.switchLock;
-			    return result.chosen;
-			  }
-
-			  function opportunityMatchesChoice(item, choice) {
-			    return opportunityMatchesChoiceCore(item, choice, opportunityChoiceCoreOptions());
-			  }
-
-			  function opportunityMissingHoldUntil(choice, t) {
-			    return opportunityMissingHoldUntilCore(choice, opportunityChoiceCoreOptions({
-			      nowMs: t,
-			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs
-			    }));
-			  }
-
-			  function missingHeldCoinCoveredByVisibleAuthority(choice, coin) {
-			    return missingHeldCoinCoveredByVisibleAuthorityCore(choice, coin, opportunityChoiceCoreOptions({
-			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius
-			    }));
-			  }
-
-			  function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
-			    const t = now();
-			    const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
-			      nowMs: t,
-			      self,
-			      activeThreats,
-			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs,
-			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius,
-			      snapshotCoinMaxDistance: cfg.snapshotCoinMaxDistance,
-			      globalCoinMaxDistance: cfg.globalCoinMaxDistance,
-			      coinMaxDistance: cfg.coinMaxDistance,
-			      visibleSourcesConfirmMissing: choice => visibleCoinSourcesConfirmTargetMissing(choice),
-			      ignoredCoin: id => Boolean(bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))),
-			      coinBlockedByThreat: (origin, coin, threat) => {
-			        const blocked = coinBlockedByThreat(origin, coin, threat);
-			        if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
-			        return blocked;
-			      },
-			      coinStaminaCost: opportunityCoinStaminaCost,
-			      coinStaminaAffordable: (origin, coin, staminaCost) => coinStaminaAffordableWithDiagnostic(origin, coin, staminaCost),
-			      scoreCoinOpportunity,
-			      priorityTier: opportunityPriorityTier
-			    }));
-			    if (result?.clearMissing) {
-			      clearMissingVisibleCoinTarget(bot.opportunityChoice, result.coin, result.clearReason || 'visible-coin-disappeared', t);
-			      return null;
-			    }
-			    const item = result?.opportunity || null;
-			    if (!item) return null;
-			    const coin = result.coin || item.sourceCoin || item;
-			    const { sourceCoin, ...opportunity } = item;
-			    return {
-			      ...opportunity,
-			      action: () => buildCoinAction(self, coin, opportunity.reason, opportunity.actionKind === 'seek-coin' ? 'seek-coin' : null)
-			    };
-		  }
-
-			  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
-	    if (!item) return action;
-	    const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
-	    bot.opportunityChoice = result.choice;
-	    return result.action;
-	  }
-
-		  function chooseStableOpportunity(opportunities) {
-		    const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
-		    bot.opportunitySwitchLock = result.switchLock;
-		    return result.chosen;
-		  }
-`;
-  return String.raw`${opportunityChoiceHelperSource}
+} = require('./src/browser/runtime/opportunity-choice');
 
 			  function opportunityChoiceCoreOptions(extra = {}) {
 			    return {
@@ -173,8 +45,6 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
 		  function opportunitySameCoinRadius() {
 		    return Math.max(0, Number(cfg.opportunitySameCoinRadius || cfg.coinCollectedPruneRadius || 900));
 		  }
-
-${localOpportunityChoiceWrapperSource}
 
 			  function currentVisibleCoinListForMissingHold() {
 			    if (typeof getNativeCoinSources !== 'function') return null;
@@ -232,53 +102,9 @@ ${localOpportunityChoiceWrapperSource}
 			      at: Date.now()
 			    };
 			  }
-
-${highValueOpportunityWrapperSource}
 `;
 }
 
-function bundledOpportunityChoiceSource() {
-  return `const {
-  opportunityKey,
-  opportunityChoiceType,
-  opportunityChoiceId,
-  opportunityChoiceKey,
-  opportunityPairKey,
-  opportunityByKey,
-  chooseStableOpportunityCore,
-  buildMissingHeldOpportunityCore,
-  opportunityRouteIds,
-  rememberOpportunityChoiceCore
-} = require('./src/browser/runtime/opportunity-choice');
-
-${opportunityChoiceInlineSource({}, { bundledRuntime: true })}`;
-}
-
-function opportunityChoiceSource(options = {}) {
-  if (options.bundledRuntime) return bundledOpportunityChoiceSource(options);
-  return opportunityChoiceInlineSource({
-    opportunityKey,
-    opportunityChoiceType,
-    opportunityChoiceId,
-    opportunityChoiceKey,
-    opportunityPairKey,
-    opportunityByKey,
-    opportunityMatchesChoiceCore,
-    isHighValueCoinOpportunityCore,
-    highValueCoinHoldBlocksEnemySwitchCore,
-    lockedOpportunityChoiceCore,
-    applyOpportunityOscillationLockCore,
-    chooseStableOpportunityCore,
-    opportunityMissingHoldUntilCore,
-    missingHeldCoinCoveredByVisibleAuthorityCore,
-    buildMissingHeldOpportunityCore,
-    opportunityRouteIds,
-    rememberOpportunityChoiceCore
-  }, options);
-}
-
 module.exports = {
-  bundledOpportunityChoiceSource,
-  opportunityChoiceInlineSource,
   opportunityChoiceSource
 };

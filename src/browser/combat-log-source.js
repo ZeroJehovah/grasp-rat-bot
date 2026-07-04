@@ -9,26 +9,11 @@ const {
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
 
-function combatLogSource(helpers = {}) {
-  const {
-    bundledRuntime = false,
-    combatLogExitSummaryFromDecision
-  } = helpers;
-  const holdPrelude = bundledRuntime
-    ? "      const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('CombatLog', { bundledRuntime, indent: '      ' })
-    : '';
-  const enemyHoldRemainingMsCall = bundledRuntime
-    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForCombatLogBoundCore')
-    : 'enemyReloginHoldRemainingMs()';
-  const offlineHoldRemainingMsCall = bundledRuntime
-    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForCombatLogBoundCore', 'clearOfflineReloginHoldForCombatLogBoundCore')
-    : 'offlineReloginHoldRemainingMs()';
-  const recordRuntimeDiagnosticsCall = values => bundledRuntime
-    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
-    : `recordRuntimeDiagnostics(${values})`;
-  const combatLogExitSummarySource = typeof combatLogExitSummaryFromDecision === 'function'
-    ? `      const combatLogExitSummaryFromDecision = ${combatLogExitSummaryFromDecision.toString()};`
-    : '';
+function combatLogSource() {
+  const holdPrelude = "      const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForCombatLogBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForCombatLogBoundCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForCombatLogBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('CombatLog', { indent: '      ' });
+  const enemyHoldRemainingMsCall = enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForCombatLogBoundCore');
+  const offlineHoldRemainingMsCall = offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForCombatLogBoundCore', 'clearOfflineReloginHoldForCombatLogBoundCore');
+  const recordRuntimeDiagnosticsCall = values => `recordRuntimeDiagnosticsCore(bot, ${values})`;
   return String.raw`${holdPrelude}      function combatLogEntryFailureKey(entry) {
         if (!entry || typeof entry !== 'object') return '';
         return [
@@ -433,7 +418,7 @@ function combatLogSource(helpers = {}) {
           pursuit: detail.pursuit || extra.pursuit || null,
           combat: detail.combat || extra.combat || null,
           offlineSafety: detail.offlineSafety || extra.offlineSafety || null,
-	          pendingExit: ${summarizePendingExitCall('bot.pendingExit', { bundledRuntime, alias: 'CombatLog' })},
+	          pendingExit: ${summarizePendingExitCall('bot.pendingExit', { alias: 'CombatLog' })},
 	          loginSnapshotGate: snapshotLoginGateStatus(),
 	          request: extra.request || null,
           leave: {
@@ -1157,8 +1142,6 @@ function combatLogSource(helpers = {}) {
           }`)};
         }
       }
-
-${combatLogExitSummarySource}
 
       function combatLogExitSummary(decision) {
         return combatLogExitSummaryFromDecision(decision);

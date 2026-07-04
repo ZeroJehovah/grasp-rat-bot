@@ -1,9 +1,7 @@
 'use strict';
 
-function pageNativeSnapshotSource(options = {}) {
-  const recordRuntimeDiagnosticsCall = values => options.bundledRuntime
-    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
-    : `recordRuntimeDiagnostics(${values})`;
+function pageNativeSnapshotSource() {
+  const recordRuntimeDiagnosticsCall = values => `recordRuntimeDiagnosticsCore(bot, ${values})`;
   return String.raw`
 	  function pageNativeSnapshotUrl(input) {
 	    try {

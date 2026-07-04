@@ -1,9 +1,7 @@
 'use strict';
 
-function entityRefreshSource(options = {}) {
-  const recordRuntimeDiagnosticsCall = values => options.bundledRuntime
-    ? `recordRuntimeDiagnosticsCore(bot, ${values})`
-    : `recordRuntimeDiagnostics(${values})`;
+function entityRefreshSource() {
+  const recordRuntimeDiagnosticsCall = values => `recordRuntimeDiagnosticsCore(bot, ${values})`;
   return String.raw`  function markRecentMovement(entities) {
     const t = now();
     const sampleMs = Math.max(1, Number(cfg.combatAimMotionSampleMs || 50));

@@ -1,7 +1,19 @@
 'use strict';
 
 const { opportunityRouteSource } = require('./opportunity-route-source');
-const {
+
+function opportunityCandidateSource() {
+  const uniqueVisibleRouteCoinsCall = 'uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })';
+  const pickCoinRouteOpportunityCall = String.raw`pickCoinRouteOpportunityCore(self, ${uniqueVisibleRouteCoinsCall}, activeThreats, {
+      ...coinRouteCoreOptions(self),
+      heldChoice: currentHeldCoinChoice(),
+      heldRouteChoice: currentHeldCoinRouteChoice()
+    })`;
+  const bestCoinOpportunityScoreCall = String.raw`(() => {
+      const route = ${pickCoinRouteOpportunityCall};
+      return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
+    })()`;
+  return String.raw`const {
   opportunityEffectiveStaminaCostCore,
   opportunityValueScoreCore,
   opportunityPriorityTierCore,
@@ -11,57 +23,8 @@ const {
   buildEnemyOpportunityCandidatesCore,
   buildOpportunityCandidatesCore,
   bestCoinOpportunityScoreCore
-} = require('./runtime/opportunity-candidates');
+} = require('./src/browser/runtime/opportunity-candidates');
 
-function opportunityCandidateInlineSource(helpers = {}, options = {}) {
-  const {
-    opportunityEffectiveStaminaCostCore,
-    opportunityValueScoreCore,
-    opportunityPriorityTierCore,
-    mergeCoinRouteDisplayCore,
-    uniqueVisibleRouteCoinsCore,
-    buildCoinOpportunityCandidatesCore,
-    buildEnemyOpportunityCandidatesCore,
-    buildOpportunityCandidatesCore,
-    bestCoinOpportunityScoreCore
-  } = helpers;
-  const opportunityCandidateHelperSource = [
-    opportunityEffectiveStaminaCostCore,
-    opportunityValueScoreCore,
-    opportunityPriorityTierCore,
-    mergeCoinRouteDisplayCore,
-    uniqueVisibleRouteCoinsCore,
-    buildCoinOpportunityCandidatesCore,
-    buildEnemyOpportunityCandidatesCore,
-    buildOpportunityCandidatesCore,
-    bestCoinOpportunityScoreCore
-  ].map(fn => typeof fn === 'function' ? `\t  ${fn.toString()}` : '').join('\n');
-  const uniqueVisibleRouteCoinsCall = 'uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })';
-  const pickCoinRouteOpportunityCall = options.bundledRuntime
-    ? String.raw`pickCoinRouteOpportunityCore(self, ${uniqueVisibleRouteCoinsCall}, activeThreats, {
-      ...coinRouteCoreOptions(self),
-      heldChoice: currentHeldCoinChoice(),
-      heldRouteChoice: currentHeldCoinRouteChoice()
-    })`
-    : String.raw`pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats)`;
-  const bestCoinOpportunityScoreCall = options.bundledRuntime
-    ? String.raw`(() => {
-      const route = ${pickCoinRouteOpportunityCall};
-      return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
-    })()`
-    : 'bestCoinOpportunityScore(self, coinGroups, activeThreats)';
-  const localOpportunityCandidateWrapperSource = options.bundledRuntime ? '' : String.raw`
-  function uniqueVisibleRouteCoins(coinGroups) {
-    return uniqueVisibleRouteCoinsCore(coinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey });
-  }
-
-  function bestCoinOpportunityScore(self, coinGroups, activeThreats) {
-    const route = pickCoinRouteOpportunity(self, uniqueVisibleRouteCoins(coinGroups), activeThreats);
-    return bestCoinOpportunityScoreCore(self, coinGroups, activeThreats, route, opportunityCandidateCoreOptions(self));
-  }
-
-`;
-  return String.raw`
   function opportunityPriorityTier(item) {
     return opportunityPriorityTierCore(item, {
       visibleDistance: cfg.opportunityVisibleDistance,
@@ -69,15 +32,13 @@ function opportunityCandidateInlineSource(helpers = {}, options = {}) {
     });
   }
 
-${opportunityCandidateHelperSource}
-
-${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(self = null) {
+${opportunityRouteSource()}	  function opportunityCandidateCoreOptions(self = null) {
 	    return {
 	      safeCoinCandidates,
 	      coinStaminaCost: opportunityCoinStaminaCost,
 	      coinStaminaAffordable: (coin, staminaCost = opportunityCoinStaminaCost(coin)) => coinStaminaAffordableWithDiagnostic(self, coin, staminaCost),
 	      scoreCoinOpportunity,
-	      snapshotCoinNavigationReason,
+	      snapshotCoinNavigationReason: coin => snapshotCoinNavigationReasonCore(coin, coinTargetCoreOptions()),
 	      maxCoinDistance: cfg.coinMaxDistance,
 	      routeMaxDistance: cfg.coinRouteMaxDistance,
 	      scoreEnemyOpportunity,
@@ -91,8 +52,6 @@ ${opportunityRouteSource(options)}	  function opportunityCandidateCoreOptions(se
 	      nearbyPriorityDistance: cfg.opportunityNearbyPriorityDistance
 	    };
 	  }
-
-${localOpportunityCandidateWrapperSource}
 
   function pickProfitableCombatTarget(self, combatTargets, bullets, coinGroups, activeThreats) {
     if (!isFullHp(self)) return null;
@@ -114,39 +73,6 @@ ${localOpportunityCandidateWrapperSource}
 `;
 }
 
-function bundledOpportunityCandidateSource(options = {}) {
-  return `const {
-  opportunityEffectiveStaminaCostCore,
-  opportunityValueScoreCore,
-  opportunityPriorityTierCore,
-  mergeCoinRouteDisplayCore,
-  uniqueVisibleRouteCoinsCore,
-  buildCoinOpportunityCandidatesCore,
-  buildEnemyOpportunityCandidatesCore,
-  buildOpportunityCandidatesCore,
-  bestCoinOpportunityScoreCore
-} = require('./src/browser/runtime/opportunity-candidates');
-
-${opportunityCandidateInlineSource({}, options)}`;
-}
-
-function opportunityCandidateSource(options = {}) {
-  if (options.bundledRuntime) return bundledOpportunityCandidateSource(options);
-  return opportunityCandidateInlineSource({
-    opportunityEffectiveStaminaCostCore,
-    opportunityValueScoreCore,
-    opportunityPriorityTierCore,
-    mergeCoinRouteDisplayCore,
-    uniqueVisibleRouteCoinsCore,
-    buildCoinOpportunityCandidatesCore,
-    buildEnemyOpportunityCandidatesCore,
-    buildOpportunityCandidatesCore,
-    bestCoinOpportunityScoreCore
-  }, options);
-}
-
 module.exports = {
-  bundledOpportunityCandidateSource,
-  opportunityCandidateInlineSource,
   opportunityCandidateSource
 };

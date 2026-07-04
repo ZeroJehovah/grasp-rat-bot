@@ -15,35 +15,16 @@ const {
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
 
-function controlLoginSource(helpers = {}) {
-  const {
-    bundledRuntime = false,
-    staminaExhaustedWindowLabel
-  } = helpers;
-  const holdPrelude = bundledRuntime
-    ? "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('ControlLogin', { bundledRuntime })
-    : '';
-  const finalizeLeaveDisplayReasonCall = detail => bundledRuntime
-    ? finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForControlLoginCore', 'leaveWaitDisplayForControlLoginCore')
-    : `finalizeLeaveDisplayReason(${detail})`;
-  const normalizePendingExitReloadConfirmationCall = args => bundledRuntime
-    ? `normalizePendingExitReloadConfirmationCore(${args})`
-    : `normalizePendingExitReloadConfirmation(${args})`;
-  const loginSnapshotSuccessRequiredCall = bundledRuntime
-    ? 'loginSnapshotSuccessRequiredCore()'
-    : 'loginSnapshotSuccessRequired()';
-  const normalizeLoginSnapshotGateStateCall = state => bundledRuntime
-    ? `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`
-    : `normalizeLoginSnapshotGateState(${state})`;
-  const writePendingExit = pending => writePersistentPendingExitStateCall(pending, { bundledRuntime });
-  const enemyHoldRemainingMsCall = bundledRuntime
-    ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore')
-    : 'enemyReloginHoldRemainingMs()';
-  const offlineHoldRemainingMsCall = bundledRuntime
-    ? offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForControlLoginBoundCore', 'clearOfflineReloginHoldForControlLoginBoundCore')
-    : 'offlineReloginHoldRemainingMs()';
+function controlLoginSource() {
+  const holdPrelude = "  const { clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore, leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore } = require('./src/browser/runtime/exit-relogin');\n" + pendingExitSummaryPreludeSource('ControlLogin');
+  const finalizeLeaveDisplayReasonCall = detail => finalizeLeaveDisplayReasonCoreCall(detail, 'finalizeLeaveDisplayReasonForControlLoginCore', 'leaveWaitDisplayForControlLoginCore');
+  const normalizePendingExitReloadConfirmationCall = args => `normalizePendingExitReloadConfirmationCore(${args})`;
+  const loginSnapshotSuccessRequiredCall = 'loginSnapshotSuccessRequiredCore()';
+  const normalizeLoginSnapshotGateStateCall = state => `normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})`;
+  const writePendingExit = pending => writePersistentPendingExitStateCall(pending);
+  const enemyHoldRemainingMsCall = enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForControlLoginBoundCore');
+  const offlineHoldRemainingMsCall = offlineReloginHoldRemainingMsBoundCall('offlineReloginHoldRemainingMsForControlLoginBoundCore', 'clearOfflineReloginHoldForControlLoginBoundCore');
   return [
-    typeof staminaExhaustedWindowLabel === 'function' ? staminaExhaustedWindowLabel.toString() : '',
     holdPrelude,
     String.raw`  function requestReload(reason) {
 	    if (cfg.dryRun || cfg.once) return;
@@ -108,7 +89,7 @@ function controlLoginSource(helpers = {}) {
 		        dx: 0,
 		        dy: 0,
 		        self: bot.lastSelf,
-		        pendingExit: ${summarizePendingExitCall('pending', { bundledRuntime, alias: 'ControlLogin' })},
+		        pendingExit: ${summarizePendingExitCall('pending', { alias: 'ControlLogin' })},
 		        exitAuditFlush: blocked,
 		        displayReason: '等待退出日志发送完成，暂不刷新确认退出'
 		      });
@@ -146,7 +127,7 @@ function controlLoginSource(helpers = {}) {
 		    logStatus('leave confirmation reload: ' + reason, {
 		      kind: 'wait',
 		      reason: 'leave-success-refresh-confirmation',
-		      pendingExit: ${summarizePendingExitCall('pending', { bundledRuntime, alias: 'ControlLogin' })},
+		      pendingExit: ${summarizePendingExitCall('pending', { alias: 'ControlLogin' })},
 		      reloadConfirmation,
 		      displayReason: 'leave接口已返回成功，刷新页面确认服务端在线状态'
 		    });
@@ -701,7 +682,7 @@ function controlLoginSource(helpers = {}) {
       snapshotSelf,
       reconnectChurn,
       wsOfflineish,
-      pendingExit: ${summarizePendingExitCall('bot.pendingExit', { bundledRuntime, alias: 'ControlLogin' })},
+      pendingExit: ${summarizePendingExitCall('bot.pendingExit', { alias: 'ControlLogin' })},
       suppressRemainingMs: Math.max(0, Math.round(suppressRemainingMs)),
       suppressReason,
       enemyHoldRemainingMs,

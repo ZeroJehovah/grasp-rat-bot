@@ -1,12 +1,8 @@
 'use strict';
 
-function combatActionSource(options = {}) {
-  const combatActionPrelude = options.bundledRuntime
-    ? "  const {\n    combatExitSummaryCore: combatExitSummaryForCombatActionCore,\n    combatLeaveActionCore: combatLeaveActionForCombatActionCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n"
-    : '';
-  const combatLeaveActionCall = (reason, baseTarget, combatState, cover) => options.bundledRuntime
-    ? `combatLeaveActionForCombatActionCore(${reason}, ${baseTarget}, ${combatState}, ${cover}, { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp })`
-    : `combatLeaveAction(${reason}, ${baseTarget}, ${combatState}, ${cover})`;
+function combatActionSource() {
+  const combatActionPrelude = "  const {\n    combatExitSummaryCore: combatExitSummaryForCombatActionCore,\n    combatLeaveActionCore: combatLeaveActionForCombatActionCore\n  } = require('./src/browser/runtime/exit-relogin');\n\n";
+  const combatLeaveActionCall = (reason, baseTarget, combatState, cover) => `combatLeaveActionForCombatActionCore(${reason}, ${baseTarget}, ${combatState}, ${cover}, { combatExitSummary: (summaryReason, summaryTarget, summaryState) => combatExitSummaryForCombatActionCore(summaryReason, summaryTarget, summaryState, { cfg, actorLabel, hpDisplay, formatDurationMs }), clamp })`;
   return String.raw`${combatActionPrelude}  function buildCombatAction(self, target, bullets) {
     const selfHp = hpValue(self);
     const targetHp = combatHpValue(target);

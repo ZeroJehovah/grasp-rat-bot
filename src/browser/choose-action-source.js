@@ -4,12 +4,11 @@ const { coinDirectionToCall } = require('./coin-motion-runtime-source');
 const { clearOpportunityChoiceForCall } = require('./opportunity-clear-call-source');
 const { recordDropMatchedKillCall } = require('./combat-history-source');
 
-function chooseActionSource(options = {}) {
-  const clearPostAttackCoinOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackCoin.postAttackTarget?.id', options);
-  const clearPostAttackWaitOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackWaitTarget.id', options);
-  const clearDailyStaminaCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null', options);
-  const summarizeNearestCoinStaminaBudgetExitCall = options.bundledRuntime
-    ? String.raw`summarizeNearestCoinStaminaBudgetExitCore(
+function chooseActionSource() {
+  const clearPostAttackCoinOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackCoin.postAttackTarget?.id');
+  const clearPostAttackWaitOpportunity = clearOpportunityChoiceForCall("'enemy'", 'postAttackWaitTarget.id');
+  const clearDailyStaminaCoinOpportunity = clearOpportunityChoiceForCall("'coin'", 'null');
+  const summarizeNearestCoinStaminaBudgetExitCall = String.raw`summarizeNearestCoinStaminaBudgetExitCore(
 	      self,
 	      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self),
 	      {
@@ -18,13 +17,8 @@ function chooseActionSource(options = {}) {
 	        coinStaminaCost: opportunityCoinStaminaCost,
 	        reloginDelayMs: staminaBudgetReloginDelayMs()
 	      }
-	    )`
-    : String.raw`summarizeNearestCoinStaminaBudgetExit(
-	      self,
-	      safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self)
 	    )`;
-  const pickNearestDailyStaminaFinalCoinCall = options.bundledRuntime
-    ? String.raw`pickNearestDailyStaminaFinalCoinCore(
+  const pickNearestDailyStaminaFinalCoinCall = String.raw`pickNearestDailyStaminaFinalCoinCore(
       safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self),
       {
         isSnapshotOnlyCoin,
@@ -35,28 +29,20 @@ function chooseActionSource(options = {}) {
           opportunityWindowStaminaBudget(self, '1d')
         )
       }
-    )`
-    : String.raw`pickNearestDailyStaminaFinalCoin(self, realtimeCoins, coinThreats)`;
-  const summarizeBlockedStaminaOpportunityCall = options.bundledRuntime
-    ? String.raw`summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {
+    )`;
+  const summarizeBlockedStaminaOpportunityCall = String.raw`summarizeBlockedStaminaOpportunityCore(realtimeCoins, [], {
 	          budget: opportunityLongStaminaBudget(self),
 	          coinStaminaCost: opportunityCoinStaminaCost,
 	          enemyStaminaCost: opportunityEnemyStaminaCost,
 	          targetDrop: dropValue
-	        })`
-    : String.raw`summarizeBlockedStaminaOpportunity(self, realtimeCoins, [])`;
-  const pickCoinRouteOpportunityOption = options.bundledRuntime
-    ? String.raw`(routeSelf, routeCoins, routeThreats) => pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {
+	        })`;
+  const pickCoinRouteOpportunityOption = String.raw`(routeSelf, routeCoins, routeThreats) => pickCoinRouteOpportunityCore(routeSelf, routeCoins, routeThreats, {
           ...coinRouteCoreOptions(routeSelf),
           heldChoice: currentHeldCoinChoice(),
           heldRouteChoice: currentHeldCoinRouteChoice()
-        })`
-    : 'pickCoinRouteOpportunity';
-  const uniqueVisibleRouteCoinsOption = options.bundledRuntime
-    ? String.raw`routeCoinGroups => uniqueVisibleRouteCoinsCore(routeCoinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })`
-    : 'uniqueVisibleRouteCoins';
-  const enemyOpportunityCandidatesOption = options.bundledRuntime
-    ? String.raw`(candidateSelf, targets, candidateThreats) => {
+        })`;
+  const uniqueVisibleRouteCoinsOption = String.raw`routeCoinGroups => uniqueVisibleRouteCoinsCore(routeCoinGroups, { isSnapshotOnlyCoin, coinKey: coinRouteKey })`;
+  const enemyOpportunityCandidatesOption = String.raw`(candidateSelf, targets, candidateThreats) => {
           const byId = new Map();
           for (const raw of targets) {
             const id = raw?.user_id;
@@ -82,13 +68,9 @@ function chooseActionSource(options = {}) {
             }
           }
           return Array.from(byId.values());
-        }`
-    : 'enemyOpportunityCandidates';
-  const snapshotCoinNavigationReasonCall = options.bundledRuntime
-    ? 'snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'
-    : 'snapshotCoinNavigationReason(localRealtimeCoin)';
-  const buildMissingHeldOpportunityOption = options.bundledRuntime
-    ? String.raw`(missingSelf, missingThreats, opportunities) => {
+        }`;
+  const snapshotCoinNavigationReasonCall = 'snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())';
+  const buildMissingHeldOpportunityOption = String.raw`(missingSelf, missingThreats, opportunities) => {
           const t = now();
           const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
             nowMs: t,
@@ -123,25 +105,19 @@ function chooseActionSource(options = {}) {
             ...opportunity,
             action: () => buildCoinAction(missingSelf, coin, opportunity.reason, opportunity.actionKind === 'seek-coin' ? 'seek-coin' : null)
           };
-        }`
-    : 'buildMissingHeldOpportunity';
-  const chooseStableOpportunityOption = options.bundledRuntime
-    ? String.raw`opportunities => {
+        }`;
+  const chooseStableOpportunityOption = String.raw`opportunities => {
           const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
           bot.opportunitySwitchLock = result.switchLock;
           return result.chosen;
-        }`
-    : 'chooseStableOpportunity';
-  const rememberOpportunityChoiceOption = options.bundledRuntime
-    ? String.raw`(item, action, previous = bot.opportunityChoice) => {
+        }`;
+  const rememberOpportunityChoiceOption = String.raw`(item, action, previous = bot.opportunityChoice) => {
           if (!item) return action;
           const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
           bot.opportunityChoice = result.choice;
           return result.action;
-        }`
-    : 'rememberOpportunityChoice';
-  const pickPostAttackDropCoinCall = (selfExpr, coinsExpr, threatsExpr, entitiesExpr, optionsExpr = '{}') => options.bundledRuntime
-    ? String.raw`(() => {
+        }`;
+  const pickPostAttackDropCoinCall = (selfExpr, coinsExpr, threatsExpr, entitiesExpr, optionsExpr = '{}') => String.raw`(() => {
       const options = ${optionsExpr};
       const t = Date.now();
       const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
@@ -164,13 +140,11 @@ function chooseActionSource(options = {}) {
         scoreCoin: scoreCoinOpportunity
       });
       for (const candidate of result.candidates || []) {
-        ${recordDropMatchedKillCall('candidate', 'candidate.amount', `summarizeSelf(${selfExpr})`, "'post-attack-drop-visible'", options)};
+        ${recordDropMatchedKillCall('candidate', 'candidate.amount', `summarizeSelf(${selfExpr})`, "'post-attack-drop-visible'")};
       }
       return result.selected || null;
-    })()`
-    : `pickPostAttackDropCoin(${selfExpr}, ${coinsExpr}, ${threatsExpr}, ${entitiesExpr}, ${optionsExpr})`;
-  const pickPostAttackDropWaitTargetCall = (selfExpr, coinsExpr, threatsExpr, entitiesExpr) => options.bundledRuntime
-    ? String.raw`(() => {
+    })()`;
+  const pickPostAttackDropWaitTargetCall = (selfExpr, coinsExpr, threatsExpr, entitiesExpr) => String.raw`(() => {
       const t = Date.now();
       const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
       return pickPostAttackDropWaitTargetCore(bot.attackHistory, ${coinsExpr}, ${threatsExpr}, {
@@ -186,8 +160,7 @@ function chooseActionSource(options = {}) {
         resolveAttack: item => postAttackDropResolvedAt(item, ${entitiesExpr}, t),
         coinBlockedByThreat: (origin, item, threat) => coinBlockedByThreat(origin, item, threat)
       });
-    })()`
-    : `pickPostAttackDropWaitTarget(${selfExpr}, ${coinsExpr}, ${threatsExpr}, ${entitiesExpr})`;
+    })()`;
   return String.raw`  function chooseAction(self) {
     const {
       entities,
@@ -454,7 +427,7 @@ function chooseActionSource(options = {}) {
 
 	    if (recovery && nearCoin) {
 	      bot.fleeLock = null;
-	      const dir = ${coinDirectionToCall('self', 'nearCoin', 'cfg.coinPrecisionTolerance', options)};
+	      const dir = ${coinDirectionToCall('self', 'nearCoin', 'cfg.coinPrecisionTolerance')};
       return {
         kind: 'coin',
         reason: 'recovery-foot-coin',
@@ -483,7 +456,7 @@ function chooseActionSource(options = {}) {
 	    if (!fullHp && cautionThreats.length) {
 	      if (footCoin) {
 	        bot.fleeLock = null;
-	        const dir = ${coinDirectionToCall('self', 'footCoin', 'cfg.coinPrecisionTolerance', options)};
+	        const dir = ${coinDirectionToCall('self', 'footCoin', 'cfg.coinPrecisionTolerance')};
         return {
           kind: 'coin',
           reason: 'foot-coin-before-active-caution',
@@ -506,7 +479,7 @@ function chooseActionSource(options = {}) {
 
 			    if (footCoin) {
 	      bot.fleeLock = null;
-	      const dir = ${coinDirectionToCall('self', 'footCoin', 'cfg.coinPrecisionTolerance', options)};
+	      const dir = ${coinDirectionToCall('self', 'footCoin', 'cfg.coinPrecisionTolerance')};
       return attachOpportunisticShot({
         kind: 'coin',
         reason: 'foot-coin-priority',
@@ -578,7 +551,7 @@ function chooseActionSource(options = {}) {
     const distantCoin = pickDistantCoin(self, realtimeCoins, coinThreats);
     if (distantCoin) {
       bot.fleeLock = null;
-      const dir = ${coinDirectionToCall('self', 'distantCoin', 'cfg.coinPrecisionTolerance', options)};
+      const dir = ${coinDirectionToCall('self', 'distantCoin', 'cfg.coinPrecisionTolerance')};
       return attachOpportunisticShot({
         kind: 'seek-coin',
         reason: 'safe-distant-coin',

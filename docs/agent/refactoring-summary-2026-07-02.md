@@ -1,5 +1,17 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-04 Follow-up: Bundled-Only Browser Source Migration
+
+`bootstrap-0.4.499` completes the aggressive browser-source-generation cleanup after the esbuild migration:
+
+- `src/browser/*.js` source modules now generate bundled-only runtime fragments. The old `*InlineSource` / `bundled*Source` compatibility selectors and optional `options.bundledRuntime` branches are removed from migrated browser source modules.
+- Browser source fragments now expose helper dependencies directly to esbuild through `require('./src/browser/runtime/...')`. Runtime adapters under `src/browser/runtime/` remain the browser boundary for strategy/shared helpers.
+- `grasp-rat-bot.js` is no longer treated as browser runtime text. It stays the Node/CDP CLI entry, while runtime behavior verification is anchored to the generated direct runtime and final `dist/grasp-rat-remote-bot.js`.
+- `scripts/verify-objective-build.js` now checks both sides of the new boundary: source-module shape for bundled-only fragment generation, and generated/dist products for behavior text, final direct-core calls, manifest hashes, bundler metadata, and absence of unresolved runtime imports.
+- The production dist still bundles through esbuild and records manifest SHA-256 `8a00ebd284885d137ac25fb98ea6cce9b8b68cb61c17bdd2dcdd7b23ef6fb970` with direct source SHA-256 `4f5063cd87ef599e28f90dcb6e2912e1f6b1b77a9af0d87ea0ef3b873e442d65`.
+
+This intentionally drops the conservative local inline compatibility layer in favor of the structurally cleaner bundled-only architecture.
+
 ## Phase Notes: Strategy Module Extraction and First Integration
 
 **Date**: 2026-07-02  

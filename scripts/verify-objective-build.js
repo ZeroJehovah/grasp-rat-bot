@@ -20,7 +20,6 @@ const RUNTIME_FILES = [
 ];
 
 const REMOTE_BOT_FILES = [
-  'grasp-rat-bot.js',
   'dist/grasp-rat-remote-bot.js'
 ];
 
@@ -243,6 +242,13 @@ function functionBody(text, name) {
 function countMatches(text, re) {
   const matches = String(text || '').match(re);
   return matches ? matches.length : 0;
+}
+
+function assertBundledOnlySourceModule(text, label) {
+  assert(!/function\s+[A-Za-z0-9_$]*InlineSource\s*\(/.test(text), `${label} still exposes an inline source factory`);
+  assert(!/function\s+bundled[A-Z][A-Za-z0-9_$]*Source\s*\(/.test(text), `${label} still exposes a bundled selector factory`);
+  assert(!text.includes('options.bundledRuntime'), `${label} still branches on optional bundledRuntime`);
+  assert(!text.includes('config?.bundledRuntime'), `${label} still branches on optional bundledRuntime config`);
 }
 
 function generateRemoteBuild(manifest) {
@@ -668,28 +674,28 @@ function main() {
     assert(runtimeSourceModule.includes('if (!Array.isArray(fragments))'), 'runtime source renderer does not validate the fragment registry shape');
     assert(runtimeSourceModule.includes('function renderRuntimeFragments(fragments)'), 'runtime source fragment renderer not found');
     assert(!runtimeSourceModule.includes('browserRuntimeAssemblySource'), 'runtime source boundary should not depend on the removed assembly adapter');
-    assert(runtimeUtilsSourceModule.includes("require('./runtime/runtime-utils')"), 'runtime-utils source module does not import the browser runtime helper module');
+    assert(runtimeUtilsSourceModule.includes("require('./src/browser/runtime/runtime-utils')"), 'runtime-utils source module does not expose a bundler-owned runtime helper require');
+    assert(!runtimeUtilsSourceModule.includes("require('./runtime/runtime-utils')"), 'runtime-utils source module still imports helper for inline injection');
     assert(runtimeUtilsRuntimeModule.includes("require('../../shared/runtime-utils')"), 'browser runtime-utils helper module does not reuse shared runtime utilities');
     assert(runtimeUtilsRuntimeModule.includes('safeStringify') && runtimeUtilsRuntimeModule.includes('safeJsonClone') && runtimeUtilsRuntimeModule.includes('sanitizeCombatLogIdPart'), 'browser runtime-utils helper module exports are incomplete');
-    assert(statusPanelRuntimeSourceModule.includes("require('./runtime/display-format')"), 'status-panel runtime source does not import the browser display-format helper module');
+    assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
     assert(displayFormatRuntimeModule.includes("require('../../shared/display-format')"), 'browser display-format helper module does not reuse shared display helpers');
     assert(displayFormatRuntimeModule.includes('escapeHtml') && displayFormatRuntimeModule.includes('formatDistance') && displayFormatRuntimeModule.includes('formatDurationMs') && displayFormatRuntimeModule.includes('actorLabel') && displayFormatRuntimeModule.includes('hpDisplay'), 'browser display-format helper module exports are incomplete');
     assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
     assert(exitSummaryRuntimeModule.includes("require('../../shared/exit-summary')"), 'browser exit-summary helper module does not reuse shared exit-summary helpers');
     assert(exitSummaryRuntimeModule.includes('staminaExhaustedLongWindows') && exitSummaryRuntimeModule.includes('staminaExhaustedWindowLabel') && exitSummaryRuntimeModule.includes('staminaEvidenceRemaining') && exitSummaryRuntimeModule.includes('staminaHoldContradictedByStaminaEvidence') && exitSummaryRuntimeModule.includes('offlineLeaveSummaryText') && exitSummaryRuntimeModule.includes('combatLogExitSummaryFromDecision'), 'browser exit-summary helper module exports are incomplete');
-    assert(combatLogRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'combat-log runtime source does not import the browser exit-summary helper module');
+    assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
     assert(combatLogRuntimeSourceModule.includes("require('./combat-log-source')"), 'combat-log runtime source module import not found');
-    assert(controlLoginRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'control-login runtime source does not import the browser exit-summary helper module');
     assert(controlLoginRuntimeSourceModule.includes("require('./control-login-source')"), 'control-login runtime source module import not found');
-    assert(runtimeBootstrapSourceModule.includes("require('./runtime/exit-summary')"), 'runtime bootstrap source does not import the browser exit-summary helper module');
-    assert(runtimeBootstrapSourceModule.includes("require('./runtime/browser-preserved-state')"), 'runtime bootstrap source does not import the browser preserved-state helper module');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'runtime bootstrap source does not expose a bundler-owned exit-summary require');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/browser-preserved-state')"), 'runtime bootstrap source does not expose a bundler-owned preserved-state require');
     assert(browserPreservedStateRuntimeModule.includes("require('../../shared/browser-preserved-state')"), 'browser preserved-state helper module does not reuse shared preserved-state helper');
     assert(browserPreservedStateRuntimeModule.includes('buildBrowserPreservedState'), 'browser preserved-state helper module export is incomplete');
-    assert(runtimeBootstrapSourceModule.includes("require('./runtime/runtime-defaults')"), 'runtime bootstrap source does not import the browser runtime-defaults helper module');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-defaults')"), 'runtime bootstrap source does not expose a bundler-owned runtime-defaults require');
     assert(runtimeDefaultsRuntimeModule.includes("require('../../shared/runtime-defaults')"), 'browser runtime-defaults helper module does not reuse shared runtime defaults helper');
     assert(runtimeDefaultsRuntimeModule.includes('buildRuntimeDefaults'), 'browser runtime-defaults helper module export is incomplete');
     assert(runtimeBootstrapSourceModule.includes("require('./page-global-core')"), 'page-global core module import not found');
-    assert(runtimeBootstrapSourceModule.includes("require('./runtime/target-whitelist')"), 'runtime bootstrap source does not import the browser target-whitelist helper module');
+    assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/target-whitelist')"), 'runtime bootstrap source does not expose a bundler-owned target-whitelist require');
     assert(targetWhitelistRuntimeModule.includes("require('../../shared/target-whitelist')"), 'browser target-whitelist helper module does not reuse shared target-whitelist helpers');
     assert(targetWhitelistRuntimeModule.includes('normalizeTargetWhitelistName') && targetWhitelistRuntimeModule.includes('parseTargetWhitelistNames') && targetWhitelistRuntimeModule.includes('deriveTargetWhitelistUrl'), 'browser target-whitelist helper module exports are incomplete');
     assert(runtimeFragmentsSourceModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
@@ -788,50 +794,80 @@ function main() {
     assert(fragmentEntriesBody.includes("['choose-action', () => chooseActionSource(config)]"), 'choose-action fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
-    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateInlineSource() {'), 'restored runtime state inline source factory not found');
-    assert(restoredRuntimeStateSourceModule.includes('function bundledRestoredRuntimeStateSource() {'), 'restored runtime state bundled source factory not found');
-    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource(options = {})'), 'restored runtime state source selector not found');
-    assert(restoredRuntimeStateSourceModule.includes('restoredRuntimeStateInlineSource,\n  bundledRestoredRuntimeStateSource,\n  restoredRuntimeStateSource'), 'restored runtime state source module exports not found');
-    const restoredRuntimeStateInlineBody = functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateInlineSource');
-    assert(restoredRuntimeStateInlineBody.includes('const restoredFailures = restoredCoinFailures();'), 'restored runtime state inline source does not restore coin failures');
-    assert(restoredRuntimeStateInlineBody.includes('const restoredPendingExitState = readPersistedPendingExitState(Date.now(), { markReloaded: !previousBot });'), 'restored runtime state inline source does not restore pending exit state');
-    assert(restoredRuntimeStateInlineBody.includes('const initialPendingExitState = chooseInitialPendingExitState(preserved.pendingExit, restoredPendingExitState, Date.now(), { markReloaded: !previousBot });'), 'restored runtime state inline source does not choose initial pending exit state');
-    const restoredRuntimeStateBundledBody = functionBody(restoredRuntimeStateSourceModule, 'bundledRestoredRuntimeStateSource');
-    assert(restoredRuntimeStateBundledBody.includes("require('./src/browser/runtime/restored-runtime-state')"), 'restored runtime state bundled source does not hand restore helper to the bundler');
-    assert(restoredRuntimeStateBundledBody.includes("require('./src/browser/runtime/restored-coin-failures')"), 'restored runtime state bundled source does not hand coin-failure restore helper to the bundler');
-    assert(restoredRuntimeStateBundledBody.includes('restoreRuntimeStateCore(preserved, previousBot'), 'restored runtime state bundled source does not bind preserved/previousBot state');
-    assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailures') && restoredRuntimeStateBundledBody.includes('readPersistentExitState'), 'restored runtime state bundled source does not bind runtime restore dependencies');
-    assert(restoredRuntimeStateBundledBody.includes('restoredCoinFailuresForRestoredRuntimeStateCore(preserved.coinFailures, cfg, performance.now())'), 'restored runtime state bundled source does not bind coin-failure restore core directly');
-    assert(restoredRuntimeStateBundledBody.includes('readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY') && restoredRuntimeStateBundledBody.includes('chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options'), 'restored runtime state bundled source does not bind pending-exit restore cores directly');
-    assert(restoredRuntimeStateBundledBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind enemy leave key');
-    assert(restoredRuntimeStateBundledBody.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'restored runtime state bundled source does not bind offline leave key');
-    assert(functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource').includes('options.bundledRuntime'), 'restored runtime state source selector does not switch on bundled runtime mode');
-    assert(statusPanelRuntimeSourceModule.includes('function bundledStatusPanelRuntimeSource()'), 'bundled status-panel runtime source factory not found');
-    assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource(options = {})'), 'status-panel runtime source factory not found');
-    assert(statusPanelRuntimeSourceModule.includes('module.exports = {\n  bundledStatusPanelRuntimeSource,\n  statusPanelRuntimeSource\n}'), 'status-panel runtime source export not found');
+    [
+      ['runtime-bootstrap', runtimeBootstrapSourceModule],
+      ['runtime-utils', runtimeUtilsSourceModule],
+      ['status-panel-runtime', statusPanelRuntimeSourceModule],
+      ['combat-log-runtime', combatLogRuntimeSourceModule],
+      ['control-login-runtime', controlLoginRuntimeSourceModule],
+      ['array-count', arrayCountSourceModule],
+      ['combat-history', combatHistorySourceModule],
+      ['entity-refresh', entityRefreshSourceModule],
+      ['coin-safety', coinSafetySourceModule],
+      ['combat-state', combatStateSourceModule],
+      ['combat-action', combatActionSourceModule],
+      ['opportunity-stamina', opportunityStaminaSourceModule],
+      ['opportunity-snapshot', opportunitySnapshotSourceModule],
+      ['post-attack', postAttackSourceModule],
+      ['opportunity-actions', opportunityActionsSourceModule],
+      ['opportunity-candidate', opportunityCandidateSourceModule],
+      ['opportunity-choice', opportunityChoiceSourceModule],
+      ['opportunity-route', opportunityRouteSourceModule],
+      ['coin-target-runtime', coinTargetRuntimeSourceModule],
+      ['choose-action', chooseActionSourceModule],
+      ['tick', tickSourceModule],
+      ['bot-object', botObjectSourceModule],
+      ['control-login', controlLoginSourceModule],
+      ['coin-motion-runtime', coinMotionRuntimeSourceModule],
+      ['tick-safety', tickSafetySourceModule],
+      ['pending-exit-persistence', pendingExitPersistenceSourceModule],
+      ['exit-relogin', exitReloginSourceModule],
+      ['pending-exit', pendingExitSourceModule],
+      ['leave-command', leaveCommandSourceModule],
+      ['leave-flow', leaveFlowSourceModule],
+      ['page-native-snapshot', pageNativeSnapshotSourceModule],
+      ['action-arbitration', actionArbitrationSourceModule],
+      ['coin-progress-runtime', coinProgressRuntimeSourceModule]
+    ].forEach(([label, text]) => assertBundledOnlySourceModule(text, label));
+    assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateSource()'), 'restored runtime state source factory not found');
+    assert(!restoredRuntimeStateSourceModule.includes('restoredRuntimeStateInlineSource'), 'restored runtime state inline source factory should be removed');
+    assert(!restoredRuntimeStateSourceModule.includes('bundledRestoredRuntimeStateSource'), 'restored runtime state bundled selector wrapper should be removed');
+    assert(restoredRuntimeStateSourceModule.includes('module.exports = {\n  restoredRuntimeStateSource\n}'), 'restored runtime state source module export not found');
+    const restoredRuntimeStateSourceBody = functionBody(restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource');
+    assert(restoredRuntimeStateSourceBody.includes("require('./src/browser/runtime/restored-runtime-state')"), 'restored runtime state source does not hand restore helper to the bundler');
+    assert(restoredRuntimeStateSourceBody.includes("require('./src/browser/runtime/restored-coin-failures')"), 'restored runtime state source does not hand coin-failure restore helper to the bundler');
+    assert(restoredRuntimeStateSourceBody.includes('restoreRuntimeStateCore(preserved, previousBot'), 'restored runtime state source does not bind preserved/previousBot state');
+    assert(restoredRuntimeStateSourceBody.includes('restoredCoinFailures') && restoredRuntimeStateSourceBody.includes('readPersistentExitState'), 'restored runtime state source does not bind runtime restore dependencies');
+    assert(restoredRuntimeStateSourceBody.includes('restoredCoinFailuresForRestoredRuntimeStateCore(preserved.coinFailures, cfg, performance.now())'), 'restored runtime state source does not bind coin-failure restore core directly');
+    assert(restoredRuntimeStateSourceBody.includes('readPersistedPendingExitStateForRestoredRuntimeStateCore(localStorage, PENDING_EXIT_STATE_KEY') && restoredRuntimeStateSourceBody.includes('chooseInitialPendingExitStateForRestoredRuntimeStateCore(memoryState, storedState, t, options'), 'restored runtime state source does not bind pending-exit restore cores directly');
+    assert(restoredRuntimeStateSourceBody.includes('enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY'), 'restored runtime state source does not bind enemy leave key');
+    assert(restoredRuntimeStateSourceBody.includes('offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'restored runtime state source does not bind offline leave key');
+    assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel runtime source factory not found');
+    assert(!statusPanelRuntimeSourceModule.includes('bundledStatusPanelRuntimeSource'), 'status-panel runtime bundled selector wrapper should be removed');
+    assert(!statusPanelRuntimeSourceModule.includes("require('./runtime/display-format')"), 'status-panel runtime should not import display helpers for inline injection');
+    assert(statusPanelRuntimeSourceModule.includes('module.exports = {\n  statusPanelRuntimeSource\n}'), 'status-panel runtime source export not found');
     assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
-    assert(statusPanelRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledStatusPanelRuntimeSource();'), 'status-panel runtime source factory does not switch to bundler-owned source in remote builds');
-    assert(statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime source does not bind display helpers');
-    assert(combatLogRuntimeSourceModule.includes('function bundledCombatLogRuntimeSource()'), 'bundled combat-log runtime source factory not found');
-    assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource(options = {})'), 'combat-log runtime source factory not found');
-    assert(combatLogRuntimeSourceModule.includes('module.exports = {\n  bundledCombatLogRuntimeSource,\n  combatLogRuntimeSource\n}'), 'combat-log runtime source export not found');
+    assert(!statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime still keeps inline display helper binding');
+    assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
+    assert(!combatLogRuntimeSourceModule.includes('bundledCombatLogRuntimeSource'), 'combat-log runtime bundled selector wrapper should be removed');
+    assert(!combatLogRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'combat-log runtime should not import exit summary for inline injection');
+    assert(combatLogRuntimeSourceModule.includes('module.exports = {\n  combatLogRuntimeSource\n}'), 'combat-log runtime source export not found');
     assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
-    assert(combatLogRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCombatLogRuntimeSource();'), 'combat-log runtime source factory does not switch to bundler-owned source in remote builds');
-    assert(combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime source does not bind exit-summary helper');
-    assert(combatLogRuntimeSourceModule.includes('combatLogSource({ bundledRuntime: true })'), 'combat-log bundled runtime source does not pass bundled-runtime mode into source factory');
-    assert(controlLoginRuntimeSourceModule.includes('function bundledControlLoginRuntimeSource()'), 'bundled control-login runtime source factory not found');
-    assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource(options = {})'), 'control-login runtime source factory not found');
-    assert(controlLoginRuntimeSourceModule.includes('module.exports = {\n  bundledControlLoginRuntimeSource,\n  controlLoginRuntimeSource\n}'), 'control-login runtime source export not found');
-    assert(controlLoginRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'control-login runtime source does not expose a bundler-owned exit-summary require');
-    assert(controlLoginRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledControlLoginRuntimeSource();'), 'control-login runtime source factory does not switch to bundler-owned source in remote builds');
-    assert(controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime source does not bind stamina helper');
-    assert(controlLoginRuntimeSourceModule.includes('controlLoginSource({ bundledRuntime: true })'), 'control-login bundled runtime source does not pass bundled-runtime mode into source factory');
-    assert(runtimeBootstrapSourceModule.includes('function bundledRuntimeBootstrapHelperSource()'), 'bundled runtime-bootstrap helper source factory not found');
-    assert(runtimeBootstrapSourceModule.includes('function inlineRuntimeBootstrapHelperSource()'), 'inline runtime-bootstrap helper source factory not found');
+    assert(!combatLogRuntimeSourceModule.includes('return combatLogSource({ combatLogExitSummaryFromDecision });'), 'combat-log runtime still keeps inline exit-summary binding');
+    assert(combatLogRuntimeSourceModule.includes('combatLogSource()'), 'combat-log runtime source does not use bundled-only source factory');
+    assert(controlLoginRuntimeSourceModule.includes('function controlLoginRuntimeSource()'), 'control-login runtime source factory not found');
+    assert(!controlLoginRuntimeSourceModule.includes('bundledControlLoginRuntimeSource'), 'control-login runtime bundled selector wrapper should be removed');
+    assert(!controlLoginRuntimeSourceModule.includes("require('./runtime/exit-summary')"), 'control-login runtime should not import stamina helper for inline injection');
+    assert(controlLoginRuntimeSourceModule.includes('module.exports = {\n  controlLoginRuntimeSource\n}'), 'control-login runtime source export not found');
+    assert(!controlLoginRuntimeSourceModule.includes('return controlLoginSource({ staminaExhaustedWindowLabel });'), 'control-login runtime still keeps inline stamina helper binding');
+    assert(controlLoginRuntimeSourceModule.includes('controlLoginSource()'), 'control-login runtime source does not use bundled-only source factory');
+    assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapHelperSource()'), 'runtime-bootstrap helper source factory not found');
+    assert(!runtimeBootstrapSourceModule.includes('function bundledRuntimeBootstrapHelperSource()'), 'runtime-bootstrap source still exposes bundled selector helper');
+    assert(!runtimeBootstrapSourceModule.includes('function inlineRuntimeBootstrapHelperSource()'), 'runtime-bootstrap source still exposes inline helper');
     assert(runtimeBootstrapSourceModule.includes('function runtimeBootstrapSource(config)'), 'runtime-bootstrap source factory not found');
-    assert(runtimeBootstrapSourceModule.includes('module.exports = {\n  bundledRuntimeBootstrapHelperSource,\n  inlineRuntimeBootstrapHelperSource,\n  runtimeBootstrapSource\n}'), 'runtime-bootstrap source module export not found');
+    assert(runtimeBootstrapSourceModule.includes('module.exports = {\n  runtimeBootstrapHelperSource,\n  runtimeBootstrapSource\n}'), 'runtime-bootstrap source module export not found');
     assert(runtimeBootstrapSourceModule.includes('${browserPageGlobalSource()}'), 'page-global adapter source is not injected into browser runtime');
-    assert(runtimeBootstrapSourceModule.includes('config?.bundledRuntime'), 'runtime-bootstrap source factory does not switch on bundled runtime mode');
+    assert(!runtimeBootstrapSourceModule.includes('config?.bundledRuntime'), 'runtime-bootstrap source still switches on bundled runtime mode');
     assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/browser-preserved-state')"), 'runtime-bootstrap bundled source does not require preserved-state runtime module');
     assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/runtime-defaults')"), 'runtime-bootstrap bundled source does not require runtime-defaults runtime module');
     assert(runtimeBootstrapSourceModule.includes("require('./src/browser/runtime/target-whitelist')"), 'runtime-bootstrap bundled source does not require target-whitelist runtime module');
@@ -848,21 +884,14 @@ function main() {
     assert(browserPageGlobalCoreSource.includes('function browserPageGlobalSource()'), 'page-global browser source builder not found');
     assert(browserPageGlobalCoreSource.includes('pageGlobalObject.toString()'), 'page-global source builder does not inline object helper');
     assert(browserPageGlobalCoreSource.includes('installPageGlobal.toString()'), 'page-global source builder does not inline installer');
-    assert(runtimeUtilsSourceModule.includes('function bundledRuntimeUtilityPreludeSource()'), 'bundled runtime utility prelude source factory not found');
-    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource(options = {})'), 'runtime utility prelude source factory not found');
-    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource(options = {})'), 'runtime utility clone source factory not found');
+    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityPreludeSource()'), 'runtime utility prelude source factory not found');
+    assert(runtimeUtilsSourceModule.includes('function runtimeUtilityCloneSource()'), 'runtime utility clone source factory not found');
     assert(runtimeUtilsSourceModule.includes('module.exports = {\n  runtimeUtilityPreludeSource,\n  runtimeUtilityCloneSource\n}'), 'runtime utility source module exports not found');
     assert(runtimeUtilsSourceModule.includes("require('./src/browser/runtime/runtime-utils')"), 'runtime utility source factory does not expose a bundler-owned runtime helper require');
-    assert(runtimeUtilsSourceModule.includes('if (options.bundledRuntime) return bundledRuntimeUtilityPreludeSource();'), 'runtime utility prelude source factory does not switch to bundler-owned source in remote builds');
-    assert(runtimeUtilsSourceModule.includes('if (options.bundledRuntime)'), 'runtime utility clone source factory does not account for bundled runtime mode');
-    assert(runtimeUtilsSourceModule.includes('${safeStringify.toString()}'), 'safeStringify is not injected from the runtime utility source module');
-    assert(runtimeUtilsSourceModule.includes('${safeJsonClone.toString()}'), 'safeJsonClone is not injected from the runtime utility source module');
-    assert(runtimeUtilsSourceModule.includes('${sanitizeCombatLogIdPart.toString()}'), 'sanitizeCombatLogIdPart is not injected from the runtime utility source module');
-    assert(runtimeBootstrapSourceModule.includes('${buildBrowserPreservedState.toString()}'), 'preserved-state helper is not injected from the inline runtime-bootstrap helper source');
-    assert(runtimeBootstrapSourceModule.includes('${buildRuntimeDefaults.toString()}'), 'runtime defaults are not injected from the inline runtime-bootstrap helper source');
-    assert(runtimeBootstrapSourceModule.includes('${normalizeTargetWhitelistName.toString()}'), 'target whitelist name normalizer is not injected from the inline runtime-bootstrap helper source');
-    assert(runtimeBootstrapSourceModule.includes('${parseTargetWhitelistNames.toString()}'), 'target whitelist parser is not injected from the inline runtime-bootstrap helper source');
-    assert(runtimeBootstrapSourceModule.includes('${deriveTargetWhitelistUrl.toString()}'), 'target whitelist URL derivation is not injected from the inline runtime-bootstrap helper source');
+    assert(!runtimeUtilsSourceModule.includes('safeStringify.toString()'), 'runtime utility source still inlines shared helper text');
+    assert(!runtimeBootstrapSourceModule.includes('buildBrowserPreservedState.toString()'), 'runtime-bootstrap source still inlines preserved-state helper text');
+    assert(!runtimeBootstrapSourceModule.includes('buildRuntimeDefaults.toString()'), 'runtime-bootstrap source still inlines runtime-default helper text');
+    assert(!runtimeBootstrapSourceModule.includes('normalizeTargetWhitelistName.toString()'), 'runtime-bootstrap source still inlines target whitelist helper text');
     [
       'targetOverlaySource',
       'targetWhitelistSource',
@@ -1019,1192 +1048,134 @@ function main() {
     assert(deriveBody.includes("return source.replace(/[^/?#]*([?#].*)?$/, 'target-whitelist.json')"), 'target whitelist URL does not handle non-URL source paths');
   });
 
-  check('browser UI source modules export overlay, whitelist, status panel, combat-log, important-log, network-quality, and control-login runtime fragments', () => {
-    assert(targetOverlaySourceModule.includes('function targetOverlaySource() {'), 'target-overlay source factory not found');
-    assert(targetOverlaySourceModule.includes('module.exports = {\n  targetOverlaySource'), 'target-overlay module export not found');
-    assert(functionBody(targetOverlaySourceModule, 'targetOverlaySource').includes('String.raw`'), 'target-overlay source factory does not return raw browser source');
-    assert(targetWhitelistSourceModule.includes('function targetWhitelistSource() {'), 'target-whitelist source factory not found');
-    assert(targetWhitelistSourceModule.includes('module.exports = {\n  targetWhitelistSource'), 'target-whitelist module export not found');
-    assert(functionBody(targetWhitelistSourceModule, 'targetWhitelistSource').includes('String.raw`'), 'target-whitelist source factory does not return raw browser source');
+  check('browser source modules are bundled-only runtime fragments', () => {
+    const rawFactories = [
+      ['target-overlay', targetOverlaySourceModule, 'targetOverlaySource'],
+      ['target-whitelist', targetWhitelistSourceModule, 'targetWhitelistSource'],
+      ['status-panel', statusPanelSourceModule, 'statusPanelSource'],
+      ['status-panel-runtime', statusPanelRuntimeSourceModule, 'statusPanelRuntimeSource'],
+      ['combat-log', combatLogSourceModule, 'combatLogSource'],
+      ['combat-log-runtime', combatLogRuntimeSourceModule, 'combatLogRuntimeSource'],
+      ['important-log', importantLogSourceModule, 'importantLogSource'],
+      ['combat-history', combatHistorySourceModule, 'combatHistorySource'],
+      ['entity-refresh', entityRefreshSourceModule, 'entityRefreshSource'],
+      ['classify', classifySourceModule, 'classifySource'],
+      ['coin-safety', coinSafetySourceModule, 'coinSafetySource'],
+      ['target-selection', targetSelectionSourceModule, 'targetSelectionSource'],
+      ['combat-movement', combatMovementSourceModule, 'combatMovementSource'],
+      ['combat-aim', combatAimSourceModule, 'combatAimSource'],
+      ['combat-state', combatStateSourceModule, 'combatStateSource'],
+      ['combat-fire', combatFireSourceModule, 'combatFireSource'],
+      ['combat-leave-cover', combatLeaveCoverSourceModule, 'combatLeaveCoverSource'],
+      ['combat-action', combatActionSourceModule, 'combatActionSource'],
+      ['opportunity-stamina', opportunityStaminaSourceModule, 'opportunityStaminaSource'],
+      ['opportunity-snapshot', opportunitySnapshotSourceModule, 'opportunitySnapshotSource'],
+      ['post-attack', postAttackSourceModule, 'postAttackSource'],
+      ['opportunity-actions', opportunityActionsSourceModule, 'opportunityActionsSource'],
+      ['opportunity-candidate', opportunityCandidateSourceModule, 'opportunityCandidateSource'],
+      ['opportunity-route', opportunityRouteSourceModule, 'opportunityRouteSource'],
+      ['opportunity-choice', opportunityChoiceSourceModule, 'opportunityChoiceSource'],
+      ['opportunity-pick', opportunityPickSourceModule, 'opportunityPickSource'],
+      ['patrol', patrolSourceModule, 'patrolSource'],
+      ['opportunity-clear', opportunityClearSourceModule, 'opportunityClearSource'],
+      ['coin-progress-runtime', coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource'],
+      ['coin-target-runtime', coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource'],
+      ['choose-action', chooseActionSourceModule, 'chooseActionSource'],
+      ['tick', tickSourceModule, 'tickSource'],
+      ['startup', startupSourceModule, 'startupSource'],
+      ['bot-object', botObjectSourceModule, 'botObjectSource'],
+      ['control-login', controlLoginSourceModule, 'controlLoginSource'],
+      ['control-login-runtime', controlLoginRuntimeSourceModule, 'controlLoginRuntimeSource'],
+      ['native-state', nativeStateSourceModule, 'nativeStateSource'],
+      ['native-control', nativeControlSourceModule, 'nativeControlSource'],
+      ['coin-motion-runtime', coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource'],
+      ['return-block', returnBlockSourceModule, 'returnBlockSource'],
+      ['entity-activity', entityActivitySourceModule, 'entityActivitySource'],
+      ['stamina-runtime', staminaRuntimeSourceModule, 'staminaRuntimeSource'],
+      ['attack-worth', attackWorthSourceModule, 'attackWorthSource'],
+      ['exit-motion', exitMotionSourceModule, 'exitMotionSource'],
+      ['persistent-last-self', persistentLastSelfSourceModule, 'persistentLastSelfSource'],
+      ['persistent-exit', persistentExitSourceModule, 'persistentExitSource'],
+      ['persistent-clear', persistentClearSourceModule, 'persistentClearSource'],
+      ['pending-exit-persistence', pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource'],
+      ['refresh-exit-detail', refreshExitDetailSourceModule, 'refreshExitDetailSource'],
+      ['restored-coin-failures', restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource'],
+      ['restored-runtime-state', restoredRuntimeStateSourceModule, 'restoredRuntimeStateSource'],
+      ['login-snapshot-gate', loginSnapshotGateSourceModule, 'loginSnapshotGateSource'],
+      ['runtime-diagnostics', runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource'],
+      ['exit-relogin', exitReloginSourceModule, 'exitReloginSource'],
+      ['pending-exit', pendingExitSourceModule, 'pendingExitSource'],
+      ['leave-command', leaveCommandSourceModule, 'leaveCommandSource'],
+      ['auto-login', autoLoginSourceModule, 'autoLoginSource'],
+      ['leave-flow', leaveFlowSourceModule, 'leaveFlowSource'],
+      ['offline-safety', offlineSafetySourceModule, 'offlineSafetySource'],
+      ['page-native-snapshot', pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource'],
+      ['action-arbitration', actionArbitrationSourceModule, 'actionArbitrationSource'],
+      ['network-quality', networkQualitySourceModule, 'networkQualitySource'],
+      ['network-quality-summary', networkQualitySummarySourceModule, 'networkQualitySummarySource'],
+      ['runtime-summary', runtimeSummarySourceModule, 'runtimeSummarySource']
+    ];
+    for (const [label, moduleSource, factoryName] of rawFactories) {
+      assert(moduleSource.includes('function ' + factoryName + '('), label + ' source factory not found');
+      assert(moduleSource.includes(factoryName), label + ' source module export not found');
+      assertBundledOnlySourceModule(moduleSource, label);
+    }
+
+    const runtimeRequires = [
+      [statusPanelRuntimeSourceModule, "require('./src/browser/runtime/display-format')", 'status-panel display-format'],
+      [combatLogRuntimeSourceModule, "require('./src/browser/runtime/exit-summary')", 'combat-log exit-summary'],
+      [runtimeUtilsSourceModule, "require('./src/browser/runtime/runtime-utils')", 'runtime utils'],
+      [arrayCountSourceModule, "require('./src/browser/runtime/array-count')", 'array count'],
+      [combatHistorySourceModule, "require('./src/browser/runtime/drop-matched-kill')", 'drop matched kill'],
+      [coinSafetySourceModule, "require('./src/browser/runtime/coin-diagnostics')", 'coin diagnostics'],
+      [combatStateSourceModule, "require('./src/browser/runtime/exit-relogin')", 'combat-state exit relogin'],
+      [combatActionSourceModule, "require('./src/browser/runtime/exit-relogin')", 'combat-action exit relogin'],
+      [opportunityStaminaSourceModule, "require('./src/browser/runtime/stamina-budget')", 'stamina budget'],
+      [postAttackSourceModule, "require('./src/browser/runtime/post-attack-drop')", 'post attack drop'],
+      [opportunityCandidateSourceModule, "require('./src/browser/runtime/opportunity-candidates')", 'opportunity candidates'],
+      [opportunityChoiceSourceModule, "require('./src/browser/runtime/opportunity-choice')", 'opportunity choice'],
+      [opportunityRouteSourceModule, "require('./src/browser/runtime/coin-route')", 'coin route'],
+      [opportunityPickSourceModule, "require('./src/browser/runtime/opportunity-pick')", 'opportunity pick'],
+      [patrolSourceModule, "require('./src/browser/runtime/patrol')", 'patrol'],
+      [opportunityClearSourceModule, "require('./src/browser/runtime/opportunity-clear')", 'opportunity clear'],
+      [coinProgressRuntimeSourceModule, "require('./src/browser/runtime/coin-progress')", 'coin progress'],
+      [coinTargetRuntimeSourceModule, "require('./src/browser/runtime/coin-target')", 'coin target'],
+      [coinMotionRuntimeSourceModule, "require('./src/browser/runtime/coin-motion')", 'coin motion'],
+      [attackWorthSourceModule, "require('./src/browser/runtime/attack-worth')", 'attack worth'],
+      [exitMotionSourceModule, "require('./src/browser/runtime/exit-motion')", 'exit motion'],
+      [persistentLastSelfSourceModule, "require('./src/browser/runtime/persistent-last-self')", 'persistent last self'],
+      [persistentExitSourceModule, "require('./src/browser/runtime/persistent-exit')", 'persistent exit'],
+      [persistentClearSourceModule, "require('./src/browser/runtime/persistent-clear')", 'persistent clear'],
+      [pendingExitPersistenceSourceModule, "require('./src/browser/runtime/pending-exit-persistence')", 'pending exit persistence'],
+      [pendingExitSourceModule, "require('./src/browser/runtime/pending-exit')", 'pending exit'],
+      [leaveCommandSourceModule, "require('./src/browser/runtime/leave-command')", 'leave command'],
+      [leaveFlowSourceModule, "require('./src/browser/runtime/exit-relogin')", 'leave-flow exit relogin'],
+      [pageNativeSnapshotSourceModule, 'recordRuntimeDiagnosticsCore(bot, ', 'page native diagnostics'],
+      [actionArbitrationSourceModule, "require('./src/browser/runtime/action-arbitration')", 'action arbitration'],
+      [actionArbitrationSourceModule, "require('./src/browser/runtime/action-switch-diagnostics')", 'action switch diagnostics']
+    ];
+    for (const [moduleSource, needle, label] of runtimeRequires) {
+      assert(moduleSource.includes(needle), label + ' runtime adapter wiring not found');
+    }
+
     assert(functionBody(targetWhitelistSourceModule, 'targetWhitelistSource').includes('function refreshTargetWhitelist'), 'target-whitelist source factory does not include refresh helper');
     assert(functionBody(targetWhitelistSourceModule, 'targetWhitelistSource').includes('function startTargetWhitelistPolling'), 'target-whitelist source factory does not include polling helper');
-    assert(statusPanelSourceModule.includes('function statusPanelSource(helpers = {}) {'), 'status-panel source factory not found');
-    assert(statusPanelSourceModule.includes('module.exports = {\n  statusPanelSource'), 'status-panel module export not found');
-    assert(functionBody(statusPanelSourceModule, 'statusPanelSource').includes('typeof escapeHtml === \'function\' ? escapeHtml.toString() : \'\''), 'status-panel source factory does not inline shared display helpers');
-    assert(functionBody(statusPanelSourceModule, 'statusPanelSource').includes('typeof formatDistance === \'function\' ? formatDistance.toString() : \'\''), 'status-panel source factory does not inline distance formatter');
-    assert(combatLogSourceModule.includes('function combatLogSource(helpers = {}) {'), 'combat-log source factory not found');
-    assert(combatLogSourceModule.includes('module.exports = {\n  combatLogSource'), 'combat-log module export not found');
-    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('String.raw`'), 'combat-log source factory does not return raw browser source');
-    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('combatLogExitSummarySource'), 'combat-log source factory does not support optional exit-summary helper injection');
-    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('combatLogExitSummaryFromDecision.toString()'), 'combat-log source factory does not inline exit-summary helper');
-    assert(functionBody(combatLogSourceModule, 'combatLogSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'combat-log source factory does not route bundled runtime diagnostics through core');
-    assert(importantLogSourceModule.includes('function importantLogSource() {'), 'important-log source factory not found');
-    assert(importantLogSourceModule.includes('module.exports = {\n  importantLogSource'), 'important-log module export not found');
-    assert(functionBody(importantLogSourceModule, 'importantLogSource').includes('String.raw`'), 'important-log source factory does not return raw browser source');
-    assert(combatHistorySourceModule.includes('function recordDropMatchedKillCall('), 'combat-history drop-matched kill call helper not found');
-    assert(combatHistorySourceModule.includes('function combatHistorySource(options = {}) {'), 'combat-history source factory not found');
-    assert(combatHistorySourceModule.includes('module.exports = {\n  recordDropMatchedKillCall,\n  combatHistorySource'), 'combat-history module exports are incomplete');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('String.raw`'), 'combat-history source factory does not return raw browser source');
-    assert(functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('buildDropMatchedKillCore') && functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('recordKillHistoryItem(dropMatchedKill.kill, dropMatchedKill.seenKey)'), 'combat-history drop-matched kill call does not route through core');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes("require('./src/browser/runtime/drop-matched-kill')"), 'combat-history source does not hand drop-matched kill core to the bundler');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function rememberAttack'), 'combat-history source factory does not include attack history tracking');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function rememberCombatEngagement'), 'combat-history source factory does not include combat engagement tracking');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function recordKillHistoryItem'), 'combat-history source factory does not include kill history storage');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('localDropMatchedKillSource'), 'combat-history source factory does not preserve local drop matched kill attribution');
-    assert(functionBody(combatHistorySourceModule, 'combatHistorySource').includes('function updateKillHistory'), 'combat-history source factory does not include kill history update');
-    assert(entityRefreshSourceModule.includes('function entityRefreshSource(options = {}) {'), 'entity-refresh source factory not found');
-    assert(entityRefreshSourceModule.includes('module.exports = {\n  entityRefreshSource'), 'entity-refresh source module export not found');
-    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('String.raw`'), 'entity-refresh source factory does not return raw browser source');
-    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'entity-refresh source factory does not route bundled runtime diagnostics through core');
-    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('function markRecentMovement'), 'entity-refresh source factory does not include recent movement marker');
-    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('async function refreshGlobalState'), 'entity-refresh source factory does not include global refresh helper');
-    assert(functionBody(entityRefreshSourceModule, 'entityRefreshSource').includes('passive-snapshot-only-active-game-api-disabled'), 'entity-refresh source factory does not preserve passive snapshot skip diagnostic');
-    assert(classifySourceModule.includes('function classifySource() {'), 'classify source factory not found');
-    assert(classifySourceModule.includes('module.exports = {\n  classifySource'), 'classify source module export not found');
-    assert(functionBody(classifySourceModule, 'classifySource').includes('String.raw`'), 'classify source factory does not return raw browser source');
-    assert(functionBody(classifySourceModule, 'classifySource').includes('function classify(self)'), 'classify source factory does not include classify helper');
-    assert(functionBody(classifySourceModule, 'classifySource').includes('markRecentMovement(localEntities)'), 'classify source factory does not preserve recent movement marking');
-    assert(functionBody(classifySourceModule, 'classifySource').includes('const combatTargets = attackableEntities'), 'classify source factory does not preserve combat target classification');
-    assert(functionBody(classifySourceModule, 'classifySource').includes('const combatDodgeOnlyTargets = attackableEntities'), 'classify source factory does not preserve combat dodge-only classification');
-    assert(functionBody(classifySourceModule, 'classifySource').includes('const snapshotCoins = allCoins.filter'), 'classify source factory does not preserve snapshot coin classification');
-    assert(coinSafetySourceModule.includes('function bundledCoinSafetySource()'), 'bundled coin-safety source factory not found');
-    assert(coinSafetySourceModule.includes('function coinSafetyInlineSource(helpers = {}, options = {})'), 'inline coin-safety source factory not found');
-    assert(coinSafetySourceModule.includes('function coinSafetySource(options = {})'), 'coin-safety source factory not found');
-    assert(coinSafetySourceModule.includes('module.exports = {\n  bundledCoinSafetySource,\n  coinSafetyInlineSource,\n  coinSafetySource\n}'), 'coin-safety source module export not found');
-    assert(coinSafetySourceModule.includes("require('./src/browser/runtime/coin-diagnostics')"), 'coin-safety source does not expose a bundler-owned coin-diagnostics require');
-    assert(coinSafetySourceModule.includes('if (options.bundledRuntime) return bundledCoinSafetySource();'), 'coin-safety source factory does not switch to bundler-owned source in remote builds');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('String.raw`'), 'coin-safety inline source factory does not return raw browser source');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('coinDiagnosticsSummarySource'), 'coin-safety inline source factory does not support diagnostics summary injection');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('coinDiagnosticsHelperSource'), 'coin-safety inline source factory does not support diagnostics helper injection');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('function coinThreatDangerRadius'), 'coin-safety source factory does not include threat radius helper');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('function safeCoinCandidates'), 'coin-safety source factory does not include safe coin candidate filter');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('function pickRealtimeLocalCoin'), 'coin-safety source factory does not include realtime local coin picker');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('function pickCoinField'), 'coin-safety source factory does not include field coin picker');
-    assert(functionBody(coinSafetySourceModule, 'coinSafetyInlineSource').includes('function pickDistantCoin'), 'coin-safety source factory does not include distant coin picker');
-    assert(targetSelectionSourceModule.includes('function targetSelectionSource() {'), 'target-selection source factory not found');
-    assert(targetSelectionSourceModule.includes('module.exports = {\n  targetSelectionSource'), 'target-selection source module export not found');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('String.raw`'), 'target-selection source factory does not return raw browser source');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function highValueCoinPriorityAmount'), 'target-selection source factory does not include high-value coin threshold helper');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function pickHighValueVisibleCoin'), 'target-selection source factory does not include high-value visible coin picker');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function isDefensiveCombatTarget'), 'target-selection source factory does not include defensive combat classifier');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function pickCombatTarget'), 'target-selection source factory does not include combat target picker');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function pickEngagedCombatTarget'), 'target-selection source factory does not include engaged combat picker');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function defensiveTargetOverridesEngaged'), 'target-selection source factory does not include defensive override helper');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function attachOpportunisticShot'), 'target-selection source factory does not include opportunistic shot attachment');
-    assert(functionBody(targetSelectionSourceModule, 'targetSelectionSource').includes('function buildOpportunisticShotWait'), 'target-selection source factory does not include opportunistic shot wait builder');
-    assert(combatMovementSourceModule.includes('function combatMovementSource() {'), 'combat-movement source factory not found');
-    assert(combatMovementSourceModule.includes('module.exports = {\n  combatMovementSource'), 'combat-movement source module export not found');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('String.raw`'), 'combat-movement source factory does not return raw browser source');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatMoveVelocityForDirection'), 'combat-movement source factory does not include velocity helper');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatBulletThreats'), 'combat-movement source factory does not include bullet threat classifier');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatThreatFieldCandidate'), 'combat-movement source factory does not include threat-field candidate scorer');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function tangentMoveForBullet'), 'combat-movement source factory does not include tangent dodge helper');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatSpacingVector'), 'combat-movement source factory does not include spacing vector helper');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatPressureDisadvantageState'), 'combat-movement source factory does not include pressure disadvantage helper');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatOutOfRangeReengageState'), 'combat-movement source factory does not include out-of-range reengage helper');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatPassiveRunnerState'), 'combat-movement source factory does not include passive runner helper');
-    assert(functionBody(combatMovementSourceModule, 'combatMovementSource').includes('function combatOutOfRangeDodgeAction'), 'combat-movement source factory does not include out-of-range dodge action');
-    assert(combatAimSourceModule.includes('function combatAimSource() {'), 'combat-aim source factory not found');
-    assert(combatAimSourceModule.includes('module.exports = { combatAimSource }'), 'combat-aim source module export not found');
-    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('String.raw`'), 'combat-aim source factory does not return raw browser source');
-    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatAimJitterLimit'), 'combat-aim source factory does not include jitter helper');
-    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatAimMotionScale'), 'combat-aim source factory does not include motion scale helper');
-    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatMotionSamplesWithCurrent'), 'combat-aim source factory does not include motion history helper');
-    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatOpponentProfile'), 'combat-aim source factory does not include opponent profile helper');
-    assert(functionBody(combatAimSourceModule, 'combatAimSource').includes('function combatTradeEstimate'), 'combat-aim source factory does not include trade estimate helper');
-    assert(combatStateSourceModule.includes('function combatStateSource(options = {}) {'), 'combat-state source factory not found');
-    assert(combatStateSourceModule.includes('module.exports = { combatStateSource }'), 'combat-state source module export not found');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('String.raw`'), 'combat-state source factory does not return raw browser source');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForCombatStateCore'), 'combat-state source factory does not import bundled offline display core alias');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('currentOfflineDisplayReasonForCombatStateCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary })'), 'combat-state source factory does not bind bundled offline display core directly');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatTargetId'), 'combat-state source factory does not include target id helper');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatDisadvantageObservationState'), 'combat-state source factory does not include disadvantage observation helper');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatTrendState'), 'combat-state source factory does not include trend state helper');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function globalSamplingOutageOfflineState'), 'combat-state source factory does not include sampling outage offline helper');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function combatTickGapOfflineState'), 'combat-state source factory does not include combat tick gap helper');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('async function handleTickReentryCombatGap'), 'combat-state source factory does not include tick reentry handler');
-    assert(functionBody(combatStateSourceModule, 'combatStateSource').includes('function nativeTickMinIntervalMs'), 'combat-state source factory does not include native tick interval helper');
-    assert(combatFireSourceModule.includes('function combatFireSource() {'), 'combat-fire source factory not found');
-    assert(combatFireSourceModule.includes('module.exports = { combatFireSource }'), 'combat-fire source module export not found');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('String.raw`'), 'combat-fire source factory does not return raw browser source');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatShootingPlan'), 'combat-fire source factory does not include shooting plan helper');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatAimNoDamageLevel'), 'combat-fire source factory does not include no-damage aim level helper');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatMovementAimMode'), 'combat-fire source factory does not include movement aim mode helper');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatInterceptSolution'), 'combat-fire source factory does not include intercept solver');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatLiveAimTarget'), 'combat-fire source factory does not include live aim target helper');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatAimDynamicStrategyState'), 'combat-fire source factory does not include dynamic aim strategy helper');
-    assert(functionBody(combatFireSourceModule, 'combatFireSource').includes('function combatAimTarget'), 'combat-fire source factory does not include combat aim target helper');
-    assert(combatLeaveCoverSourceModule.includes('function combatLeaveCoverSource() {'), 'combat-leave-cover source factory not found');
-    assert(combatLeaveCoverSourceModule.includes('module.exports = { combatLeaveCoverSource }'), 'combat-leave-cover source module export not found');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('String.raw`'), 'combat-leave-cover source factory does not return raw browser source');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('function combatLeaveCoverAction'), 'combat-leave-cover source factory does not include leave cover action builder');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combatPressureThreat'), 'combat-leave-cover source factory does not include pressure threat wiring');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combatAimTarget'), 'combat-leave-cover source factory does not include aim target wiring');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combatShootingPlan'), 'combat-leave-cover source factory does not include shooting plan wiring');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combat-stamina-hold'), 'combat-leave-cover source factory does not include stamina hold reason');
-    assert(functionBody(combatLeaveCoverSourceModule, 'combatLeaveCoverSource').includes('combat-leave-cover'), 'combat-leave-cover source factory does not include leave cover reason');
-    assert(combatActionSourceModule.includes('function combatActionSource(options = {}) {'), 'combat-action source factory not found');
-    assert(combatActionSourceModule.includes('module.exports = { combatActionSource }'), 'combat-action source module export not found');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('String.raw`'), 'combat-action source factory does not return raw browser source');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatLeaveActionCore: combatLeaveActionForCombatActionCore'), 'combat-action source factory does not import bundled combat leave action core alias');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatExitSummaryCore: combatExitSummaryForCombatActionCore'), 'combat-action source factory does not import bundled combat summary core alias');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatLeaveActionForCombatActionCore(${reason}, ${baseTarget}, ${combatState}, ${cover},'), 'combat-action source factory does not bind bundled combat leave action core directly');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('function buildCombatAction'), 'combat-action source factory does not include combat action builder');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatLeaveCoverAction'), 'combat-action source factory does not include leave cover action wiring');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatOutOfRangeDodgeAction'), 'combat-action source factory does not include out-of-range dodge wiring');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatTrendState'), 'combat-action source factory does not include combat trend wiring');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatShootingPlan'), 'combat-action source factory does not include shooting plan wiring');
-    assert(functionBody(combatActionSourceModule, 'combatActionSource').includes('combatState'), 'combat-action source factory does not include combat state logging');
-    assert(opportunityStaminaSourceModule.includes('function opportunityStaminaInlineSource(helpers = {}, options = {}) {'), 'opportunity-stamina inline source factory not found');
-    assert(opportunityStaminaSourceModule.includes('function bundledOpportunityStaminaSource() {'), 'opportunity-stamina bundled source factory not found');
-    assert(opportunityStaminaSourceModule.includes('function opportunityStaminaSource(options = {}) {'), 'opportunity-stamina source selector not found');
-    assert(opportunityStaminaSourceModule.includes('bundledOpportunityStaminaSource') && opportunityStaminaSourceModule.includes('opportunityStaminaInlineSource') && opportunityStaminaSourceModule.includes('opportunityStaminaSource'), 'opportunity-stamina source module exports are incomplete');
-    const opportunityStaminaInlineBody = functionBody(opportunityStaminaSourceModule, 'opportunityStaminaInlineSource');
-    assert(opportunityStaminaInlineBody.includes('String.raw`'), 'opportunity-stamina inline source factory does not return raw browser source');
-    assert(opportunityStaminaInlineBody.includes('function opportunityEffectiveStaminaCost'), 'opportunity-stamina inline source factory does not include effective stamina helper');
-    assert(opportunityStaminaInlineBody.includes('staminaBudgetHelperSource'), 'opportunity-stamina inline source factory does not inject stamina budget helpers');
-    assert(opportunityStaminaInlineBody.includes('function dailyStaminaFinalCoinAction'), 'opportunity-stamina inline source factory does not include daily final coin action');
-    assert(opportunityStaminaInlineBody.includes('function staminaBudgetCoinLeaveAction'), 'opportunity-stamina inline source factory does not include stamina budget leave action');
-    assert(opportunityStaminaInlineBody.includes('function mergeCoinRouteDisplay'), 'opportunity-stamina inline source factory does not include coin route display wrapper');
-    assert(functionBody(opportunityStaminaSourceModule, 'bundledOpportunityStaminaSource').includes("require('./src/browser/runtime/stamina-budget')"), 'opportunity-stamina bundled source does not hand stamina-budget helpers to the bundler');
-    assert(opportunitySnapshotSourceModule.includes('function opportunitySnapshotSource(options = {}) {'), 'opportunity-snapshot source factory not found');
-    assert(opportunitySnapshotSourceModule.includes('module.exports = { opportunitySnapshotSource }'), 'opportunity-snapshot source module export not found');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('String.raw`'), 'opportunity-snapshot source factory does not return raw browser source');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function snapshotCoinAgeMs'), 'opportunity-snapshot source factory does not include snapshot coin age helper');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function pickSnapshotCoinDestination'), 'opportunity-snapshot source factory does not include snapshot coin picker');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('snapshotCoinWorthLongTravelCore'), 'opportunity-snapshot source factory does not include snapshot worth wrapper');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreCoinOpportunity'), 'opportunity-snapshot source factory does not include coin opportunity scorer');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function updateOpportunityAfkStaminaObservations'), 'opportunity-snapshot source factory does not include AFK stamina observation updater');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function afkOpportunityBlockedByStaminaCooldown'), 'opportunity-snapshot source factory does not include AFK cooldown gate');
-    assert(functionBody(opportunitySnapshotSourceModule, 'opportunitySnapshotSource').includes('function scoreEnemyOpportunity'), 'opportunity-snapshot source factory does not include enemy opportunity scorer');
-    assert(postAttackSourceModule.includes('function postAttackInlineSource(helpers = {}, options = {}) {'), 'post-attack inline source factory not found');
-    assert(postAttackSourceModule.includes('function bundledPostAttackSource() {'), 'post-attack bundled source factory not found');
-    assert(postAttackSourceModule.includes('function postAttackSource(options = {}) {'), 'post-attack source selector not found');
-    assert(postAttackSourceModule.includes('bundledPostAttackSource') && postAttackSourceModule.includes('postAttackInlineSource') && postAttackSourceModule.includes('postAttackSource'), 'post-attack source module exports are incomplete');
-    const postAttackInlineBody = functionBody(postAttackSourceModule, 'postAttackInlineSource');
-    assert(postAttackInlineBody.includes('String.raw`'), 'post-attack inline source factory does not return raw browser source');
-    assert(postAttackInlineBody.includes('function pickPostAttackDropCoin'), 'post-attack inline source factory does not include drop coin picker');
-    assert(postAttackInlineBody.includes('function pickPostAttackDropWaitTarget'), 'post-attack inline source factory does not include wait target picker');
-    assert(postAttackInlineBody.includes('function buildPostAttackDropWaitAction'), 'post-attack inline source factory does not include wait action builder');
-    assert(postAttackInlineBody.includes('postAttackDropHelperSource'), 'post-attack inline source factory does not inject drop helpers');
-    assert(postAttackInlineBody.includes('coinMotionMetaCore(dir)'), 'post-attack source factory does not use coin motion metadata core directly');
-    assert(functionBody(postAttackSourceModule, 'bundledPostAttackSource').includes("require('./src/browser/runtime/post-attack-drop')"), 'post-attack bundled source does not hand post-attack-drop helpers to the bundler');
-    assert(opportunityActionsSourceModule.includes('function opportunityActionsSource(options = {}) {'), 'opportunity-actions source factory not found');
-    assert(opportunityActionsSourceModule.includes('module.exports = { opportunityActionsSource }'), 'opportunity-actions source module export not found');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('String.raw`'), 'opportunity-actions source factory does not return raw browser source');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('localEnemyOpportunityCandidatesSource'), 'opportunity-actions source factory does not keep local enemy candidate fallback');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildCoinAction'), 'opportunity-actions source factory does not include coin action builder');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('coinMotionMetaCore(dir)'), 'opportunity-actions source factory does not use coin motion metadata core directly');
-    assert(functionBody(opportunityActionsSourceModule, 'opportunityActionsSource').includes('function buildEnemyAction'), 'opportunity-actions source factory does not include enemy action builder');
-    assert(opportunityCandidateSourceModule.includes('function opportunityCandidateInlineSource(helpers = {}, options = {}) {'), 'opportunity-candidate inline source factory not found');
-    assert(opportunityCandidateSourceModule.includes('function bundledOpportunityCandidateSource(options = {}) {'), 'opportunity-candidate bundled source factory not found');
-    assert(opportunityCandidateSourceModule.includes('function opportunityCandidateSource(options = {}) {'), 'opportunity-candidate source selector not found');
-    assert(opportunityCandidateSourceModule.includes('bundledOpportunityCandidateSource') && opportunityCandidateSourceModule.includes('opportunityCandidateInlineSource') && opportunityCandidateSourceModule.includes('opportunityCandidateSource'), 'opportunity-candidate source module exports are incomplete');
-    const opportunityCandidateInlineBody = functionBody(opportunityCandidateSourceModule, 'opportunityCandidateInlineSource');
-    assert(opportunityCandidateInlineBody.includes('String.raw`'), 'opportunity-candidate inline source factory does not return raw browser source');
-    assert(opportunityCandidateInlineBody.includes('${opportunityRouteSource(options)}'), 'opportunity-candidate inline source factory does not inject route source with runtime options');
-    assert(opportunityCandidateInlineBody.includes('opportunityCandidateHelperSource'), 'opportunity-candidate inline source factory does not inject candidate helpers');
-    assert(opportunityCandidateInlineBody.includes('function opportunityCandidateCoreOptions'), 'opportunity-candidate inline source factory does not include core options wrapper');
-    assert(opportunityCandidateInlineBody.includes('function pickProfitableCombatTarget'), 'opportunity-candidate inline source factory does not include profitable combat comparison wrapper');
-    assert(functionBody(opportunityCandidateSourceModule, 'bundledOpportunityCandidateSource').includes("require('./src/browser/runtime/opportunity-candidates')"), 'opportunity-candidate bundled source does not hand candidate helpers to the bundler');
-    assert(opportunityChoiceSourceModule.includes('function opportunityChoiceInlineSource(helpers = {}, options = {}) {'), 'opportunity-choice inline source factory not found');
-    assert(opportunityChoiceSourceModule.includes('function bundledOpportunityChoiceSource() {'), 'opportunity-choice bundled source factory not found');
-    assert(opportunityChoiceSourceModule.includes('function opportunityChoiceSource(options = {}) {'), 'opportunity-choice source selector not found');
-    assert(opportunityChoiceSourceModule.includes('bundledOpportunityChoiceSource') && opportunityChoiceSourceModule.includes('opportunityChoiceInlineSource') && opportunityChoiceSourceModule.includes('opportunityChoiceSource'), 'opportunity-choice source module exports are incomplete');
-    const opportunityChoiceInlineBody = functionBody(opportunityChoiceSourceModule, 'opportunityChoiceInlineSource');
-    assert(opportunityChoiceInlineBody.includes('String.raw`'), 'opportunity-choice inline source factory does not return raw browser source');
-    assert(opportunityChoiceInlineBody.includes('opportunityChoiceHelperSource'), 'opportunity-choice inline source factory does not inject choice helpers');
-    assert(opportunityChoiceInlineBody.includes('fn.toString()'), 'opportunity-choice inline source factory does not inline helper functions');
-    assert(opportunityChoiceInlineBody.includes('function opportunityChoiceCoreOptions'), 'opportunity-choice inline source factory does not include core options wrapper');
-    assert(opportunityChoiceInlineBody.includes('function buildMissingHeldOpportunity'), 'opportunity-choice inline source factory does not include missing-held wrapper');
-    assert(functionBody(opportunityChoiceSourceModule, 'bundledOpportunityChoiceSource').includes("require('./src/browser/runtime/opportunity-choice')"), 'opportunity-choice bundled source does not hand choice helpers to the bundler');
-    assert(opportunityPickSourceModule.includes('function opportunityPickInlineSource() {'), 'opportunity-pick inline source factory not found');
-    assert(opportunityPickSourceModule.includes('function bundledOpportunityPickSource() {'), 'opportunity-pick bundled source factory not found');
-    assert(opportunityPickSourceModule.includes('function opportunityPickSource(options = {}) {'), 'opportunity-pick source selector not found');
-    assert(opportunityPickSourceModule.includes('bundledOpportunityPickSource') && opportunityPickSourceModule.includes('opportunityPickInlineSource') && opportunityPickSourceModule.includes('opportunityPickSource'), 'opportunity-pick source module exports are incomplete');
-    const opportunityPickInlineBody = functionBody(opportunityPickSourceModule, 'opportunityPickInlineSource');
-    assert(opportunityPickInlineBody.includes('String.raw`'), 'opportunity-pick inline source factory does not return raw browser source');
-    assert(opportunityPickInlineBody.includes('function pickBestOpportunity'), 'opportunity-pick inline source factory does not include pickBestOpportunity');
-    assert(opportunityPickInlineBody.includes('pickCoinRouteOpportunity'), 'opportunity-pick inline source factory does not include route opportunity selection');
-    assert(opportunityPickInlineBody.includes('buildOpportunityCandidatesCore'), 'opportunity-pick inline source factory does not include candidate core call');
-    assert(functionBody(opportunityPickSourceModule, 'bundledOpportunityPickSource').includes("require('./src/browser/runtime/opportunity-pick')"), 'opportunity-pick bundled source does not hand picker core to the bundler');
-    assert(patrolSourceModule.includes('function patrolInlineSource() {'), 'patrol inline source factory not found');
-    assert(patrolSourceModule.includes('function bundledPatrolSource() {'), 'patrol bundled source factory not found');
-    assert(patrolSourceModule.includes('function patrolSource(options = {}) {'), 'patrol source selector not found');
-    assert(patrolSourceModule.includes('bundledPatrolSource') && patrolSourceModule.includes('patrolInlineSource') && patrolSourceModule.includes('patrolSource'), 'patrol source module exports are incomplete');
-    const patrolInlineBody = functionBody(patrolSourceModule, 'patrolInlineSource');
-    assert(patrolInlineBody.includes('String.raw`'), 'patrol inline source factory does not return raw browser source');
-    assert(patrolInlineBody.includes('function patrolDirection'), 'patrol inline source factory does not include patrolDirection');
-    assert(patrolInlineBody.includes('scan-toward-distant-coin'), 'patrol inline source factory does not include distant coin patrol branch');
-    assert(patrolInlineBody.includes('maintain-safe-spacing'), 'patrol inline source factory does not include safe spacing patrol branch');
-    assert(functionBody(patrolSourceModule, 'bundledPatrolSource').includes("require('./src/browser/runtime/patrol')"), 'patrol bundled source does not hand patrol core to the bundler');
-    assert(opportunityClearSourceModule.includes('function opportunityClearInlineSource() {'), 'opportunity-clear inline source factory not found');
-    assert(opportunityClearSourceModule.includes('function bundledOpportunityClearSource() {'), 'opportunity-clear bundled source factory not found');
-    assert(opportunityClearSourceModule.includes('function opportunityClearSource(options = {}) {'), 'opportunity-clear source selector not found');
-    assert(opportunityClearSourceModule.includes('bundledOpportunityClearSource') && opportunityClearSourceModule.includes('opportunityClearInlineSource') && opportunityClearSourceModule.includes('opportunityClearSource'), 'opportunity-clear source module exports are incomplete');
-    const opportunityClearInlineBody = functionBody(opportunityClearSourceModule, 'opportunityClearInlineSource');
-    assert(opportunityClearInlineBody.includes('String.raw`'), 'opportunity-clear inline source factory does not return raw browser source');
-    assert(opportunityClearInlineBody.includes('function clearOpportunityChoiceFor'), 'opportunity-clear inline source factory does not include clearOpportunityChoiceFor');
-    assert(opportunityClearInlineBody.includes('bot.opportunityChoice = null'), 'opportunity-clear inline source factory does not clear opportunity choice');
-    assert(opportunityClearInlineBody.includes('resetOpportunitySwitchLock()'), 'opportunity-clear inline source factory does not reset switch lock');
-    const opportunityClearBundledBody = functionBody(opportunityClearSourceModule, 'bundledOpportunityClearSource');
-    assert(opportunityClearBundledBody.includes("require('./src/browser/runtime/opportunity-clear')"), 'opportunity-clear bundled source does not hand clear helper to the bundler');
-    assert(!opportunityClearBundledBody.includes('function clearOpportunityChoiceFor'), 'opportunity-clear bundled source still keeps clear wrapper');
-    assert(opportunityClearCallSourceModule.includes('function clearOpportunityChoiceForCall'), 'opportunity-clear direct call source helper not found');
-    assert(opportunityClearCallSourceModule.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice'), 'opportunity-clear direct call helper does not call clear core');
-    assert(opportunityClearCallSourceModule.includes('bot.opportunityChoice = null'), 'opportunity-clear direct call helper does not clear choice state');
-    assert(opportunityClearCallSourceModule.includes('resetOpportunitySwitchLock()'), 'opportunity-clear direct call helper does not reset switch lock');
-    assert(opportunityRouteSourceModule.includes('function opportunityRouteInlineSource(helpers = {}, options = {}) {'), 'opportunity-route inline source factory not found');
-    assert(opportunityRouteSourceModule.includes('function bundledOpportunityRouteSource() {'), 'opportunity-route bundled source factory not found');
-    assert(opportunityRouteSourceModule.includes('function opportunityRouteSource(options = {}) {'), 'opportunity-route source selector not found');
-    assert(opportunityRouteSourceModule.includes('bundledOpportunityRouteSource') && opportunityRouteSourceModule.includes('opportunityRouteInlineSource') && opportunityRouteSourceModule.includes('opportunityRouteSource'), 'opportunity-route source module exports are incomplete');
-    const opportunityRouteInlineBody = functionBody(opportunityRouteSourceModule, 'opportunityRouteInlineSource');
-    assert(opportunityRouteInlineBody.includes('String.raw`'), 'opportunity-route inline source factory does not return raw browser source');
-    assert(opportunityRouteInlineBody.includes('coinRouteHelperSource'), 'opportunity-route inline source factory does not inject coin route helpers');
-    assert(opportunityRouteInlineBody.includes('function coinRouteCoreOptions'), 'opportunity-route inline source factory does not include core options wrapper');
-    assert(opportunityRouteInlineBody.includes('function currentHeldCoinRouteChoice'), 'opportunity-route inline source factory does not include held route helper');
-    assert(functionBody(opportunityRouteSourceModule, 'bundledOpportunityRouteSource').includes("require('./src/browser/runtime/coin-route')"), 'opportunity-route bundled source does not hand coin-route helpers to the bundler');
-    assert(coinTargetRuntimeSourceModule.includes('function bundledCoinTargetRuntimeSource()'), 'bundled coin-target runtime source factory not found');
-    assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-target runtime source factory not found');
-    assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource(options = {})'), 'coin-target runtime source factory not found');
-    assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  bundledCoinTargetRuntimeSource,\n  coinTargetRuntimeInlineSource,\n  coinTargetRuntimeSource,\n  rememberNativeCoinSnapshotCall\n}'), 'coin-target runtime module export not found');
-    assert(coinTargetRuntimeSourceModule.includes("require('./src/browser/runtime/coin-target')"), 'coin-target runtime source does not expose a bundler-owned coin-target require');
-    assert(coinTargetRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCoinTargetRuntimeSource();'), 'coin-target runtime source factory does not switch to bundler-owned source in remote builds');
-    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('String.raw`'), 'coin-target inline runtime source factory does not return raw browser source');
-    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('coinTargetHelperSource'), 'coin-target inline runtime source factory does not inject helper source');
-    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('function markCoinCollected'), 'coin-target runtime source factory does not include tracked pickup recorder');
-    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('function recordIncidentalCoinPickups'), 'coin-target runtime source factory does not include incidental pickup recorder');
-    assert(chooseActionSourceModule.includes('function chooseActionSource(options = {}) {'), 'choose-action source factory not found');
-    assert(chooseActionSourceModule.includes('module.exports = { chooseActionSource }'), 'choose-action source module export not found');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('String.raw`'), 'choose-action source factory does not return raw browser source');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('function chooseAction(self)'), 'choose-action source factory does not include chooseAction');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('buildCoinDiagnostics'), 'choose-action source factory does not preserve coin diagnostics');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('coinMotionMetaCore(dir)'), 'choose-action source factory does not use coin motion metadata core directly');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('highValueVisibleCoinPriorityNeeded'), 'choose-action source factory does not preserve high-value visible coin priority');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickPostAttackDropCoin'), 'choose-action source factory does not preserve post-attack drop coin handling');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('summarizeNearestCoinStaminaBudgetExit'), 'choose-action source factory does not preserve stamina-budget exit handling');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickBestOpportunity'), 'choose-action source factory does not preserve opportunity selection');
-    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes("'wait-for-visible-coin-refresh'"), 'choose-action source factory does not preserve visible-coin wait reason');
-    assert(tickSourceModule.includes('function tickSource(options = {}) {'), 'tick source factory not found');
-    assert(tickSourceModule.includes('module.exports = { tickSource }'), 'tick source module export not found');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('String.raw`'), 'tick source factory does not return raw browser source');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore'), 'tick source factory does not import bundled relogin hold cleanup bound cores');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('clearEnemyReloginHoldForTickBoundCore(bot, localStorage') && functionBody(tickSourceModule, 'tickSource').includes('clearOfflineReloginHoldForTickBoundCore(bot, localStorage'), 'tick source factory does not bind bundled relogin hold cleanup through runtime bound cores');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore'), 'tick source factory does not import bundled offline display core alias');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('currentOfflineDisplayReasonForTickCore(${reason}, ${offlineSafety}, ${leaveResult}, ${offlineDetail}, ${fallback}, { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForTickCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) })'), 'tick source factory does not bind bundled offline display core directly');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore'), 'tick source factory does not import bundled offline summary core alias');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('offlineLeaveSummaryForTickCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'tick source factory does not bind bundled offline summary core directly');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore'), 'tick source factory does not import bundled injury summary core alias');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('injuryLeaveSummaryForTickCore(${injury}, { actorLabel, hpDisplay })'), 'tick source factory does not bind bundled injury summary core directly');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore'), 'tick source factory does not import bundled pursuit summary core alias');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('pursuitLeaveSummaryForTickCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })'), 'tick source factory does not bind bundled pursuit summary core directly');
-    assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['combat-state', () => combatStateSource(config)]"), 'runtime fragment registry does not pass config into combat-state source');
-    assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['tick', () => tickSource(config)]"), 'runtime fragment registry does not pass config into tick source');
-    assert(functionBody(tickSourceModule, 'tickSource').includes("async function tick(source = 'timer')"), 'tick source factory does not include tick');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('handlePendingExit(self)'), 'tick source factory does not preserve pending-exit handling');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('maybeStartAutoLogin'), 'tick source factory does not preserve login handling');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('leaveOffline'), 'tick source factory does not preserve offline leave handling');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('chooseAction(self)'), 'tick source factory does not preserve action selection');
-    assert(functionBody(tickSourceModule, 'tickSource').includes("trackCoinProgressCall('action', 'self', options)"), 'tick source factory does not preserve coin progress tracking');
-    assert(functionBody(tickSourceModule, 'tickSource').includes("applyFinalActionArbitrationCall('action', 'source', options)"), 'tick source factory does not preserve final action arbitration');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('recordImportantCombatTick(source, bot.lastDecision)'), 'tick source factory does not preserve important combat tick logging');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('recordCombatLogTick(source, bot.lastDecision)'), 'tick source factory does not preserve combat-log tick logging');
-    assert(startupSourceModule.includes('function startupSource() {'), 'startup source factory not found');
-    assert(startupSourceModule.includes('module.exports = { startupSource }'), 'startup source module export not found');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('String.raw`'), 'startup source factory does not return raw browser source');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('restorePersistedExitAuditLogs()'), 'startup source factory does not preserve exit audit restore');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('restorePersistedCombatLogPendingEntries()'), 'startup source factory does not preserve combat-log pending restore');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('restoreImportantLogsForRemote()'), 'startup source factory does not preserve important-log restore');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('installNativeLoginGateInterceptors()'), 'startup source factory does not preserve native login gate install');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('installPageGlobal(BOT_KEY, bot, pageGlobal)'), 'startup source factory does not preserve bot page-global install');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('previousBot.stop'), 'startup source factory does not preserve previous bot shutdown');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('installPageNativeSnapshotObserver()'), 'startup source factory does not preserve page-native observer install');
-    assert(functionBody(startupSourceModule, 'startupSource').includes('startTargetWhitelistPolling()'), 'startup source factory does not preserve target whitelist polling');
-    assert(functionBody(startupSourceModule, 'startupSource').includes("tick('startup')"), 'startup source factory does not preserve startup tick');
-    assert(functionBody(startupSourceModule, 'startupSource').includes("runTickSafely('timer')"), 'startup source factory does not preserve timer tick safety');
-    assert(botObjectSourceModule.includes('function botObjectSource(options = {}) {'), 'bot-object source factory not found');
-    assert(botObjectSourceModule.includes('module.exports = { botObjectSource }'), 'bot-object source module export not found');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('String.raw`'), 'bot-object source factory does not return raw browser source');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now()') && functionBody(botObjectSourceModule, 'botObjectSource').includes('enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'bot-object source factory does not bind bundled enemy streak status through runtime bound core');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("? 'loginSnapshotSuccessRequiredCore()'"), 'bot-object source factory does not route bundled login snapshot required count through core');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})'), 'bot-object source factory does not route bundled login snapshot normalization through core');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('postExitDecisionWithoutTargetForStatusCore'), 'bot-object source factory does not route bundled post-exit display through core alias');
-    assert(functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragmentEntries').includes("['bot-object', () => botObjectSource(config)]"), 'runtime fragment registry does not pass config into bot-object source');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('const bot = {'), 'bot-object source factory does not include bot object');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('pendingExit: initialPendingExitState'), 'bot-object source factory does not preserve pending exit initialization');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('combatLogging: {'), 'bot-object source factory does not preserve combat logging state');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('importantLogging: {'), 'bot-object source factory does not preserve important logging state');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('postLoginZoom: {'), 'bot-object source factory does not preserve post-login zoom state');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("stop(reason = 'manual')"), 'bot-object source factory does not preserve stop method');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes("setPaused(paused, reason = 'external')"), 'bot-object source factory does not preserve pause method');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('status()'), 'bot-object source factory does not preserve status method');
-    assert(functionBody(botObjectSourceModule, 'botObjectSource').includes('summarizeNetworkQuality()'), 'bot-object source factory does not preserve network quality status');
-    assert(botObjectSourceModule.includes("pendingExitSummaryPreludeSource('BotObject'") && botObjectSourceModule.includes("summarizePendingExitCall('this.pendingExit'"), 'bot-object source factory does not route pending exit status through direct summary core helper');
-    assert(controlLoginSourceModule.includes('function controlLoginSource(helpers = {}) {'), 'control-login source factory not found');
-    assert(controlLoginSourceModule.includes('module.exports = {\n  controlLoginSource'), 'control-login module export not found');
-    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('String.raw`'), 'control-login source factory does not return raw browser source');
-    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('typeof staminaExhaustedWindowLabel === \'function\' ? staminaExhaustedWindowLabel.toString() : \'\''), 'control-login source factory does not inline stamina window helper');
-    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes("? 'loginSnapshotSuccessRequiredCore()'"), 'control-login source does not route bundled login snapshot required count through core');
-    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('normalizeLoginSnapshotGateStateCore(${state}, ${loginSnapshotSuccessRequiredCall})'), 'control-login source does not route bundled login snapshot normalization through core');
-    assert(controlLoginSourceModule.includes('function currentBotIsInstalled()'), 'control-login source does not expose current bot helper');
-    assert(controlLoginSourceModule.includes('readPageGlobal(BOT_KEY, null, pageGlobal) === bot'), 'control-login source does not read bot identity through page-global adapter');
-    assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatBotPauseReason', '', pageGlobal)"), 'control-login source does not read pause reason through page-global adapter');
-    assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatBotPaused', false, pageGlobal) === true"), 'control-login source does not read paused state through page-global adapter');
-    assert(controlLoginSourceModule.includes("installPageGlobal('__graspRatManualLoginBypassUntil'"), 'control-login source does not install manual login bypass through page-global adapter');
-    assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatManualLoginBypassUntil', 0, pageGlobal)"), 'control-login source does not read manual login bypass through page-global adapter');
-    assert(controlLoginSourceModule.includes("readPageGlobal('__graspRatBotStartLinuxDoLoginGateVersion', '', pageGlobal)"), 'control-login source does not read startLinuxDoLogin gate version through page-global adapter');
-    assert(controlLoginSourceModule.includes("const current = readPageGlobal('startLinuxDoLogin', null, pageGlobal);"), 'control-login source does not read startLinuxDoLogin through page-global adapter');
-    assert(controlLoginSourceModule.includes("installPageGlobal('__graspRatBotRawStartLinuxDoLogin', previous, pageGlobal);"), 'control-login source does not preserve raw startLinuxDoLogin through page-global adapter');
-    assert(controlLoginSourceModule.includes("installPageGlobal('startLinuxDoLogin', guardedStartLinuxDoLogin, pageGlobal);"), 'control-login source does not install guarded startLinuxDoLogin through page-global adapter');
-    assert(!controlLoginSourceModule.includes('window[BOT_KEY]'), 'control-login source still reads bot identity directly from window');
-    assert(!controlLoginSourceModule.includes('window.__graspRatBotPauseReason'), 'control-login source still reads pause reason directly from window');
-    assert(!controlLoginSourceModule.includes('window.__graspRatBotPaused'), 'control-login source still reads paused state directly from window');
-    assert(!controlLoginSourceModule.includes('window.__graspRatManualLoginBypass'), 'control-login source still accesses manual login bypass directly on window');
-    assert(!controlLoginSourceModule.includes('window.__graspRatStartLinuxDoLoginGateInstalled'), 'control-login source still reads startLinuxDoLogin installed flag directly from window');
-    assert(!controlLoginSourceModule.includes('window.__graspRatBotStartLinuxDoLoginGateVersion'), 'control-login source still reads startLinuxDoLogin version directly from window');
-    assert(!controlLoginSourceModule.includes('window.__graspRatBotRawStartLinuxDoLogin'), 'control-login source still reads raw startLinuxDoLogin directly from window');
-    assert(!controlLoginSourceModule.includes('window.startLinuxDoLogin'), 'control-login source still accesses startLinuxDoLogin directly on window');
-    assert(nativeStateSourceModule.includes('function nativeStateSource() {'), 'native-state source factory not found');
-    assert(nativeStateSourceModule.includes('module.exports = {\n  nativeStateSource'), 'native-state module export not found');
-    assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('String.raw`'), 'native-state source factory does not return raw browser source');
-    assert(functionBody(nativeStateSourceModule, 'nativeStateSource').includes('function getNativeState()'), 'native-state source factory does not include native state helpers');
-    assert(nativeControlSourceModule.includes('function nativeControlSource() {'), 'native-control source factory not found');
-    assert(nativeControlSourceModule.includes('module.exports = {\n  nativeControlSource'), 'native-control module export not found');
-    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('String.raw`'), 'native-control source factory does not return raw browser source');
-    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function sendDirectNativeVelocity'), 'native-control source factory does not include direct velocity sender');
-    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function scheduleDirectVelocityRepeat'), 'native-control source factory does not include velocity repeat scheduler');
-    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function stopMotionSafely'), 'native-control source factory does not include safe stop helper');
-    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function sendNativeShoot'), 'native-control source factory does not include native shoot helper');
-    assert(functionBody(nativeControlSourceModule, 'nativeControlSource').includes('function shootAt'), 'native-control source factory does not include shoot cadence wrapper');
-    assert(coinMotionRuntimeSourceModule.includes('function bundledCoinMotionRuntimeSource()'), 'bundled coin-motion runtime source factory not found');
-    assert(coinMotionRuntimeSourceModule.includes('function coinMotionRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-motion runtime source factory not found');
-    assert(coinMotionRuntimeSourceModule.includes('function coinMotionRuntimeSource(options = {})'), 'coin-motion runtime source factory not found');
-    assert(coinMotionRuntimeSourceModule.includes('module.exports = {\n  bundledCoinMotionRuntimeSource,\n  coinDirectionToCall,\n  coinMotionRuntimeInlineSource,\n  coinMotionRuntimeSource\n}'), 'coin-motion runtime module export not found');
-    assert(coinMotionRuntimeSourceModule.includes("require('./src/browser/runtime/coin-motion')"), 'coin-motion runtime source does not expose a bundler-owned coin-motion require');
-    assert(coinMotionRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCoinMotionRuntimeSource();'), 'coin-motion runtime source factory does not switch to bundler-owned source in remote builds');
-    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource').includes('String.raw`'), 'coin-motion inline runtime source factory does not return raw browser source');
-    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource').includes('coinMotionHelperSource'), 'coin-motion inline runtime source factory does not inject helper source');
-    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource').includes('function coinMotionCoreOptions'), 'coin-motion runtime source factory does not include core options wrapper');
-    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource').includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime source factory does not include lock update wrapper');
-    assert(returnBlockSourceModule.includes('function returnBlockSource() {'), 'return-block source factory not found');
-    assert(returnBlockSourceModule.includes('module.exports = {\n  returnBlockSource'), 'return-block source module export not found');
-    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('String.raw`'), 'return-block source factory does not return raw browser source');
-    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function fleeDirection'), 'return-block source factory does not include flee direction helper');
-    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function lockedFleeDirection'), 'return-block source factory does not include locked flee helper');
-    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function returnBlockScanDirection'), 'return-block source factory does not include scan direction helper');
-    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function buildReturnBlockScanAction'), 'return-block source factory does not include scan action builder');
-    assert(functionBody(returnBlockSourceModule, 'returnBlockSource').includes('function blockThreatReturnAction'), 'return-block source factory does not include threat return-block helper');
-    assert(entityActivitySourceModule.includes('function entityActivitySource() {'), 'entity-activity source factory not found');
-    assert(entityActivitySourceModule.includes('module.exports = {\n  entityActivitySource'), 'entity-activity source module export not found');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('String.raw`'), 'entity-activity source factory does not return raw browser source');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('const now = () => performance.now();'), 'entity-activity source factory does not include clock helper');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('const dist = (a, b)'), 'entity-activity source factory does not include distance helper');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('const isInvulnerable = e => anyPositiveNumber'), 'entity-activity source factory does not include invulnerability helper');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('function recentlyActionedForAfk'), 'entity-activity source factory does not include recent-activity helper');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('function isIdleInvulnerableTarget'), 'entity-activity source factory does not include idle invulnerable helper');
-    assert(functionBody(entityActivitySourceModule, 'entityActivitySource').includes('const isAfkProfitTarget'), 'entity-activity source factory does not include AFK profit helper');
-    assert(staminaRuntimeSourceModule.includes('function staminaRuntimeSource() {'), 'stamina-runtime source factory not found');
-    assert(staminaRuntimeSourceModule.includes('module.exports = {\n  staminaRuntimeSource'), 'stamina-runtime source module export not found');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('String.raw`'), 'stamina-runtime source factory does not return raw browser source');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('const hpValue = e =>'), 'stamina-runtime source factory does not include HP helper');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('const decorateActiveThreat'), 'stamina-runtime source factory does not include active threat decoration helper');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function summarizeStamina'), 'stamina-runtime source factory does not include stamina summary helper');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staminaResetHoldUntil'), 'stamina-runtime source factory does not include reset hold helper');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function deferredStaminaExhaustionLeave'), 'stamina-runtime source factory does not include deferred leave helper');
-    assert(functionBody(staminaRuntimeSourceModule, 'staminaRuntimeSource').includes('function staleOfflineStaminaHoldContradicted'), 'stamina-runtime source factory does not include stale offline contradiction helper');
-    assert(attackWorthSourceModule.includes('function attackWorthInlineSource() {'), 'attack-worth inline source factory not found');
-    assert(attackWorthSourceModule.includes('function bundledAttackWorthSource() {'), 'attack-worth bundled source factory not found');
-    assert(attackWorthSourceModule.includes('function attackWorthSource(options = {}) {'), 'attack-worth source selector not found');
-    assert(attackWorthSourceModule.includes('attackWorthInlineSource') && attackWorthSourceModule.includes('bundledAttackWorthSource') && attackWorthSourceModule.includes('attackWorthSource'), 'attack-worth source module exports are incomplete');
-    const attackWorthInlineBody = functionBody(attackWorthSourceModule, 'attackWorthInlineSource');
-    assert(attackWorthInlineBody.includes('String.raw`'), 'attack-worth inline source factory does not return raw browser source');
-    assert(attackWorthInlineBody.includes('const attackWorthTaking = (self, target) =>'), 'attack-worth inline source factory does not include attack worth wrapper');
-    assert(attackWorthInlineBody.includes('isWhitelistedTarget(target)'), 'attack-worth inline source factory does not preserve whitelist guard');
-    assert(attackWorthInlineBody.includes('isAfkProfitTarget(target)'), 'attack-worth inline source factory does not preserve AFK profit target handling');
-    assert(attackWorthInlineBody.includes('cfg.attackMinRewardRatio'), 'attack-worth inline source factory does not preserve reward ratio guard');
-    const attackWorthBundledBody = functionBody(attackWorthSourceModule, 'bundledAttackWorthSource');
-    assert(attackWorthBundledBody.includes("require('./src/browser/runtime/attack-worth')"), 'attack-worth bundled source does not hand attack-worth core to the bundler');
-    assert(!attackWorthBundledBody.includes('const attackWorthTaking ='), 'attack-worth bundled source still keeps attack-worth wrapper');
-    assert(exitMotionSourceModule.includes('function exitMotionInlineSource() {'), 'exit-motion inline source factory not found');
-    assert(exitMotionSourceModule.includes('function bundledExitMotionSource() {'), 'exit-motion bundled source factory not found');
-    assert(exitMotionSourceModule.includes('function exitMotionSource(options = {}) {'), 'exit-motion source selector not found');
-    assert(exitMotionSourceModule.includes('exitMotionInlineSource') && exitMotionSourceModule.includes('bundledExitMotionSource') && exitMotionSourceModule.includes('exitMotionSource'), 'exit-motion source module exports are incomplete');
-    const exitMotionInlineBody = functionBody(exitMotionSourceModule, 'exitMotionInlineSource');
-    assert(exitMotionInlineBody.includes('String.raw`'), 'exit-motion inline source factory does not return raw browser source');
-    assert(exitMotionInlineBody.includes('function exitMotionStopLockRemainingMs'), 'exit-motion inline source factory does not include motion stop lock helper');
-    assert(!exitMotionInlineBody.includes('function exitMotionStopActive'), 'exit-motion inline source still keeps stop-active alias');
-    assert(exitMotionInlineBody.includes('function postExitDecisionWithoutTarget'), 'exit-motion inline source factory does not include post-exit decision helper');
-    assert(exitMotionInlineBody.includes('function clearPostExitTargetState'), 'exit-motion inline source factory does not include post-exit target cleanup helper');
-    assert(exitMotionInlineBody.includes('removeTargetOverlay()'), 'exit-motion inline source factory does not clear target overlay');
-    const exitMotionBundledBody = functionBody(exitMotionSourceModule, 'bundledExitMotionSource');
-    assert(exitMotionBundledBody.includes("require('./src/browser/runtime/exit-motion')"), 'exit-motion bundled source does not hand exit-motion core to the bundler');
-    assert(exitMotionBundledBody.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'exit-motion bundled source does not call lock core with runtime state/config');
-    assert(!exitMotionBundledBody.includes('function exitMotionStopActive'), 'exit-motion bundled source still keeps stop-active alias');
-    assert(!exitMotionBundledBody.includes('function postExitDecisionWithoutTarget('), 'exit-motion bundled source still keeps post-exit decision wrapper');
-    assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(bot.lastDecision, reason'), 'exit-motion bundled cleanup does not sanitize last decision through core directly');
-    assert(exitMotionBundledBody.includes('removeTargetOverlay()'), 'exit-motion bundled source does not retain target overlay cleanup');
-    assert(functionBody(targetOverlaySourceModule, 'targetOverlaySuppressedAfterExit').includes('exitMotionStopLockRemainingMs() > 0'), 'target overlay still relies on exit-motion stop-active alias');
-    assert(functionBody(tickSourceModule, 'tickSource').includes('postExitDecisionWithoutTargetForTickCore'), 'tick source does not route bundled post-exit decision through core alias');
-    assert(arrayCountSourceModule.includes('function arrayCountSource(options = {}) {'), 'array-count source factory not found');
-    assert(arrayCountSourceModule.includes('function bundledArrayCountSource()'), 'bundled array-count source factory not found');
-    assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
-    assert(arrayCountSourceModule.includes("require('./runtime/array-count')"), 'array-count source factory does not import the runtime helper module');
-    assert(arrayCountSourceModule.includes("require('./src/browser/runtime/array-count')"), 'array-count source factory does not expose a bundler-owned runtime helper require');
-    assert(arrayCountSourceModule.includes('if (options.bundledRuntime) return bundledArrayCountSource();'), 'array-count source factory does not switch to bundler-owned source in remote builds');
-    assert(arrayCountSourceModule.includes('function indentSource(source, spaces)'), 'array-count source factory does not preserve generated indentation');
-    assert(functionBody(arrayCountSourceModule, 'arrayCountSource').includes('arrayCount.toString()'), 'array-count source factory does not inline the runtime helper module');
-    assert(arrayCountRuntimeModule.includes('function arrayCount(value)'), 'array-count runtime helper not found');
-    assert(arrayCountRuntimeModule.includes('Array.isArray(value) ? value.length : 0'), 'array-count runtime helper does not preserve array length fallback');
-    assert(arrayCountRuntimeModule.includes('module.exports = {\n  arrayCount\n}'), 'array-count runtime helper export not found');
-    assert(tickSafetySourceModule.includes('function tickSafetySource(options = {}) {'), 'tick-safety source factory not found');
-    assert(tickSafetySourceModule.includes('module.exports = { tickSafetySource }'), 'tick-safety source module export not found');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('String.raw`'), 'tick-safety source factory does not return raw browser source');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'tick-safety source factory does not route bundled runtime diagnostics through core');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('function recordUnhandledTickError'), 'tick-safety source factory does not include unhandled tick recorder');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes("console.error('[grasp-rat-bot:unhandled-tick]', err)"), 'tick-safety source factory does not preserve console error logging');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('function runTickSafely'), 'tick-safety source factory does not include tick safety wrapper');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('recordRuntimeDiagnostics'), 'tick-safety source factory does not preserve runtime diagnostics recording');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes('function runCallbackSafely'), 'tick-safety source factory does not include callback safety wrapper');
-    assert(functionBody(tickSafetySourceModule, 'tickSafetySource').includes("result.catch(err => recordUnhandledTickError(label, err))"), 'tick-safety source factory does not preserve async callback error capture');
-    assert(persistentLastSelfSourceModule.includes('function persistentLastSelfInlineSource() {'), 'persistent-last-self inline source factory not found');
-    assert(persistentLastSelfSourceModule.includes('function bundledPersistentLastSelfSource() {'), 'persistent-last-self bundled source factory not found');
-    assert(persistentLastSelfSourceModule.includes('function persistentLastSelfSource(options = {}) {'), 'persistent-last-self source selector not found');
-    assert(persistentLastSelfSourceModule.includes('persistentLastSelfInlineSource') && persistentLastSelfSourceModule.includes('bundledPersistentLastSelfSource') && persistentLastSelfSourceModule.includes('persistentLastSelfSource'), 'persistent-last-self source module exports are incomplete');
-    const persistentLastSelfInlineBody = functionBody(persistentLastSelfSourceModule, 'persistentLastSelfInlineSource');
-    assert(persistentLastSelfInlineBody.includes('String.raw`'), 'persistent-last-self inline source factory does not return raw browser source');
-    assert(persistentLastSelfInlineBody.includes('function readPersistentLastSelfState'), 'persistent-last-self inline source factory does not include read helper');
-    assert(persistentLastSelfInlineBody.includes('function writePersistentLastSelfState'), 'persistent-last-self inline source factory does not include write helper');
-    assert(persistentLastSelfInlineBody.includes('LAST_SELF_STATE_KEY'), 'persistent-last-self inline source factory does not use last-self storage key');
-    const persistentLastSelfBundledBody = functionBody(persistentLastSelfSourceModule, 'bundledPersistentLastSelfSource');
-    assert(persistentLastSelfBundledBody.includes("require('./src/browser/runtime/persistent-last-self')"), 'persistent-last-self bundled source does not hand helpers to the bundler');
-    assert(persistentLastSelfBundledBody.includes('readPersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, cfg.lastSelfPersistMaxMs, t)'), 'persistent-last-self bundled source does not call read core with runtime config');
-    assert(persistentLastSelfBundledBody.includes('writePersistentLastSelfStateCore(localStorage, LAST_SELF_STATE_KEY, selfSummary, t)'), 'persistent-last-self bundled source does not call write core with runtime key');
-    assert(persistentExitSourceModule.includes('function persistentExitInlineSource() {'), 'persistent-exit inline source factory not found');
-    assert(persistentExitSourceModule.includes('function bundledPersistentExitSource() {'), 'persistent-exit bundled source factory not found');
-    assert(persistentExitSourceModule.includes('function persistentExitSource(options = {}) {'), 'persistent-exit source selector not found');
-    assert(persistentExitSourceModule.includes('persistentExitInlineSource') && persistentExitSourceModule.includes('bundledPersistentExitSource') && persistentExitSourceModule.includes('persistentExitSource'), 'persistent-exit source module exports are incomplete');
-    const persistentExitInlineBody = functionBody(persistentExitSourceModule, 'persistentExitInlineSource');
-    assert(persistentExitInlineBody.includes('String.raw`'), 'persistent-exit inline source factory does not return raw browser source');
-    assert(persistentExitInlineBody.includes('function readPersistentExitState'), 'persistent-exit inline source factory does not include read helper');
-    assert(persistentExitInlineBody.includes('function writePersistentExitState'), 'persistent-exit inline source factory does not include write helper');
-    assert(persistentExitInlineBody.includes('refreshExitDetail'), 'persistent-exit inline source factory does not refresh exit detail');
-    const persistentExitBundledBody = functionBody(persistentExitSourceModule, 'bundledPersistentExitSource');
-    assert(persistentExitBundledBody.includes("require('./src/browser/runtime/persistent-exit')"), 'persistent-exit bundled source does not hand helpers to the bundler');
-    assert(persistentExitBundledBody.includes('readPersistentExitStateCore(localStorage, key, refreshExitDetail, t)'), 'persistent-exit bundled source does not call read core with refresh detail');
-    assert(persistentExitBundledBody.includes('writePersistentExitStateCore(localStorage, key, detail, refreshExitDetail)'), 'persistent-exit bundled source does not call write core with refresh detail');
-    assert(persistentClearSourceModule.includes('function persistentClearInlineSource() {'), 'persistent-clear inline source factory not found');
-    assert(persistentClearSourceModule.includes('function bundledPersistentClearSource() {'), 'persistent-clear bundled source factory not found');
-    assert(persistentClearSourceModule.includes('function persistentClearSource(options = {}) {'), 'persistent-clear source selector not found');
-    assert(persistentClearSourceModule.includes('persistentClearInlineSource') && persistentClearSourceModule.includes('bundledPersistentClearSource') && persistentClearSourceModule.includes('persistentClearSource'), 'persistent-clear source module exports are incomplete');
-    const persistentClearInlineBody = functionBody(persistentClearSourceModule, 'persistentClearInlineSource');
-    assert(persistentClearInlineBody.includes('String.raw`'), 'persistent-clear inline source factory does not return raw browser source');
-    assert(persistentClearInlineBody.includes('function clearPersistentExitState'), 'persistent-clear inline source factory does not include exit clear helper');
-    assert(persistentClearInlineBody.includes('function clearPersistentPendingExitState'), 'persistent-clear inline source factory does not include pending-exit clear helper');
-    assert(persistentClearInlineBody.includes('PENDING_EXIT_STATE_KEY'), 'persistent-clear inline source factory does not clear pending-exit storage key');
-    const persistentClearBundledBody = functionBody(persistentClearSourceModule, 'bundledPersistentClearSource');
-    assert(persistentClearBundledBody.includes("require('./src/browser/runtime/persistent-clear')"), 'persistent-clear bundled source does not hand clear helper to the bundler');
-    assert(persistentClearBundledBody.includes('clearPersistentStorageKey(key)'), 'persistent-clear bundled source does not clear provided exit key');
-    assert(persistentClearBundledBody.includes('clearPersistentStorageKey(PENDING_EXIT_STATE_KEY)'), 'persistent-clear bundled source does not clear pending-exit storage key');
-    assert(pendingExitPersistenceSourceModule.includes('function pendingExitPersistenceInlineSource() {'), 'pending-exit persistence inline source factory not found');
-    assert(pendingExitPersistenceSourceModule.includes('function bundledPendingExitPersistenceSource() {'), 'pending-exit persistence bundled source factory not found');
-    assert(pendingExitPersistenceSourceModule.includes('function pendingExitPersistenceSource(options = {})'), 'pending-exit persistence source selector not found');
-    assert(pendingExitPersistenceSourceModule.includes('pendingExitPersistenceInlineSource,\n  bundledPendingExitPersistenceSource,\n  pendingExitPersistenceSource'), 'pending-exit persistence source module exports not found');
-    const pendingExitPersistenceInlineBody = functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceInlineSource');
-    assert(pendingExitPersistenceInlineBody.includes('String.raw`'), 'pending-exit persistence inline source factory does not return raw browser source');
-    assert(pendingExitPersistenceInlineBody.includes('function normalizePendingExitReloadConfirmation'), 'pending-exit persistence inline source factory does not include reload confirmation normalizer');
-    assert(pendingExitPersistenceInlineBody.includes('function normalizePendingExitStateForStorage'), 'pending-exit persistence inline source factory does not include storage normalizer');
-    assert(pendingExitPersistenceInlineBody.includes('function readPersistedPendingExitState'), 'pending-exit persistence inline source factory does not include storage reader');
-    assert(pendingExitPersistenceInlineBody.includes('function writePersistentPendingExitState'), 'pending-exit persistence inline source factory does not include storage writer');
-    assert(pendingExitPersistenceInlineBody.includes('function chooseInitialPendingExitState'), 'pending-exit persistence inline source factory does not include initial-state chooser');
-    assert(pendingExitPersistenceInlineBody.includes('PENDING_EXIT_STATE_KEY'), 'pending-exit persistence inline source factory does not use pending-exit storage key');
-    const pendingExitPersistenceBundledBody = functionBody(pendingExitPersistenceSourceModule, 'bundledPendingExitPersistenceSource');
-    assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit-persistence')"), 'pending-exit persistence bundled source does not hand helpers to the bundler');
-    assert(pendingExitPersistenceBundledBody.includes("require('./src/browser/runtime/pending-exit')"), 'pending-exit persistence bundled source does not bind pending-exit retry/display cores');
-    assert(pendingExitPersistenceBundledBody.includes('pendingExitPersistMaxMs: cfg.pendingExitPersistMaxMs'), 'pending-exit persistence bundled source does not bind config max age');
-    assert(pendingExitPersistenceBundledBody.includes('cloneForPendingExit') && pendingExitPersistenceBundledBody.includes('pendingExitDisplayReason: summary => pendingExitDisplayReasonForPersistenceCore(summary)') && pendingExitPersistenceBundledBody.includes('pendingExitRetryMs: pending => pendingExitRetryMsForPersistenceCore(pending, pendingExitRetryCoreOptionsForPersistence())'), 'pending-exit persistence bundled source does not bind runtime helper dependencies');
-    assert(pendingExitPersistenceCallSourceModule.includes('function writePersistentPendingExitStateCall') && pendingExitPersistenceCallSourceModule.includes('writePersistentPendingExitStateCore(localStorage, PENDING_EXIT_STATE_KEY'), 'pending-exit persistence call source does not generate direct writer core calls');
-    assert(pendingExitPersistenceCallSourceModule.includes('function writePersistentPendingExitStateCallback') && pendingExitPersistenceCallSourceModule.includes('pending => writePersistentPendingExitStateCore'), 'pending-exit persistence call source does not generate direct writer callbacks');
-    assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitReloadConfirmation('), 'pending-exit persistence bundled source still keeps reload-confirmation wrapper');
-    assert(!pendingExitPersistenceBundledBody.includes('function normalizePendingExitStateForStorage('), 'pending-exit persistence bundled source still keeps storage-normalizer wrapper');
-    assert(!pendingExitPersistenceBundledBody.includes('function readPersistedPendingExitState('), 'pending-exit persistence bundled source still keeps storage-reader wrapper');
-    assert(!pendingExitPersistenceBundledBody.includes('function writePersistentPendingExitState('), 'pending-exit persistence bundled source still keeps storage-writer wrapper');
-    assert(!pendingExitPersistenceBundledBody.includes('function chooseInitialPendingExitState('), 'pending-exit persistence bundled source still keeps initial-state chooser wrapper');
-    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes("writePersistentPendingExitStateCall(pending, { bundledRuntime })"), 'control-login source does not route pending-exit writes through direct core call helper');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('writePersistentPendingExitStateCall(pending, options)'), 'pending-exit source does not route pending-exit writes through direct core call helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('writePersistentPendingExitStateCall(pending, options)'), 'leave-command source does not route pending-exit writes through direct core call helper');
-    assert(tickSourceModule.includes('writePersistentPendingExitStateCallback(options)'), 'tick source does not route relogin-hold cleanup writes through direct core callback helper');
-    assert(exitReloginHoldReadCallSourceModule.includes('writePersistentPendingExitStateCallback({ bundledRuntime: true })'), 'exit-relogin hold-read call source does not route clear callbacks through direct core writer');
-    assert(functionBody(controlLoginSourceModule, 'controlLoginSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(controlLoginSourceModule, 'controlLoginSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'control-login source does not route reload-confirmation normalization directly to core for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const normalizePendingExitReloadConfirmationCall') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('normalizePendingExitReloadConfirmationCore(${args})'), 'pending-exit source does not route reload-confirmation normalization directly to core for bundled builds');
-    assert(functionBody(pendingExitPersistenceSourceModule, 'pendingExitPersistenceSource').includes('options.bundledRuntime'), 'pending-exit persistence source selector does not switch on bundled runtime mode');
-    assert(pendingExitPersistenceRuntimeModule.includes('function normalizePendingExitReloadConfirmationCore'), 'pending-exit persistence runtime reload-confirmation core not found');
-    assert(pendingExitPersistenceRuntimeModule.includes('function normalizePendingExitStateForStorageCore'), 'pending-exit persistence runtime storage-normalizer core not found');
-    assert(pendingExitPersistenceRuntimeModule.includes('function readPersistedPendingExitStateCore'), 'pending-exit persistence runtime storage-reader core not found');
-    assert(pendingExitPersistenceRuntimeModule.includes('function writePersistentPendingExitStateCore'), 'pending-exit persistence runtime storage-writer core not found');
-    assert(pendingExitPersistenceRuntimeModule.includes('function chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime initial-state chooser core not found');
-    assert(pendingExitPersistenceRuntimeModule.includes('Math.max(60000, Number(resolved.pendingExitPersistMaxMs || 3600000) || 3600000)'), 'pending-exit persistence runtime core does not enforce minimum max age');
-    assert(pendingExitPersistenceRuntimeModule.includes('restoredAfterReload && requestedAt && !reloadedAt'), 'pending-exit persistence runtime core does not mark reload restoration');
-    assert(pendingExitPersistenceRuntimeModule.includes('storage.setItem(key, resolved.stringify(normalized))'), 'pending-exit persistence runtime core does not write normalized state');
-    assert(pendingExitPersistenceRuntimeModule.includes('return storedStamp > memoryStamp ? stored : memory;'), 'pending-exit persistence runtime core does not choose newest state');
-    assert(pendingExitPersistenceRuntimeModule.includes('normalizePendingExitReloadConfirmationCore,\n  normalizePendingExitStateForStorageCore,\n  readPersistedPendingExitStateCore,\n  writePersistentPendingExitStateCore,\n  chooseInitialPendingExitStateCore'), 'pending-exit persistence runtime exports are incomplete');
-    assert(
-      strategyPendingExitSource.includes('function pendingExitRetryMsCore')
-        && strategyPendingExitSource.includes('function pendingExitDisplayReasonCore')
-        && strategyPendingExitSource.includes('function summarizePendingExitCore')
-        && strategyPendingExitSource.includes('function leaveRequestHasHttp403Core')
-        && strategyPendingExitSource.includes('function leaveSuccessReloadConfirmationForDetailCore')
-        && strategyPendingExitSource.includes('function pendingExitWaitReasonCore'),
-      'pending-exit strategy module does not expose retry/display/summary/leave cores'
-    );
-    assert(pendingExitRuntimeModule.includes("require('../../strategy/pending-exit')"), 'browser pending-exit runtime module does not reuse the strategy pending-exit helpers');
-    assert(
-      pendingExitRuntimeModule.includes('pendingExitRetryMsCore,\n  pendingExitDisplayReasonCore,\n  summarizePendingExitCore')
-        && pendingExitRuntimeModule.includes('leaveRequestHasHttp403Core,\n  leaveDetailHasHttp403Core,\n  leaveDetailSucceededCore')
-        && pendingExitRuntimeModule.includes('leaveSuccessReloadConfirmationForDetailCore,\n  leaveSuccessReloadConfirmationSatisfiedCore,\n  pendingExitWaitReasonCore'),
-      'browser pending-exit runtime exports are incomplete'
-    );
-    assert(
-      strategyLeaveCommandSource.includes('function leaveCommandFailureMessageCore')
-        && strategyLeaveCommandSource.includes('function summarizeLeaveCommandResultCore')
-        && strategyLeaveCommandSource.includes('function leaveDetailFailedForClashRescueCore')
-        && strategyLeaveCommandSource.includes('function clashLeaveRescueRetryDetailCore')
-        && strategyLeaveCommandSource.includes('function resetClashLeaveRescueRoundCore'),
-      'leave-command strategy module does not expose command/Clash rescue cores'
-    );
-    assert(leaveCommandRuntimeModule.includes("require('../../strategy/leave-command')"), 'browser leave-command runtime module does not reuse strategy leave-command helpers');
-    assert(
-      leaveCommandRuntimeModule.includes('leaveCommandFailureMessageCore,\n  summarizeLeaveCommandResultCore,\n  leaveDetailFailedForClashRescueCore')
-        && leaveCommandRuntimeModule.includes('clashLeaveRescueRetryDetailCore,\n  resetClashLeaveRescueRoundCore'),
-      'browser leave-command runtime exports are incomplete'
-    );
-    assert(!distSource.includes('function normalizePendingExitReloadConfirmation('), 'dist remote bot still keeps pending-exit reload-confirmation wrapper');
-    assert(!distSource.includes('function normalizePendingExitStateForStorage('), 'dist remote bot still keeps pending-exit storage-normalizer wrapper');
-    assert(!distSource.includes('function readPersistedPendingExitState('), 'dist remote bot still keeps pending-exit storage-reader wrapper');
-    assert(!distSource.includes('function writePersistentPendingExitState('), 'dist remote bot still keeps pending-exit storage-writer wrapper');
-    assert(!distSource.includes('function chooseInitialPendingExitState('), 'dist remote bot still keeps pending-exit initial-state chooser wrapper');
-    assert(!distSource.includes('function pendingExitRetryMs('), 'dist remote bot still keeps pending-exit retry wrapper');
-    assert(!distSource.includes('function pendingExitDisplayReason('), 'dist remote bot still keeps pending-exit display wrapper');
-    assert(!distSource.includes('function summarizePendingExit('), 'dist remote bot still keeps pending-exit summary wrapper');
-    assert(!distSource.includes('function leaveRequestHasHttp403('), 'dist remote bot still keeps leaveRequestHasHttp403 wrapper');
-    assert(!distSource.includes('function leaveDetailHasHttp403('), 'dist remote bot still keeps leaveDetailHasHttp403 wrapper');
-    assert(!distSource.includes('function leaveDetailSucceeded('), 'dist remote bot still keeps leaveDetailSucceeded wrapper');
-    assert(!distSource.includes('function leaveSuccessReloadConfirmationForDetail('), 'dist remote bot still keeps leaveSuccessReloadConfirmationForDetail wrapper');
-    assert(!distSource.includes('function leaveSuccessReloadConfirmationSatisfied('), 'dist remote bot still keeps leaveSuccessReloadConfirmationSatisfied wrapper');
-    assert(!distSource.includes('function pendingExitWaitReason('), 'dist remote bot still keeps pendingExitWaitReason wrapper');
-    [
-      'leaveCommandFailureMessage',
-      'summarizeLeaveCommandResult',
-      'leaveDetailFailedForClashRescue',
-      'clashLeaveRescueAttempts',
-      'nextClashLeaveRescueStage',
-      'summarizeClashLeaveRescueResult',
-      'clashLeaveRescueRetryDetail',
-      'resetClashLeaveRescueRound'
-    ].forEach(wrapperName => {
-      assert(!distSource.includes(`function ${wrapperName}(`), `dist remote bot still keeps ${wrapperName} wrapper`);
-    });
-    assert(refreshExitDetailSourceModule.includes('function refreshExitDetailInlineSource() {'), 'refresh-exit-detail inline source factory not found');
-    assert(refreshExitDetailSourceModule.includes('function bundledRefreshExitDetailSource() {'), 'refresh-exit-detail bundled source factory not found');
-    assert(refreshExitDetailSourceModule.includes('function refreshExitDetailSource(options = {})'), 'refresh-exit-detail source selector not found');
-    assert(refreshExitDetailSourceModule.includes('refreshExitDetailInlineSource,\n  bundledRefreshExitDetailSource,\n  refreshExitDetailSource'), 'refresh-exit-detail source module exports not found');
-    const refreshExitDetailInlineBody = functionBody(refreshExitDetailSourceModule, 'refreshExitDetailInlineSource');
-    assert(refreshExitDetailInlineBody.includes('String.raw`'), 'refresh-exit-detail inline source factory does not return raw browser source');
-    assert(refreshExitDetailInlineBody.includes('function refreshExitDetail'), 'refresh-exit-detail inline source factory does not include refresh helper');
-    assert(refreshExitDetailInlineBody.includes('holdRemainingMs'), 'refresh-exit-detail inline source factory does not refresh relogin hold remaining time');
-    assert(refreshExitDetailInlineBody.includes('staminaBudgetExit'), 'refresh-exit-detail inline source factory does not refresh stamina-budget exit summary');
-    assert(refreshExitDetailInlineBody.includes('finalizeLeaveDisplayReason'), 'refresh-exit-detail inline source factory does not finalize display reason');
-    const refreshExitDetailBundledBody = functionBody(refreshExitDetailSourceModule, 'bundledRefreshExitDetailSource');
-    assert(refreshExitDetailBundledBody.includes("require('./src/browser/runtime/refresh-exit-detail')"), 'refresh-exit-detail bundled source does not hand refresh helper to the bundler');
-    assert(refreshExitDetailBundledBody.includes('finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import display finalizer core alias');
-    assert(refreshExitDetailBundledBody.includes('leaveWaitDisplayCore: leaveWaitDisplayForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import wait-display core alias');
-    assert(refreshExitDetailBundledBody.includes('offlineLeaveSummaryCore: offlineLeaveSummaryForRefreshExitDetailCore'), 'refresh-exit-detail bundled source does not import offline summary core alias');
-    assert(refreshExitDetailBundledBody.includes('offlineLeaveSummaryForRefreshExitDetailCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'refresh-exit-detail bundled source does not bind runtime offline summary core directly');
-    assert(refreshExitDetailBundledBody.includes("value => ${finalizeLeaveDisplayReasonCoreCall('value', 'finalizeLeaveDisplayReasonForRefreshExitDetailCore', 'leaveWaitDisplayForRefreshExitDetailCore')}"), 'refresh-exit-detail bundled source does not bind display finalizer core directly');
-    assert(functionBody(refreshExitDetailSourceModule, 'refreshExitDetailSource').includes('options.bundledRuntime'), 'refresh-exit-detail source selector does not switch on bundled runtime mode');
-    assert(refreshExitDetailRuntimeModule.includes('function refreshExitDetailCore(detail, offlineLeaveSummary, finalizeLeaveDisplayReason'), 'refresh-exit-detail runtime core not found');
-    assert(refreshExitDetailRuntimeModule.includes('detail.holdRemainingMs = Math.max(0, Math.round(reloginUntil - t));'), 'refresh-exit-detail runtime core does not refresh relogin hold remaining time');
-    assert(refreshExitDetailRuntimeModule.includes('detail.offlineSafety?.staminaBudgetExit'), 'refresh-exit-detail runtime core does not refresh stamina-budget exit summary');
-    assert(refreshExitDetailRuntimeModule.includes('detail.offlineSafety?.staminaExhausted'), 'refresh-exit-detail runtime core does not refresh stamina-exhausted exit summary');
-    assert(refreshExitDetailRuntimeModule.includes('return finalizeLeaveDisplayReason(detail);'), 'refresh-exit-detail runtime core does not finalize display reason');
-    assert(refreshExitDetailRuntimeModule.includes('module.exports = { refreshExitDetailCore }'), 'refresh-exit-detail runtime core export not found');
-    assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresInlineSource() {'), 'restored-coin-failures inline source factory not found');
-    assert(restoredCoinFailuresSourceModule.includes('function bundledRestoredCoinFailuresSource() {'), 'restored-coin-failures bundled source factory not found');
-    assert(restoredCoinFailuresSourceModule.includes('function restoredCoinFailuresSource(options = {})'), 'restored-coin-failures source selector not found');
-    assert(restoredCoinFailuresSourceModule.includes('restoredCoinFailuresInlineSource,\n  bundledRestoredCoinFailuresSource,\n  restoredCoinFailuresSource'), 'restored-coin-failures source module exports not found');
-    const restoredCoinFailuresInlineBody = functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresInlineSource');
-    assert(restoredCoinFailuresInlineBody.includes('String.raw`'), 'restored-coin-failures inline source factory does not return raw browser source');
-    assert(restoredCoinFailuresInlineBody.includes('function restoredCoinFailures'), 'restored-coin-failures inline source factory does not include restore helper');
-    assert(restoredCoinFailuresInlineBody.includes('preserved.coinFailures'), 'restored-coin-failures inline source factory does not read preserved failures');
-    assert(restoredCoinFailuresInlineBody.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures inline source factory does not restore severe ignore windows');
-    assert(restoredCoinFailuresInlineBody.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures inline source factory does not restore hard ignore windows');
-    const restoredCoinFailuresBundledBody = functionBody(restoredCoinFailuresSourceModule, 'bundledRestoredCoinFailuresSource');
-    assert(restoredCoinFailuresBundledBody.includes("return '';"), 'restored-coin-failures bundled source should be empty after direct runtime-state core binding');
-    assert(!restoredCoinFailuresBundledBody.includes('function restoredCoinFailures('), 'restored-coin-failures bundled source still keeps restore wrapper');
-    assert(functionBody(restoredCoinFailuresSourceModule, 'restoredCoinFailuresSource').includes('options.bundledRuntime'), 'restored-coin-failures source selector does not switch on bundled runtime mode');
-    assert(restoredCoinFailuresRuntimeModule.includes('function restoredCoinFailuresCore(preservedCoinFailures, cfg, t)'), 'restored-coin-failures runtime core not found');
-    assert(restoredCoinFailuresRuntimeModule.includes('preservedCoinFailures || []'), 'restored-coin-failures runtime core does not read provided failures');
-    assert(restoredCoinFailuresRuntimeModule.includes("next.reason === 'near' || next.reason === 'close'"), 'restored-coin-failures runtime core does not filter single near/close failures');
-    assert(restoredCoinFailuresRuntimeModule.includes('coinFailureSevereIgnoreCount'), 'restored-coin-failures runtime core does not restore severe ignore windows');
-    assert(restoredCoinFailuresRuntimeModule.includes('coinFailureHardIgnoreCount'), 'restored-coin-failures runtime core does not restore hard ignore windows');
-    assert(restoredCoinFailuresRuntimeModule.includes('module.exports = { restoredCoinFailuresCore }'), 'restored-coin-failures runtime core export not found');
-    assert(restoredRuntimeStateRuntimeModule.includes('function restoreRuntimeStateCore(preserved, previousBot, helpers = {})'), 'restored runtime state runtime core not found');
-    assert(restoredRuntimeStateRuntimeModule.includes('const restoredFailures = helpers.restoredCoinFailures();'), 'restored runtime state runtime core does not restore coin failures first');
-    assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistentExitState(helpers.enemyLeaveStateKey)'), 'restored runtime state runtime core does not restore enemy leave state');
-    assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistentExitState(helpers.offlineLeaveStateKey)'), 'restored runtime state runtime core does not restore offline leave state');
-    assert(restoredRuntimeStateRuntimeModule.includes('const restoreOptions = { markReloaded: !previousBot };'), 'restored runtime state runtime core does not preserve first-load reload marker');
-    assert(restoredRuntimeStateRuntimeModule.includes('helpers.readPersistedPendingExitState(nowMs(), restoreOptions)'), 'restored runtime state runtime core does not restore persisted pending exit state');
-    assert(restoredRuntimeStateRuntimeModule.includes('helpers.chooseInitialPendingExitState('), 'restored runtime state runtime core does not choose initial pending exit state');
-    assert(!distSource.includes('function restoredCoinFailures('), 'dist remote bot still keeps restored coin failures wrapper');
-    assert(restoredRuntimeStateRuntimeModule.includes('module.exports = { restoreRuntimeStateCore }'), 'restored runtime state runtime core export not found');
-    assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateInlineSource() {'), 'login-snapshot-gate inline source factory not found');
-    assert(loginSnapshotGateSourceModule.includes('function bundledLoginSnapshotGateSource() {'), 'login-snapshot-gate bundled source factory not found');
-    assert(loginSnapshotGateSourceModule.includes('function loginSnapshotGateSource(options = {})'), 'login-snapshot-gate source selector not found');
-    assert(loginSnapshotGateSourceModule.includes('loginSnapshotGateInlineSource,\n  bundledLoginSnapshotGateSource,\n  loginSnapshotGateSource'), 'login-snapshot-gate source module exports not found');
-    const loginSnapshotGateInlineBody = functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateInlineSource');
-    assert(loginSnapshotGateInlineBody.includes('String.raw`'), 'login-snapshot-gate inline source factory does not return raw browser source');
-    assert(loginSnapshotGateInlineBody.includes('function loginSnapshotSuccessRequired'), 'login-snapshot-gate inline source factory does not include required-count helper');
-    assert(loginSnapshotGateInlineBody.includes('function normalizeLoginSnapshotGateState'), 'login-snapshot-gate inline source factory does not include state normalizer');
-    assert(loginSnapshotGateInlineBody.includes('lastSampleAt'), 'login-snapshot-gate inline source factory does not preserve last sample timestamp');
-    assert(loginSnapshotGateInlineBody.includes('resetReason'), 'login-snapshot-gate inline source factory does not preserve reset reason');
-    const loginSnapshotGateBundledBody = functionBody(loginSnapshotGateSourceModule, 'bundledLoginSnapshotGateSource');
-    assert(loginSnapshotGateBundledBody.includes("require('./src/browser/runtime/login-snapshot-gate')"), 'login-snapshot-gate bundled source does not hand gate helpers to the bundler');
-    assert(loginSnapshotGateBundledBody.includes('loginSnapshotSuccessRequiredCore'), 'login-snapshot-gate bundled source does not hand required-count core to the bundler');
-    assert(!loginSnapshotGateBundledBody.includes('function loginSnapshotSuccessRequired('), 'login-snapshot-gate bundled source still keeps required-count wrapper');
-    assert(!distSource.includes('function loginSnapshotSuccessRequired('), 'dist remote bot still keeps login snapshot required-count wrapper');
-    assert(!loginSnapshotGateBundledBody.includes('function normalizeLoginSnapshotGateState('), 'login-snapshot-gate bundled source still keeps state normalizer wrapper');
-    assert(!distSource.includes('function normalizeLoginSnapshotGateState('), 'dist remote bot still keeps login snapshot state normalizer wrapper');
-    assert(functionBody(loginSnapshotGateSourceModule, 'loginSnapshotGateSource').includes('options.bundledRuntime'), 'login-snapshot-gate source selector does not switch on bundled runtime mode');
-    assert(loginSnapshotGateRuntimeModule.includes('function loginSnapshotSuccessRequiredCore()'), 'login-snapshot-gate runtime required-count core not found');
-    assert(loginSnapshotGateRuntimeModule.includes('function normalizeLoginSnapshotGateStateCore(state = null'), 'login-snapshot-gate runtime state normalizer core not found');
-    assert(loginSnapshotGateRuntimeModule.includes('lastSampleAt: Number(state?.lastSampleAt || state?.lastOkAt || state?.lastErrorAt || 0) || 0'), 'login-snapshot-gate runtime core does not preserve last sample fallback');
-    assert(loginSnapshotGateRuntimeModule.includes("resetReason: String(state?.resetReason || '')"), 'login-snapshot-gate runtime core does not preserve reset reason');
-    assert(loginSnapshotGateRuntimeModule.includes('loginSnapshotSuccessRequiredCore,\n  normalizeLoginSnapshotGateStateCore'), 'login-snapshot-gate runtime core exports not found');
-    assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsInlineSource() {'), 'runtime-diagnostics inline source factory not found');
-    assert(runtimeDiagnosticsSourceModule.includes('function bundledRuntimeDiagnosticsSource() {'), 'runtime-diagnostics bundled source factory not found');
-    assert(runtimeDiagnosticsSourceModule.includes('function runtimeDiagnosticsSource(options = {})'), 'runtime-diagnostics source selector not found');
-    assert(runtimeDiagnosticsSourceModule.includes('runtimeDiagnosticsInlineSource,\n  bundledRuntimeDiagnosticsSource,\n  runtimeDiagnosticsSource'), 'runtime-diagnostics source module exports not found');
-    const runtimeDiagnosticsInlineBody = functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsInlineSource');
-    assert(runtimeDiagnosticsInlineBody.includes('String.raw`'), 'runtime-diagnostics inline source factory does not return raw browser source');
-    assert(runtimeDiagnosticsInlineBody.includes('function recordRuntimeDiagnostics'), 'runtime-diagnostics inline source factory does not include runtime diagnostics recorder');
-    assert(runtimeDiagnosticsInlineBody.includes('bot.runtimeDiagnostics'), 'runtime-diagnostics inline source factory does not update bot runtime diagnostics');
-    assert(runtimeDiagnosticsInlineBody.includes('Object.assign(bot.runtimeDiagnostics, values)'), 'runtime-diagnostics inline source factory does not merge diagnostic values');
-    assert(runtimeDiagnosticsInlineBody.includes('catch (_) {}'), 'runtime-diagnostics inline source factory does not preserve error swallowing');
-    const runtimeDiagnosticsBundledBody = functionBody(runtimeDiagnosticsSourceModule, 'bundledRuntimeDiagnosticsSource');
-    assert(runtimeDiagnosticsBundledBody.includes("require('./src/browser/runtime/runtime-diagnostics')"), 'runtime-diagnostics bundled source does not hand recorder to the bundler');
-    assert(!runtimeDiagnosticsBundledBody.includes('function recordRuntimeDiagnostics('), 'runtime-diagnostics bundled source still keeps recorder wrapper');
-    assert(!distSource.includes('function recordRuntimeDiagnostics('), 'dist remote bot still keeps runtime diagnostics recorder wrapper');
-    assert(functionBody(runtimeDiagnosticsSourceModule, 'runtimeDiagnosticsSource').includes('options.bundledRuntime'), 'runtime-diagnostics source selector does not switch on bundled runtime mode');
-    assert(runtimeDiagnosticsRuntimeModule.includes('function recordRuntimeDiagnosticsCore(bot, values = {})'), 'runtime-diagnostics runtime core not found');
-    assert(runtimeDiagnosticsRuntimeModule.includes("if (!bot.runtimeDiagnostics || typeof bot.runtimeDiagnostics !== 'object') bot.runtimeDiagnostics = {};"), 'runtime-diagnostics runtime core does not initialize diagnostics object');
-    assert(runtimeDiagnosticsRuntimeModule.includes('Object.assign(bot.runtimeDiagnostics, values);'), 'runtime-diagnostics runtime core does not merge diagnostic values');
-    assert(runtimeDiagnosticsRuntimeModule.includes('catch (_) {}'), 'runtime-diagnostics runtime core does not preserve error swallowing');
-    assert(runtimeDiagnosticsRuntimeModule.includes('module.exports = { recordRuntimeDiagnosticsCore }'), 'runtime-diagnostics runtime core export not found');
-    assert(exitReloginSourceModule.includes('function exitReloginDisplayInlineSource() {'), 'exit-relogin display inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginDisplaySource() {'), 'exit-relogin display bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginActorInlineSource() {'), 'exit-relogin actor inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginActorSource() {'), 'exit-relogin actor bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginStreakInlineSource() {'), 'exit-relogin streak inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginStreakSource() {'), 'exit-relogin streak bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginSummaryInlineSource() {'), 'exit-relogin summary inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginSummarySource() {'), 'exit-relogin summary bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginHoldInlineSource() {'), 'exit-relogin hold inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginHoldSource() {'), 'exit-relogin hold bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginHoldReadInlineSource() {'), 'exit-relogin hold-read inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginHoldReadSource() {'), 'exit-relogin hold-read bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginClearInlineSource() {'), 'exit-relogin clear inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginClearSource() {'), 'exit-relogin clear bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginRemainderPrefixInlineSource() {'), 'exit-relogin remainder prefix inline source factory not found');
-    assert(exitReloginSourceModule.includes('function bundledExitReloginRemainderPrefixSource() {'), 'exit-relogin remainder prefix bundled source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginRemainderSource() {'), 'exit-relogin remainder source factory not found');
-    assert(exitReloginSourceModule.includes('function exitReloginSource(options = {})'), 'exit-relogin source selector not found');
-    assert(exitReloginSourceModule.includes('module.exports = {'), 'exit-relogin source module exports not found');
-    for (const exportedName of [
-      'exitReloginDisplayInlineSource',
-      'bundledExitReloginDisplaySource',
-      'exitReloginActorInlineSource',
-      'bundledExitReloginActorSource',
-      'exitReloginStreakInlineSource',
-      'bundledExitReloginStreakSource',
-      'exitReloginSummaryInlineSource',
-      'bundledExitReloginSummarySource',
-      'exitReloginHoldInlineSource',
-      'bundledExitReloginHoldSource',
-      'exitReloginHoldReadInlineSource',
-      'bundledExitReloginHoldReadSource',
-      'exitReloginClearInlineSource',
-      'bundledExitReloginClearSource',
-      'exitReloginRemainderPrefixInlineSource',
-      'bundledExitReloginRemainderPrefixSource',
-      'exitReloginRemainderSource',
-      'exitReloginSource'
-    ]) {
-      assert(exitReloginSourceModule.includes(`  ${exportedName}`), `exit-relogin source module does not export ${exportedName}`);
-    }
-    const exitReloginDisplayInlineBody = functionBody(exitReloginSourceModule, 'exitReloginDisplayInlineSource');
-    assert(exitReloginDisplayInlineBody.includes('String.raw`'), 'exit-relogin display inline source factory does not return raw browser source');
-    assert(exitReloginDisplayInlineBody.includes('function leaveWaitDisplay'), 'exit-relogin display inline source does not include wait display helper');
-    assert(exitReloginDisplayInlineBody.includes('function finalizeLeaveDisplayReason'), 'exit-relogin display inline source does not include display finalizer');
-    assert(exitReloginDisplayInlineBody.includes('formatDurationMs(waitMs)'), 'exit-relogin display inline source does not preserve wait duration formatting');
-    const exitReloginDisplayBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginDisplaySource');
-    assert(exitReloginDisplayBundledBody.includes("return '';"), 'exit-relogin display bundled source should be empty after finalizer handoff');
-    assert(!exitReloginDisplayBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin display bundled source should not keep unused runtime import');
-    assert(!exitReloginDisplayBundledBody.includes('function leaveWaitDisplay'), 'exit-relogin display bundled source still keeps wait-display wrapper');
-    assert(!exitReloginDisplayBundledBody.includes('function finalizeLeaveDisplayReason'), 'exit-relogin display bundled source still keeps display finalizer wrapper');
-    assert(exitReloginDisplayCallSourceModule.includes('finalizeLeaveDisplayReasonCoreCall') && exitReloginDisplayCallSourceModule.includes('${waitName}(base, value, formatDurationMs)'), 'display call source does not bind formatDurationMs directly');
-    assert(refreshExitDetailSourceModule.includes('finalizeLeaveDisplayReasonForRefreshExitDetailCore'), 'refresh-exit-detail source does not bind display finalizer directly in bundled mode');
-    assert(pendingExitSourceModule.includes('finalizeLeaveDisplayReasonForPendingExitCore'), 'pending-exit source does not bind display finalizer directly in bundled mode');
-    assert(leaveFlowSourceModule.includes('finalizeLeaveDisplayReasonForLeaveFlowCore'), 'leave-flow source does not bind display finalizer directly in bundled mode');
-    assert(controlLoginSourceModule.includes('finalizeLeaveDisplayReasonForControlLoginCore'), 'control-login source does not bind display finalizer directly in bundled mode');
-    const exitReloginActorInlineBody = functionBody(exitReloginSourceModule, 'exitReloginActorInlineSource');
-    assert(exitReloginActorInlineBody.includes('function normalizeEnemyActor'), 'exit-relogin actor inline source does not include actor normalizer');
-    assert(exitReloginActorInlineBody.includes('function enemyActorFromLeaveDetail'), 'exit-relogin actor inline source does not include detail actor resolver');
-    assert(exitReloginActorInlineBody.includes('function enemyRepeatDelayMsForCount'), 'exit-relogin actor inline source does not include repeat delay helper');
-    assert(exitReloginActorInlineBody.includes('actor.user_id ?? actor.id ?? actor.targetId'), 'exit-relogin actor inline source does not preserve id fallback');
-    assert(exitReloginActorInlineBody.includes('enemyReloginRepeatThirdMaxMs'), 'exit-relogin actor inline source does not preserve third repeat delay');
-    const exitReloginActorBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginActorSource');
-    assert(exitReloginActorBundledBody.includes("return '';"), 'exit-relogin actor bundled source should be empty after bound-core handoff');
-    assert(!exitReloginActorBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin actor bundled source should not keep unused runtime import');
-    assert(!exitReloginActorBundledBody.includes('function normalizeEnemyActor'), 'exit-relogin actor bundled source should not keep normalizer wrapper');
-    assert(!exitReloginActorBundledBody.includes('function enemyActorFromLeaveDetail'), 'exit-relogin actor bundled source should not keep actor resolver wrapper');
-    assert(!exitReloginActorBundledBody.includes('function enemyRepeatDelayMsForCount'), 'exit-relogin actor bundled source should not keep repeat-delay wrapper');
-    const exitReloginStreakInlineBody = functionBody(exitReloginSourceModule, 'exitReloginStreakInlineSource');
-    assert(exitReloginStreakInlineBody.includes('function readEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak reader');
-    assert(exitReloginStreakInlineBody.includes('function writeEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak writer');
-    assert(exitReloginStreakInlineBody.includes('function updateEnemyLeaveStreak'), 'exit-relogin streak inline source does not include enemy streak updater');
-    assert(exitReloginStreakInlineBody.includes('localStorage.getItem(ENEMY_LEAVE_STREAK_KEY)'), 'exit-relogin streak inline source does not read streak storage');
-    assert(exitReloginStreakInlineBody.includes('localStorage.removeItem(ENEMY_LEAVE_STREAK_KEY)'), 'exit-relogin streak inline source does not remove expired streak storage');
-    assert(exitReloginStreakInlineBody.includes('localStorage.setItem(ENEMY_LEAVE_STREAK_KEY'), 'exit-relogin streak inline source does not write streak storage');
-    assert(exitReloginStreakInlineBody.includes('bot.enemyLeaveStreak = normalized'), 'exit-relogin streak inline source does not preserve normalized bot state');
-    assert(exitReloginStreakInlineBody.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak inline source does not preserve repeat delay metadata');
-    const exitReloginStreakBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginStreakSource');
-    assert(exitReloginStreakBundledBody.includes("return '';"), 'exit-relogin streak bundled source should be empty after bound-core handoff');
-    assert(!exitReloginStreakBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin streak bundled source should not keep unused runtime import');
-    assert(!exitReloginStreakBundledBody.includes('function readEnemyLeaveStreak'), 'exit-relogin streak bundled source should not keep reader wrapper');
-    assert(!exitReloginStreakBundledBody.includes('function writeEnemyLeaveStreak'), 'exit-relogin streak bundled source should not keep writer wrapper');
-    assert(!exitReloginStreakBundledBody.includes('function updateEnemyLeaveStreak'), 'exit-relogin streak bundled source should not keep updater wrapper');
-    const exitReloginSummaryInlineBody = functionBody(exitReloginSourceModule, 'exitReloginSummaryInlineSource');
-    assert(exitReloginSummaryInlineBody.includes('function combatExitSummary'), 'exit-relogin summary inline source does not include combat summary helper');
-    assert(exitReloginSummaryInlineBody.includes('function combatLeaveAction'), 'exit-relogin summary inline source does not include combat leave action helper');
-    assert(exitReloginSummaryInlineBody.includes('function pursuitLeaveSummary'), 'exit-relogin summary inline source does not include pursuit summary helper');
-    assert(exitReloginSummaryInlineBody.includes('function injuryLeaveSummary'), 'exit-relogin summary inline source does not include injury summary helper');
-    assert(exitReloginSummaryInlineBody.includes('function offlineLeaveSummary'), 'exit-relogin summary inline source does not include offline summary helper');
-    assert(exitReloginSummaryInlineBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary inline source does not include offline display helper');
-    assert(exitReloginSummaryInlineBody.includes('function reloginDelayForHp'), 'exit-relogin summary inline source does not include relogin HP delay helper');
-    assert(exitReloginSummaryInlineBody.includes('combatState?.pressureDisadvantage'), 'exit-relogin summary inline source does not preserve pressure disadvantage branch');
-    assert(exitReloginSummaryInlineBody.includes('staminaExhaustedWindowLabel'), 'exit-relogin summary inline source does not preserve stamina label helper');
-    assert(exitReloginSummaryInlineBody.includes('repeatMinMs'), 'exit-relogin summary inline source does not preserve repeat relogin delay minimum');
-    const exitReloginSummaryBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginSummarySource');
-    assert(exitReloginSummaryBundledBody.includes("return '';"), 'exit-relogin summary bundled source should be empty after summary/action wrapper handoff');
-    assert(!exitReloginSummaryBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin summary bundled source should not keep unused runtime import');
-    assert(!exitReloginSummaryBundledBody.includes('function combatExitSummary'), 'exit-relogin summary bundled source still keeps combat summary wrapper');
-    assert(!exitReloginSummaryBundledBody.includes('function combatLeaveAction'), 'exit-relogin summary bundled source still keeps combat leave action wrapper');
-    assert(!exitReloginSummaryBundledBody.includes('function pursuitLeaveSummary'), 'exit-relogin summary bundled source still keeps pursuit summary wrapper');
-    assert(!exitReloginSummaryBundledBody.includes('function injuryLeaveSummary'), 'exit-relogin summary bundled source still keeps injury summary wrapper');
-    assert(!exitReloginSummaryBundledBody.includes('function offlineLeaveSummary'), 'exit-relogin summary bundled source still keeps offline summary wrapper');
-    assert(!exitReloginSummaryBundledBody.includes('function currentOfflineDisplayReason'), 'exit-relogin summary bundled source still keeps offline display wrapper');
-    assert(!exitReloginSummaryBundledBody.includes('function reloginDelayForHp'), 'exit-relogin summary bundled source still keeps HP relogin delay wrapper');
-    const exitReloginHoldInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldInlineSource');
-    assert(exitReloginHoldInlineBody.includes('function isExitLoginSuppressReason'), 'exit-relogin hold inline source does not include suppress reason matcher');
-    assert(exitReloginHoldInlineBody.includes('function setExitReloginSuppress'), 'exit-relogin hold inline source does not include suppress writer');
-    assert(exitReloginHoldInlineBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold inline source does not include unsafe minimum helper');
-    assert(exitReloginHoldInlineBody.includes('function pendingExitSuppressReason'), 'exit-relogin hold inline source does not include pending suppress helper');
-    assert(exitReloginHoldInlineBody.includes('function startExitAudit'), 'exit-relogin hold inline source does not include start exit audit helper');
-    assert(exitReloginHoldInlineBody.includes('function primePendingUnsafeExitLoginSuppress'), 'exit-relogin hold inline source does not include pending unsafe suppress helper');
-    assert(exitReloginHoldInlineBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold inline source does not include stamina budget hold helper');
-    assert(exitReloginHoldInlineBody.includes('function staminaExitHoldUntilForDetail'), 'exit-relogin hold inline source does not include stamina hold selector');
-    assert(exitReloginHoldInlineBody.includes('function offlineExitRequiresUnsafeReloginDelay'), 'exit-relogin hold inline source does not include offline unsafe predicate');
-    assert(exitReloginHoldInlineBody.includes('offlineSafety.samplingOutage || offlineSafety.combatTickGap'), 'exit-relogin hold inline source does not preserve sampling/tick unsafe branches');
-    assert(exitReloginHoldInlineBody.includes('pending unsafe hostile exit'), 'exit-relogin hold inline source does not preserve pending hostile suppress reason');
-    const exitReloginHoldBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldSource');
-    assert(exitReloginHoldBundledBody.includes("return '';"), 'exit-relogin hold bundled source should be empty after suppress writer handoff');
-    assert(!exitReloginHoldBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold bundled source should not keep unused runtime import');
-    assert(!exitReloginHoldBundledBody.includes('isExitLoginSuppressReason: isExitLoginSuppressReasonCore'), 'exit-relogin hold bundled source should not bind suppress reason matcher after suppress writer handoff');
-    assert(!exitReloginHoldBundledBody.includes('function isExitLoginSuppressReason'), 'exit-relogin hold bundled source should not keep unused suppress reason wrapper');
-    assert(!exitReloginHoldBundledBody.includes('unsafeExitReloginMinDelayMsCore,'), 'exit-relogin hold bundled source should not import unused unsafe minimum helper');
-    assert(!exitReloginHoldBundledBody.includes('pendingExitSuppressReasonCore,'), 'exit-relogin hold bundled source should not import unused pending suppress helper');
-    assert(!exitReloginHoldBundledBody.includes('function unsafeExitReloginMinDelayMs'), 'exit-relogin hold bundled source should not keep unused unsafe minimum wrapper');
-    assert(!exitReloginHoldBundledBody.includes('function pendingExitSuppressReason'), 'exit-relogin hold bundled source should not keep unused pending suppress wrapper');
-    assert(!exitReloginHoldBundledBody.includes('startExitAuditBoundCore'), 'exit-relogin hold bundled source should not keep unused start exit audit bound core import');
-    assert(!exitReloginHoldBundledBody.includes('function startExitAudit'), 'exit-relogin hold bundled source should not keep unused start exit audit wrapper');
-    assert(!exitReloginHoldBundledBody.includes('lastSelf: bot.lastSelf'), 'exit-relogin hold bundled source should not bind lastSelf outside the runtime bound core');
-    assert(!exitReloginHoldBundledBody.includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'exit-relogin hold bundled source should not keep unused pending unsafe suppress bound core import');
-    assert(!exitReloginHoldBundledBody.includes('function primePendingUnsafeExitLoginSuppress'), 'exit-relogin hold bundled source should not keep unused pending unsafe suppress wrapper');
-    assert(!exitReloginHoldBundledBody.includes('setEnemyLeaveSuppressCore'), 'exit-relogin hold bundled source should not keep unused enemy suppress wrapper core');
-    assert(!exitReloginHoldBundledBody.includes('staminaBudgetExitHoldUntilCore,'), 'exit-relogin hold bundled source should not import unused stamina budget wrapper helper');
-    assert(!exitReloginHoldBundledBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold bundled source should not keep unused stamina budget wrapper');
-    assert(!exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailBoundCore'), 'exit-relogin hold bundled source should not keep unused stamina hold selector bound core import');
-    assert(!exitReloginHoldBundledBody.includes('function staminaExitHoldUntilForDetail'), 'exit-relogin hold bundled source should not keep unused stamina hold selector wrapper');
-    assert(!exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore'), 'exit-relogin hold bundled source should not keep unused offline unsafe predicate core');
-    assert(!exitReloginHoldBundledBody.includes('function offlineExitRequiresUnsafeReloginDelay'), 'exit-relogin hold bundled source should not keep unused offline unsafe predicate wrapper');
-    assert(!exitReloginHoldBundledBody.includes('function setExitReloginSuppress'), 'exit-relogin hold bundled source should not keep suppress writer wrapper');
-    assert(!exitReloginHoldBundledBody.includes('setExitReloginSuppressCore'), 'exit-relogin hold bundled source should not bind suppress writer core directly');
-    const exitReloginRemainderPrefixInlineBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderPrefixInlineSource');
-    assert(exitReloginRemainderPrefixInlineBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix inline source does not include offline suppress helper');
-    assert(exitReloginRemainderPrefixInlineBody.includes('function primePendingStaminaExitLoginSuppress'), 'exit-relogin remainder prefix inline source does not include pending stamina suppress helper');
-    assert(exitReloginRemainderPrefixInlineBody.includes('staminaExitHoldUntilForDetail(detail)'), 'exit-relogin remainder prefix inline source does not preserve stamina hold lookup');
-    assert(exitReloginRemainderPrefixInlineBody.includes('offlineExitRequiresUnsafeReloginDelay(reason, detail?.offlineSafety || null)'), 'exit-relogin remainder prefix inline source does not preserve unsafe offline predicate call');
-    const exitReloginRemainderPrefixBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginRemainderPrefixSource');
-    assert(exitReloginRemainderPrefixBundledBody.includes("return '';"), 'exit-relogin remainder prefix bundled source should be empty after wrapper handoff');
-    assert(!exitReloginRemainderPrefixBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin remainder prefix bundled source should not keep unused runtime import');
-    assert(!exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressCore'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress core import');
-    assert(!exitReloginRemainderPrefixBundledBody.includes('setOfflineLeaveSuppressBoundCore'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress bound core import');
-    assert(!exitReloginRemainderPrefixBundledBody.includes('function setOfflineLeaveSuppress'), 'exit-relogin remainder prefix bundled source should not keep unused offline suppress wrapper');
-    assert(!exitReloginRemainderPrefixBundledBody.includes('primePendingStaminaExitLoginSuppressBoundCore'), 'exit-relogin remainder prefix bundled source should not keep unused pending stamina suppress bound core import');
-    assert(!exitReloginRemainderPrefixBundledBody.includes('function primePendingStaminaExitLoginSuppress'), 'exit-relogin remainder prefix bundled source should not keep unused pending stamina suppress wrapper');
-    const exitReloginHoldReadInlineBody = functionBody(exitReloginSourceModule, 'exitReloginHoldReadInlineSource');
-    assert(exitReloginHoldReadInlineBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include enemy hold reader');
-    assert(exitReloginHoldReadInlineBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read inline source does not include offline hold reader');
-    assert(exitReloginHoldReadInlineBody.includes('function clearLoginSuppressMatching'), 'exit-relogin hold-read inline source does not include login suppress clear helper');
-    assert(exitReloginHoldReadInlineBody.includes('readPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'exit-relogin hold-read inline source does not read persistent enemy leave state');
-    assert(exitReloginHoldReadInlineBody.includes('readPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'exit-relogin hold-read inline source does not read persistent offline leave state');
-    assert(exitReloginHoldReadInlineBody.includes('staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)'), 'exit-relogin hold-read inline source does not preserve stale offline contradiction check');
-    assert(exitReloginHoldReadInlineBody.includes('localStorage.removeItem(LOGIN_SUPPRESS_KEY)'), 'exit-relogin hold-read inline source does not clear login suppress key');
-    const exitReloginHoldReadBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginHoldReadSource');
-    assert(exitReloginHoldReadBundledBody.includes("return '';"), 'exit-relogin hold-read bundled source should be empty after wrapper handoff');
-    assert(!exitReloginHoldReadBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin hold-read bundled source should not keep unused runtime import');
-    assert(!exitReloginHoldReadBundledBody.includes('enemyReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source should not keep enemy hold reader wrapper binding');
-    assert(!exitReloginHoldReadBundledBody.includes('offlineReloginHoldRemainingMsBoundCore(bot, localStorage'), 'exit-relogin hold-read bundled source should not keep offline hold reader wrapper binding');
-    assert(!exitReloginHoldReadBundledBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin hold-read bundled source still keeps enemy hold reader wrapper');
-    assert(!exitReloginHoldReadBundledBody.includes('function offlineReloginHoldRemainingMs'), 'exit-relogin hold-read bundled source still keeps offline hold reader wrapper');
-    assert(!exitReloginHoldReadBundledBody.includes('function clearLoginSuppressMatching'), 'exit-relogin hold-read bundled source should not keep suppress clear wrapper');
-    assert(!exitReloginHoldReadBundledBody.includes('clearLoginSuppressMatchingBoundCore'), 'exit-relogin hold-read bundled source should not keep unused suppress clear import');
-    assert(tickSourceModule.includes('enemyReloginHoldRemainingMsForTickBoundCore') && tickSourceModule.includes('offlineReloginHoldRemainingMsForTickBoundCore'), 'tick source does not bind hold readers directly in bundled mode');
-    assert(pendingExitSourceModule.includes('enemyReloginHoldRemainingMsForPendingExitBoundCore') && pendingExitSourceModule.includes('offlineReloginHoldRemainingMsForPendingExitBoundCore'), 'pending-exit source does not bind hold readers directly in bundled mode');
-    assert(leaveFlowSourceModule.includes('enemyReloginHoldRemainingMsForLeaveFlowBoundCore'), 'leave-flow source does not bind enemy hold reader directly in bundled mode');
-    assert(combatLogSourceModule.includes('enemyReloginHoldRemainingMsForCombatLogBoundCore') && combatLogSourceModule.includes('offlineReloginHoldRemainingMsForCombatLogBoundCore'), 'combat-log source does not bind hold readers directly in bundled mode');
-    assert(controlLoginSourceModule.includes('enemyReloginHoldRemainingMsForControlLoginBoundCore') && controlLoginSourceModule.includes('offlineReloginHoldRemainingMsForControlLoginBoundCore'), 'control-login source does not bind hold readers directly in bundled mode');
-    assert(exitReloginHoldReadCallSourceModule.includes('readPersistentExitState') && exitReloginHoldReadCallSourceModule.includes('staleOfflineStaminaHoldContradicted') && exitReloginHoldReadCallSourceModule.includes('clearOfflineReloginHold'), 'direct bundled hold reader calls do not pass required runtime helper bindings');
-    const exitReloginClearInlineBody = functionBody(exitReloginSourceModule, 'exitReloginClearInlineSource');
-    assert(exitReloginClearInlineBody.includes('function clearEnemyReloginHold'), 'exit-relogin clear inline source does not include enemy hold cleanup helper');
-    assert(exitReloginClearInlineBody.includes('function clearOfflineReloginHold'), 'exit-relogin clear inline source does not include offline hold cleanup helper');
-    assert(exitReloginClearInlineBody.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;"), 'exit-relogin clear inline source does not preserve enemy pending-exit scope rule');
-    assert(exitReloginClearInlineBody.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;"), 'exit-relogin clear inline source does not preserve offline pending-exit scope rule');
-    assert(exitReloginClearInlineBody.includes('clearExitHoldDetail(detail, reason, t);'), 'exit-relogin clear inline source does not clear enemy detail hold fields');
-    assert(exitReloginClearInlineBody.includes('clearPersistentExitState(ENEMY_LEAVE_STATE_KEY)'), 'exit-relogin clear inline source does not clear persistent enemy leave state');
-    assert(exitReloginClearInlineBody.includes('clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY)'), 'exit-relogin clear inline source does not clear persistent offline leave state');
-    assert(exitReloginClearInlineBody.includes('clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'exit-relogin clear inline source does not clear enemy login suppress');
-    assert(exitReloginClearInlineBody.includes('clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear inline source does not clear offline login suppress');
-    const exitReloginClearBundledBody = functionBody(exitReloginSourceModule, 'bundledExitReloginClearSource');
-    assert(exitReloginClearBundledBody.includes("return '';"), 'exit-relogin clear bundled source should be empty after bound-core handoff');
-    assert(!exitReloginClearBundledBody.includes("require('./src/browser/runtime/exit-relogin')"), 'exit-relogin clear bundled source should not keep unused runtime import');
-    assert(!exitReloginClearBundledBody.includes('function clearEnemyReloginHold'), 'exit-relogin clear bundled source should not keep enemy hold cleanup wrapper');
-    assert(!exitReloginClearBundledBody.includes('function clearOfflineReloginHold'), 'exit-relogin clear bundled source should not keep offline hold cleanup wrapper');
-    const exitReloginRemainderBody = functionBody(exitReloginSourceModule, 'exitReloginRemainderSource');
-    assert(!exitReloginRemainderBody.includes('function combatExitSummary'), 'exit-relogin remainder source still owns combat summary helper');
-    assert(!exitReloginRemainderBody.includes('function setExitReloginSuppress'), 'exit-relogin remainder source still owns suppress helper');
-    assert(!exitReloginRemainderBody.includes('function enemyReloginHoldRemainingMs'), 'exit-relogin remainder source still owns enemy hold reader');
-    assert(!exitReloginRemainderBody.includes('function clearEnemyReloginHold'), 'exit-relogin remainder source still owns enemy hold cleanup helper');
-    assert(!exitReloginRemainderBody.includes('function clearOfflineReloginHold'), 'exit-relogin remainder source still owns offline hold cleanup helper');
-    assert(functionBody(exitReloginSourceModule, 'exitReloginSource').includes('options.bundledRuntime'), 'exit-relogin source selector does not switch on bundled runtime mode');
-    assert(exitReloginRuntimeModule.includes('function leaveWaitDisplayCore(base, detail, formatDurationMs)'), 'exit-relogin display runtime core not found');
-    assert(exitReloginRuntimeModule.includes('return summary + \'，等待\' + formatDurationMs(waitMs);'), 'exit-relogin display runtime core does not append wait duration');
-    assert(exitReloginRuntimeModule.includes('function finalizeLeaveDisplayReasonCore(detail, leaveWaitDisplay)'), 'exit-relogin display finalizer runtime core not found');
-    assert(exitReloginRuntimeModule.includes('detail.summary = base;'), 'exit-relogin display finalizer runtime core does not write summary');
-    assert(exitReloginRuntimeModule.includes('detail.displayReason = leaveWaitDisplay(base, detail);'), 'exit-relogin display finalizer runtime core does not write display reason');
-    assert(exitReloginRuntimeModule.includes('function normalizeEnemyActorCore(actor)'), 'exit-relogin actor runtime normalizer core not found');
-    assert(exitReloginRuntimeModule.includes('actor.user_id ?? actor.id ?? actor.targetId'), 'exit-relogin actor runtime core does not preserve id fallback');
-    assert(exitReloginRuntimeModule.includes("const key = id ? 'id:' + id : (name ? 'name:' + name : '');"), 'exit-relogin actor runtime core does not preserve key construction');
-    assert(exitReloginRuntimeModule.includes('function enemyActorFromLeaveDetailCore(detail, normalizeEnemyActor)'), 'exit-relogin actor runtime resolver core not found');
-    assert(exitReloginRuntimeModule.includes('detail?.injury?.nearestHuman'), 'exit-relogin actor runtime resolver does not preserve injury fallback');
-    assert(exitReloginRuntimeModule.includes('function enemyRepeatDelayMsForCountCore(count, cfg)'), 'exit-relogin repeat delay runtime core not found');
-    assert(exitReloginRuntimeModule.includes('enemyReloginRepeatSecondMaxMs') && exitReloginRuntimeModule.includes('enemyReloginRepeatThirdMaxMs'), 'exit-relogin repeat delay runtime core does not preserve config delays');
-    assert(exitReloginRuntimeModule.includes('function readEnemyLeaveStreakCore(storage, key, bot, cfg, t, enemyRepeatDelayMsForCount)'), 'exit-relogin streak reader runtime core not found');
-    assert(exitReloginRuntimeModule.includes('storage.getItem(key)'), 'exit-relogin streak reader runtime core does not read storage key');
-    assert(exitReloginRuntimeModule.includes('storage.removeItem(key)'), 'exit-relogin streak reader runtime core does not remove expired storage key');
-    assert(exitReloginRuntimeModule.includes('bot.enemyLeaveStreak = normalized;'), 'exit-relogin streak reader runtime core does not write normalized bot state');
-    assert(exitReloginRuntimeModule.includes('function writeEnemyLeaveStreakCore(storage, key, bot, streak)'), 'exit-relogin streak writer runtime core not found');
-    assert(exitReloginRuntimeModule.includes('storage.setItem(key, JSON.stringify(streak))'), 'exit-relogin streak writer runtime core does not persist streak JSON');
-    assert(exitReloginRuntimeModule.includes('function updateEnemyLeaveStreakCore(detail, t, helpers)'), 'exit-relogin streak updater runtime core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.readEnemyLeaveStreak(t)'), 'exit-relogin streak updater runtime core does not read previous streak through helper');
-    assert(exitReloginRuntimeModule.includes('helpers.writeEnemyLeaveStreak(streak)'), 'exit-relogin streak updater runtime core does not write streak through helper');
-    assert(exitReloginRuntimeModule.includes('detail.reloginRepeatDelayMs = streak.reloginMinMs'), 'exit-relogin streak updater runtime core does not preserve repeat delay metadata');
-    assert(exitReloginRuntimeModule.includes('function readEnemyLeaveStreakBoundCore(storage, bot, cfg, t, helpers)'), 'exit-relogin streak reader bound core not found');
-    assert(exitReloginRuntimeModule.includes('function writeEnemyLeaveStreakBoundCore(storage, bot, streak, helpers)'), 'exit-relogin streak writer bound core not found');
-    assert(exitReloginRuntimeModule.includes('function updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, cfg, helpers)'), 'exit-relogin streak updater bound core not found');
-    assert(exitReloginRuntimeModule.includes('enemyActorFromLeaveDetail: value => enemyActorFromLeaveDetailCore(value, normalizeEnemyActorCore)') && exitReloginRuntimeModule.includes('readEnemyLeaveStreak: readAt => readEnemyLeaveStreakBoundCore(storage, bot, cfg, readAt, helpers)'), 'exit-relogin streak updater bound core does not bind actor/read helpers');
-    assert(exitReloginRuntimeModule.includes('function combatExitSummaryCore(reason, target, combatState = {}, helpers)'), 'exit-relogin summary runtime combat summary core not found');
-    assert(exitReloginRuntimeModule.includes('combatState?.pressureDisadvantage'), 'exit-relogin summary runtime core does not preserve pressure disadvantage branch');
-    assert(exitReloginRuntimeModule.includes('helpers.formatDurationMs(estimate.tDeathMs)'), 'exit-relogin summary runtime core does not bind duration formatting');
-    assert(exitReloginRuntimeModule.includes('function combatLeaveActionCore(reason, baseTarget, combatState = {}, cover = null, helpers)'), 'exit-relogin summary runtime combat action core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.clamp(Math.round(Number(normalizedCover.dx) || 0), -1, 1)'), 'exit-relogin summary runtime core does not clamp cover dx');
-    assert(exitReloginRuntimeModule.includes('combatCover: normalizedCover'), 'exit-relogin summary runtime core does not preserve combat cover metadata');
-    assert(exitReloginRuntimeModule.includes('function pursuitLeaveSummaryCore(pursuit, helpers)'), 'exit-relogin summary runtime pursuit core not found');
-    assert(exitReloginRuntimeModule.includes('function injuryLeaveSummaryCore(injury, helpers)'), 'exit-relogin summary runtime injury core not found');
-    assert(exitReloginRuntimeModule.includes('function offlineLeaveSummaryCore(reason, offlineSafety, helpers)'), 'exit-relogin summary runtime offline core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.staminaBudgetCoinLeaveSummary(offlineSafety.staminaBudgetExit)'), 'exit-relogin summary runtime offline core does not preserve stamina budget branch');
-    assert(exitReloginRuntimeModule.includes('function currentOfflineDisplayReasonCore(reason, offlineSafety, leaveResult = null, offlineDetail = null, fallback = \'\', helpers)'), 'exit-relogin summary runtime offline display core not found');
-    assert(exitReloginRuntimeModule.includes('leaveDisplay.includes(currentSummary)'), 'exit-relogin summary runtime offline display core does not preserve display reuse rule');
-    assert(exitReloginRuntimeModule.includes('function reloginDelayForHpCore(selfLike, detail, helpers)'), 'exit-relogin summary runtime HP delay core not found');
-    assert(exitReloginRuntimeModule.includes('const repeatMinMs = Math.max(0, Number(detail?.enemyLeaveStreak?.reloginMinMs ?? detail?.reloginRepeatDelayMs ?? 0) || 0);'), 'exit-relogin summary runtime HP delay core does not preserve repeat minimum');
-    assert(exitReloginRuntimeModule.includes('function isExitLoginSuppressReasonCore(reason)'), 'exit-relogin hold runtime suppress reason core not found');
-    assert(exitReloginRuntimeModule.includes('/enemy leave|offline.*leave|combat leave|pursuit leave/i.test'), 'exit-relogin hold runtime suppress matcher does not preserve reason pattern');
-    assert(exitReloginRuntimeModule.includes('function unsafeExitReloginMinDelayMsCore(cfg)'), 'exit-relogin hold runtime unsafe minimum core not found');
-    assert(exitReloginRuntimeModule.includes('function pendingExitSuppressReasonCore(storageReason)'), 'exit-relogin hold runtime pending suppress core not found');
-    assert(exitReloginRuntimeModule.includes('pending unsafe hostile exit'), 'exit-relogin hold runtime pending suppress core does not preserve hostile reason');
-    assert(exitReloginRuntimeModule.includes('function startExitAuditCore(detail, meta = {}, helpers)'), 'exit-relogin hold runtime start exit audit core not found');
-    assert(exitReloginRuntimeModule.includes("'exit-trigger:' + (meta.reason || detail.reason || '')"), 'exit-relogin hold runtime start exit audit core does not preserve reset reason');
-    assert(exitReloginRuntimeModule.includes('helpers.loginPointSafetyExitSelfForDetail(detail, meta, helpers.lastSelf)'), 'exit-relogin hold runtime start exit audit core does not pass self HP into login-point safety reset');
-    assert(exitReloginRuntimeModule.includes("helpers.recordExitAuditEvent('exit-trigger', detail"), 'exit-relogin hold runtime start exit audit core does not record trigger event');
-    assert(exitReloginRuntimeModule.includes('function startExitAuditBoundCore(detail, meta = {}, bot, helpers)'), 'exit-relogin hold runtime start exit audit bound core not found');
-    assert(exitReloginRuntimeModule.includes('return startExitAuditCore(detail, meta, {') && exitReloginRuntimeModule.includes('lastSelf: bot?.lastSelf'), 'exit-relogin hold runtime start exit audit bound core does not preserve bot lastSelf binding');
-    assert(exitReloginRuntimeModule.includes('function setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers)'), 'exit-relogin hold runtime suppress writer core not found');
-    assert(exitReloginRuntimeModule.includes('storage.getItem(helpers.loginSuppressReasonKey)'), 'exit-relogin hold runtime suppress writer does not read suppress reason storage');
-    assert(exitReloginRuntimeModule.includes('storage.getItem(helpers.loginSuppressKey)'), 'exit-relogin hold runtime suppress writer does not read suppress until storage');
-    assert(exitReloginRuntimeModule.includes('const reloginDelayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'), 'exit-relogin hold runtime suppress writer does not preserve longest-delay rule');
-    assert(exitReloginRuntimeModule.includes('detail.reusedExitSuppress = true;'), 'exit-relogin hold runtime suppress writer does not mark reused suppress details');
-    assert(exitReloginRuntimeModule.includes('helpers.updateEnemyLeaveStreak(detail, t);'), 'exit-relogin hold runtime suppress writer does not update enemy streak before new holds');
-    assert(exitReloginRuntimeModule.includes('detail.defensiveReloginDelaySkipped = true;'), 'exit-relogin hold runtime suppress writer does not record zero-delay defensive skip');
-    assert(exitReloginRuntimeModule.includes('helpers.setLoginSuppress(storageReason, reloginDelayMs);'), 'exit-relogin hold runtime suppress writer does not set login suppress');
-    assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.enemyLeaveStateKey, detail);'), 'exit-relogin hold runtime suppress writer does not persist enemy leave detail');
-    assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);'), 'exit-relogin hold runtime suppress writer does not persist offline leave detail');
-    assert(exitReloginRuntimeModule.includes('function setExitReloginSuppressBoundCore(bot, storage, storageReason, reason, detail, selfLike, options = {}, helpers)'), 'exit-relogin hold runtime suppress writer bound core not found');
-    assert(exitReloginRuntimeModule.includes('return setExitReloginSuppressCore(bot, storage, storageReason, reason, detail, selfLike, options, {') && exitReloginRuntimeModule.includes('isExitLoginSuppressReason: isExitLoginSuppressReasonCore'), 'exit-relogin hold runtime suppress writer bound core does not preserve helper binding');
-    assert(exitReloginRuntimeModule.includes('updateEnemyLeaveStreak: (detail, t) => updateEnemyLeaveStreakBoundCore(detail, t, storage, bot, helpers.cfg') && exitReloginRuntimeModule.includes('enemyLeaveStreakKey: helpers.enemyLeaveStreakKey'), 'exit-relogin hold runtime suppress writer bound core does not bind streak updater internally');
-    assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress core not found');
-    assert(exitReloginRuntimeModule.includes('const delayMs = Math.max(Number(delay.delayMs || 0), minimumDelayMs);'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve longest-delay rule');
-    assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressReason = suppressReason;'), 'exit-relogin hold runtime pending unsafe suppress core does not write suppress reason');
-    assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressHpDelayMs = delay.hpDelayMs || 0;'), 'exit-relogin hold runtime pending unsafe suppress core does not preserve HP delay metadata');
-    assert(exitReloginRuntimeModule.includes('function primePendingUnsafeExitLoginSuppressBoundCore(storageReason, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin hold runtime pending unsafe suppress bound core not found');
-    assert(exitReloginRuntimeModule.includes('return primePendingUnsafeExitLoginSuppressCore(storageReason, reason, detail, selfLike, options, {') && exitReloginRuntimeModule.includes('unsafeExitReloginMinDelayMs: () => unsafeExitReloginMinDelayMsCore(helpers.cfg)') && exitReloginRuntimeModule.includes('pendingExitSuppressReason: pendingExitSuppressReasonCore'), 'exit-relogin hold runtime pending unsafe suppress bound core does not preserve helper binding');
-    assert(!exitReloginRuntimeModule.includes('function setEnemyLeaveSuppressCore'), 'exit-relogin hold runtime should not keep unused enemy suppress core');
-    assert(exitReloginRuntimeModule.includes('function staminaBudgetExitHoldUntilCore(staminaBudgetExit, t, staminaBudgetReloginDelayMs)'), 'exit-relogin hold runtime stamina budget core not found');
-    assert(exitReloginRuntimeModule.includes("reason: 'stamina budget'"), 'exit-relogin hold runtime stamina budget core does not preserve reason');
-    assert(exitReloginRuntimeModule.includes('function staminaExitHoldUntilForDetailCore(detail, t, helpers)'), 'exit-relogin hold runtime stamina selector core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.staminaResetHoldUntil(detail?.offlineSafety?.staminaExhausted, t)'), 'exit-relogin hold runtime stamina selector does not preserve reset hold branch');
-    assert(exitReloginRuntimeModule.includes('function staminaExitHoldUntilForDetailBoundCore(detail, t, helpers)'), 'exit-relogin hold runtime bound stamina selector core not found');
-    assert(exitReloginRuntimeModule.includes('staminaBudgetExitHoldUntilCore(') && exitReloginRuntimeModule.includes('helpers.staminaBudgetReloginDelayMs'), 'exit-relogin hold runtime bound stamina selector does not preserve budget delay binding');
-    assert(exitReloginRuntimeModule.includes('function offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold runtime offline unsafe core not found');
-    assert(exitReloginRuntimeModule.includes('offlineSafety.samplingOutage || offlineSafety.combatTickGap'), 'exit-relogin hold runtime offline unsafe core does not preserve sampling/tick branches');
-    assert(exitReloginRuntimeModule.includes('function enemyReloginHoldRemainingMsCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime enemy reader core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.readPersistentExitState(helpers.enemyLeaveStateKey)'), 'exit-relogin hold-read runtime enemy reader does not read persistent state');
-    assert(exitReloginRuntimeModule.includes("suppressReason === 'enemy leave' || suppressReason === 'pursuit leave' || suppressReason === 'combat leave'"), 'exit-relogin hold-read runtime enemy reader does not preserve suppress reasons');
-    assert(exitReloginRuntimeModule.includes('function offlineReloginHoldRemainingMsCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime offline reader core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.staleOfflineStaminaHoldContradicted(bot.lastOfflineLeaveResult || persistent)'), 'exit-relogin hold-read runtime offline reader does not preserve stale hold check');
-    assert(exitReloginRuntimeModule.includes("helpers.clearOfflineReloginHold('stale offline suppress contradicted by known stamina')"), 'exit-relogin hold-read runtime offline reader does not preserve stale suppress cleanup');
-    assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingCore(storage, suppressKey, suppressReasonKey, pattern)'), 'exit-relogin hold-read runtime suppress clear core not found');
-    assert(exitReloginRuntimeModule.includes('storage.removeItem(suppressKey)') && exitReloginRuntimeModule.includes('storage.removeItem(suppressReasonKey)'), 'exit-relogin hold-read runtime suppress clear core does not remove both keys');
-    assert(exitReloginRuntimeModule.includes('function enemyReloginHoldRemainingMsBoundCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime enemy bound reader core not found');
-    assert(exitReloginRuntimeModule.includes('return enemyReloginHoldRemainingMsCore(bot, storage, {') && exitReloginRuntimeModule.includes('enemyLeaveStateKey: helpers.enemyLeaveStateKey'), 'exit-relogin hold-read runtime enemy bound reader does not preserve helper binding');
-    assert(exitReloginRuntimeModule.includes('function offlineReloginHoldRemainingMsBoundCore(bot, storage, helpers)'), 'exit-relogin hold-read runtime offline bound reader core not found');
-    assert(exitReloginRuntimeModule.includes('return offlineReloginHoldRemainingMsCore(bot, storage, {') && exitReloginRuntimeModule.includes('clearOfflineReloginHold: helpers.clearOfflineReloginHold'), 'exit-relogin hold-read runtime offline bound reader does not preserve helper binding');
-    assert(exitReloginRuntimeModule.includes('function clearLoginSuppressMatchingBoundCore(storage, pattern, helpers)'), 'exit-relogin hold-read runtime suppress clear bound core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.loginSuppressKey') && exitReloginRuntimeModule.includes('helpers.loginSuppressReasonKey'), 'exit-relogin hold-read runtime suppress clear bound core does not preserve suppress key binding');
-    assert(exitReloginRuntimeModule.includes('function setOfflineLeaveSuppressCore(bot, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin prefix runtime offline suppress core not found');
-    assert(exitReloginRuntimeModule.includes('const staminaHold = helpers.staminaExitHoldUntilForDetail(detail);'), 'exit-relogin prefix runtime offline suppress core does not read stamina hold');
-    assert(exitReloginRuntimeModule.includes('detail.safeReloginAllowed = !unsafeOfflineExit;'), 'exit-relogin prefix runtime offline suppress core does not preserve safe marker');
-    assert(exitReloginRuntimeModule.includes('helpers.writePersistentExitState(helpers.offlineLeaveStateKey, detail);'), 'exit-relogin prefix runtime offline suppress core does not persist zero-hold detail');
-    assert(exitReloginRuntimeModule.includes("return helpers.setExitReloginSuppress('offline leave', reason, detail, selfLike"), 'exit-relogin prefix runtime offline suppress core does not call suppress writer');
-    assert(exitReloginRuntimeModule.includes('minimumUntil: Math.max(Number(options.minimumUntil || 0) || 0, staminaHold?.until || 0)'), 'exit-relogin prefix runtime offline suppress core does not preserve minimumUntil selection');
-    assert(exitReloginRuntimeModule.includes('function setOfflineLeaveSuppressBoundCore(bot, storage, reason, detail, selfLike = null, options = {}, helpers)'), 'exit-relogin prefix runtime offline suppress bound core not found');
-    assert(exitReloginRuntimeModule.includes('staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn()') && exitReloginRuntimeModule.includes('offlineExitRequiresUnsafeReloginDelay: offlineExitRequiresUnsafeReloginDelayCore'), 'exit-relogin prefix runtime offline suppress bound core does not preserve helper binding');
-    assert(exitReloginRuntimeModule.includes('setExitReloginSuppress: (storageReason, suppressReason, suppressDetail, suppressSelfLike, suppressOptions) => setExitReloginSuppressBoundCore(') && exitReloginRuntimeModule.includes('storage,') && exitReloginRuntimeModule.includes('suppressOptions,'), 'exit-relogin prefix runtime offline suppress bound core does not route through bound suppress writer');
-    assert(exitReloginRuntimeModule.includes('function primePendingStaminaExitLoginSuppressCore(detail, helpers)'), 'exit-relogin prefix runtime pending stamina core not found');
-    assert(exitReloginRuntimeModule.includes("const until = helpers.setLoginSuppress('stamina leave pending', delayMs);"), 'exit-relogin prefix runtime pending stamina core does not set login suppress');
-    assert(exitReloginRuntimeModule.includes('detail.pendingLoginSuppressDelayMs = Math.max(0, Math.round(until - now));'), 'exit-relogin prefix runtime pending stamina core does not preserve pending delay');
-    assert(exitReloginRuntimeModule.includes('if (hold.staminaBudgetExit) detail.staminaBudgetHold = hold;'), 'exit-relogin prefix runtime pending stamina core does not preserve budget hold metadata');
-    assert(exitReloginRuntimeModule.includes('function primePendingStaminaExitLoginSuppressBoundCore(detail, helpers)'), 'exit-relogin prefix runtime pending stamina bound core not found');
-    assert(exitReloginRuntimeModule.includes('return primePendingStaminaExitLoginSuppressCore(detail, {') && exitReloginRuntimeModule.includes('staminaExitHoldUntilForDetailBoundCore(holdDetail, nowFn()'), 'exit-relogin prefix runtime pending stamina bound core does not preserve helper binding');
-    assert(exitReloginRuntimeModule.includes('function clearEnemyReloginHoldCore(bot, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime enemy core not found');
-    assert(exitReloginRuntimeModule.includes('helpers.activeEnemyLeaveDetail(t)'), 'exit-relogin clear runtime enemy core does not read active leave detail');
-    assert(exitReloginRuntimeModule.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? bot.pendingExit : null;"), 'exit-relogin clear runtime enemy core does not preserve pending-exit scope rule');
-    assert(exitReloginRuntimeModule.includes('helpers.clearExitHoldDetail(detail, reason, t);'), 'exit-relogin clear runtime enemy core does not clear detail hold fields');
-    assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.enemyLeaveStateKey)'), 'exit-relogin clear runtime enemy core does not clear persistent enemy state');
-    assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/enemy leave|combat leave|pursuit leave/i)'), 'exit-relogin clear runtime enemy core does not clear enemy login suppress');
-    assert(exitReloginRuntimeModule.includes('function clearOfflineReloginHoldCore(bot, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime offline core not found');
-    assert(exitReloginRuntimeModule.includes("bot.pendingExit = bot.pendingExit?.scope === 'offline' ? null : bot.pendingExit;"), 'exit-relogin clear runtime offline core does not preserve pending-exit scope rule');
-    assert(exitReloginRuntimeModule.includes('bot.lastOfflineLeaveResult.reloginUntil = 0;'), 'exit-relogin clear runtime offline core does not clear reloginUntil');
-    assert(exitReloginRuntimeModule.includes('helpers.clearPersistentExitState(helpers.offlineLeaveStateKey)'), 'exit-relogin clear runtime offline core does not clear persistent offline state');
-    assert(exitReloginRuntimeModule.includes('helpers.clearLoginSuppressMatching(/offline.*leave/i)'), 'exit-relogin clear runtime offline core does not clear offline login suppress');
-    assert(exitReloginRuntimeModule.includes('function clearEnemyReloginHoldBoundCore(bot, storage, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime enemy bound core not found');
-    assert(exitReloginRuntimeModule.includes('return clearEnemyReloginHoldCore(bot, reason, {') && exitReloginRuntimeModule.includes('clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(storage, pattern'), 'exit-relogin clear runtime enemy bound core does not preserve cleanup binding');
-    assert(exitReloginRuntimeModule.includes('function clearOfflineReloginHoldBoundCore(bot, storage, reason = \'online self restored\', helpers)'), 'exit-relogin clear runtime offline bound core not found');
-    assert(exitReloginRuntimeModule.includes('return clearOfflineReloginHoldCore(bot, reason, {') && exitReloginRuntimeModule.includes('offlineLeaveStateKey: helpers.offlineLeaveStateKey'), 'exit-relogin clear runtime offline bound core does not preserve cleanup binding');
-    for (const exportedName of [
-      'leaveWaitDisplayCore',
-      'finalizeLeaveDisplayReasonCore',
-      'normalizeEnemyActorCore',
-      'enemyActorFromLeaveDetailCore',
-      'enemyRepeatDelayMsForCountCore',
-      'readEnemyLeaveStreakCore',
-      'writeEnemyLeaveStreakCore',
-      'updateEnemyLeaveStreakCore',
-      'readEnemyLeaveStreakBoundCore',
-      'writeEnemyLeaveStreakBoundCore',
-      'updateEnemyLeaveStreakBoundCore',
-      'combatExitSummaryCore',
-      'combatLeaveActionCore',
-      'pursuitLeaveSummaryCore',
-      'injuryLeaveSummaryCore',
-      'offlineLeaveSummaryCore',
-      'currentOfflineDisplayReasonCore',
-      'reloginDelayForHpCore',
-      'isExitLoginSuppressReasonCore',
-      'unsafeExitReloginMinDelayMsCore',
-      'pendingExitSuppressReasonCore',
-      'startExitAuditCore',
-      'startExitAuditBoundCore',
-      'setExitReloginSuppressCore',
-      'setExitReloginSuppressBoundCore',
-      'primePendingUnsafeExitLoginSuppressCore',
-      'primePendingUnsafeExitLoginSuppressBoundCore',
-      'staminaBudgetExitHoldUntilCore',
-      'staminaExitHoldUntilForDetailCore',
-      'staminaExitHoldUntilForDetailBoundCore',
-      'offlineExitRequiresUnsafeReloginDelayCore',
-      'enemyReloginHoldRemainingMsCore',
-      'offlineReloginHoldRemainingMsCore',
-      'clearLoginSuppressMatchingCore',
-      'enemyReloginHoldRemainingMsBoundCore',
-      'offlineReloginHoldRemainingMsBoundCore',
-      'clearLoginSuppressMatchingBoundCore',
-      'setOfflineLeaveSuppressCore',
-      'setOfflineLeaveSuppressBoundCore',
-      'primePendingStaminaExitLoginSuppressCore',
-      'primePendingStaminaExitLoginSuppressBoundCore',
-      'clearEnemyReloginHoldCore',
-      'clearOfflineReloginHoldCore',
-      'clearEnemyReloginHoldBoundCore',
-      'clearOfflineReloginHoldBoundCore'
-    ]) {
-      assert(exitReloginRuntimeModule.includes(`  ${exportedName}`), `exit-relogin runtime module does not export ${exportedName}`);
-    }
-    assert(pendingExitSourceModule.includes('function pendingExitSource(options = {}) {'), 'pending-exit source factory not found');
-    assert(pendingExitSourceModule.includes('module.exports = {\n  pendingExitSource'), 'pending-exit source module export not found');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('String.raw`'), 'pending-exit source factory does not return raw browser source');
-    assert(pendingExitSummaryCallSourceModule.includes('function summarizePendingExitCall') && pendingExitSummaryCallSourceModule.includes('summarizePendingExitCore') && pendingExitSummaryCallSourceModule.includes('pendingExitRetryCoreOptionsSource'), 'pending-exit summary call source does not generate direct summary core calls');
-    assert(pendingExitSourceModule.includes('const localPendingExitHelperWrappers = options.bundledRuntime ?') && pendingExitSourceModule.includes('function summarizePendingExit(pending = bot.pendingExit)'), 'pending-exit source does not preserve local summary fallback wrapper');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const summarizePendingExitExpr = pending => summarizePendingExitCall'), 'pending-exit source does not use summary direct-call helper');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("require('./src/browser/runtime/pending-exit')"), 'pending-exit source does not import retry/display/summary runtime cores for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function pendingExitRetryCoreOptions()'), 'pending-exit source does not bind retry core options');
-    assert(pendingExitSourceModule.includes("summaryCoreName: 'summarizePendingExitCore'"), 'pending-exit source does not route summary helper through core');
-    assert(pendingExitSourceModule.includes('pendingExitRetryMsCore(${pendingExpr}, pendingExitRetryCoreOptions())'), 'pending-exit source does not generate direct retry core calls');
-    assert(pendingExitSourceModule.includes('pendingExitDisplayReasonCore(${summaryExpr})'), 'pending-exit source does not generate direct display core calls');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('async function handlePendingExit'), 'pending-exit source factory does not include handler');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('function updatePursuitTracking'), 'pending-exit source factory does not include pursuit tracking helper');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("options.bundledRuntime"), 'pending-exit source does not select bundled enemy suppress call from runtime config');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setExitReloginSuppressBoundCore'), 'pending-exit source does not import runtime suppress writer bound core for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('setOfflineLeaveSuppressBoundCore'), 'pending-exit source does not import runtime offline suppress bound core for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('clearLoginSuppressMatchingBoundCore'), 'pending-exit source does not import runtime suppress clear bound core for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppressBoundCore(bot, localStorage, detail.reason || 'websocket offline'"), 'pending-exit source does not pass storage into bundled offline suppress bound core');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY'), 'pending-exit source does not bind cfg/streak key for bundled offline suppress');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const clearLoginSuppressMatchingBinding') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('clearLoginSuppressMatching: pattern => clearLoginSuppressMatchingBoundCore(localStorage, pattern'), 'pending-exit source does not bind suppress writer cleanup through bound core');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const reloginDelayForHpBinding') && functionBody(pendingExitSourceModule, 'pendingExitSource').includes('reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'), 'pending-exit source does not bind HP relogin delay through runtime core for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${clearLoginSuppressMatchingBinding}'), 'pending-exit source does not pass bound suppress cleanup into bundled suppress writers');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${reloginDelayForHpBinding}'), 'pending-exit source does not pass runtime HP relogin delay binding into bundled suppress writers');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('const finalizeLeaveDisplayReasonBinding = options.bundledRuntime'), 'pending-exit source does not select display finalizer binding for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("finalizeLeaveDisplayReasonCoreBinding('finalizeLeaveDisplayReasonForPendingExitCore', 'leaveWaitDisplayForPendingExitCore')"), 'pending-exit source does not bind display finalizer through direct runtime core');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now'), 'pending-exit source does not bind offline suppress writer helpers for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setOfflineLeaveSuppress(detail.reason || 'websocket offline'"), 'pending-exit source does not preserve inline offline suppress wrapper call');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setExitReloginSuppressBoundCore(bot, localStorage, 'enemy leave', detail.reason || 'enemy leave'"), 'pending-exit source does not write bundled enemy leave suppress through bound runtime writer');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY'), 'pending-exit source does not bind suppress writer storage keys for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes('${finalizeLeaveDisplayReasonBinding}, writePersistentExitState, setLoginSuppress, now: Date.now'), 'pending-exit source does not bind suppress writer helpers for bundled builds');
-    assert(functionBody(pendingExitSourceModule, 'pendingExitSource').includes("setEnemyLeaveSuppress(detail.reason || 'enemy leave'"), 'pending-exit source does not preserve inline enemy suppress wrapper call');
-    assert(leaveCommandSourceModule.includes('function leaveCommandSource(options = {}) {'), 'leave-command source factory not found');
-    assert(leaveCommandSourceModule.includes('module.exports = {\n  leaveCommandSource'), 'leave-command source module export not found');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('String.raw`'), 'leave-command source factory does not return raw browser source');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function waitWithTimeout'), 'leave-command source factory does not include timeout helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes("require('./src/browser/runtime/leave-command')"), 'leave-command source does not import runtime command cores for bundled builds');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('const localLeaveCommandHelperWrappers = options.bundledRuntime ?'), 'leave-command source does not preserve local helper fallback wrappers');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function leaveCommandFailureMessage'), 'leave-command source factory does not include failure helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function summarizeLeaveCommandResult'), 'leave-command source factory does not include result summary helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function clashLeaveRescueHook'), 'leave-command source factory does not include Clash rescue hook helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function scheduleClashLeaveRescueRetry'), 'leave-command source factory does not include Clash rescue scheduler');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('async function runClashLeaveRescueRetry'), 'leave-command source factory does not include Clash rescue retry runner');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function updatePendingExitLastResult'), 'leave-command source factory does not include pending-exit result update helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function maybeConfirmPendingExitFromLeaveDetail'), 'leave-command source factory does not include pending-exit confirmation helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('function completeLeaveRequest'), 'leave-command source factory does not include leave request completion helper');
-    assert(functionBody(leaveCommandSourceModule, 'leaveCommandSource').includes('async function issueLeaveCommand'), 'leave-command source factory does not include leave command issuer');
-    assert(autoLoginSourceModule.includes('function autoLoginSource() {'), 'auto-login source factory not found');
-    assert(autoLoginSourceModule.includes('module.exports = {\n  autoLoginSource'), 'auto-login source module export not found');
-    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('String.raw`'), 'auto-login source factory does not return raw browser source');
-    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function maybeStartAutoLogin'), 'auto-login source factory does not include auto login starter');
-    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function forceLoginNow'), 'auto-login source factory does not include manual login starter');
-    assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('allowLiveSessionTakeoverBypass'), 'auto-login source factory does not preserve live-session takeover bypass handling');
-    assert(leaveFlowSourceModule.includes('function leaveFlowSource(options = {}) {'), 'leave-flow source factory not found');
-    assert(leaveFlowSourceModule.includes('module.exports = {\n  leaveFlowSource'), 'leave-flow source module export not found');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('String.raw`'), 'leave-flow source factory does not return raw browser source');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveOffline'), 'leave-flow source factory does not include offline leave wrapper');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForInjury'), 'leave-flow source factory does not include injury leave wrapper');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForPursuit'), 'leave-flow source factory does not include pursuit leave wrapper');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForCombat'), 'leave-flow source factory does not include combat leave wrapper');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveDuringEnemyHold'), 'leave-flow source factory does not include enemy-hold leave wrapper');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pendingExitSkipNewLeave'), 'leave-flow source factory does not preserve pending-exit duplicate leave guard');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('options.bundledRuntime'), 'leave-flow source does not select offline unsafe predicate call from runtime config');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('combatExitSummaryCore: combatExitSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled combat summary core alias');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('combatExitSummaryForLeaveFlowCore(${reason}, ${target}, ${combatState}, { cfg, actorLabel, hpDisplay, formatDurationMs })'), 'leave-flow source does not bind bundled combat summary core directly');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled injury summary core alias');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('injuryLeaveSummaryForLeaveFlowCore(${injury}, { actorLabel, hpDisplay })'), 'leave-flow source does not bind bundled injury summary core directly');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled offline summary core alias');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineLeaveSummaryForLeaveFlowCore(${reason}, ${offlineSafety}, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })'), 'leave-flow source does not bind bundled offline summary core directly');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore'), 'leave-flow source does not import bundled pursuit summary core alias');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pursuitLeaveSummaryForLeaveFlowCore(${pursuit}, { actorLabel, formatDurationMs, formatDistance })'), 'leave-flow source does not bind bundled pursuit summary core directly');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)'), 'leave-flow source does not preserve inline offline unsafe predicate wrapper call');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingStaminaExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending stamina suppress bound core for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress })'), 'leave-flow source does not bind pending stamina suppress helpers for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("primePendingStaminaExitLoginSuppress(detail)'"), 'leave-flow source does not preserve inline pending stamina suppress wrapper call');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('primePendingUnsafeExitLoginSuppressBoundCore'), 'leave-flow source does not import runtime pending unsafe suppress bound core for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('const reloginDelayForHpBinding') && functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('reloginDelayForHp: (selfLike, detail) => reloginDelayForHpCore(selfLike, detail, { cfg, hpInfoForRelogin, randomBetween, clamp })'), 'leave-flow source does not bind HP relogin delay through runtime core for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('hpInfoForRelogin, ${reloginDelayForHpBinding}, cfg, setLoginSuppress, now: Date.now'), 'leave-flow source does not pass runtime HP relogin delay binding into bundled pending unsafe suppress');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('`primePendingUnsafeExitLoginSuppress(${storageReason}, ${reason}, ${detail}, ${selfLike})`'), 'leave-flow source does not preserve inline pending unsafe suppress wrapper call template');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('startExitAuditBoundCore'), 'leave-flow source does not import runtime start exit audit bound core for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now'), 'leave-flow source does not bind start exit audit helpers for bundled builds');
-    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('`startExitAudit(${detail}, ${meta})`'), 'leave-flow source does not preserve inline start exit audit wrapper call template');
-    assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
-    assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
-    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');
-    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function summarizeOfflineThreat'), 'offline-safety source factory does not include offline threat summary helper');
-    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function assessOfflineSafety'), 'offline-safety source factory does not include offline safety assessment helper');
-    assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('function pickActiveCombatWaitThreat'), 'offline-safety source factory does not include active combat wait picker');
-    assert(pageNativeSnapshotSourceModule.includes('function pageNativeSnapshotSource(options = {}) {'), 'page-native snapshot source factory not found');
-    assert(pageNativeSnapshotSourceModule.includes('module.exports = {\n  pageNativeSnapshotSource'), 'page-native snapshot module export not found');
-    assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('String.raw`'), 'page-native snapshot source factory does not return raw browser source');
-    assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('recordRuntimeDiagnosticsCore(bot, ${values})'), 'page-native snapshot source factory does not route bundled runtime diagnostics through core');
-    assert(functionBody(pageNativeSnapshotSourceModule, 'pageNativeSnapshotSource').includes('function installPageNativeSnapshotObserver()'), 'page-native snapshot source does not include observer installer');
-    assert(actionArbitrationSourceModule.includes('function actionArbitrationInlineSource(helpers = {}, options = {}) {'), 'action-arbitration inline source factory not found');
-    assert(actionArbitrationSourceModule.includes('function bundledActionArbitrationSource() {'), 'action-arbitration bundled source factory not found');
-    assert(actionArbitrationSourceModule.includes('function actionArbitrationSource(options = {}) {'), 'action-arbitration source selector not found');
-    assert(actionArbitrationSourceModule.includes('module.exports = {\n  recordActionSwitchDiagnosticsCall,\n  applyFinalActionArbitrationCall,\n  actionArbitrationInlineSource,\n  bundledActionArbitrationSource,\n  actionArbitrationSource'), 'action-arbitration module exports are incomplete');
-    assert(actionArbitrationSourceModule.includes("require('./runtime/action-priority')"), 'action-arbitration source does not import action-priority through the browser runtime helper module');
-    assert(actionArbitrationSourceModule.includes("require('./runtime/action-arbitration')"), 'action-arbitration source does not import action-arbitration through the browser runtime helper module');
-    assert(!actionArbitrationSourceModule.includes("require('../strategy/action-arbitration')"), 'action-arbitration source still imports final action arbitration directly from strategy');
-    assert(actionArbitrationSourceModule.includes("require('./runtime/action-switch-diagnostics')"), 'action-arbitration source does not import action-switch diagnostics through the browser runtime helper module');
-    assert(!actionArbitrationSourceModule.includes("require('../strategy/action-switch-diagnostics')"), 'action-arbitration source still imports action-switch diagnostics directly from strategy');
-    assert(actionPriorityRuntimeModule.includes("require('../../strategy/action-priority')"), 'browser action-priority helper module does not reuse the strategy action-priority helpers');
-    assert(actionPriorityRuntimeModule.includes('actionPriorityBand') && actionPriorityRuntimeModule.includes('actionFocusSummary') && actionPriorityRuntimeModule.includes('getActionTargetKey'), 'browser action-priority helper module exports are incomplete');
-    assert(actionArbitrationRuntimeModule.includes("require('../../strategy/action-arbitration')"), 'browser action-arbitration helper module does not reuse the strategy action-arbitration helpers');
-    assert(actionArbitrationRuntimeModule.includes('finalActionBandRank') && actionArbitrationRuntimeModule.includes('applyFinalActionArbitrationCore') && actionArbitrationRuntimeModule.includes('buildArbitrationStatus'), 'browser action-arbitration helper module exports are incomplete');
-    assert(actionSwitchDiagnosticsRuntimeModule.includes("require('../../strategy/action-switch-diagnostics')"), 'browser action-switch diagnostics helper module does not reuse the strategy action-switch diagnostics helpers');
-    assert(actionSwitchDiagnosticsRuntimeModule.includes('actionSwitchPairKey') && actionSwitchDiagnosticsRuntimeModule.includes('buildPreviousDecisionSummary') && actionSwitchDiagnosticsRuntimeModule.includes('recordActionSwitchDiagnosticsCore'), 'browser action-switch diagnostics helper module exports are incomplete');
-    const actionArbitrationInlineBody = functionBody(actionArbitrationSourceModule, 'actionArbitrationInlineSource');
-    assert(actionArbitrationInlineBody.includes('String.raw`'), 'action-arbitration inline source factory does not return raw browser source');
-    assert(actionArbitrationInlineBody.includes('localActionSwitchWrapperSource') && actionArbitrationInlineBody.includes('function recordActionSwitchDiagnostics'), 'action-arbitration inline source factory does not include local target switch diagnostics wrapper');
-    assert(actionArbitrationInlineBody.includes('localFinalActionWrapperSource') && actionArbitrationInlineBody.includes('function applyFinalActionArbitration'), 'action-arbitration inline source factory does not include local final action arbitration wrapper');
-    assert(actionArbitrationInlineBody.includes('actionPriorityHelperSource') && actionArbitrationInlineBody.includes('actionSwitchHelperSource') && actionArbitrationInlineBody.includes('finalActionHelperSource'), 'action-arbitration inline source factory does not inject helper groups');
-    assert(actionArbitrationInlineBody.includes('fn.toString()'), 'action-arbitration inline source factory does not inline helper functions');
-    const actionArbitrationBundledBody = functionBody(actionArbitrationSourceModule, 'bundledActionArbitrationSource');
-    assert(actionArbitrationBundledBody.includes("require('./src/browser/runtime/action-priority')"), 'action-arbitration bundled source does not hand action-priority helpers to the bundler');
-    assert(actionArbitrationBundledBody.includes("require('./src/browser/runtime/action-switch-diagnostics')"), 'action-arbitration bundled source does not hand action-switch diagnostics helpers to the bundler');
-    assert(actionArbitrationBundledBody.includes("require('./src/browser/runtime/action-arbitration')"), 'action-arbitration bundled source does not hand final action arbitration helpers to the bundler');
-    assert(actionArbitrationBundledBody.includes('actionArbitrationInlineSource({}, { bundledRuntime: true })'), 'action-arbitration bundled source does not omit local wrappers');
-    assert(networkQualitySourceModule.includes('function networkQualitySource() {'), 'network-quality source factory not found');
-    assert(networkQualitySourceModule.includes('module.exports = {\n  networkQualitySource'), 'network-quality module export not found');
-    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('String.raw`'), 'network-quality source factory does not return raw browser source');
-    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function observeNativeWsFrame'), 'network-quality source factory does not include native frame observer');
-    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function recordNetworkQualityMovementCommand'), 'network-quality source factory does not include movement command tracking');
-    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function recordNetworkQualityShot'), 'network-quality source factory does not include attack shot tracking');
-    assert(functionBody(networkQualitySourceModule, 'networkQualitySource').includes('function recordNetworkQualityAttackDamage'), 'network-quality source factory does not include attack damage ACK tracking');
-    assert(networkQualitySummarySourceModule.includes('function networkQualitySummarySource() {'), 'network-quality summary source factory not found');
-    assert(networkQualitySummarySourceModule.includes('module.exports = {\n  networkQualitySummarySource'), 'network-quality summary module export not found');
-    assert(functionBody(networkQualitySummarySourceModule, 'networkQualitySummarySource').includes('String.raw`'), 'network-quality summary source factory does not return raw browser source');
-    assert(functionBody(networkQualitySummarySourceModule, 'networkQualitySummarySource').includes('function summarizeNetworkQuality'), 'network-quality summary source factory does not include summarizeNetworkQuality');
-    assert(functionBody(networkQualitySummarySourceModule, 'networkQualitySummarySource').includes("source: 'native-ws-state'"), 'network-quality summary source does not preserve native WS source');
-    assert(runtimeSummarySourceModule.includes('function runtimeSummarySource() {'), 'runtime-summary source factory not found');
-    assert(runtimeSummarySourceModule.includes('module.exports = {\n  runtimeSummarySource'), 'runtime-summary module export not found');
-    assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('String.raw`'), 'runtime-summary source factory does not return raw browser source');
-    assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('function summarizeSelf(self)'), 'runtime-summary source factory does not include self summary helper');
-    assert(functionBody(runtimeSummarySourceModule, 'runtimeSummarySource').includes('function assessServerPositionStall(self)'), 'runtime-summary source factory does not include server-position stall helper');
+    assert(functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('buildDropMatchedKillCore'), 'combat-history drop-matched kill call does not route through core');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function safeCoinCandidates'), 'coin-safety source factory does not include safe coin candidate filter');
+    assert(functionBody(coinSafetySourceModule, 'coinSafetySource').includes('function pickRealtimeLocalCoin'), 'coin-safety source factory does not include realtime local coin picker');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function dailyStaminaFinalCoinAction'), 'opportunity-stamina source factory does not include daily final coin action');
+    assert(functionBody(opportunityStaminaSourceModule, 'opportunityStaminaSource').includes('function staminaBudgetCoinLeaveAction'), 'opportunity-stamina source factory does not include stamina budget leave action');
+    assert(functionBody(postAttackSourceModule, 'postAttackSource').includes('function buildPostAttackDropWaitAction'), 'post-attack source factory does not include wait action builder');
+    assert(functionBody(opportunityCandidateSourceModule, 'opportunityCandidateSource').includes('function opportunityCandidateCoreOptions'), 'opportunity-candidate source factory does not include core options wrapper');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('function opportunityChoiceCoreOptions'), 'opportunity-choice source factory does not include core options wrapper');
+    assert(functionBody(opportunityRouteSourceModule, 'opportunityRouteSource').includes('function coinRouteCoreOptions'), 'opportunity-route source factory does not include core options wrapper');
+    assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource').includes('function recordIncidentalCoinPickups'), 'coin-target runtime source factory does not include incidental pickup recorder');
+    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('function coinMotionCoreOptions'), 'coin-motion runtime source factory does not include core options wrapper');
+    assert(functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource').includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime source factory does not include lock update wrapper');
+    assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource').includes('function coinProgressCoreOptions'), 'coin-progress runtime source factory does not include core options wrapper');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("trackCoinProgressCall('action', 'self')"), 'tick source factory does not preserve coin progress tracking');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("applyFinalActionArbitrationCall('action', 'source')"), 'tick source factory does not preserve final action arbitration');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("recordActionSwitchDiagnosticsCall('action', 'source')"), 'tick source factory does not preserve target switch diagnostics');
   });
 
   check('bundler scripts are wired without coupling spike and production entrypoints', () => {
@@ -2337,8 +1308,8 @@ function main() {
   });
 
   for (const file of REMOTE_BOT_FILES) {
-    const text = file === 'grasp-rat-bot.js' ? sourceRuntimeText : generatedRuntimeSource;
-    const finalRuntimeText = file === 'grasp-rat-bot.js' ? text : distSource;
+    const text = generatedRuntimeSource;
+    const finalRuntimeText = distSource;
     const defaultConfigSource = file === 'grasp-rat-bot.js' ? sharedRuntimeDefaultsSource : finalRuntimeText;
     for (const invariant of NUMERIC_INVARIANTS) {
       check(`${file} has ${invariant.key}=${invariant.value}`, () => {
@@ -4002,14 +2973,13 @@ function main() {
     assert(nodeSelfTestSource.includes("name: 'high roi post combat drop at visible edge beats recovery wait'"), 'high-value post-combat recovery pickup self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low roi far post combat drop waits for recovery'"), 'low-ROI post-combat recovery wait self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low long stamina target-only budget block waits for visible coin refresh'"), 'target-only stamina budget wait reason self-test not found');
-    assert(sourceRuntimeText.includes('function dailyStaminaBudgetIsLimiting'), 'daily stamina final-run budget helper not found');
-    assert(sourceRuntimeText.includes('function pickNearestDailyStaminaFinalCoin'), 'daily stamina final-run coin picker not found');
-    assert(sourceRuntimeText.includes("'daily-stamina-final-visible-coin'"), 'daily stamina final-run action reason not found');
-    assert(sourceRuntimeText.includes('!isSnapshotOnlyCoin(coin)') || sourceRuntimeText.includes('filter(coin => !isSnapshotOnlyCoin(coin))'), 'daily stamina final-run does not exclude snapshot-only coins');
-    const dailyFinalWrapperIndex = sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = pickNearestDailyStaminaFinalCoin');
-    const dailyFinalCoreIndex = sourceRuntimeText.indexOf('const dailyStaminaFinalCoin = ${pickNearestDailyStaminaFinalCoinCall}');
-    const dailyFinalIndex = dailyFinalWrapperIndex > 0 ? dailyFinalWrapperIndex : dailyFinalCoreIndex;
-    assert(dailyFinalIndex > 0 && dailyFinalIndex < sourceRuntimeText.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
+    assert(strategyStaminaBudgetSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'daily stamina final-run budget core not found');
+    assert(strategyStaminaBudgetSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'daily stamina final-run coin picker core not found');
+    assert(opportunityStaminaSourceModule.includes("'daily-stamina-final-visible-coin'"), 'daily stamina final-run action reason not found');
+    assert(chooseActionSourceModule.includes('isSnapshotOnlyCoin') && chooseActionSourceModule.includes('pickNearestDailyStaminaFinalCoinCore'), 'daily stamina final-run does not exclude snapshot-only coins through the core picker');
+    const chooseActionSourceBody = functionBody(chooseActionSourceModule, 'chooseActionSource');
+    const dailyFinalIndex = chooseActionSourceBody.indexOf('const dailyStaminaFinalCoin = ${pickNearestDailyStaminaFinalCoinCall}');
+    assert(dailyFinalIndex > 0 && dailyFinalIndex < chooseActionSourceBody.indexOf('const localRealtimeCoin = pickRealtimeLocalCoin'), 'daily stamina final-run does not run before ordinary ROI opportunity selection');
     assert(nodeSelfTestSource.includes("name: 'low daily stamina goes to nearest visible coin instead of waiting for roi'"), 'low daily stamina final-run visible coin self-test not found');
     assert(nodeSelfTestSource.includes("name: 'low daily stamina does not use snapshot-only final coin'"), 'low daily stamina snapshot-only exclusion self-test not found');
 	    assert(nodeSelfTestSource.includes("name: 'oscillating opportunity pair locks after repeated switches'"), 'opportunity oscillation lock self-test not found');
@@ -4075,7 +3045,7 @@ function main() {
   check('coin diagnostics expose filtered visible coin candidates', () => {
     assert(strategyCoinDiagnosticsSource.includes('function buildCoinDiagnostics'), 'strategy coin diagnostics builder not found');
     assert(strategyCoinDiagnosticsSource.includes('function addCoinFilterDiagnostic'), 'strategy coin filter diagnostic recorder not found');
-    assert(coinSafetySourceModule.includes("require('./runtime/coin-diagnostics')"), 'coin-safety source does not import coin diagnostics through the browser runtime helper module');
+    assert(coinSafetySourceModule.includes("require('./src/browser/runtime/coin-diagnostics')"), 'coin-safety source does not import coin diagnostics through the browser runtime helper module');
     assert(!coinSafetySourceModule.includes("require('../strategy/coin-diagnostics')"), 'coin-safety source still imports coin diagnostics directly from strategy');
     assert(coinDiagnosticsRuntimeModule.includes("require('../../strategy/coin-diagnostics')"), 'browser coin diagnostics helper module does not reuse the strategy coin diagnostics helpers');
     assert(coinDiagnosticsRuntimeModule.includes('coinDiagnosticsSummary') && coinDiagnosticsRuntimeModule.includes('addCoinFilterDiagnostic') && coinDiagnosticsRuntimeModule.includes('buildCoinDiagnostics'), 'browser coin diagnostics helper module exports are incomplete');
@@ -4084,7 +3054,7 @@ function main() {
     assert(distSource.includes('function buildCoinDiagnostics'), 'bundled dist does not contain coin diagnostics builder');
     assert(distSource.includes('function addCoinFilterDiagnostic'), 'bundled dist does not contain coin filter diagnostic recorder');
     assert(distSource.includes("reason: 'snapshot-only'") || distSource.includes('reason: "snapshot-only"'), 'bundled dist snapshot-only coin diagnostics not exposed');
-    assert(coinSafetySourceModule.includes('buildCoinDiagnostics') && coinSafetySourceModule.includes('fn.toString()'), 'coin diagnostics builder is not wired for local helper injection');
+    assert(coinSafetySourceModule.includes('buildCoinDiagnostics') && coinSafetySourceModule.includes('addCoinFilterDiagnostic'), 'coin diagnostics builder is not wired through the bundled runtime adapter');
     assert(sourceRuntimeText.includes('function recordCoinFilterDiagnostic'), 'coin filter diagnostic recorder not found');
     assert(sourceRuntimeText.includes("recordCoinFilterDiagnostic(c, 'ignored'"), 'ignored coin diagnostics not recorded');
     assert(sourceRuntimeText.includes("recordCoinFilterDiagnostic(c, 'threat-blocked'"), 'threat-blocked coin diagnostics not recorded');
@@ -4102,19 +3072,17 @@ function main() {
     assert(strategyCoinMotionSource.includes('function coinPickupPrecisionPulseMsCore'), 'strategy coin pickup pulse core not found');
     assert(strategyCoinMotionSource.includes('function coinAxisLockShouldHoldCore'), 'strategy coin axis lock core not found');
     assert(strategyCoinMotionSource.includes('function coinMotionMetaCore'), 'strategy coin motion metadata core not found');
-    const coinMotionRuntimeBody = functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeInlineSource');
+    const coinMotionRuntimeBody = functionBody(coinMotionRuntimeSourceModule, 'coinMotionRuntimeSource');
     const coinDirectionToCallBody = functionBody(coinMotionRuntimeSourceModule, 'coinDirectionToCall');
-    assert(coinMotionRuntimeSourceModule.includes("require('./runtime/coin-motion')"), 'coin-motion runtime source does not import coin motion through the browser runtime helper module');
+    assert(coinMotionRuntimeSourceModule.includes("require('./src/browser/runtime/coin-motion')"), 'coin-motion runtime source does not import coin motion through the browser runtime helper module');
     assert(!coinMotionRuntimeSourceModule.includes("require('../strategy/coin-motion')"), 'coin-motion runtime source still imports coin motion directly from strategy');
     assert(coinMotionRuntimeModule.includes("require('../../strategy/coin-motion')"), 'browser coin motion helper module does not reuse the strategy coin motion helpers');
     assert(coinMotionRuntimeModule.includes('coinDirectionToCore') && coinMotionRuntimeModule.includes('coinPickupPrecisionPulseMsCore') && coinMotionRuntimeModule.includes('coinMotionMetaCore'), 'browser coin motion helper module exports are incomplete');
     assert(coinMotionRuntimeSourceModule.includes('coinDirectionToCore') && coinMotionRuntimeSourceModule.includes('coinMotionMetaCore'), 'coin-motion runtime source does not wire coin motion helpers');
-    assert(coinMotionRuntimeBody.includes('fn.toString()'), 'coin-motion runtime source does not inline coin motion helper text for local builds');
     assert(coinMotionRuntimeBody.includes('function coinMotionCoreOptions'), 'coin-motion runtime wrapper options not found');
     assert(coinMotionRuntimeBody.includes('function applyCoinApproachLockUpdate'), 'coin-motion runtime coin approach lock wrapper not found');
-    assert(coinMotionRuntimeBody.includes('coinDirectionToCore(self, target, coinMotionCoreOptions'), 'coin-motion runtime coin direction wrapper does not call strategy core');
-    assert(coinMotionRuntimeBody.includes('applyCoinApproachLockUpdate(result.lockUpdate)'), 'coin-motion runtime coin direction wrapper does not apply lock updates');
-    assert(coinMotionRuntimeBody.includes("options.bundledRuntime ? ''"), 'coin-motion bundled runtime does not suppress the local coin direction wrapper');
+    assert(coinDirectionToCallBody.includes('coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions'), 'coin-motion direct-call helper does not call strategy core');
+    assert(coinDirectionToCallBody.includes('applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate)'), 'coin-motion direct-call helper does not apply lock updates');
     assert(coinDirectionToCallBody.includes('coinDirectionToCore(coinDirectionSelf, coinDirectionTarget, coinMotionCoreOptions'), 'coin direction direct-call helper does not call strategy core directly');
     assert(coinDirectionToCallBody.includes('applyCoinApproachLockUpdate(coinDirectionResult.lockUpdate)'), 'coin direction direct-call helper does not apply lock updates');
     assert(opportunityActionsSourceModule.includes("coinDirectionToCall('self', 'coin'"), 'opportunity action source does not use direct coin direction call generator');
@@ -4140,24 +3108,23 @@ function main() {
     assert(strategyCoinTargetSource.includes('function pickIncidentalCoinPickupsCore'), 'strategy incidental pickup core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinWorthLongTravelCore'), 'strategy snapshot coin worth core not found');
     assert(strategyCoinTargetSource.includes('function snapshotCoinNavigationReasonCore'), 'strategy snapshot coin reason core not found');
-    const coinTargetRuntimeBody = functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource');
-    assert(coinTargetRuntimeSourceModule.includes("require('./runtime/coin-target')"), 'coin-target runtime source does not import coin target through the browser runtime helper module');
+    const coinTargetRuntimeBody = functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeSource');
+    assert(coinTargetRuntimeSourceModule.includes("require('./src/browser/runtime/coin-target')"), 'coin-target runtime source does not import coin target through the browser runtime helper module');
     assert(!coinTargetRuntimeSourceModule.includes("require('../strategy/coin-target')"), 'coin-target runtime source still imports coin target directly from strategy');
     assert(coinTargetRuntimeModule.includes("require('../../strategy/coin-target')"), 'browser coin target helper module does not reuse the strategy coin target helpers');
     assert(coinTargetRuntimeModule.includes('coinTargetKeyCore') && coinTargetRuntimeModule.includes('coinMatchesTrackedTargetCore') && coinTargetRuntimeModule.includes('buildNativeCoinSnapshotCore') && coinTargetRuntimeModule.includes('snapshotCoinNavigationReasonCore'), 'browser coin target helper module exports are incomplete');
     assert(coinTargetRuntimeSourceModule.includes('coinTargetKeyCore') && coinTargetRuntimeSourceModule.includes('snapshotCoinNavigationReasonCore'), 'coin-target runtime source does not wire coin target helpers');
-    assert(coinTargetRuntimeBody.includes('fn.toString()'), 'coin-target runtime source does not inline coin target helper text for local builds');
     assert(coinTargetRuntimeBody.includes('function coinTargetCoreOptions'), 'coin-target runtime wrapper options not found');
     assert(!coinTargetRuntimeBody.includes('function trackedCoinTargetForCollection('), 'coin-target runtime source still keeps tracked target wrapper');
     assert(coinTargetRuntimeBody.includes('const target = trackedCoinTargetForCollectionCore({'), 'coin-target runtime collection marker does not call tracked target core directly');
     assert(!coinTargetRuntimeBody.includes('function coinTargetKey('), 'coin-target runtime source still keeps coin target key wrapper');
     assert(!coinTargetRuntimeBody.includes('function coinMatchesTrackedTarget('), 'coin-target runtime source still keeps coin target matcher wrapper');
-    assert(coinTargetRuntimeBody.includes('const key = coinTargetKeyCore(target);'), 'coin-target runtime recorder does not call coin target key core directly');
-    assert(coinTargetRuntimeBody.includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'coin-target runtime visibility check does not call matcher core directly');
+    assert(coinTargetRuntimeSourceModule.includes('const sessionKey = coinTargetKeyCore(sessionTarget);'), 'coin-target runtime recorder does not call coin target key core directly');
+    assert(coinTargetRuntimeSourceModule.includes('coinMatchesTrackedTargetCore(coin, visibleTarget, coinTargetCoreOptions())'), 'coin-target runtime visibility check does not call matcher core directly');
     assert(functionBody(combatHistorySourceModule, 'recordDropMatchedKillCall').includes('coinTargetKey: coinTargetKeyCore'), 'combat-history drop-matched kill call does not bind coin target key core');
     assert(strategyDropMatchedKillSource.includes('function buildDropMatchedKillCore') && strategyDropMatchedKillSource.includes('coinTargetKey(target)'), 'drop-matched kill strategy core does not use coin target key callback');
     assert(dropMatchedKillRuntimeModule.includes("require('../../strategy/drop-matched-kill')") && dropMatchedKillRuntimeModule.includes('buildDropMatchedKillCore'), 'browser drop-matched kill runtime adapter is incomplete');
-    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceInlineSource').includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'opportunity-choice source does not call coin target matcher core directly');
+    assert(functionBody(opportunityChoiceSourceModule, 'opportunityChoiceSource').includes('coinMatchesTrackedTargetCore(coin, target, coinTargetCoreOptions())'), 'opportunity-choice source does not call coin target matcher core directly');
     assert(!distSource.includes('function coinTargetKey('), 'dist remote bot still keeps coin target key wrapper');
     assert(!distSource.includes('function coinMatchesTrackedTarget('), 'dist remote bot still keeps coin target matcher wrapper');
     assert(!distSource.includes('function trackedCoinTargetForCollection('), 'dist remote bot still keeps tracked coin target wrapper');
@@ -4165,10 +3132,10 @@ function main() {
       assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still keeps ${wrapperName} wrapper`);
       assert(!distSource.includes(`function ${wrapperName}(`), `bundled dist still keeps ${wrapperName} wrapper`);
     }
-    assert(coinTargetRuntimeBody.includes('return buildNativeCoinSnapshotCore(coins'), 'coin-target runtime native coin snapshot wrapper does not call strategy core');
+    assert(coinTargetRuntimeSourceModule.includes('return buildNativeCoinSnapshotCore(nativeSnapshotCoins'), 'coin-target runtime native coin snapshot wrapper does not call strategy core');
     assert(coinTargetRuntimeBody.includes('pickIncidentalCoinPickupsCore('), 'coin-target runtime incidental pickup wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('return snapshotCoinWorthLongTravelCore(coin, members, totalAmount'), 'source bot snapshot coin worth wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('return snapshotCoinNavigationReasonCore(coin'), 'source bot snapshot coin reason wrapper does not call strategy core');
+    assert(opportunitySnapshotSourceModule.includes('snapshotCoinWorthLongTravelCore('), 'source bot snapshot coin worth wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('snapshotCoinNavigationReasonCore(localRealtimeCoin, coinTargetCoreOptions())'), 'source bot snapshot coin reason wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-target')"), 'generated remote runtime does not hand coin target helpers to the bundler');
     for (const wrapperName of ['snapshotCoinWorthLongTravel', 'snapshotCoinNavigationReason']) {
       assert(!generatedRuntimeSource.includes(`function ${wrapperName}(`), `generated remote runtime still declares unused ${wrapperName} wrapper`);
@@ -4198,25 +3165,20 @@ function main() {
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinProgressCore'), 'strategy ignored coin progress core not found');
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinPatrolActionCore'), 'strategy ignored coin patrol action core not found');
     assert(strategyCoinProgressSource.includes('function coinIgnoreCleanupIntentCore'), 'strategy coin ignore cleanup intent core not found');
-    assert(coinProgressRuntimeSourceModule.includes('function bundledCoinProgressRuntimeSource()'), 'bundled coin-progress runtime source factory not found');
-    assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-progress runtime source factory not found');
-    assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeSource(options = {})'), 'coin-progress runtime source factory not found');
-    assert(coinProgressRuntimeSourceModule.includes('module.exports = {\n  bundledCoinProgressRuntimeSource,\n  coinProgressRuntimeInlineSource,\n  coinProgressRuntimeSource,\n  trackCoinProgressCall\n}'), 'coin-progress runtime source module export not found');
+    assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeSource()'), 'coin-progress runtime source factory not found');
+    assert(coinProgressRuntimeSourceModule.includes('module.exports = {\n  coinProgressRuntimeSource,\n  trackCoinProgressCall\n}'), 'coin-progress runtime source module export not found');
     assert(coinProgressRuntimeSourceModule.includes("require('./src/browser/runtime/coin-progress')"), 'coin-progress runtime source does not expose a bundler-owned coin-progress require');
-    assert(coinProgressRuntimeSourceModule.includes('if (options.bundledRuntime) return bundledCoinProgressRuntimeSource();'), 'coin-progress runtime source factory does not switch to bundler-owned source in remote builds');
-    assert(functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeInlineSource').includes('String.raw`'), 'coin-progress inline runtime source factory does not return raw browser source');
-    assert(coinProgressRuntimeSourceModule.includes("require('./runtime/coin-progress')"), 'coin-progress runtime source does not import coin progress through browser runtime adapter');
+    assert(!coinProgressRuntimeSourceModule.includes('coinProgressRuntimeInlineSource'), 'coin-progress runtime source still exposes inline runtime generation');
+    assert(!coinProgressRuntimeSourceModule.includes('bundledCoinProgressRuntimeSource'), 'coin-progress runtime source still exposes bundled selector generation');
     assert(!coinProgressRuntimeSourceModule.includes("require('../strategy/coin-progress')"), 'coin-progress runtime source still imports coin progress directly from strategy');
     assert(coinProgressRuntimeModule.includes("require('../../strategy/coin-progress')"), 'coin-progress runtime adapter does not reuse strategy module core');
     assert(coinProgressRuntimeModule.includes('coinFailureIgnoreCore') && coinProgressRuntimeModule.includes('coinIgnoreCleanupIntentCore'), 'coin-progress runtime adapter does not export expected helpers');
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/coin-progress.js'"), 'bundler spike does not import coin progress runtime adapter');
     assert(bundlerSpikeEntrySource.includes('coinProgress.coinFailureIgnoreCore('), 'bundler spike does not execute coin progress failure helper');
     assert(bundlerSpikeBuildSource.includes('status.coinProgressIgnoreMs === 800'), 'bundler spike self-test does not assert coin progress failure execution');
-    const coinProgressRuntimeBody = functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeInlineSource');
+    const coinProgressRuntimeBody = functionBody(coinProgressRuntimeSourceModule, 'coinProgressRuntimeSource');
     const trackCoinProgressCallBody = functionBody(coinProgressRuntimeSourceModule, 'trackCoinProgressCall');
-    assert(coinProgressRuntimeBody.includes('fn.toString()'), 'coin-progress runtime source does not inline coin progress helper text for local builds');
-    assert(coinProgressRuntimeBody.includes('function trackCoinProgress'), 'coin-progress runtime source factory does not include trackCoinProgress wrapper');
-    assert(coinProgressRuntimeBody.includes("options.bundledRuntime ? ''"), 'coin-progress bundled runtime does not suppress local progress wrappers');
+    assert(coinProgressRuntimeBody.includes('function coinProgressCoreOptions'), 'coin-progress runtime wrapper options not found');
     assert(trackCoinProgressCallBody.includes('coinProgressIntentCore(progressAction)'), 'coin-progress direct-call helper does not call progress intent core');
     assert(trackCoinProgressCallBody.includes('coinFailureIgnoreCore(bot.coinFailures.get(progressId)'), 'coin-progress direct-call helper does not call failure ignore core');
     assert(trackCoinProgressCallBody.includes('staleCoinEscapeDirectionCore(progressAction, progressSelf'), 'coin-progress direct-call helper does not call stale escape core');
@@ -4231,21 +3193,20 @@ function main() {
     assert(coinProgressRuntimeSourceModule.includes('buildIgnoredCoinPatrolActionCore'), 'coin-progress source does not wire ignored coin patrol action core');
     assert(coinProgressRuntimeSourceModule.includes('coinIgnoreCleanupIntentCore'), 'coin-progress source does not wire coin ignore cleanup intent core');
     assert(sourceRuntimeText.includes('function coinProgressCoreOptions'), 'source bot coin progress runtime wrapper options not found');
-    assert(sourceRuntimeText.includes('coinFailureIgnoreCore(bot.coinFailures.get(id)'), 'source bot coin failure wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('staleCoinEscapeDirectionCore(action, self'), 'source bot stale coin escape wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('coinAttemptExpiredCore(attempt, t, options)'), 'source bot coin attempt cleanup does not call strategy core');
-    assert(sourceRuntimeText.includes('coinProgressIntentCore(action)'), 'source bot coin intent wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('coinFailureIgnoreCore(bot.coinFailures.get(progressId)'), 'source bot coin failure wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('staleCoinEscapeDirectionCore(progressAction, progressSelf'), 'source bot stale coin escape wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('coinAttemptExpiredCore(progressAttempt, progressAt, progressOptions)'), 'source bot coin attempt cleanup does not call strategy core');
+    assert(sourceRuntimeText.includes('coinProgressIntentCore(progressAction)'), 'source bot coin intent wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('updateCoinAttemptCore(bot.coinAttempts.get'), 'source bot coin attempt wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('updateCoinProgressRecordCore(previous, attempt, distance, t, options)'), 'source bot coin progress wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes("buildIgnoredCoinProgressCore(id, attempt, distance, t, ignoreUntil, 'stuck')"), 'source bot stuck ignored progress does not call strategy core');
-    assert(sourceRuntimeText.includes("buildIgnoredCoinProgressCore(id, bot.coinProgress, distance, t, ignoreUntil, 'progress')"), 'source bot no-progress ignored progress does not call strategy core');
+    assert(sourceRuntimeText.includes('updateCoinProgressRecordCore(previousProgress, progressAttemptRecord, progressDistance, progressAt, progressOptions)'), 'source bot coin progress wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes("buildIgnoredCoinProgressCore(progressId, progressAttemptRecord, progressDistance, progressAt, progressFailure.ignoreUntil, 'stuck')"), 'source bot stuck ignored progress does not call strategy core');
+    assert(sourceRuntimeText.includes("buildIgnoredCoinProgressCore(progressId, bot.coinProgress, progressDistance, progressAt, staleFailure.ignoreUntil, 'progress')"), 'source bot no-progress ignored progress does not call strategy core');
     assert(sourceRuntimeText.includes('buildIgnoredCoinPatrolActionCore('), 'source bot ignored coin action does not call strategy core');
-    assert(sourceRuntimeText.includes('function clearIgnoredCoinRuntimeState'), 'source bot ignored coin cleanup wrapper not found');
-    assert(sourceRuntimeText.includes('coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, id)'), 'source bot ignored coin cleanup wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('clearIgnoredCoinRuntimeState(id)'), 'source bot ignored coin branches do not call cleanup wrapper');
-    assert(sourceRuntimeText.includes('bot.coinFailures.set(id') && sourceRuntimeText.includes('bot.ignoredCoins.set(id'), 'source bot coin failure wrapper does not retain runtime state writes');
-    assert(sourceRuntimeText.includes('bot.staleCoinEscape = result.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
-    assert(sourceRuntimeText.includes('bot.coinAttempts.set(id, attempt)'), 'source bot coin attempt wrapper does not retain runtime map write');
+    assert(sourceRuntimeText.includes('coinIgnoreCleanupIntentCore(bot.lastTarget, bot.coinApproachLock, progressId)'), 'source bot ignored coin cleanup wrapper does not call strategy core');
+    assert(coinProgressRuntimeSourceModule.includes('clearOpportunityChoiceForCall("\'coin\'", \'progressId\''), 'source bot ignored coin branches do not clear held opportunity choice');
+    assert(sourceRuntimeText.includes('bot.coinFailures.set(progressId') && sourceRuntimeText.includes('bot.ignoredCoins.set(progressId'), 'source bot coin failure wrapper does not retain runtime state writes');
+    assert(sourceRuntimeText.includes('bot.staleCoinEscape = progressEscapeResult.state'), 'source bot stale coin escape wrapper does not retain runtime state write');
+    assert(sourceRuntimeText.includes('bot.coinAttempts.set(progressId, progressAttemptRecord)'), 'source bot coin attempt wrapper does not retain runtime map write');
     assert(sourceRuntimeText.includes('bot.coinProgress = progressResult.progress'), 'source bot coin progress wrapper does not retain runtime state write');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-progress')"), 'generated remote runtime does not hand coin progress helpers to the bundler');
     assert(distSource.includes('function coinFailureIgnoreCore'), 'bundled dist does not contain coin failure ignore core');
@@ -4274,14 +3235,14 @@ function main() {
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsCloserFirstCoinCore'), 'strategy coin route closer-first core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteSkipsHeldSingleCoinCore'), 'strategy coin route held single-coin core not found');
     assert(strategyCoinRouteSource.includes('function coinRouteActionMetaCore'), 'strategy coin route action metadata core not found');
-    assert(opportunityRouteSourceModule.includes("require('./runtime/coin-route')"), 'opportunity-route source does not import coin route through browser runtime adapter');
+    assert(opportunityRouteSourceModule.includes("require('./src/browser/runtime/coin-route')"), 'opportunity-route source does not import coin route through browser runtime adapter');
     assert(!opportunityRouteSourceModule.includes("require('../strategy/coin-route')"), 'opportunity-route source still imports coin route directly from strategy');
     assert(coinRouteRuntimeModule.includes("require('../../strategy/coin-route')"), 'coin-route runtime adapter does not reuse strategy module core');
     assert(coinRouteRuntimeModule.includes('coinRouteKey') && coinRouteRuntimeModule.includes('pickCoinRouteOpportunityCore'), 'coin-route runtime adapter does not export expected helpers');
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/coin-route.js'"), 'bundler spike does not import coin route runtime adapter');
     assert(bundlerSpikeEntrySource.includes('coinRoute.coinRouteActionMetaCore('), 'bundler spike does not execute coin route metadata helper');
     assert(bundlerSpikeBuildSource.includes("status.coinRouteKey === 'route-spike'"), 'bundler spike self-test does not assert coin route execution');
-    assert(opportunityRouteSourceModule.includes('coinRouteHelperSource') && opportunityRouteSourceModule.includes('fn.toString()'), 'source modules do not wire local coin route helper injection');
+    assert(opportunityRouteSourceModule.includes('pickCoinRouteOpportunityCore') && opportunityRouteSourceModule.includes('function coinRouteCoreOptions'), 'source module does not wire bundled coin route helpers');
     assert(sourceRuntimeText.includes('coinRouteActionMetaCore(coin?.coinRoute || null, dir.distance)'), 'source bot coin action does not call route metadata core');
     assert(sourceRuntimeText.includes('function coinRouteCoreOptions'), 'source bot coin route runtime wrapper options not found');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/coin-route')"), 'generated remote runtime does not hand coin route helpers to the bundler');
@@ -4299,14 +3260,14 @@ function main() {
     assert(strategyOpportunityChoiceSource.includes('function highValueCoinHoldBlocksEnemySwitchCore'), 'strategy high-value coin hold core not found');
     assert(strategyOpportunityChoiceSource.includes('function rememberOpportunityChoiceCore'), 'strategy opportunity choice persistence core not found');
     assert(strategyOpportunityChoiceSource.includes('function buildMissingHeldOpportunityCore'), 'strategy missing-held opportunity core not found');
-    assert(opportunityChoiceSourceModule.includes("require('./runtime/opportunity-choice')"), 'opportunity-choice source does not import opportunity choice through browser runtime adapter');
+    assert(opportunityChoiceSourceModule.includes("require('./src/browser/runtime/opportunity-choice')"), 'opportunity-choice source does not import opportunity choice through browser runtime adapter');
     assert(!opportunityChoiceSourceModule.includes("require('../strategy/opportunity-choice')"), 'opportunity-choice source still imports opportunity choice directly from strategy');
     assert(opportunityChoiceRuntimeModule.includes("require('../../strategy/opportunity-choice')"), 'opportunity-choice runtime adapter does not reuse strategy module core');
     assert(opportunityChoiceRuntimeModule.includes('chooseStableOpportunityCore') && opportunityChoiceRuntimeModule.includes('rememberOpportunityChoiceCore'), 'opportunity-choice runtime adapter does not export expected helpers');
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-choice.js'"), 'bundler spike does not import opportunity choice runtime adapter');
     assert(bundlerSpikeEntrySource.includes('opportunityChoice.chooseStableOpportunityCore('), 'bundler spike does not execute opportunity choice stable helper');
     assert(bundlerSpikeBuildSource.includes("status.opportunityChoiceKey === 'coin:choice-held'"), 'bundler spike self-test does not assert opportunity choice execution');
-    assert(opportunityChoiceSourceModule.includes('opportunityChoiceHelperSource') && opportunityChoiceSourceModule.includes('fn.toString()'), 'source modules do not wire local opportunity choice helper injection');
+    assert(opportunityChoiceSourceModule.includes('chooseStableOpportunityCore') && opportunityChoiceSourceModule.includes('function opportunityChoiceCoreOptions'), 'source module does not wire bundled opportunity choice helpers');
     assert(sourceRuntimeText.includes('buildMissingHeldOpportunityCore(bot.opportunityChoice'), 'source bot missing-held wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('function opportunityChoiceCoreOptions'), 'source bot opportunity choice runtime wrapper options not found');
     assert(sourceRuntimeText.includes('switchHoldMs: cfg.opportunitySwitchHoldMs'), 'source bot opportunity choice persistence hold config not wired');
@@ -4371,7 +3332,7 @@ function main() {
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-pick')"), 'generated remote runtime does not hand opportunity pick helper to the bundler');
     assert(!generatedRuntimeSource.includes('function pickBestOpportunityCore'), 'generated remote runtime still inlines opportunity pick core before bundling');
     assert(distSource.includes('function pickBestOpportunityCore'), 'bundled dist does not contain opportunity pick core');
-    assert(!functionBody(opportunityPickSourceModule, 'bundledOpportunityPickSource').includes('function pickBestOpportunity('), 'opportunity-pick bundled source still keeps pick wrapper');
+    assert(!functionBody(opportunityPickSourceModule, 'opportunityPickSource').includes('function pickBestOpportunity('), 'opportunity-pick source still keeps pick wrapper');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('const opportunity = typeof pickBestOpportunityCore'), 'choose-action source does not select opportunity through direct core path');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups'), 'choose-action source does not call opportunity pick core directly');
     assert(distSource.includes('pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups'), 'bundled dist choose-action does not call opportunity pick core directly');
@@ -4393,7 +3354,7 @@ function main() {
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/patrol')"), 'generated remote runtime does not hand patrol helper to the bundler');
     assert(!generatedRuntimeSource.includes('function patrolDirectionCore'), 'generated remote runtime still inlines patrol core before bundling');
     assert(distSource.includes('function patrolDirectionCore'), 'bundled dist does not contain patrol direction core');
-    assert(!functionBody(patrolSourceModule, 'bundledPatrolSource').includes('function patrolDirection('), 'patrol bundled source still keeps patrol direction wrapper');
+    assert(!functionBody(patrolSourceModule, 'patrolSource').includes('function patrolDirection('), 'patrol source still keeps patrol direction wrapper');
     assert(!distSource.includes('function patrolDirection('), 'dist remote bot still keeps patrol direction wrapper');
   });
 
@@ -4546,14 +3507,14 @@ function main() {
     assert(strategyOpportunityCandidatesSource.includes('function buildEnemyOpportunityCandidatesCore'), 'strategy enemy opportunity candidate core not found');
     assert(strategyOpportunityCandidatesSource.includes('function bestCoinOpportunityScoreCore'), 'strategy best coin opportunity score core not found');
     assert(strategyOpportunityCandidatesSource.includes('function opportunityValueScoreCore'), 'strategy opportunity value score core not found');
-    assert(opportunityCandidateSourceModule.includes("require('./runtime/opportunity-candidates')"), 'opportunity-candidate source does not import opportunity candidates through browser runtime adapter');
+    assert(opportunityCandidateSourceModule.includes("require('./src/browser/runtime/opportunity-candidates')"), 'opportunity-candidate source does not import opportunity candidates through browser runtime adapter');
     assert(!opportunityCandidateSourceModule.includes("require('../strategy/opportunity-candidates')"), 'opportunity-candidate source still imports opportunity candidates directly from strategy');
     assert(opportunityCandidatesRuntimeModule.includes("require('../../strategy/opportunity-candidates')"), 'opportunity-candidates runtime adapter does not reuse strategy module core');
     assert(opportunityCandidatesRuntimeModule.includes('buildOpportunityCandidatesCore') && opportunityCandidatesRuntimeModule.includes('bestCoinOpportunityScoreCore'), 'opportunity-candidates runtime adapter does not export expected helpers');
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/opportunity-candidates.js'"), 'bundler spike does not import opportunity candidates runtime adapter');
     assert(bundlerSpikeEntrySource.includes('opportunityCandidates.buildOpportunityCandidatesCore('), 'bundler spike does not execute opportunity candidate combiner helper');
     assert(bundlerSpikeBuildSource.includes('status.opportunityCandidateCount === 2'), 'bundler spike self-test does not assert opportunity candidate execution');
-    assert(opportunityCandidateSourceModule.includes('opportunityCandidateHelperSource') && opportunityCandidateSourceModule.includes('fn.toString()'), 'source modules do not wire local opportunity candidate helper injection');
+    assert(opportunityCandidateSourceModule.includes('buildOpportunityCandidatesCore') && opportunityCandidateSourceModule.includes('function opportunityCandidateCoreOptions'), 'source module does not wire bundled opportunity candidate helpers');
     assert(sourceRuntimeText.includes('function opportunityCandidateCoreOptions'), 'source bot opportunity candidate runtime wrapper options not found');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-candidates')"), 'generated remote runtime does not hand opportunity candidate helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function buildOpportunityCandidatesCore'), 'generated remote runtime still inlines opportunity candidate core before bundling');
@@ -4580,8 +3541,8 @@ function main() {
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropCoinCore'), 'strategy post-attack drop coin picker core not found');
     assert(strategyPostAttackDropSource.includes('function pickPostAttackDropWaitTargetCore'), 'strategy post-attack wait picker core not found');
     assert(strategyDropMatchedKillSource.includes('function buildDropMatchedKillCore'), 'strategy drop-matched kill core not found');
-    assert(postAttackSourceModule.includes("require('./runtime/post-attack-drop')"), 'post-attack source does not import post-attack drop through browser runtime adapter');
-    assert(postAttackSourceModule.includes("require('./combat-history-source')"), 'post-attack source does not import drop-matched kill call helper');
+    assert(postAttackSourceModule.includes("require('./src/browser/runtime/post-attack-drop')"), 'post-attack source does not import post-attack drop through browser runtime adapter');
+    assert(chooseActionSourceModule.includes("require('./combat-history-source')"), 'choose-action source does not import drop-matched kill call helper');
     assert(!postAttackSourceModule.includes("require('../strategy/post-attack-drop')"), 'post-attack source still imports post-attack drop directly from strategy');
     assert(postAttackDropRuntimeModule.includes("require('../../strategy/post-attack-drop')"), 'post-attack drop runtime adapter does not reuse strategy module core');
     assert(postAttackDropRuntimeModule.includes('postAttackVisibleCoinExistsCore') && postAttackDropRuntimeModule.includes('pickPostAttackDropCoinCore') && postAttackDropRuntimeModule.includes('pickPostAttackDropWaitTargetCore'), 'post-attack drop runtime adapter does not export expected helpers');
@@ -4590,7 +3551,7 @@ function main() {
     assert(bundlerSpikeEntrySource.includes('postAttackDrop.pickPostAttackDropCoinCore('), 'bundler spike does not execute post-attack drop picker helper');
     assert(bundlerSpikeBuildSource.includes("status.postAttackDropSelectedId === 'post-attack-coin'"), 'bundler spike self-test does not assert post-attack drop execution');
     assert(bundlerSpikeBuildSource.includes("status.dropMatchedKillVictim === 'Post Target'") && bundlerSpikeBuildSource.includes('status.dropMatchedKillStaminaMs === 150'), 'bundler spike self-test does not assert drop-matched kill execution');
-    assert(postAttackSourceModule.includes('postAttackDropHelperSource') && postAttackSourceModule.includes('fn.toString()'), 'source modules do not wire local post-attack drop helper injection');
+    assert(postAttackSourceModule.includes('pickPostAttackDropCoinCore') && postAttackSourceModule.includes('pickPostAttackDropWaitTargetCore'), 'source module does not wire bundled post-attack drop helpers');
     assert(sourceRuntimeText.includes('pickPostAttackDropCoinCore(bot.attackHistory'), 'source bot post-attack drop coin wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('pickPostAttackDropWaitTargetCore(bot.attackHistory'), 'source bot post-attack wait wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/post-attack-drop')"), 'generated remote runtime does not hand post-attack drop helpers to the bundler');
@@ -4623,17 +3584,17 @@ function main() {
     assert(strategyStaminaBudgetSource.includes('function summarizeBlockedStaminaOpportunityCore'), 'strategy blocked stamina summary core not found');
     assert(strategyStaminaBudgetSource.includes('function summarizeNearestCoinStaminaBudgetExitCore'), 'strategy nearest coin stamina exit core not found');
     assert(strategyStaminaBudgetSource.includes('function pickNearestDailyStaminaFinalCoinCore'), 'strategy daily final coin picker core not found');
-    assert(opportunityStaminaSourceModule.includes("require('./runtime/stamina-budget')"), 'opportunity-stamina source does not import stamina budget through browser runtime adapter');
+    assert(opportunityStaminaSourceModule.includes("require('./src/browser/runtime/stamina-budget')"), 'opportunity-stamina source does not import stamina budget through browser runtime adapter');
     assert(!opportunityStaminaSourceModule.includes("require('../strategy/stamina-budget')"), 'opportunity-stamina source still imports stamina budget directly from strategy');
     assert(staminaBudgetRuntimeModule.includes("require('../../strategy/stamina-budget')"), 'stamina-budget runtime adapter does not reuse strategy module core');
     assert(staminaBudgetRuntimeModule.includes('dailyStaminaBudgetIsLimitingCore') && staminaBudgetRuntimeModule.includes('summarizeNearestCoinStaminaBudgetExitCore') && staminaBudgetRuntimeModule.includes('pickNearestDailyStaminaFinalCoinCore'), 'stamina-budget runtime adapter does not export expected helpers');
     assert(bundlerSpikeEntrySource.includes("from '../browser/runtime/stamina-budget.js'"), 'bundler spike does not import stamina-budget runtime adapter');
     assert(bundlerSpikeEntrySource.includes('staminaBudget.dailyStaminaBudgetIsLimitingCore('), 'bundler spike does not execute stamina budget helper');
     assert(bundlerSpikeBuildSource.includes('status.staminaBudgetExitShortageMs === 50'), 'bundler spike self-test does not assert stamina budget execution');
-    assert(opportunityStaminaSourceModule.includes('staminaBudgetHelperSource') && opportunityStaminaSourceModule.includes('fn.toString()'), 'source modules do not wire local stamina budget helper injection');
+    assert(opportunityStaminaSourceModule.includes('dailyStaminaBudgetIsLimitingCore') && opportunityStaminaSourceModule.includes('pickNearestDailyStaminaFinalCoinCore'), 'source module does not wire bundled stamina budget helpers');
     assert(sourceRuntimeText.includes('dailyStaminaBudgetIsLimitingCore('), 'source bot daily stamina wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore(coins, targets'), 'source bot blocked stamina wrapper does not call strategy core');
-    assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore(self, coins'), 'source bot nearest stamina exit wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('summarizeBlockedStaminaOpportunityCore(realtimeCoins, []'), 'source bot blocked stamina wrapper does not call strategy core');
+    assert(sourceRuntimeText.includes('summarizeNearestCoinStaminaBudgetExitCore(') && sourceRuntimeText.includes('safeCoinCandidates(realtimeCoins, coinThreats, cfg.globalCoinMaxDistance, self)'), 'source bot nearest stamina exit wrapper does not call strategy core');
     assert(sourceRuntimeText.includes('pickNearestDailyStaminaFinalCoinCore('), 'source bot daily final coin wrapper does not call strategy core');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/stamina-budget')"), 'generated remote runtime does not hand stamina budget helpers to the bundler');
     assert(!generatedRuntimeSource.includes('function dailyStaminaBudgetIsLimitingCore'), 'generated remote runtime still inlines daily stamina budget core before bundling');
@@ -4690,7 +3651,7 @@ function main() {
     assert(distSource.includes('function recordActionSwitchDiagnosticsCore'), 'bundled dist does not contain target switch diagnostic core');
     assert(distSource.includes('targetSwitch: snapshot'), 'bundled dist target switch event is not attached to decisions');
     assert(sourceRuntimeText.includes('targetSwitchDiagnostics: this.targetSwitchDiagnostics'), 'status does not expose target switch diagnostics');
-    assert(functionBody(tickSourceModule, 'tickSource').includes("recordActionSwitchDiagnosticsCall('action', 'source', options)"), 'tick source does not generate direct target switch diagnostics call');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("recordActionSwitchDiagnosticsCall('action', 'source')"), 'tick source does not generate direct target switch diagnostics call');
     assert(generatedRuntimeSource.includes('recordActionSwitchDiagnosticsCore(action, targetSwitchState'), 'generated runtime does not record target switch diagnostics directly');
     assert(combatLogSourceModule.includes("type: 'target-switch'"), 'standalone target-switch log entry not found');
     assert(combatLogSourceModule.includes('recordTargetSwitchLog(source, decision || {})'), 'target switch diagnostics are not recorded on each log tick');
@@ -4712,7 +3673,7 @@ function main() {
     assert(distSource.includes('function finalActionBandRank'), 'bundled dist does not contain final action priority band rank helper');
     assert(distSource.includes('function applyFinalActionArbitrationCore'), 'bundled dist does not contain final action arbitration core');
     assert(distSource.includes('higher-priority-band-stick'), 'final action hysteresis reason not found in bundled dist');
-    assert(functionBody(tickSourceModule, 'tickSource').includes("applyFinalActionArbitrationCall('action', 'source', options)"), 'tick source does not generate direct final action arbitration call');
+    assert(functionBody(tickSourceModule, 'tickSource').includes("applyFinalActionArbitrationCall('action', 'source')"), 'tick source does not generate direct final action arbitration call');
     assert(generatedRuntimeSource.includes('applyFinalActionArbitrationCore(action, finalActionState'), 'generated runtime does not run final action arbitration directly');
     assert(generatedRuntimeSource.indexOf('applyFinalActionArbitrationCore(action, finalActionState') < generatedRuntimeSource.indexOf('recordActionSwitchDiagnosticsCore(action, targetSwitchState'), 'final action arbitration must run before target-switch diagnostics');
     assert(sourceRuntimeText.includes('finalActionArbitration: this.finalActionArbitration'), 'status does not expose final action arbitration state');
