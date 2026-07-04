@@ -4742,7 +4742,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.448" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.449" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10344,7 +10344,6 @@
     }
     const {
       isExitLoginSuppressReasonCore,
-      startExitAuditBoundCore,
       setExitReloginSuppressCore
     } = require_exit_relogin();
     function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
@@ -10361,15 +10360,6 @@
         finalizeLeaveDisplayReason,
         writePersistentExitState,
         setLoginSuppress,
-        now: Date.now
-      });
-    }
-    function startExitAudit(detail, meta = {}) {
-      return startExitAuditBoundCore(detail, meta, bot, {
-        resetLoginSnapshotGate,
-        loginPointSafetyExitSelfForDetail,
-        ensureExitAuditDetail,
-        recordExitAuditEvent,
         now: Date.now
       });
     }
@@ -12116,7 +12106,8 @@
     }
     const {
       offlineExitRequiresUnsafeReloginDelayCore,
-      primePendingUnsafeExitLoginSuppressBoundCore
+      primePendingUnsafeExitLoginSuppressBoundCore,
+      startExitAuditBoundCore
     } = require_exit_relogin();
     async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
       const t = Date.now();
@@ -12153,7 +12144,7 @@
         summary: offlineLeaveSummary(reason, offlineSafety),
         error: ""
       };
-      startExitAudit(detail, { scope: "offline", source: "offline", reason, self: selfSummary, offlineSafety });
+      startExitAuditBoundCore(detail, { scope: "offline", source: "offline", reason, self: selfSummary, offlineSafety }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
       bot.lastOfflineLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
@@ -12197,7 +12188,7 @@
         summary: injuryLeaveSummary(injury),
         error: ""
       };
-      startExitAudit(detail, { scope: "enemy", source: "injury", reason: detail.reason, self: injury?.self || injury, injury });
+      startExitAuditBoundCore(detail, { scope: "enemy", source: "injury", reason: detail.reason, self: injury?.self || injury, injury }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
       bot.lastInjuryLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
@@ -12241,7 +12232,7 @@
         summary: pursuitLeaveSummary(pursuitSummary),
         error: ""
       };
-      startExitAudit(detail, { scope: "enemy", source: "pursuit", reason: detail.reason, self: selfSummary, pursuit: pursuitSummary });
+      startExitAuditBoundCore(detail, { scope: "enemy", source: "pursuit", reason: detail.reason, self: selfSummary, pursuit: pursuitSummary }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
       bot.lastPursuitLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
@@ -12294,7 +12285,7 @@
         summary: action?.exitSummary || combatExitSummary(action?.reason || "combat-low-hp-leave", action?.target || null, action?.combatState || {}),
         error: ""
       };
-      startExitAudit(detail, { scope: "enemy", source: "combat", reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null });
+      startExitAuditBoundCore(detail, { scope: "enemy", source: "combat", reason, self: selfSummary, target: action?.target || null, combat: action?.combatState || null }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
       bot.lastCombatLeaveAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted) {
@@ -12342,7 +12333,7 @@
         reloginDelayMs: active?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || 0,
         error: ""
       };
-      startExitAudit(detail, { scope: "enemy", source: "enemy-hold-retry", reason });
+      startExitAuditBoundCore(detail, { scope: "enemy", source: "enemy-hold-retry", reason }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
       bot.lastEnemyLeaveRetryAt = t;
       await issueLeaveCommand(detail);
       if (detail.attempted && !detail.error) bot.pendingCombatLeave = null;
