@@ -119,6 +119,7 @@ async function selfTest() {
   assert(source.includes('function combatExitSummaryCore'), 'exit-relogin summary helper was not bundled');
   assert(source.includes('function isExitLoginSuppressReasonCore'), 'exit-relogin hold helper was not bundled');
   assert(source.includes('function setEnemyLeaveSuppressCore'), 'exit-relogin enemy suppress helper was not bundled');
+  assert(source.includes('function staminaExitHoldUntilForDetailBoundCore'), 'exit-relogin stamina hold bound helper was not bundled');
   assert(source.includes('function enemyReloginHoldRemainingMsCore'), 'exit-relogin hold read helper was not bundled');
   assert(source.includes('function setOfflineLeaveSuppressCore'), 'exit-relogin offline suppress helper was not bundled');
   assert(source.includes('function clearEnemyReloginHoldCore'), 'exit-relogin hold clear helper was not bundled');
@@ -289,6 +290,7 @@ async function selfTest() {
   assert(status.exitReloginEnemySuppressReturn === 12345, 'spike did not return enemy suppress delegate result');
   assert(status.exitReloginBudgetHoldUntil === 4000, 'spike did not execute exit relogin stamina budget hold helper');
   assert(status.exitReloginStaminaHoldReason === 'stamina reset', 'spike did not execute exit relogin stamina hold selector');
+  assert(status.exitReloginStaminaHoldBoundReason === 'stamina reset', 'spike did not execute exit relogin bound stamina hold selector');
   assert(status.exitReloginOfflineUnsafe === true, 'spike did not execute exit relogin unsafe offline delay predicate');
   assert(status.exitReloginEnemyHoldRemaining === 2000, 'spike did not execute exit relogin enemy hold reader');
   assert(status.exitReloginEnemyHoldBotUntil === 3000, 'spike did not update bot enemy relogin hold');

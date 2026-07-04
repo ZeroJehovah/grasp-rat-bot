@@ -482,6 +482,17 @@ function staminaExitHoldUntilForDetailCore(detail, t, helpers) {
   return holds.sort((a, b) => Number(b.until || 0) - Number(a.until || 0))[0] || null;
 }
 
+function staminaExitHoldUntilForDetailBoundCore(detail, t, helpers) {
+  return staminaExitHoldUntilForDetailCore(detail, t, {
+    staminaBudgetExitHoldUntil: (staminaBudgetExit, at) => staminaBudgetExitHoldUntilCore(
+      staminaBudgetExit,
+      at,
+      helpers.staminaBudgetReloginDelayMs
+    ),
+    staminaResetHoldUntil: helpers.staminaResetHoldUntil
+  });
+}
+
 function offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety) {
   if (!offlineSafety) return false;
   if (offlineSafety.unsafe || offlineSafety.reconnectChurn || offlineSafety.noSelfGameSession || offlineSafety.staminaExhausted || offlineSafety.samplingOutage || offlineSafety.combatTickGap) return true;
@@ -678,6 +689,7 @@ module.exports = {
   setEnemyLeaveSuppressCore,
   staminaBudgetExitHoldUntilCore,
   staminaExitHoldUntilForDetailCore,
+  staminaExitHoldUntilForDetailBoundCore,
   offlineExitRequiresUnsafeReloginDelayCore,
   enemyReloginHoldRemainingMsCore,
   offlineReloginHoldRemainingMsCore,
