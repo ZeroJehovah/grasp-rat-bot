@@ -346,7 +346,6 @@ async function main() {
   const targetOverlaySourceModule = readText('src/browser/target-overlay-source.js');
   const targetWhitelistSourceModule = readText('src/browser/target-whitelist-source.js');
   const statusPanelSourceModule = readText('src/browser/status-panel-source.js');
-  const statusPanelRuntimeSourceModule = readText('src/browser/status-panel-runtime-source.js');
   const displayFormatRuntimeModule = readText('src/browser/runtime/display-format.js');
   const arrayCountRuntimeModule = readText('src/browser/runtime/array-count.js');
   const runtimeUtilsSourceModule = readText('src/browser/runtime-utils-source.js');
@@ -459,7 +458,6 @@ async function main() {
     targetOverlaySourceModule,
     targetWhitelistSourceModule,
     statusPanelSourceModule,
-    statusPanelRuntimeSourceModule,
     displayFormatRuntimeModule,
     arrayCountRuntimeModule,
     runtimeUtilsSourceModule,
@@ -690,10 +688,10 @@ async function main() {
     assert(!runtimeUtilsSourceModule.includes("require('./runtime/runtime-utils')"), 'runtime-utils source module still imports helper for inline injection');
     assert(runtimeUtilsRuntimeModule.includes("require('../../shared/runtime-utils')"), 'browser runtime-utils helper module does not reuse shared runtime utilities');
     assert(runtimeUtilsRuntimeModule.includes('safeStringify') && runtimeUtilsRuntimeModule.includes('safeJsonClone') && runtimeUtilsRuntimeModule.includes('sanitizeCombatLogIdPart'), 'browser runtime-utils helper module exports are incomplete');
-    assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
+    assert(!fs.existsSync(path.join(ROOT, 'src/browser/status-panel-runtime-source.js')), 'obsolete status-panel runtime wrapper still exists');
+    assert(statusPanelSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel source does not expose a bundler-owned display-format require');
     assert(displayFormatRuntimeModule.includes("require('../../shared/display-format')"), 'browser display-format helper module does not reuse shared display helpers');
     assert(displayFormatRuntimeModule.includes('escapeHtml') && displayFormatRuntimeModule.includes('formatDistance') && displayFormatRuntimeModule.includes('formatDurationMs') && displayFormatRuntimeModule.includes('actorLabel') && displayFormatRuntimeModule.includes('hpDisplay'), 'browser display-format helper module exports are incomplete');
-    assert(statusPanelRuntimeSourceModule.includes("require('./status-panel-source')"), 'status-panel runtime source module import not found');
     assert(exitSummaryRuntimeModule.includes("require('../../shared/exit-summary')"), 'browser exit-summary helper module does not reuse shared exit-summary helpers');
     assert(exitSummaryRuntimeModule.includes('staminaExhaustedLongWindows') && exitSummaryRuntimeModule.includes('staminaExhaustedWindowLabel') && exitSummaryRuntimeModule.includes('staminaEvidenceRemaining') && exitSummaryRuntimeModule.includes('staminaHoldContradictedByStaminaEvidence') && exitSummaryRuntimeModule.includes('offlineLeaveSummaryText') && exitSummaryRuntimeModule.includes('combatLogExitSummaryFromDecision'), 'browser exit-summary helper module exports are incomplete');
     assert(combatLogRuntimeSourceModule.includes("require('./src/browser/runtime/exit-summary')"), 'combat-log runtime source does not expose a bundler-owned exit-summary require');
@@ -713,7 +711,8 @@ async function main() {
     assert(targetWhitelistRuntimeModule.includes('normalizeTargetWhitelistName') && targetWhitelistRuntimeModule.includes('parseTargetWhitelistNames') && targetWhitelistRuntimeModule.includes('deriveTargetWhitelistUrl'), 'browser target-whitelist helper module exports are incomplete');
     assert(runtimeFragmentRegistryModule.includes("require('./target-overlay-source')"), 'target-overlay source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./target-whitelist-source')"), 'target-whitelist source module import not found');
-    assert(runtimeFragmentRegistryModule.includes("require('./status-panel-runtime-source')"), 'status-panel runtime source module import not found');
+    assert(runtimeFragmentRegistryModule.includes("require('./status-panel-source')"), 'status-panel source module import not found');
+    assert(!runtimeFragmentRegistryModule.includes("require('./status-panel-runtime-source')"), 'runtime fragment registry still imports obsolete status-panel runtime wrapper');
     assert(runtimeFragmentRegistryModule.includes("require('./runtime-utils-source')"), 'runtime-utils source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./combat-log-runtime-source')"), 'combat-log runtime source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./important-log-source')"), 'important-log source module import not found');
@@ -800,7 +799,7 @@ async function main() {
     assert(!runtimeFragmentsSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
     assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)]"), 'runtime-utility-prelude fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelRuntimeSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
     assert(!fragmentEntriesBody.includes('array-count'), 'obsolete standalone array-count fragment is still registered');
     assert(!fragmentEntriesBody.includes('runtime-utility-clone'), 'obsolete empty runtime-utility-clone fragment is still registered');
     assert(fragmentEntriesBody.includes("['combat-log-runtime', () => combatLogRuntimeSource(config)]"), 'combat-log-runtime fragment is not config-aware for bundled runtime migration');
@@ -822,7 +821,7 @@ async function main() {
     [
       ['runtime-bootstrap', runtimeBootstrapSourceModule],
       ['runtime-utils', runtimeUtilsSourceModule],
-      ['status-panel-runtime', statusPanelRuntimeSourceModule],
+      ['status-panel-runtime', statusPanelSourceModule],
       ['combat-log-runtime', combatLogRuntimeSourceModule],
       ['control-login-runtime', controlLoginRuntimeSourceModule],
       ['combat-history', combatHistorySourceModule],
@@ -873,13 +872,13 @@ async function main() {
     assert(bundlerSpikeEntrySource.includes("from './runtime/runtime-state-bindings.js'"), 'runtime helper entry does not import runtime-state-bindings helper');
     assert(bundlerSpikeEntrySource.includes('runtimeStateBindings.createRuntimeStateBindings('), 'runtime helper entry does not execute runtime-state-bindings helper');
     assert(bundlerSpikeBuildSource.includes("status.runtimeStateLastSelfId === 'state-binding-self'"), 'runtime helper entry self-test does not assert runtime-state last-self binding');
-    assert(statusPanelRuntimeSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel runtime source factory not found');
-    assert(!statusPanelRuntimeSourceModule.includes('bundledStatusPanelRuntimeSource'), 'status-panel runtime bundled selector wrapper should be removed');
-    assert(!statusPanelRuntimeSourceModule.includes("require('./runtime/display-format')"), 'status-panel runtime should not import display helpers for inline injection');
-    assert(statusPanelRuntimeSourceModule.includes('module.exports = {\n  statusPanelRuntimeSource\n}'), 'status-panel runtime source export not found');
-    assert(statusPanelRuntimeSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel runtime source does not expose a bundler-owned display-format require');
-    assert(!statusPanelRuntimeSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel runtime still keeps inline display helper binding');
     assert(statusPanelSourceModule.includes('function statusPanelSource()'), 'status-panel source factory should not accept inline helper fallbacks');
+    assert(!statusPanelSourceModule.includes('function statusPanelRuntimeSource()'), 'status-panel source should not keep obsolete runtime wrapper factory');
+    assert(!statusPanelSourceModule.includes('bundledStatusPanelRuntimeSource'), 'status-panel bundled selector wrapper should be removed');
+    assert(!statusPanelSourceModule.includes("require('./runtime/display-format')"), 'status-panel source should not import display helpers for inline injection');
+    assert(statusPanelSourceModule.includes('module.exports = {\n  statusPanelSource\n}'), 'status-panel source export not found');
+    assert(statusPanelSourceModule.includes("require('./src/browser/runtime/display-format')"), 'status-panel source does not expose a bundler-owned display-format require');
+    assert(!statusPanelSourceModule.includes('return statusPanelSource({ escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay });'), 'status-panel source still keeps inline display helper binding');
     assert(!statusPanelSourceModule.includes('helpers = {}'), 'status-panel source still accepts inline helper fallback object');
     assert(!statusPanelSourceModule.includes('.toString()'), 'status-panel source still inlines display helpers from function text');
     assert(combatLogRuntimeSourceModule.includes('function combatLogRuntimeSource()'), 'combat-log runtime source factory not found');
@@ -933,7 +932,7 @@ async function main() {
     [
       'targetOverlaySource',
       'targetWhitelistSource',
-      'statusPanelRuntimeSource',
+      'statusPanelSource',
       'runtimeUtilityPreludeSource',
       'combatLogRuntimeSource',
       'tickSafetySource',
@@ -1087,7 +1086,6 @@ async function main() {
       ['target-overlay', targetOverlaySourceModule, 'targetOverlaySource'],
       ['target-whitelist', targetWhitelistSourceModule, 'targetWhitelistSource'],
       ['status-panel', statusPanelSourceModule, 'statusPanelSource'],
-      ['status-panel-runtime', statusPanelRuntimeSourceModule, 'statusPanelRuntimeSource'],
       ['combat-log', combatLogSourceModule, 'combatLogSource'],
       ['combat-log-runtime', combatLogRuntimeSourceModule, 'combatLogRuntimeSource'],
       ['important-log', importantLogSourceModule, 'importantLogSource'],
@@ -1148,7 +1146,7 @@ async function main() {
     }
 
     const runtimeRequires = [
-      [statusPanelRuntimeSourceModule, "require('./src/browser/runtime/display-format')", 'status-panel display-format'],
+      [statusPanelSourceModule, "require('./src/browser/runtime/display-format')", 'status-panel display-format'],
       [combatLogRuntimeSourceModule, "require('./src/browser/runtime/exit-summary')", 'combat-log exit-summary'],
       [runtimeUtilsSourceModule, "require('./src/browser/runtime/runtime-utils')", 'runtime utils'],
       [runtimeUtilsSourceModule, "require('./src/browser/runtime/array-count')", 'array count'],

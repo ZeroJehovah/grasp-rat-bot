@@ -3,7 +3,7 @@
 const { runtimeBootstrapSource } = require('./runtime-bootstrap-source');
 const { targetOverlaySource } = require('./target-overlay-source');
 const { targetWhitelistSource } = require('./target-whitelist-source');
-const { statusPanelRuntimeSource } = require('./status-panel-runtime-source');
+const { statusPanelSource } = require('./status-panel-source');
 const {
   runtimeUtilityPreludeSource
 } = require('./runtime-utils-source');
@@ -97,7 +97,7 @@ function browserRuntimeFragmentEntries(config) {
     `
 
     `],
-    ['status-panel-runtime', () => statusPanelRuntimeSource(config)],
+    ['status-panel-runtime', () => statusPanelSource(config)],
     ['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)],
     ['combat-log-runtime', () => combatLogRuntimeSource(config)],
     ['separator-after-combat-log-runtime',
