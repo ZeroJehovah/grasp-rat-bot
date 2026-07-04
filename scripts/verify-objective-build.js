@@ -2453,7 +2453,7 @@ function main() {
       assert(chooseBody.includes('pickPostAttackDropCoin(self, realtimeCoins'), 'post-attack pickup is not limited to realtime coins');
       assert(chooseBody.includes('{ coins: realtimeGlobalCoins, maxDistance: cfg.globalCoinMaxDistance }'), 'normal opportunity coin pool is not limited to realtime coins');
       assert(chooseBody.includes('realtimeGlobalTargets.filter(isAfkProfitTarget)'), 'normal AFK opportunity pool is not limited to realtime targets');
-      const visibleOpportunityIndex = chooseBody.indexOf('const opportunity = pickBestOpportunity(');
+      const visibleOpportunityIndex = chooseBody.indexOf('const opportunity = typeof pickBestOpportunityCore');
       const distantCoinIndex = chooseBody.indexOf('const distantCoin = pickDistantCoin(self, realtimeCoins');
       const localRealtimeIndex = chooseBody.indexOf('if (localRealtimeCoin) {');
       const shotWaitIndex = chooseBody.indexOf('const shotWait = buildOpportunisticShotWait(self, realtimeEntities');
@@ -2477,7 +2477,7 @@ function main() {
       const routeCoreSource = file === 'grasp-rat-bot.js' ? strategyCoinRouteSource : finalRuntimeText;
       const routeCoreBody = functionBody(routeCoreSource, 'pickCoinRouteOpportunityCore');
       const bestBody = functionBody(text, 'bestCoinOpportunityScore');
-      const pickBody = functionBody(text, 'pickBestOpportunity');
+      const pickBody = file === 'grasp-rat-bot.js' ? functionBody(text, 'pickBestOpportunity') : '';
       const pickCoreSource = file === 'grasp-rat-bot.js' ? strategyOpportunityPickSource : finalRuntimeText;
       const pickCoreBody = functionBody(pickCoreSource, 'pickBestOpportunityCore');
       const opportunityCandidateCoreSource = file === 'grasp-rat-bot.js' ? strategyOpportunityCandidatesSource : finalRuntimeText;
@@ -2505,6 +2505,9 @@ function main() {
       assert(bestBody.includes('pickCoinRouteOpportunity') && bestBody.includes('bestCoinOpportunityScoreCore'), 'profitable combat comparison does not include coin route score');
       assert(pickBody.includes('pickCoinRouteOpportunity') || pickCoreBody.includes('pickCoinRouteOpportunity'), 'visible opportunity selection does not include coin route');
       assert(pickBody.includes('buildOpportunityCandidatesCore') || pickCoreBody.includes('buildOpportunityCandidatesCore'), 'visible opportunity selection does not use opportunity candidate core');
+      if (file !== 'grasp-rat-bot.js') {
+        assert(text.includes('pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups'), 'bundled visible opportunity selection does not call opportunity pick core directly');
+      }
       assert(coinCandidateBody.includes('mergeCoinRouteDisplayCore(previous, routeCoin)'), 'same-first-coin route metadata is not preserved for overlay display');
       assert(coinCandidateBody.includes('routeHeld: Boolean(coin.routeHeld)'), 'coin route held metadata is not propagated to opportunity choice');
       assert(coinCandidateBody.includes("actionKind = Number(coin.distance || Infinity) <= Number(options.maxCoinDistance") && coinCandidateBody.includes('seek-coin'), 'coin route action kind does not preserve coin/seek-coin split');
@@ -4050,7 +4053,11 @@ function main() {
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-pick')"), 'generated remote runtime does not hand opportunity pick helper to the bundler');
     assert(!generatedRuntimeSource.includes('function pickBestOpportunityCore'), 'generated remote runtime still inlines opportunity pick core before bundling');
     assert(distSource.includes('function pickBestOpportunityCore'), 'bundled dist does not contain opportunity pick core');
-    assert(distSource.includes('return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups'), 'bundled dist pick wrapper does not call opportunity pick core');
+    assert(!functionBody(opportunityPickSourceModule, 'bundledOpportunityPickSource').includes('function pickBestOpportunity('), 'opportunity-pick bundled source still keeps pick wrapper');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('const opportunity = typeof pickBestOpportunityCore'), 'choose-action source does not select opportunity through direct core path');
+    assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups'), 'choose-action source does not call opportunity pick core directly');
+    assert(distSource.includes('pickBestOpportunityCore(self, coinThreats, opportunityCoinGroups, opportunityEnemyGroups'), 'bundled dist choose-action does not call opportunity pick core directly');
+    assert(!distSource.includes('function pickBestOpportunity('), 'dist remote bot still keeps opportunity pick wrapper');
   });
 
   check('patrol direction uses strategy module core', () => {

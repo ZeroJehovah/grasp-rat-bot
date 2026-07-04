@@ -39,22 +39,7 @@ function opportunityPickInlineSource() {
 }
 
 function bundledOpportunityPickSource() {
-  return `const { pickBestOpportunityCore } = require('./src/browser/runtime/opportunity-pick');
-
-  function pickBestOpportunity(self, activeThreats, coinGroups, enemyGroups, options = {}) {
-    return pickBestOpportunityCore(self, activeThreats, coinGroups, enemyGroups, {
-      ...options,
-      enemyOpportunityCandidates,
-      uniqueVisibleRouteCoins,
-      pickCoinRouteOpportunity,
-      opportunityCandidateCoreOptions,
-      buildCoinAction,
-      buildEnemyAction,
-      buildMissingHeldOpportunity,
-      chooseStableOpportunity,
-      rememberOpportunityChoice
-    });
-  }`;
+  return `const { pickBestOpportunityCore } = require('./src/browser/runtime/opportunity-pick');`;
 }
 
 function opportunityPickSource(options = {}) {
