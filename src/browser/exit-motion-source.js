@@ -9,10 +9,6 @@ function exitMotionInlineSource() {
     return Math.max(0, Math.round(stoppedAt + lockMs - t));
   }
 
-  function exitMotionStopActive(t = Date.now()) {
-    return exitMotionStopLockRemainingMs(t) > 0;
-  }
-
   function postExitDecisionWithoutTarget(decision, reason = '') {
     const previous = decision && typeof decision === 'object' ? decision : {};
     return {
@@ -59,10 +55,6 @@ function bundledExitMotionSource() {
 
   function exitMotionStopLockRemainingMs(t = Date.now()) {
     return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
-  }
-
-  function exitMotionStopActive(t = Date.now()) {
-    return exitMotionStopLockRemainingMs(t) > 0;
   }
 
   function postExitDecisionWithoutTarget(decision, reason = '') {

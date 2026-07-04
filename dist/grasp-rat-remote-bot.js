@@ -4796,7 +4796,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.481" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.482" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -5761,9 +5761,6 @@
     function exitMotionStopLockRemainingMs(t = Date.now()) {
       return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
     }
-    function exitMotionStopActive(t = Date.now()) {
-      return exitMotionStopLockRemainingMs(t) > 0;
-    }
     function postExitDecisionWithoutTarget(decision, reason = "") {
       return postExitDecisionWithoutTargetCore(decision, reason, {
         lastExitMotionStopReason: bot.lastExitMotionStopReason,
@@ -5791,7 +5788,7 @@
       if (overlay) overlay.remove();
     }
     function targetOverlaySuppressedAfterExit(decision) {
-      if (exitMotionStopActive()) return true;
+      if (exitMotionStopLockRemainingMs() > 0) return true;
       if (decision?.exitMotionStopped) return true;
       if (decision?.leave?.exitConfirmed) return true;
       const reason = String(decision?.reason || "");

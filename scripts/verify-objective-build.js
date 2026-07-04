@@ -1350,14 +1350,17 @@ function main() {
     const exitMotionInlineBody = functionBody(exitMotionSourceModule, 'exitMotionInlineSource');
     assert(exitMotionInlineBody.includes('String.raw`'), 'exit-motion inline source factory does not return raw browser source');
     assert(exitMotionInlineBody.includes('function exitMotionStopLockRemainingMs'), 'exit-motion inline source factory does not include motion stop lock helper');
+    assert(!exitMotionInlineBody.includes('function exitMotionStopActive'), 'exit-motion inline source still keeps stop-active alias');
     assert(exitMotionInlineBody.includes('function postExitDecisionWithoutTarget'), 'exit-motion inline source factory does not include post-exit decision helper');
     assert(exitMotionInlineBody.includes('function clearPostExitTargetState'), 'exit-motion inline source factory does not include post-exit target cleanup helper');
     assert(exitMotionInlineBody.includes('removeTargetOverlay()'), 'exit-motion inline source factory does not clear target overlay');
     const exitMotionBundledBody = functionBody(exitMotionSourceModule, 'bundledExitMotionSource');
     assert(exitMotionBundledBody.includes("require('./src/browser/runtime/exit-motion')"), 'exit-motion bundled source does not hand exit-motion core to the bundler');
     assert(exitMotionBundledBody.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'exit-motion bundled source does not call lock core with runtime state/config');
+    assert(!exitMotionBundledBody.includes('function exitMotionStopActive'), 'exit-motion bundled source still keeps stop-active alias');
     assert(exitMotionBundledBody.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'exit-motion bundled source does not call decision core');
     assert(exitMotionBundledBody.includes('removeTargetOverlay()'), 'exit-motion bundled source does not retain target overlay cleanup');
+    assert(functionBody(targetOverlaySourceModule, 'targetOverlaySuppressedAfterExit').includes('exitMotionStopLockRemainingMs() > 0'), 'target overlay still relies on exit-motion stop-active alias');
     assert(arrayCountSourceModule.includes('function arrayCountSource(options = {}) {'), 'array-count source factory not found');
     assert(arrayCountSourceModule.includes('function bundledArrayCountSource()'), 'bundled array-count source factory not found');
     assert(arrayCountSourceModule.includes('module.exports = { arrayCountSource }'), 'array-count source module export not found');
@@ -4122,6 +4125,7 @@ function main() {
     assert(distSource.includes('function postExitDecisionWithoutTargetCore'), 'bundled dist does not contain exit-motion decision core');
     assert(distSource.includes('exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t)'), 'bundled dist exit-motion lock wrapper does not call strategy core');
     assert(distSource.includes('postExitDecisionWithoutTargetCore(decision, reason'), 'bundled dist exit-motion decision wrapper does not call strategy core');
+    assert(!distSource.includes('function exitMotionStopActive('), 'dist remote bot still keeps exit-motion stop-active alias');
   });
 
   check('persistent exit uses browser runtime adapter', () => {
