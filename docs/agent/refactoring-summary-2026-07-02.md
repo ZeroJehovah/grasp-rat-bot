@@ -1,5 +1,14 @@
 # Grasp Rat Bot - Strategy Refactoring Summary
 
+## 2026-07-05 Follow-up: Runtime Fragment Registry Split
+
+`bootstrap-0.4.501` splits the ordered browser runtime fragment provider graph from the fragment materializer:
+
+- `src/browser/runtime-fragment-registry.js` now owns all browser runtime fragment provider imports and the ordered `browserRuntimeFragmentEntries(config)` tuple list.
+- `src/browser/runtime-fragments-source.js` now owns only the named fragment contract, validation, materialization, and final fragment composition. It drops from 300 lines to 33 lines.
+- `scripts/verify-objective-build.js` checks the registry/materializer boundary, rejects provider imports in the materializer, requires the materializer to import the registry, and still verifies explicit fragment materialization plus generated/dist hash alignment.
+- The production dist records manifest SHA-256 `95be4880f5a6cc53b46a8ddbc64369da9476b777adcc7e35b55b0b959273f730` with direct source SHA-256 `a9527de3aa4213e7a942794a3dcd033ba12cc5177f41eedc820ab4f2f2801863`.
+
 ## 2026-07-05 Follow-up: Virtual Entry Bundler Migration
 
 `bootstrap-0.4.500` moves the shared remote bundler to esbuild virtual entry modules:
