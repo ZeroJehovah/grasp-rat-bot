@@ -1,7 +1,16 @@
 'use strict';
 
-function tickSource() {
-  return String.raw`  async function tick(source = 'timer') {
+function tickSource(options = {}) {
+  const clearPrelude = options.bundledRuntime
+    ? "  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    : '';
+  const clearEnemyOnlineRestore = options.bundledRuntime
+    ? "clearEnemyReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during enemy hold', { now: Date.now, activeEnemyLeaveDetail, writePersistentPendingExitState, clearPersistentPendingExitState, clearExitHoldDetail, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY })"
+    : "clearEnemyReloginHold('online self restored during enemy hold')";
+  const clearOfflineOnlineRestore = options.bundledRuntime
+    ? "clearOfflineReloginHoldForTickBoundCore(bot, localStorage, 'online self restored during offline hold', { now: Date.now, writePersistentPendingExitState, clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY })"
+    : "clearOfflineReloginHold('online self restored during offline hold')";
+  return String.raw`${clearPrelude}  async function tick(source = 'timer') {
     if (!bot.running) return;
     if (bot.ticking) {
       await handleTickReentryCombatGap(source);
@@ -81,7 +90,7 @@ function tickSource() {
 	      const enemyHoldControl = summarizeControl();
 	      let enemyHoldRemainingMs = enemyReloginHoldRemainingMs();
 	      if (enemyHoldRemainingMs > 0 && self && isAlive(self) && enemyHoldControl.wsOpen) {
-	        clearEnemyReloginHold('online self restored during enemy hold');
+	        ${clearEnemyOnlineRestore};
 	        enemyHoldRemainingMs = 0;
 	      }
 		      if (enemyHoldRemainingMs > 0) {
@@ -120,7 +129,7 @@ function tickSource() {
       const offlineHoldControl = summarizeControl();
       let offlineHoldRemainingMs = offlineReloginHoldRemainingMs();
       if (offlineHoldRemainingMs > 0 && self && isAlive(self) && offlineHoldControl.wsOpen) {
-        clearOfflineReloginHold('online self restored during offline hold');
+        ${clearOfflineOnlineRestore};
         offlineHoldRemainingMs = 0;
       }
       if (offlineHoldRemainingMs > 0) {
