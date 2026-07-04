@@ -7,7 +7,7 @@ const { statusPanelSource } = require('./status-panel-source');
 const {
   runtimeUtilityPreludeSource
 } = require('./runtime-utils-source');
-const { combatLogRuntimeSource } = require('./combat-log-runtime-source');
+const { combatLogSource } = require('./combat-log-source');
 const { tickSafetySource } = require('./tick-safety-source');
 const { importantLogSource } = require('./important-log-source');
 const { combatHistorySource } = require('./combat-history-source');
@@ -99,7 +99,7 @@ function browserRuntimeFragmentEntries(config) {
     `],
     ['status-panel-runtime', () => statusPanelSource(config)],
     ['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)],
-    ['combat-log-runtime', () => combatLogRuntimeSource(config)],
+    ['combat-log-runtime', () => combatLogSource(config)],
     ['separator-after-combat-log-runtime',
     `
 `],
