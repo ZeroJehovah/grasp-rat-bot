@@ -733,6 +733,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['restored-runtime-state', () => restoredRuntimeStateSource(config)]"), 'restored-runtime-state fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['runtime-diagnostics', () => runtimeDiagnosticsSource(config)]"), 'runtime-diagnostics fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['exit-relogin', () => exitReloginSource(config)]"), 'exit-relogin fragment is not config-aware for bundled runtime migration');
+    assert(fragmentEntriesBody.includes("['leave-flow', () => leaveFlowSource(config)]"), 'leave-flow fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
@@ -1607,7 +1608,8 @@ function main() {
     assert(!exitReloginHoldBundledBody.includes('function staminaBudgetExitHoldUntil'), 'exit-relogin hold bundled source should not keep unused stamina budget wrapper');
     assert(exitReloginHoldBundledBody.includes('staminaExitHoldUntilForDetailBoundCore(detail, t'), 'exit-relogin hold bundled source does not bind stamina hold selector through runtime-bound core');
     assert(exitReloginHoldBundledBody.includes('staminaBudgetReloginDelayMs') && exitReloginHoldBundledBody.includes('staminaResetHoldUntil'), 'exit-relogin hold bundled source does not pass stamina hold selector bindings');
-    assert(exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'exit-relogin hold bundled source does not bind offline unsafe predicate');
+    assert(!exitReloginHoldBundledBody.includes('offlineExitRequiresUnsafeReloginDelayCore'), 'exit-relogin hold bundled source should not keep unused offline unsafe predicate core');
+    assert(!exitReloginHoldBundledBody.includes('function offlineExitRequiresUnsafeReloginDelay'), 'exit-relogin hold bundled source should not keep unused offline unsafe predicate wrapper');
     assert(exitReloginHoldBundledBody.includes('function setExitReloginSuppress'), 'exit-relogin hold bundled source does not preserve suppress writer wrapper');
     assert(exitReloginHoldBundledBody.includes('setExitReloginSuppressCore(bot, localStorage, storageReason'), 'exit-relogin hold bundled source does not bind suppress writer core');
     assert(exitReloginHoldBundledBody.includes('loginSuppressKey: LOGIN_SUPPRESS_KEY'), 'exit-relogin hold bundled suppress writer does not pass suppress key binding');
@@ -1850,7 +1852,7 @@ function main() {
     assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function maybeStartAutoLogin'), 'auto-login source factory does not include auto login starter');
     assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('async function forceLoginNow'), 'auto-login source factory does not include manual login starter');
     assert(functionBody(autoLoginSourceModule, 'autoLoginSource').includes('allowLiveSessionTakeoverBypass'), 'auto-login source factory does not preserve live-session takeover bypass handling');
-    assert(leaveFlowSourceModule.includes('function leaveFlowSource() {'), 'leave-flow source factory not found');
+    assert(leaveFlowSourceModule.includes('function leaveFlowSource(options = {}) {'), 'leave-flow source factory not found');
     assert(leaveFlowSourceModule.includes('module.exports = {\n  leaveFlowSource'), 'leave-flow source module export not found');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('String.raw`'), 'leave-flow source factory does not return raw browser source');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveOffline'), 'leave-flow source factory does not include offline leave wrapper');
@@ -1859,6 +1861,10 @@ function main() {
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveForCombat'), 'leave-flow source factory does not include combat leave wrapper');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('async function leaveDuringEnemyHold'), 'leave-flow source factory does not include enemy-hold leave wrapper');
     assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('pendingExitSkipNewLeave'), 'leave-flow source factory does not preserve pending-exit duplicate leave guard');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('options.bundledRuntime'), 'leave-flow source does not select offline unsafe predicate call from runtime config');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes("require('./src/browser/runtime/exit-relogin')"), 'leave-flow source does not import runtime offline unsafe predicate for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'), 'leave-flow source does not call runtime offline unsafe predicate core for bundled builds');
+    assert(functionBody(leaveFlowSourceModule, 'leaveFlowSource').includes('offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)'), 'leave-flow source does not preserve inline offline unsafe predicate wrapper call');
     assert(offlineSafetySourceModule.includes('function offlineSafetySource() {'), 'offline-safety source factory not found');
     assert(offlineSafetySourceModule.includes('module.exports = {\n  offlineSafetySource'), 'offline-safety source module export not found');
     assert(functionBody(offlineSafetySourceModule, 'offlineSafetySource').includes('String.raw`'), 'offline-safety source factory does not return raw browser source');

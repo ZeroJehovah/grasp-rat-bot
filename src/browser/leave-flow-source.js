@@ -1,7 +1,13 @@
 'use strict';
 
-function leaveFlowSource() {
-  return String.raw`  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
+function leaveFlowSource(options = {}) {
+  const offlineUnsafePredicatePrelude = options.bundledRuntime
+    ? "  const { offlineExitRequiresUnsafeReloginDelayCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    : '';
+  const offlineUnsafePredicateCall = options.bundledRuntime
+    ? 'offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)'
+    : 'offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)';
+  return String.raw`${offlineUnsafePredicatePrelude}  async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
     const t = Date.now();
     if (cfg.dryRun || cfg.once) return null;
     const skipped = pendingExitSkipNewLeave('offline', reason, {
@@ -41,7 +47,7 @@ function leaveFlowSource() {
     await issueLeaveCommand(detail);
     if (detail.attempted) {
       const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
-      if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)) {
+      if (!staminaSuppress && ${offlineUnsafePredicateCall}) {
         primePendingUnsafeExitLoginSuppress('offline leave', reason, detail, selfSummary);
       }
     }

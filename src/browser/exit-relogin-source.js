@@ -615,8 +615,7 @@ function bundledExitReloginHoldSource() {
 \t    setExitReloginSuppressCore,
 \t    primePendingUnsafeExitLoginSuppressBoundCore,
 \t    staminaExitHoldUntilForDetailCore,
-\t    staminaExitHoldUntilForDetailBoundCore,
-\t    offlineExitRequiresUnsafeReloginDelayCore
+\t    staminaExitHoldUntilForDetailBoundCore
 \t  } = require('./src/browser/runtime/exit-relogin');
 
   function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
@@ -664,9 +663,6 @@ function bundledExitReloginHoldSource() {
     });
   }
 
-\t  function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
-\t    return offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety);
-\t  }
 `;
 }
 

@@ -4742,7 +4742,7 @@
       }
     }
     const pageGlobal = resolvePageGlobal();
-    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.445" };
+    const baseConfig = { "dryRun": false, "once": false, "statusEvery": 3e4, "bundledRuntime": true, "version": "bootstrap-0.4.446" };
     const runtimeConfig = (() => {
       try {
         const value = readPageGlobal("__graspRatBotRuntimeConfig", {}, pageGlobal);
@@ -10348,8 +10348,7 @@
       setExitReloginSuppressCore,
       primePendingUnsafeExitLoginSuppressBoundCore,
       staminaExitHoldUntilForDetailCore,
-      staminaExitHoldUntilForDetailBoundCore,
-      offlineExitRequiresUnsafeReloginDelayCore
+      staminaExitHoldUntilForDetailBoundCore
     } = require_exit_relogin();
     function setExitReloginSuppress(storageReason, reason, detail, selfLike, options = {}) {
       return setExitReloginSuppressCore(bot, localStorage, storageReason, reason, detail, selfLike, options, {
@@ -10391,9 +10390,6 @@
         staminaBudgetReloginDelayMs,
         staminaResetHoldUntil
       });
-    }
-    function offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety) {
-      return offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety);
     }
     const {
       setOfflineLeaveSuppressCore,
@@ -12136,6 +12132,7 @@
       setTimeout(() => triggerNativeTick("manual-login", false), 0);
       return detail;
     }
+    const { offlineExitRequiresUnsafeReloginDelayCore } = require_exit_relogin();
     async function leaveOffline(reason, selfSummary = null, offlineSafety = null) {
       const t = Date.now();
       if (cfg.dryRun || cfg.once) return null;
@@ -12176,7 +12173,7 @@
       await issueLeaveCommand(detail);
       if (detail.attempted) {
         const staminaSuppress = primePendingStaminaExitLoginSuppress(detail);
-        if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelay(reason, offlineSafety)) {
+        if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)) {
           primePendingUnsafeExitLoginSuppress("offline leave", reason, detail, selfSummary);
         }
       }
