@@ -358,6 +358,7 @@ function main() {
   const opportunityPickSourceModule = readText('src/browser/opportunity-pick-source.js');
   const patrolSourceModule = readText('src/browser/patrol-source.js');
   const opportunityClearSourceModule = readText('src/browser/opportunity-clear-source.js');
+  const opportunityClearCallSourceModule = readText('src/browser/opportunity-clear-call-source.js');
   const coinProgressRuntimeSourceModule = readText('src/browser/coin-progress-runtime-source.js');
   const coinTargetRuntimeSourceModule = readText('src/browser/coin-target-runtime-source.js');
   const chooseActionSourceModule = readText('src/browser/choose-action-source.js');
@@ -472,6 +473,7 @@ function main() {
     opportunityPickSourceModule,
     patrolSourceModule,
     opportunityClearSourceModule,
+    opportunityClearCallSourceModule,
     coinProgressRuntimeSourceModule,
     coinTargetRuntimeSourceModule,
     chooseActionSourceModule,
@@ -742,7 +744,7 @@ function main() {
     assert(fragmentEntriesBody.includes("['entity-refresh', () => entityRefreshSource(config)]"), 'entity-refresh fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['exit-relogin', () => exitReloginSource(config)]"), 'exit-relogin fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['leave-flow', () => leaveFlowSource(config)]"), 'leave-flow fragment is not config-aware for bundled runtime migration');
-    assert(fragmentEntriesBody.includes("['choose-action', chooseActionSource]"), 'choose-action fragment is not explicitly named');
+    assert(fragmentEntriesBody.includes("['choose-action', () => chooseActionSource(config)]"), 'choose-action fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['startup', startupSource]"), 'startup fragment is not explicitly named');
     assert(fragmentEntriesBody.includes('() => runtimeBootstrapSource(config)'), 'runtime-bootstrap module is not injected into browser runtime');
     assert(restoredRuntimeStateSourceModule.includes('function restoredRuntimeStateInlineSource() {'), 'restored runtime state inline source factory not found');
@@ -1132,7 +1134,7 @@ function main() {
     assert(opportunityCandidateInlineBody.includes('function opportunityCandidateCoreOptions'), 'opportunity-candidate inline source factory does not include core options wrapper');
     assert(opportunityCandidateInlineBody.includes('function pickProfitableCombatTarget'), 'opportunity-candidate inline source factory does not include profitable combat comparison wrapper');
     assert(functionBody(opportunityCandidateSourceModule, 'bundledOpportunityCandidateSource').includes("require('./src/browser/runtime/opportunity-candidates')"), 'opportunity-candidate bundled source does not hand candidate helpers to the bundler');
-    assert(opportunityChoiceSourceModule.includes('function opportunityChoiceInlineSource(helpers = {}) {'), 'opportunity-choice inline source factory not found');
+    assert(opportunityChoiceSourceModule.includes('function opportunityChoiceInlineSource(helpers = {}, options = {}) {'), 'opportunity-choice inline source factory not found');
     assert(opportunityChoiceSourceModule.includes('function bundledOpportunityChoiceSource() {'), 'opportunity-choice bundled source factory not found');
     assert(opportunityChoiceSourceModule.includes('function opportunityChoiceSource(options = {}) {'), 'opportunity-choice source selector not found');
     assert(opportunityChoiceSourceModule.includes('bundledOpportunityChoiceSource') && opportunityChoiceSourceModule.includes('opportunityChoiceInlineSource') && opportunityChoiceSourceModule.includes('opportunityChoiceSource'), 'opportunity-choice source module exports are incomplete');
@@ -1172,7 +1174,13 @@ function main() {
     assert(opportunityClearInlineBody.includes('function clearOpportunityChoiceFor'), 'opportunity-clear inline source factory does not include clearOpportunityChoiceFor');
     assert(opportunityClearInlineBody.includes('bot.opportunityChoice = null'), 'opportunity-clear inline source factory does not clear opportunity choice');
     assert(opportunityClearInlineBody.includes('resetOpportunitySwitchLock()'), 'opportunity-clear inline source factory does not reset switch lock');
-    assert(functionBody(opportunityClearSourceModule, 'bundledOpportunityClearSource').includes("require('./src/browser/runtime/opportunity-clear')"), 'opportunity-clear bundled source does not hand clear helper to the bundler');
+    const opportunityClearBundledBody = functionBody(opportunityClearSourceModule, 'bundledOpportunityClearSource');
+    assert(opportunityClearBundledBody.includes("require('./src/browser/runtime/opportunity-clear')"), 'opportunity-clear bundled source does not hand clear helper to the bundler');
+    assert(!opportunityClearBundledBody.includes('function clearOpportunityChoiceFor'), 'opportunity-clear bundled source still keeps clear wrapper');
+    assert(opportunityClearCallSourceModule.includes('function clearOpportunityChoiceForCall'), 'opportunity-clear direct call source helper not found');
+    assert(opportunityClearCallSourceModule.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice'), 'opportunity-clear direct call helper does not call clear core');
+    assert(opportunityClearCallSourceModule.includes('bot.opportunityChoice = null'), 'opportunity-clear direct call helper does not clear choice state');
+    assert(opportunityClearCallSourceModule.includes('resetOpportunitySwitchLock()'), 'opportunity-clear direct call helper does not reset switch lock');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteInlineSource(helpers = {}) {'), 'opportunity-route inline source factory not found');
     assert(opportunityRouteSourceModule.includes('function bundledOpportunityRouteSource() {'), 'opportunity-route bundled source factory not found');
     assert(opportunityRouteSourceModule.includes('function opportunityRouteSource(options = {}) {'), 'opportunity-route source selector not found');
@@ -1184,7 +1192,7 @@ function main() {
     assert(opportunityRouteInlineBody.includes('function currentHeldCoinRouteChoice'), 'opportunity-route inline source factory does not include held route helper');
     assert(functionBody(opportunityRouteSourceModule, 'bundledOpportunityRouteSource').includes("require('./src/browser/runtime/coin-route')"), 'opportunity-route bundled source does not hand coin-route helpers to the bundler');
     assert(coinTargetRuntimeSourceModule.includes('function bundledCoinTargetRuntimeSource()'), 'bundled coin-target runtime source factory not found');
-    assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeInlineSource(helpers = {})'), 'inline coin-target runtime source factory not found');
+    assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('function coinTargetRuntimeSource(options = {})'), 'coin-target runtime source factory not found');
     assert(coinTargetRuntimeSourceModule.includes('module.exports = {\n  bundledCoinTargetRuntimeSource,\n  coinTargetRuntimeInlineSource,\n  coinTargetRuntimeSource\n}'), 'coin-target runtime module export not found');
     assert(coinTargetRuntimeSourceModule.includes("require('./src/browser/runtime/coin-target')"), 'coin-target runtime source does not expose a bundler-owned coin-target require');
@@ -1193,7 +1201,7 @@ function main() {
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('coinTargetHelperSource'), 'coin-target inline runtime source factory does not inject helper source');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('function markCoinCollected'), 'coin-target runtime source factory does not include tracked pickup recorder');
     assert(functionBody(coinTargetRuntimeSourceModule, 'coinTargetRuntimeInlineSource').includes('function recordIncidentalCoinPickups'), 'coin-target runtime source factory does not include incidental pickup recorder');
-    assert(chooseActionSourceModule.includes('function chooseActionSource() {'), 'choose-action source factory not found');
+    assert(chooseActionSourceModule.includes('function chooseActionSource(options = {}) {'), 'choose-action source factory not found');
     assert(chooseActionSourceModule.includes('module.exports = { chooseActionSource }'), 'choose-action source module export not found');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('String.raw`'), 'choose-action source factory does not return raw browser source');
     assert(functionBody(chooseActionSourceModule, 'chooseActionSource').includes('function chooseAction(self)'), 'choose-action source factory does not include chooseAction');
@@ -3938,7 +3946,7 @@ function main() {
     assert(strategyCoinProgressSource.includes('function buildIgnoredCoinPatrolActionCore'), 'strategy ignored coin patrol action core not found');
     assert(strategyCoinProgressSource.includes('function coinIgnoreCleanupIntentCore'), 'strategy coin ignore cleanup intent core not found');
     assert(coinProgressRuntimeSourceModule.includes('function bundledCoinProgressRuntimeSource()'), 'bundled coin-progress runtime source factory not found');
-    assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeInlineSource(helpers = {})'), 'inline coin-progress runtime source factory not found');
+    assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeInlineSource(helpers = {}, options = {})'), 'inline coin-progress runtime source factory not found');
     assert(coinProgressRuntimeSourceModule.includes('function coinProgressRuntimeSource(options = {})'), 'coin-progress runtime source factory not found');
     assert(coinProgressRuntimeSourceModule.includes('module.exports = {\n  bundledCoinProgressRuntimeSource,\n  coinProgressRuntimeInlineSource,\n  coinProgressRuntimeSource\n}'), 'coin-progress runtime source module export not found');
     assert(coinProgressRuntimeSourceModule.includes("require('./src/browser/runtime/coin-progress')"), 'coin-progress runtime source does not expose a bundler-owned coin-progress require');
@@ -4205,8 +4213,19 @@ function main() {
     assert(bundlerSpikeBuildSource.includes('status.opportunityClearExact === true'), 'bundler spike self-test does not assert opportunity clear execution');
     assert(generatedRuntimeSource.includes("require('./src/browser/runtime/opportunity-clear')"), 'generated remote runtime does not hand opportunity clear helper to the bundler');
     assert(!generatedRuntimeSource.includes('function shouldClearOpportunityChoiceCore'), 'generated remote runtime still inlines opportunity clear core before bundling');
+    assert(!generatedRuntimeSource.includes('function clearOpportunityChoiceFor('), 'generated remote runtime still declares opportunity clear wrapper');
+    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'enemy', postAttackCoin.postAttackTarget?.id)"), 'generated choose-action post-attack coin path does not clear opportunity choice through core directly');
+    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'enemy', postAttackWaitTarget.id)"), 'generated choose-action post-attack wait path does not clear opportunity choice through core directly');
+    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', null)"), 'generated runtime does not clear all coin opportunity choices through core directly');
+    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', idText || null)"), 'generated opportunity-choice visible-missing path does not clear opportunity choice through core directly');
+    assert(generatedRuntimeSource.includes("shouldClearOpportunityChoiceCore(bot.opportunityChoice, 'coin', id)"), 'generated coin-progress ignored-coin path does not clear opportunity choice through core directly');
     assert(distSource.includes('function shouldClearOpportunityChoiceCore'), 'bundled dist does not contain opportunity clear core');
-    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, type, id)'), 'bundled dist clear wrapper does not call opportunity clear core');
+    assert(!distSource.includes('function clearOpportunityChoiceFor('), 'bundled dist still declares opportunity clear wrapper');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", postAttackCoin.postAttackTarget?.id)'), 'bundled dist choose-action post-attack coin path does not clear opportunity choice through core directly');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "enemy", postAttackWaitTarget.id)'), 'bundled dist choose-action post-attack wait path does not clear opportunity choice through core directly');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", null)'), 'bundled dist does not clear all coin opportunity choices through core directly');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", idText || null)'), 'bundled dist opportunity-choice visible-missing path does not clear opportunity choice through core directly');
+    assert(distSource.includes('shouldClearOpportunityChoiceCore(bot.opportunityChoice, "coin", id)'), 'bundled dist coin-progress ignored-coin path does not clear opportunity choice through core directly');
   });
 
   check('opportunity candidate construction uses strategy module core', () => {

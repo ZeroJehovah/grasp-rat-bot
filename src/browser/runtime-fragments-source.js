@@ -269,7 +269,7 @@ function browserRuntimeFragmentEntries(config) {
     ['separator-after-coin-target-runtime',
     `
 `],
-    ['choose-action', chooseActionSource],
+    ['choose-action', () => chooseActionSource(config)],
     ['separator-after-choose-action',
     `
 
