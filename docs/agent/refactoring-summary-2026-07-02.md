@@ -1514,3 +1514,10 @@ The main bot remains fully functional. Action arbitration is now integrated thro
 - Drop-matched kill attribution was extracted to `src/strategy/drop-matched-kill.js` and exposed through `src/browser/runtime/drop-matched-kill.js`.
 - Bundled post-attack and coin-pickup paths now call `buildDropMatchedKillCore(...)` directly and pass the returned kill record into `recordKillHistoryItem(...)`; final dist no longer declares `recordDropMatchedKill()`.
 - Local CDP/`--print-source` compatibility keeps the old wrapper source shape where useful, while production build verification rejects the removed wrapper declarations.
+
+`bootstrap-0.4.494` continues that direction through the pending-exit boundary:
+
+- Pending-exit retry duration, display reason, and status-summary construction now live in `src/strategy/pending-exit.js`, exposed to browser builds through `src/browser/runtime/pending-exit.js`.
+- Bundled pending-exit, pending-exit persistence, and Clash leave retry display paths now call the pending-exit cores directly; local CDP generation keeps wrapper fallbacks.
+- Final production dist no longer declares `pendingExitRetryMs()` or `pendingExitDisplayReason()`, and verifier now rejects those production wrappers.
+- Strategy self-tests cover pending-exit retry floors, display fallback, reload/combat-cover summary normalization, and last-error propagation.

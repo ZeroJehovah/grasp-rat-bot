@@ -14,6 +14,11 @@ const {
   exitMotionStopLockRemainingMsCore,
   postExitDecisionWithoutTargetCore
 } = require('./exit-motion');
+const {
+  pendingExitRetryMsCore,
+  pendingExitDisplayReasonCore,
+  summarizePendingExitCore
+} = require('./pending-exit');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const {
   coinAxisLockShouldHoldCore,
@@ -174,6 +179,60 @@ function runStrategyModuleSelfTests() {
     passed: postExitExplicitReason.reason === 'exit-confirmed'
       && postExitExplicitReason.exitMotionStopReason === 'exit-confirmed'
       && postExitExplicitReason.exitMotionLockRemainingMs === 0
+  });
+
+  const pendingExitRetryOptions = {
+    leaveRetryMinMs: 10000,
+    leaveCommandTimeoutMs: 3000,
+    offlineLeaveRetryMs: 12000,
+    combatLeaveRetryMs: 4000,
+    pursuitLeaveRetryMs: 16000
+  };
+  results.push({
+    name: 'pending-exit-retry-core-applies-source-specific-floors',
+    passed: pendingExitRetryMsCore({ scope: 'offline', source: 'offline' }, pendingExitRetryOptions) === 12000
+      && pendingExitRetryMsCore({ scope: 'enemy', source: 'pursuit' }, pendingExitRetryOptions) === 16000
+      && pendingExitRetryMsCore({ scope: 'enemy', source: 'combat' }, pendingExitRetryOptions) === 10000
+  });
+  results.push({
+    name: 'pending-exit-display-core-uses-summary-fallback',
+    passed: pendingExitDisplayReasonCore('追击退出') === '追击退出，等待退出确认，未退出会继续补发'
+      && pendingExitDisplayReasonCore('') === '退出请求已发送，等待退出确认，未退出会继续补发'
+  });
+  const pendingExitSummary = summarizePendingExitCore({
+    scope: 'enemy',
+    source: 'combat',
+    reason: 'combat leave',
+    summary: '战斗退出',
+    displayReason: '战斗退出等待',
+    at: 1000,
+    lastAttemptAt: 1500,
+    retryCount: 2,
+    userId: 'self-1',
+    combatCover: { reason: 'cover', dx: 2, dy: -2, shoot: true },
+    lastResult: { leaveRequestPending: true, error: 'timeout' }
+  }, {
+    nowMs: 2500,
+    retryMs: 3000,
+    reloadConfirmation: {
+      required: true,
+      requestedAt: 1800,
+      reloadedAt: 2200,
+      restoredAfterReload: true,
+      count: 1,
+      reason: 'leave-success'
+    }
+  });
+  results.push({
+    name: 'pending-exit-summary-core-normalizes-runtime-status',
+    passed: pendingExitSummary.ageMs === 1500
+      && pendingExitSummary.lastAttemptAgeMs === 1000
+      && pendingExitSummary.retryRemainingMs === 2000
+      && pendingExitSummary.leaveRequestPending === true
+      && pendingExitSummary.reloadConfirmation?.ageAfterReloadMs === 300
+      && pendingExitSummary.combatCover?.dx === 1
+      && pendingExitSummary.combatCover?.dy === -1
+      && pendingExitSummary.lastError === 'timeout'
   });
 
   // Test action focus building
