@@ -7,12 +7,25 @@ const {
   pendingExitSummaryPreludeSource,
   summarizePendingExitCall
 } = require('./pending-exit-summary-call-source');
+const {
+  leaveCommandFailureMessageCore,
+  summarizeLeaveCommandResultCore,
+  leaveDetailFailedForClashRescueCore,
+  clashLeaveRescueAttemptsCore,
+  nextClashLeaveRescueStageCore,
+  summarizeClashLeaveRescueResultCore,
+  clashLeaveRescueRetryDetailCore,
+  resetClashLeaveRescueRoundCore
+} = require('./runtime/leave-command');
 
 function leaveCommandSource(options = {}) {
   const pendingExitLeaveCommandPrelude = options.bundledRuntime
     ? "  const { pendingExitDisplayReasonCore: pendingExitDisplayReasonForLeaveCommandCore, leaveDetailHasHttp403Core: leaveDetailHasHttp403ForLeaveCommandCore, leaveDetailSucceededCore: leaveDetailSucceededForLeaveCommandCore } = require('./src/browser/runtime/pending-exit');\n"
     : '';
-  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand', options) + pendingExitLeaveCommandPrelude;
+  const leaveCommandCorePrelude = options.bundledRuntime
+    ? "  const { leaveCommandFailureMessageCore, summarizeLeaveCommandResultCore, leaveDetailFailedForClashRescueCore, clashLeaveRescueAttemptsCore, nextClashLeaveRescueStageCore, summarizeClashLeaveRescueResultCore, clashLeaveRescueRetryDetailCore, resetClashLeaveRescueRoundCore } = require('./src/browser/runtime/leave-command');\n"
+    : '';
+  const runtimePrelude = pendingExitSummaryPreludeSource('LeaveCommand', options) + pendingExitLeaveCommandPrelude + leaveCommandCorePrelude;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   const pendingExitDisplayReason = summary => options.bundledRuntime
     ? `pendingExitDisplayReasonForLeaveCommandCore(${summary})`
@@ -23,7 +36,82 @@ function leaveCommandSource(options = {}) {
   const leaveDetailSucceededCall = detail => options.bundledRuntime
     ? `leaveDetailSucceededForLeaveCommandCore(${detail})`
     : `leaveDetailSucceeded(${detail})`;
-  return String.raw`${runtimePrelude}  function waitWithTimeout(promise, timeoutMs, label) {
+  const leaveCommandFailureMessageCall = value => options.bundledRuntime
+    ? `leaveCommandFailureMessageCore(${value})`
+    : `leaveCommandFailureMessage(${value})`;
+  const summarizeLeaveCommandResultCall = value => options.bundledRuntime
+    ? `summarizeLeaveCommandResultCore(${value})`
+    : `summarizeLeaveCommandResult(${value})`;
+  const leaveDetailFailedForClashRescueCall = detail => options.bundledRuntime
+    ? `leaveDetailFailedForClashRescueCore(${detail}, { clashLeaveRescueEnabled: cfg.clashLeaveRescueEnabled, hasClashLeaveRescueHook: () => Boolean(clashLeaveRescueHook()) })`
+    : `leaveDetailFailedForClashRescue(${detail})`;
+  const clashLeaveRescueAttemptsCall = detail => options.bundledRuntime
+    ? `clashLeaveRescueAttemptsCore(${detail})`
+    : `clashLeaveRescueAttempts(${detail})`;
+  const nextClashLeaveRescueStageCall = detail => options.bundledRuntime
+    ? `nextClashLeaveRescueStageCore(${detail})`
+    : `nextClashLeaveRescueStage(${detail})`;
+  const summarizeClashLeaveRescueResultCall = (result, stage, error = "''") => options.bundledRuntime
+    ? `summarizeClashLeaveRescueResultCore(${result}, ${stage}, ${error})`
+    : `summarizeClashLeaveRescueResult(${result}, ${stage}, ${error})`;
+  const clashLeaveRescueRetryDetailCall = (detail, stage) => options.bundledRuntime
+    ? `clashLeaveRescueRetryDetailCore(${detail}, ${stage}, { nowMs: Date.now(), cloneForPendingExit, pendingExitDisplayReason: summary => ${pendingExitDisplayReason('summary')} })`
+    : `clashLeaveRescueRetryDetail(${detail}, ${stage})`;
+  const resetClashLeaveRescueRoundCall = detail => options.bundledRuntime
+    ? `resetClashLeaveRescueRoundCore(${detail})`
+    : `resetClashLeaveRescueRound(${detail})`;
+  const localLeaveCommandHelperSource = options.bundledRuntime ? '' : [
+    leaveCommandFailureMessageCore,
+    summarizeLeaveCommandResultCore,
+    leaveDetailFailedForClashRescueCore,
+    clashLeaveRescueAttemptsCore,
+    nextClashLeaveRescueStageCore,
+    summarizeClashLeaveRescueResultCore,
+    clashLeaveRescueRetryDetailCore,
+    resetClashLeaveRescueRoundCore
+  ].map(fn => `  ${fn.toString()}`).join('\n\n') + '\n\n';
+  const localLeaveCommandHelperWrappers = options.bundledRuntime ? '' : String.raw`
+  function leaveCommandFailureMessage(value) {
+    return leaveCommandFailureMessageCore(value);
+  }
+
+  function summarizeLeaveCommandResult(value) {
+    return summarizeLeaveCommandResultCore(value);
+  }
+
+  function leaveDetailFailedForClashRescue(detail) {
+    return leaveDetailFailedForClashRescueCore(detail, {
+      clashLeaveRescueEnabled: cfg.clashLeaveRescueEnabled,
+      hasClashLeaveRescueHook: () => Boolean(clashLeaveRescueHook())
+    });
+  }
+
+  function clashLeaveRescueAttempts(detail) {
+    return clashLeaveRescueAttemptsCore(detail);
+  }
+
+  function nextClashLeaveRescueStage(detail) {
+    return nextClashLeaveRescueStageCore(detail);
+  }
+
+  function summarizeClashLeaveRescueResult(result, stage, error = '') {
+    return summarizeClashLeaveRescueResultCore(result, stage, error);
+  }
+
+  function clashLeaveRescueRetryDetail(detail, stage) {
+    return clashLeaveRescueRetryDetailCore(detail, stage, {
+      nowMs: Date.now(),
+      cloneForPendingExit,
+      pendingExitDisplayReason
+    });
+  }
+
+  function resetClashLeaveRescueRound(detail) {
+    return resetClashLeaveRescueRoundCore(detail);
+  }
+
+`;
+  return String.raw`${runtimePrelude}${localLeaveCommandHelperSource}${localLeaveCommandHelperWrappers}  function waitWithTimeout(promise, timeoutMs, label) {
     const ms = Math.max(100, Number(timeoutMs) || 0);
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -49,36 +137,6 @@ function leaveCommandSource(options = {}) {
     });
   }
 
-  function leaveCommandFailureMessage(value) {
-    if (value === false) return 'leave request returned false';
-    if (!value || typeof value !== 'object') return '';
-    if (value.ok === false || value.success === false) {
-      return value.message || value.error || 'leave request returned failure';
-    }
-    if (value.error && value.ok !== true && value.success !== true) {
-      return value.message || value.error || 'leave request returned error';
-    }
-    const status = Number(value.status || value.statusCode || 0);
-    if (status >= 400) return value.statusText || value.message || ('leave request HTTP ' + status);
-    return '';
-  }
-
-  function summarizeLeaveCommandResult(value) {
-    if (value === undefined) return { type: 'undefined' };
-    if (value === null) return { type: 'null' };
-    if (value === false || value === true) return { type: 'boolean', value: Boolean(value) };
-    if (typeof value !== 'object') return { type: typeof value, value: String(value).slice(0, 200) };
-    return {
-      type: Array.isArray(value) ? 'array' : 'object',
-      ok: value.ok ?? null,
-      success: value.success ?? null,
-      status: value.status ?? value.statusCode ?? null,
-      statusText: value.statusText || '',
-      message: value.message || '',
-      error: value.error || ''
-    };
-  }
-
   function clashLeaveRescueHook() {
     try {
       const hook = readPageGlobal('__graspRatBotClashLeaveRescue', null, pageGlobal);
@@ -88,58 +146,9 @@ function leaveCommandSource(options = {}) {
     }
   }
 
-  function leaveDetailFailedForClashRescue(detail) {
-    if (!cfg.clashLeaveRescueEnabled) return false;
-    if (!detail || typeof detail !== 'object') return false;
-    if (!detail.attempted || detail.leaveRequestPending) return false;
-    if (detail.exitConfirmed) return false;
-    const http403 = ${leaveDetailHasHttp403Call('detail')};
-    if (!detail.error && !http403) return false;
-    if (${leaveDetailSucceededCall('detail')}) return false;
-    return Boolean(clashLeaveRescueHook());
-  }
-
-  function clashLeaveRescueAttempts(detail) {
-    return Array.isArray(detail?.clashLeaveRescueAttempts)
-      ? detail.clashLeaveRescueAttempts.filter(item => item && typeof item === 'object')
-      : [];
-  }
-
-  const CLASH_LEAVE_RESCUE_STAGE_ORDER = ['auto', 'direct', 'manual'];
-
-  function nextClashLeaveRescueStage(detail) {
-    const stages = new Set(clashLeaveRescueAttempts(detail).map(item => String(item.stage || '')));
-    for (const stage of CLASH_LEAVE_RESCUE_STAGE_ORDER) {
-      if (!stages.has(stage)) return stage;
-    }
-    return '';
-  }
-
-  function summarizeClashLeaveRescueResult(result, stage, error = '') {
-    const raw = result && typeof result === 'object' ? result : {};
-    return {
-      stage,
-      ok: Boolean(!error && raw.ok !== false),
-      target: raw.target || '',
-      group: raw.group || '',
-      at: Number(raw.at || Date.now()) || Date.now(),
-      durationMs: Math.max(0, Math.round(Number(raw.durationMs || 0) || 0)),
-      switched: raw.switched ? {
-        ok: Boolean(raw.switched.ok !== false),
-        status: Number(raw.switched.status || 0) || 0
-      } : null,
-      closeConnections: raw.closeConnections ? {
-        ok: Boolean(raw.closeConnections.ok !== false),
-        status: Number(raw.closeConnections.status || 0) || 0,
-        error: raw.closeConnections.error || ''
-      } : null,
-      error: error || raw.error || ''
-    };
-  }
-
   function appendClashLeaveRescueAttempt(detail, attempt) {
     if (!detail || !attempt) return;
-    const attempts = clashLeaveRescueAttempts(detail).concat([attempt]).slice(-6);
+    const attempts = ${clashLeaveRescueAttemptsCall('detail')}.concat([attempt]).slice(-6);
     detail.clashLeaveRescueAttempts = attempts;
     detail.clashLeaveRescue = attempt;
     bot.clashLeaveRescue.lastAt = Number(attempt.at || Date.now()) || Date.now();
@@ -150,37 +159,10 @@ function leaveCommandSource(options = {}) {
       .slice(-8);
   }
 
-  function clashLeaveRescueRetryDetail(detail, stage) {
-    const retryDetail = cloneForPendingExit(detail) || {};
-    retryDetail.at = Date.now();
-    retryDetail.attempted = false;
-    retryDetail.method = '';
-    retryDetail.error = '';
-    retryDetail.leaveRequestPending = false;
-    retryDetail.lastLeaveRequest = null;
-    retryDetail.leaveRequests = [];
-    retryDetail.pendingExitRetry = true;
-    retryDetail.clashLeaveRescueRetry = true;
-    retryDetail.clashLeaveRescueStage = stage;
-    retryDetail.clashLeaveRescueAttempts = clashLeaveRescueAttempts(detail);
-    retryDetail.summary = detail.summary || detail.exitSummary || detail.reason || '';
-    retryDetail.displayReason = detail.displayReason || ${pendingExitDisplayReason('retryDetail.summary')};
-    return retryDetail;
-  }
-
-  function resetClashLeaveRescueRound(detail) {
-    if (!detail || typeof detail !== 'object') return detail;
-    detail.clashLeaveRescueAttempts = [];
-    detail.clashLeaveRescue = null;
-    detail.clashLeaveRescueStage = '';
-    detail.clashLeaveRescueRetry = false;
-    return detail;
-  }
-
   async function prepareDefaultClashLeaveProxy(detail) {
     if (!cfg.clashLeaveRescueEnabled) return false;
     if (!detail || typeof detail !== 'object') return false;
-    if (detail.clashLeaveRescueRetry || clashLeaveRescueAttempts(detail).length) return false;
+    if (detail.clashLeaveRescueRetry || ${clashLeaveRescueAttemptsCall('detail')}.length) return false;
     if (bot.clashLeaveRescue.running) return false;
     const hook = clashLeaveRescueHook();
     if (!hook) return false;
@@ -201,9 +183,9 @@ function leaveCommandSource(options = {}) {
           Math.max(1000, Number(cfg.clashLeaveRescueTimeoutMs || 9000) || 9000),
           'Clash leave default ' + stage
         );
-        attempt = summarizeClashLeaveRescueResult(result, stage);
+        attempt = ${summarizeClashLeaveRescueResultCall('result', 'stage')};
       } catch (err) {
-        attempt = summarizeClashLeaveRescueResult(null, stage, err?.message || String(err));
+        attempt = ${summarizeClashLeaveRescueResultCall('null', 'stage', 'err?.message || String(err)')};
       }
       appendClashLeaveRescueAttempt(detail, attempt);
       updatePendingExitLastResult(detail);
@@ -225,8 +207,8 @@ function leaveCommandSource(options = {}) {
 
   async function runClashLeaveRescueRetry(detail) {
     if (bot.clashLeaveRescue.running) return null;
-    if (!leaveDetailFailedForClashRescue(detail)) return null;
-    let stage = nextClashLeaveRescueStage(detail);
+    if (!${leaveDetailFailedForClashRescueCall('detail')}) return null;
+    let stage = ${nextClashLeaveRescueStageCall('detail')};
     if (!stage) return null;
     bot.clashLeaveRescue.running = true;
     try {
@@ -247,9 +229,9 @@ function leaveCommandSource(options = {}) {
             Math.max(1000, Number(cfg.clashLeaveRescueTimeoutMs || 9000) || 9000),
             'Clash leave rescue ' + stage
           );
-          attempt = summarizeClashLeaveRescueResult(result, stage);
+          attempt = ${summarizeClashLeaveRescueResultCall('result', 'stage')};
         } catch (err) {
-          attempt = summarizeClashLeaveRescueResult(null, stage, err?.message || String(err));
+          attempt = ${summarizeClashLeaveRescueResultCall('null', 'stage', 'err?.message || String(err)')};
         }
         appendClashLeaveRescueAttempt(detail, attempt);
         updatePendingExitLastResult(detail);
@@ -261,7 +243,7 @@ function leaveCommandSource(options = {}) {
         });
         if (attempt.ok) {
           logStatus('clash leave rescue switched ' + stage, { stage, clashLeaveRescue: attempt });
-          const retryDetail = clashLeaveRescueRetryDetail(detail, stage);
+          const retryDetail = ${clashLeaveRescueRetryDetailCall('detail', 'stage')};
           const pending = bot.pendingExit;
           const retryAt = Number(retryDetail.at || Date.now()) || Date.now();
           if (pending) {
@@ -279,17 +261,17 @@ function leaveCommandSource(options = {}) {
           await issueLeaveCommand(retryDetail);
           if (
             !retryDetail.leaveRequestPending
-            && leaveDetailFailedForClashRescue(retryDetail)
-            && nextClashLeaveRescueStage(retryDetail)
+            && ${leaveDetailFailedForClashRescueCall('retryDetail')}
+            && ${nextClashLeaveRescueStageCall('retryDetail')}
           ) {
             detail = retryDetail;
-            stage = nextClashLeaveRescueStage(detail);
+            stage = ${nextClashLeaveRescueStageCall('detail')};
             continue;
           }
           return retryDetail;
         }
         logStatus('clash leave rescue failed ' + stage, { stage, clashLeaveRescue: attempt });
-        stage = nextClashLeaveRescueStage(detail);
+        stage = ${nextClashLeaveRescueStageCall('detail')};
       }
     } finally {
       bot.clashLeaveRescue.running = false;
@@ -298,8 +280,8 @@ function leaveCommandSource(options = {}) {
   }
 
   function scheduleClashLeaveRescueRetry(detail) {
-    if (!leaveDetailFailedForClashRescue(detail)) return false;
-    if (!nextClashLeaveRescueStage(detail)) return false;
+    if (!${leaveDetailFailedForClashRescueCall('detail')}) return false;
+    if (!${nextClashLeaveRescueStageCall('detail')}) return false;
     if (bot.clashLeaveRescue.running) return true;
     Promise.resolve()
       .then(() => runClashLeaveRescueRetry(detail))
@@ -350,7 +332,7 @@ function leaveCommandSource(options = {}) {
 
   function completeLeaveRequest(detail, request, rawResult, errorMessage = '') {
     if (!detail || !request || request.completedAt) return detail;
-    const failure = errorMessage || leaveCommandFailureMessage(rawResult);
+    const failure = errorMessage || ${leaveCommandFailureMessageCall('rawResult')};
     if (failure) detail.error = failure;
     detail.leaveRequestPending = false;
     request.completedAt = Date.now();
@@ -358,14 +340,14 @@ function leaveCommandSource(options = {}) {
     request.attempted = Boolean(detail.attempted);
     request.method = detail.method || '';
     request.error = detail.error || '';
-	    request.result = summarizeLeaveCommandResult(rawResult);
+	    request.result = ${summarizeLeaveCommandResultCall('rawResult')};
 	    request.pending = false;
 	    if (!Array.isArray(detail.leaveRequests)) detail.leaveRequests = [];
 	    detail.leaveRequests.push(request);
     detail.leaveRequests = detail.leaveRequests.slice(-20);
     detail.lastLeaveRequest = request;
     const http403 = ${leaveDetailHasHttp403Call('detail')};
-    const clashRescuePending = http403 && leaveDetailFailedForClashRescue(detail) && Boolean(nextClashLeaveRescueStage(detail));
+    const clashRescuePending = http403 && ${leaveDetailFailedForClashRescueCall('detail')} && Boolean(${nextClashLeaveRescueStageCall('detail')});
     if (${leaveDetailSucceededCall('detail')} || http403) {
       stopMotionAfterExit(http403 ? 'leave-http-403' : 'leave-success');
       if (http403 && !clashRescuePending) {

@@ -25,6 +25,16 @@ const {
   leaveSuccessReloadConfirmationSatisfiedCore,
   pendingExitWaitReasonCore
 } = require('./pending-exit');
+const {
+  leaveCommandFailureMessageCore,
+  summarizeLeaveCommandResultCore,
+  leaveDetailFailedForClashRescueCore,
+  clashLeaveRescueAttemptsCore,
+  nextClashLeaveRescueStageCore,
+  summarizeClashLeaveRescueResultCore,
+  clashLeaveRescueRetryDetailCore,
+  resetClashLeaveRescueRoundCore
+} = require('./leave-command');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
 const {
   coinAxisLockShouldHoldCore,
@@ -303,6 +313,130 @@ function runStrategyModuleSelfTests() {
       && pendingExitWaitReasonCore({ scope: 'offline', source: 'offline' }, true) === 'offline-leave-wait'
       && pendingExitWaitReasonCore({ scope: 'enemy', source: 'pursuit' }, false) === 'pursuit-leave-retry'
       && pendingExitWaitReasonCore({ scope: 'enemy', source: 'combat' }, true) === 'enemy-leave-wait'
+  });
+  results.push({
+    name: 'leave-command-failure-message-core-classifies-result-errors',
+    passed: leaveCommandFailureMessageCore(false) === 'leave request returned false'
+      && leaveCommandFailureMessageCore({ ok: false, message: 'blocked' }) === 'blocked'
+      && leaveCommandFailureMessageCore({ error: 'network' }) === 'network'
+      && leaveCommandFailureMessageCore({ status: 500, statusText: 'server' }) === 'server'
+      && leaveCommandFailureMessageCore({ ok: true }) === ''
+  });
+  const summarizedLeaveResult = summarizeLeaveCommandResultCore({
+    ok: false,
+    statusCode: 403,
+    statusText: 'Forbidden',
+    message: 'blocked',
+    error: 'denied'
+  });
+  results.push({
+    name: 'leave-command-result-summary-core-normalizes-primitive-and-object-results',
+    passed: summarizeLeaveCommandResultCore(undefined).type === 'undefined'
+      && summarizeLeaveCommandResultCore(false).value === false
+      && summarizeLeaveCommandResultCore('abc').value === 'abc'
+      && summarizedLeaveResult.type === 'object'
+      && summarizedLeaveResult.status === 403
+      && summarizedLeaveResult.error === 'denied'
+  });
+  results.push({
+    name: 'leave-command-clash-rescue-failure-core-gates-hook-enabled-failed-detail',
+    passed: leaveDetailFailedForClashRescueCore({
+      attempted: true,
+      error: 'timeout'
+    }, {
+      clashLeaveRescueEnabled: true,
+      hasClashLeaveRescueHook: true
+    }) === true
+      && leaveDetailFailedForClashRescueCore({
+        attempted: true,
+        error: 'timeout'
+      }, {
+        clashLeaveRescueEnabled: true,
+        hasClashLeaveRescueHook: false
+      }) === false
+      && leaveDetailFailedForClashRescueCore({
+        attempted: true,
+        method: 'leave',
+        lastLeaveRequest: { completedAt: 1000 }
+      }, {
+        clashLeaveRescueEnabled: true,
+        hasClashLeaveRescueHook: true
+      }) === false
+  });
+  const clashAttemptsDetail = {
+    clashLeaveRescueAttempts: [
+      null,
+      { stage: 'auto' },
+      'bad',
+      { stage: 'direct' }
+    ]
+  };
+  results.push({
+    name: 'leave-command-clash-rescue-stage-core-filters-attempts-and-picks-next',
+    passed: clashLeaveRescueAttemptsCore(clashAttemptsDetail).length === 2
+      && nextClashLeaveRescueStageCore(clashAttemptsDetail) === 'manual'
+      && nextClashLeaveRescueStageCore({ clashLeaveRescueAttempts: [{ stage: 'auto' }] }, {
+        stageOrder: ['auto', 'manual']
+      }) === 'manual'
+  });
+  const clashResultSummary = summarizeClashLeaveRescueResultCore({
+    ok: false,
+    target: 'proxy',
+    closeConnections: {
+      ok: false,
+      status: 599,
+      error: 'close failed'
+    }
+  }, 'direct', '', { nowMs: 2000 });
+  results.push({
+    name: 'leave-command-clash-rescue-result-core-summarizes-proxy-result',
+    passed: clashResultSummary.stage === 'direct'
+      && clashResultSummary.ok === false
+      && clashResultSummary.target === 'proxy'
+      && clashResultSummary.at === 2000
+      && clashResultSummary.closeConnections?.status === 599
+  });
+  const clashRetryDetail = clashLeaveRescueRetryDetailCore({
+    at: 1000,
+    attempted: true,
+    method: 'leave',
+    error: '403',
+    leaveRequestPending: true,
+    lastLeaveRequest: { requestId: 'old' },
+    leaveRequests: [{ requestId: 'old' }],
+    reason: 'leave-http-403',
+    clashLeaveRescueAttempts: [{ stage: 'auto' }]
+  }, 'direct', {
+    nowMs: 3000,
+    cloneForPendingExit: value => ({ ...value, cloned: true }),
+    pendingExitDisplayReason: summary => 'display:' + summary
+  });
+  results.push({
+    name: 'leave-command-clash-rescue-retry-detail-core-clears-stale-request-state',
+    passed: clashRetryDetail.cloned === true
+      && clashRetryDetail.at === 3000
+      && clashRetryDetail.attempted === false
+      && clashRetryDetail.method === ''
+      && clashRetryDetail.error === ''
+      && clashRetryDetail.leaveRequestPending === false
+      && Array.isArray(clashRetryDetail.leaveRequests)
+      && clashRetryDetail.leaveRequests.length === 0
+      && clashRetryDetail.clashLeaveRescueStage === 'direct'
+      && clashRetryDetail.displayReason === 'display:leave-http-403'
+  });
+  const clashResetDetail = resetClashLeaveRescueRoundCore({
+    clashLeaveRescueAttempts: [{ stage: 'auto' }],
+    clashLeaveRescue: { stage: 'auto' },
+    clashLeaveRescueStage: 'auto',
+    clashLeaveRescueRetry: true
+  });
+  results.push({
+    name: 'leave-command-clash-rescue-reset-core-clears-round-state',
+    passed: Array.isArray(clashResetDetail.clashLeaveRescueAttempts)
+      && clashResetDetail.clashLeaveRescueAttempts.length === 0
+      && clashResetDetail.clashLeaveRescue === null
+      && clashResetDetail.clashLeaveRescueStage === ''
+      && clashResetDetail.clashLeaveRescueRetry === false
   });
 
   // Test action focus building

@@ -38,7 +38,7 @@ function pendingExitDisplayReasonCall(summaryExpr, options = {}) {
 
 function pendingExitSource(options = {}) {
   const offlineSuppressPrelude = options.bundledRuntime
-    ? "  const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore, leaveRequestHasHttp403Core, leaveDetailHasHttp403Core, leaveDetailSucceededCore, leaveSuccessReloadConfirmationForDetailCore, leaveSuccessReloadConfirmationSatisfiedCore, pendingExitWaitReasonCore } = require('./src/browser/runtime/pending-exit');\n  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
+    ? "  const { pendingExitRetryMsCore, pendingExitDisplayReasonCore, summarizePendingExitCore, leaveRequestHasHttp403Core, leaveDetailHasHttp403Core, leaveDetailSucceededCore, leaveSuccessReloadConfirmationForDetailCore, leaveSuccessReloadConfirmationSatisfiedCore, pendingExitWaitReasonCore } = require('./src/browser/runtime/pending-exit');\n  const { resetClashLeaveRescueRoundCore: resetClashLeaveRescueRoundForPendingExitCore } = require('./src/browser/runtime/leave-command');\n  const { clearLoginSuppressMatchingBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore, finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore, leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore, setExitReloginSuppressBoundCore, setOfflineLeaveSuppressBoundCore } = require('./src/browser/runtime/exit-relogin');\n\n"
     : '';
   const enemyHoldRemainingMsCall = options.bundledRuntime
     ? enemyReloginHoldRemainingMsBoundCall('enemyReloginHoldRemainingMsForPendingExitBoundCore')
@@ -82,6 +82,9 @@ function pendingExitSource(options = {}) {
   const pendingExitWaitReasonCall = (pending, confirmed) => options.bundledRuntime
     ? `pendingExitWaitReasonCore(${pending}, ${confirmed})`
     : `pendingExitWaitReason(${pending}, ${confirmed})`;
+  const resetClashLeaveRescueRoundCall = detail => options.bundledRuntime
+    ? `resetClashLeaveRescueRoundForPendingExitCore(${detail})`
+    : `resetClashLeaveRescueRound(${detail})`;
   const writePendingExit = pending => writePersistentPendingExitStateCall(pending, options);
   const summarizePendingExitExpr = pending => summarizePendingExitCall(pending || 'bot.pendingExit', {
     ...options,
@@ -748,7 +751,7 @@ ${enemyLeaveSuppressCall}
     detail.injury = detail.injury || pending.injury || null;
     detail.combat = detail.combat || pending.combat || null;
     detail.combatCover = detail.combatCover || pending.combatCover || detail.combat?.leaveCover || null;
-    resetClashLeaveRescueRound(detail);
+    ${resetClashLeaveRescueRoundCall('detail')};
     detail.exitPending = true;
     detail.exitConfirmed = false;
     detail.pendingExitRetry = true;

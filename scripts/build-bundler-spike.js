@@ -111,6 +111,8 @@ async function selfTest() {
   assert(source.includes('function pendingExitRetryMsCore'), 'pending-exit helper was not bundled');
   assert(source.includes('function leaveRequestHasHttp403Core'), 'pending-exit leave request 403 helper was not bundled');
   assert(source.includes('function leaveSuccessReloadConfirmationForDetailCore'), 'pending-exit leave success reload helper was not bundled');
+  assert(source.includes('function leaveCommandFailureMessageCore'), 'leave-command failure helper was not bundled');
+  assert(source.includes('function nextClashLeaveRescueStageCore'), 'leave-command Clash rescue stage helper was not bundled');
   assert(source.includes('function refreshExitDetailCore'), 'refresh-exit-detail helper was not bundled');
   assert(source.includes('function restoredCoinFailuresCore'), 'restored coin failures helper was not bundled');
   assert(source.includes('function restoreRuntimeStateCore'), 'restored runtime state helper was not bundled');
@@ -240,6 +242,14 @@ async function selfTest() {
   assert(status.pendingExitCoreReloadRequestId === 'spike-leave', 'spike did not execute pending-exit leave reload helper');
   assert(status.pendingExitCoreReloadSatisfied === true, 'spike did not execute pending-exit reload satisfied helper');
   assert(status.pendingExitCoreWaitReason === 'pursuit-leave-retry', 'spike did not execute pending-exit wait reason helper');
+  assert(status.leaveCommandFailureMessage === 'Forbidden', 'spike did not execute leave-command failure helper');
+  assert(status.leaveCommandResultStatus === 403, 'spike did not execute leave-command result summary helper');
+  assert(status.leaveCommandClashFailed === true, 'spike did not execute leave-command Clash failure helper');
+  assert(status.leaveCommandNextClashStage === 'direct', 'spike did not execute leave-command Clash stage helper');
+  assert(status.leaveCommandClashSummaryAt === 2400, 'spike did not execute leave-command Clash summary helper');
+  assert(status.leaveCommandRetryStage === 'direct', 'spike did not execute leave-command retry detail helper');
+  assert(status.leaveCommandRetryPending === false, 'spike did not clear stale leave-command retry request state');
+  assert(status.leaveCommandResetCleared === true, 'spike did not execute leave-command reset helper');
   assert(status.refreshExitHoldRemainingMs === 1400, 'spike did not refresh exit hold remaining time');
   assert(status.refreshExitSummary === 'summary:stamina budget coin leave', 'spike did not refresh stamina-budget exit summary');
   assert(status.refreshExitDisplayReason === 'summary:stamina budget coin leave', 'spike did not finalize refreshed exit display reason');
