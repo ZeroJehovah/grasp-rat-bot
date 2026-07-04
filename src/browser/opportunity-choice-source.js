@@ -99,6 +99,56 @@ function opportunityChoiceInlineSource(helpers = {}, options = {}) {
 			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius
 			    }));
 			  }
+
+			  function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
+			    const t = now();
+			    const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
+			      nowMs: t,
+			      self,
+			      activeThreats,
+			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs,
+			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius,
+			      snapshotCoinMaxDistance: cfg.snapshotCoinMaxDistance,
+			      globalCoinMaxDistance: cfg.globalCoinMaxDistance,
+			      coinMaxDistance: cfg.coinMaxDistance,
+			      visibleSourcesConfirmMissing: choice => visibleCoinSourcesConfirmTargetMissing(choice),
+			      ignoredCoin: id => Boolean(bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))),
+			      coinBlockedByThreat: (origin, coin, threat) => {
+			        const blocked = coinBlockedByThreat(origin, coin, threat);
+			        if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
+			        return blocked;
+			      },
+			      coinStaminaCost: opportunityCoinStaminaCost,
+			      coinStaminaAffordable: (origin, coin, staminaCost) => coinStaminaAffordableWithDiagnostic(origin, coin, staminaCost),
+			      scoreCoinOpportunity,
+			      priorityTier: opportunityPriorityTier
+			    }));
+			    if (result?.clearMissing) {
+			      clearMissingVisibleCoinTarget(bot.opportunityChoice, result.coin, result.clearReason || 'visible-coin-disappeared', t);
+			      return null;
+			    }
+			    const item = result?.opportunity || null;
+			    if (!item) return null;
+			    const coin = result.coin || item.sourceCoin || item;
+			    const { sourceCoin, ...opportunity } = item;
+			    return {
+			      ...opportunity,
+			      action: () => buildCoinAction(self, coin, opportunity.reason, opportunity.actionKind === 'seek-coin' ? 'seek-coin' : null)
+			    };
+		  }
+
+			  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
+	    if (!item) return action;
+	    const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
+	    bot.opportunityChoice = result.choice;
+	    return result.action;
+	  }
+
+		  function chooseStableOpportunity(opportunities) {
+		    const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
+		    bot.opportunitySwitchLock = result.switchLock;
+		    return result.chosen;
+		  }
 `;
   return String.raw`${opportunityChoiceHelperSource}
 
@@ -183,56 +233,7 @@ ${localOpportunityChoiceWrapperSource}
 			    };
 			  }
 
-			  function buildMissingHeldOpportunity(self, activeThreats, opportunities) {
-			    const t = now();
-			    const result = buildMissingHeldOpportunityCore(bot.opportunityChoice, opportunities, opportunityChoiceCoreOptions({
-			      nowMs: t,
-			      self,
-			      activeThreats,
-			      missingHoldMs: cfg.opportunityMissingHoldMs ?? cfg.opportunitySwitchHoldMs,
-			      nativeCoinAuthoritativeRadius: typeof snapshotCoinLocalSuppressRadius === 'function' ? snapshotCoinLocalSuppressRadius() : cfg.nativeCoinAuthoritativeRadius,
-			      snapshotCoinMaxDistance: cfg.snapshotCoinMaxDistance,
-			      globalCoinMaxDistance: cfg.globalCoinMaxDistance,
-			      coinMaxDistance: cfg.coinMaxDistance,
-			      visibleSourcesConfirmMissing: choice => visibleCoinSourcesConfirmTargetMissing(choice),
-			      ignoredCoin: id => Boolean(bot.ignoredCoins && typeof bot.ignoredCoins.has === 'function' && bot.ignoredCoins.has(String(id))),
-			      coinBlockedByThreat: (origin, coin, threat) => {
-			        const blocked = coinBlockedByThreat(origin, coin, threat);
-			        if (blocked) recordCoinFilterDiagnostic(coin, 'threat-blocked', { threat: coinThreatDiagnostics(threat) });
-			        return blocked;
-			      },
-			      coinStaminaCost: opportunityCoinStaminaCost,
-			      coinStaminaAffordable: (origin, coin, staminaCost) => coinStaminaAffordableWithDiagnostic(origin, coin, staminaCost),
-			      scoreCoinOpportunity,
-			      priorityTier: opportunityPriorityTier
-			    }));
-			    if (result?.clearMissing) {
-			      clearMissingVisibleCoinTarget(bot.opportunityChoice, result.coin, result.clearReason || 'visible-coin-disappeared', t);
-			      return null;
-			    }
-			    const item = result?.opportunity || null;
-			    if (!item) return null;
-			    const coin = result.coin || item.sourceCoin || item;
-			    const { sourceCoin, ...opportunity } = item;
-			    return {
-			      ...opportunity,
-			      action: () => buildCoinAction(self, coin, opportunity.reason, opportunity.actionKind === 'seek-coin' ? 'seek-coin' : null)
-			    };
-		  }
-
-			  function rememberOpportunityChoice(item, action, previous = bot.opportunityChoice) {
-	    if (!item) return action;
-	    const result = rememberOpportunityChoiceCore(item, action, previous, opportunityChoiceCoreOptions());
-	    bot.opportunityChoice = result.choice;
-	    return result.action;
-	  }
-
 ${highValueOpportunityWrapperSource}
-		  function chooseStableOpportunity(opportunities) {
-		    const result = chooseStableOpportunityCore(opportunities, bot.opportunityChoice, bot.opportunitySwitchLock, opportunityChoiceCoreOptions());
-		    bot.opportunitySwitchLock = result.switchLock;
-		    return result.chosen;
-		  }
 `;
 }
 

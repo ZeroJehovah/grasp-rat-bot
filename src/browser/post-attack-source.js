@@ -32,6 +32,53 @@ function postAttackInlineSource(helpers = {}, options = {}) {
   }
 
 `;
+  const localPostAttackPickerSource = options.bundledRuntime ? '' : String.raw`
+  function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
+    const t = Date.now();
+    const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
+    const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
+    const minScore = Math.max(0, Number(options.minScore ?? 0) || 0);
+    const candidateCoins = safeCoinCandidates(coins, activeThreats, maxDistance, self)
+      .filter(coin => Number(coin.amount || 0) > minAmount)
+      .filter(coin => Number.isFinite(Number(coin.distance)))
+      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin));
+    const result = pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {
+      nowMs: t,
+      dist,
+      priorityMs: cfg.postAttackDropCoinPriorityMs,
+      includeSingle: options.includeSingle,
+      minAmount,
+      maxDistance,
+      minScore,
+      dropCoinRadius: cfg.postAttackDropCoinRadius,
+      resolveAttack: attack => postAttackDropResolvedAt(attack, entities, t),
+      scoreCoin: scoreCoinOpportunity
+    });
+    for (const candidate of result.candidates || []) {
+      recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), 'post-attack-drop-visible');
+    }
+    return result.selected || null;
+  }
+
+  function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
+    const t = Date.now();
+    const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
+    return pickPostAttackDropWaitTargetCore(bot.attackHistory, coins, activeThreats, {
+      nowMs: t,
+      self,
+      dist,
+      waitMs,
+      minDrop: Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0),
+      resolveMaxMs: Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs),
+      maxDistance: Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0)),
+      stopDistance: Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0)),
+      dropCoinRadius: cfg.postAttackDropCoinRadius,
+      resolveAttack: item => postAttackDropResolvedAt(item, entities, t),
+      coinBlockedByThreat: (origin, item, threat) => coinBlockedByThreat(origin, item, threat)
+    });
+  }
+
+`;
   return String.raw`  function attackEntityMatches(entity, attack) {
     const id = String(attack?.id ?? '');
     const name = String(attack?.name || '');
@@ -61,54 +108,10 @@ function postAttackInlineSource(helpers = {}, options = {}) {
     return t;
   }
 
-  function pickPostAttackDropCoin(self, coins, activeThreats, entities, options = {}) {
-    const t = Date.now();
-    const minAmount = options.includeSingle ? 0 : cfg.postAttackDropCoinMinAmount;
-    const maxDistance = Math.max(0, Number(options.maxDistance ?? cfg.postAttackDropCoinMaxDistance) || 0);
-    const minScore = Math.max(0, Number(options.minScore ?? 0) || 0);
-    const candidateCoins = safeCoinCandidates(coins, activeThreats, maxDistance, self)
-      .filter(coin => Number(coin.amount || 0) > minAmount)
-      .filter(coin => Number.isFinite(Number(coin.distance)))
-      .filter(coin => coinStaminaAffordableWithDiagnostic(self, coin));
-    const result = pickPostAttackDropCoinCore(bot.attackHistory, candidateCoins, {
-      nowMs: t,
-      dist,
-      priorityMs: cfg.postAttackDropCoinPriorityMs,
-      includeSingle: options.includeSingle,
-      minAmount,
-      maxDistance,
-      minScore,
-      dropCoinRadius: cfg.postAttackDropCoinRadius,
-      resolveAttack: attack => postAttackDropResolvedAt(attack, entities, t),
-      scoreCoin: scoreCoinOpportunity
-    });
-    for (const candidate of result.candidates || []) {
-      recordDropMatchedKill(candidate, candidate.amount, summarizeSelf(self), 'post-attack-drop-visible');
-    }
-    return result.selected || null;
-  }
-
 ${postAttackDropHelperSource}
 
 ${localPostAttackVisibleCoinExistsSource}
-
-  function pickPostAttackDropWaitTarget(self, coins, activeThreats, entities) {
-    const t = Date.now();
-    const waitMs = Math.max(0, Number(cfg.postAttackDropWaitMs || 0));
-    return pickPostAttackDropWaitTargetCore(bot.attackHistory, coins, activeThreats, {
-      nowMs: t,
-      self,
-      dist,
-      waitMs,
-      minDrop: Math.max(0, Number(cfg.postAttackDropWaitMinDrop ?? cfg.attackMinDrop) || 0),
-      resolveMaxMs: Math.max(waitMs, Number(cfg.postAttackDropResolveMaxMs || waitMs) || waitMs),
-      maxDistance: Math.max(0, Number(cfg.postAttackDropWaitMaxDistance || cfg.opportunityVisibleDistance || cfg.globalCoinMaxDistance || 0)),
-      stopDistance: Math.max(0, Number(cfg.postAttackDropWaitStopDistance || cfg.coinPickupSweepDistance || 0)),
-      dropCoinRadius: cfg.postAttackDropCoinRadius,
-      resolveAttack: item => postAttackDropResolvedAt(item, entities, t),
-      coinBlockedByThreat: (origin, item, threat) => coinBlockedByThreat(origin, item, threat)
-    });
-  }
+${localPostAttackPickerSource}
 
   function buildPostAttackDropWaitAction(self, target) {
     const dir = coinDirectionTo(self, target, cfg.patrolPrecisionTolerance);
