@@ -8,10 +8,21 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 18,680 lines.
-- Function declarations inside the direct entry: 693.
-- Existing executable helper modules: 40 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 18,434 lines.
+- Function declarations inside the direct entry: 672.
+- Existing executable helper modules: 42 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
+
+## Migration Status
+
+- [x] Runtime shell and context (`bootstrap-0.4.525`).
+- [ ] UI, overlay, status, whitelist, and stamina.
+- [ ] Logging and history.
+- [ ] Login, exit, pending exit, and leave flow.
+- [ ] Native state, transport, session stats, and network quality.
+- [ ] Coin, opportunity, profit, and arbitration.
+- [ ] Combat domain.
+- [ ] Final orchestrator and verifier tightening.
 
 ## Remaining Migration Scope
 
@@ -29,21 +40,21 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Bootstrap, runtime config, shared state, and `bot` object: lines 1-721.
-- Target whitelist, stamina, exit motion, target overlay, and status panel: lines 722-1878.
-- Combat log, tick safety, reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 1879-5900.
-- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 5901-8066.
-- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 8067-9736.
-- Important logs, combat history, kill attribution, and entity refresh: lines 9737-10970.
-- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 10971-12249.
-- Target selection and combat movement/aim/state/fire/leave/action: lines 12250-15883.
-- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 15884-18680.
+- Runtime shell use, shared bindings, `bot` methods, and base helpers: lines 1-475.
+- Target whitelist, stamina, exit motion, target overlay, and status panel: lines 476-1632.
+- Combat log, tick safety, reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 1633-5654.
+- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 5655-7820.
+- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 7821-9490.
+- Important logs, combat history, kill attribution, and entity refresh: lines 9491-10724.
+- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 10725-12003.
+- Target selection and combat movement/aim/state/fire/leave/action: lines 12004-15637.
+- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 15638-18434.
 
 ## Commit Plan
 
-Plan count: 8 future migration commits, plus this documentation commit. The 8 implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 7 future migration commits after the completed shell/context slice. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
 
-### 1. Runtime Shell And Context
+### 1. Runtime Shell And Context - Completed
 
 Goal:
 
@@ -59,6 +70,8 @@ Validation focus:
 
 - Runtime bootstrap defaults, preserved state, pending-exit persistence, and page-global adapters initialize in the same order.
 - Direct esbuild entry and helper-entry tests still use the same config injection path.
+
+Completed in `bootstrap-0.4.525`: `src/browser/runtime/runtime-shell.js` creates the bootstrap and runtime-state bindings, `src/browser/runtime/runtime-bot-state.js` owns the extracted initial `bot` state, and `scripts/verify-objective-build.js` checks the new shell/bot-state boundary.
 
 ### 2. UI, Overlay, Status, Whitelist, And Stamina
 
