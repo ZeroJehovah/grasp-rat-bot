@@ -29,12 +29,13 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.535`：
+进度更新到 `bootstrap-0.4.536`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 57 个可执行运行时模块，约 22,614 行。
-- `scripts/verify-objective-build.js`: 632 行，当前报告 26 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue 的 owner 防回流检查。
-- 10 次实施提交中已完成 3 次，剩余 7 次。
+- `src/browser/runtime/*.js`: 60 个可执行运行时模块，约 22,924 行。
+- `src/browser/runtime/control-flow-runtime.js`: 3,410 行。
+- `scripts/verify-objective-build.js`: 678 行，当前报告 27 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom 的 owner 防回流检查。
+- 10 次实施提交中已完成 4 次，剩余 6 次。
 
 ## 剩余待迁移内容
 
@@ -135,7 +136,7 @@
 - [x] Entry Public API And Status Split (`bootstrap-0.4.533`)
 - [x] Shared Entity Predicate Split (`bootstrap-0.4.534`)
 - [x] Exit Detail, Pause, And Entry Glue Split (`bootstrap-0.4.535`)
-- [ ] Control-flow Login Gate And Login-point Safety Split
+- [x] Control-flow Login Gate And Login-point Safety Split (`bootstrap-0.4.536`)
 - [ ] Control-flow Pending-exit And Leave Flow Split
 - [ ] Native State And Transport Split
 - [ ] Session, Stall, And Network Quality Split
@@ -207,7 +208,7 @@ Completed in `bootstrap-0.4.534`: `src/browser/runtime/entity-state-runtime.js` 
 
 Completed in `bootstrap-0.4.535`: `src/browser/runtime/exit-detail-runtime.js` owns enemy/offline leave detail refresh plus latest enemy leave summary/display helpers, and `src/browser/runtime/entry-glue-runtime.js` owns post-exit target cleanup, pause reason/sync, own-entity lookup, and status logging glue. `runtime-entry.js` now composes these through `createExitDetailRuntime()` and `createEntryGlueRuntime()`. `scripts/verify-objective-build.js` rejects those helper bodies returning to `runtime-entry.js`, requires both modules in the direct esbuild graph, and reports 26 checks across 57 runtime modules.
 
-### 4. Control-flow Login Gate And Login-point Safety Split
+### 4. Control-flow Login Gate And Login-point Safety Split - Completed
 
 目标：
 
@@ -224,6 +225,8 @@ Completed in `bootstrap-0.4.535`: `src/browser/runtime/exit-detail-runtime.js` o
 
 - manual immediate login 在 relogin hold/login-point unsafe 时仍可显式点击。
 - login-point safety 三连安全快照、动态半径、last-exit HP 记忆、overlay 状态保持兼容。
+
+Completed in `bootstrap-0.4.536`: `src/browser/runtime/control-login-runtime.js` owns native login gate interception, manual login bypass, login suppress status, snapshot-gate display/status, and `startLinuxDoLogin` guarding; `src/browser/runtime/login-point-safety-runtime.js` owns login-point safety persistence, dynamic radius, damage evidence, probe recording, reset, and login-point recording; `src/browser/runtime/post-login-zoom-runtime.js` owns post-login visible-range fit, zoom controls, wheel/fallback clicks, and unavailable-self handling. `src/browser/runtime/control-flow-runtime.js` now composes these through three factories and is down to 3,410 lines. `scripts/verify-objective-build.js` rejects these bodies returning to `control-flow-runtime.js`, requires the three new modules in the direct esbuild graph, and reports 27 checks across 60 runtime modules.
 
 ### 5. Control-flow Pending-exit And Leave Flow Split
 
