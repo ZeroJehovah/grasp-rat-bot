@@ -12,6 +12,21 @@ Baseline:
 - `src/browser/runtime-fragment-registry.js`: 54 named runtime fragment entries.
 - Non-registry source-generation files: 8 files (`runtime-source.js`, `runtime-entry-source.js`, `opportunity-route-source.js`, and five `*-call-source.js` helpers).
 
+## Migration Status
+
+Completed in `bootstrap-0.4.524`.
+
+- [x] Thin prelude wrapper collapse.
+- [x] Source helper generator cleanup.
+- [x] Runtime bootstrap and state entry modules.
+- [x] Coin and opportunity domain runtime cutover.
+- [x] Combat domain runtime cutover.
+- [x] Exit, pending, login, and control runtime cutover.
+- [x] UI, logging, native, and network runtime cutover.
+- [x] Final entry and registry cutover.
+
+Implementation note: the final cutover keeps the already extracted `src/browser/runtime/*.js` helper modules and moves the remaining browser runtime body into `src/browser/runtime-entry.js`, a real esbuild entry module. Production remote builds and local CDP/eval builds now bundle that entry directly with build-time runtime config injected by esbuild `define`. The old source-fragment registry/materializer/source-helper files are removed instead of retained as build adapters.
+
 ## Migration Target
 
 The target is to remove the browser source-string fragment layer and make production/local runtime generation flow through real bundler entries and executable browser runtime modules.
@@ -25,7 +40,9 @@ End-state expectations:
 - `scripts/remote-bot-bundle.js` bundles actual entry modules instead of virtual modules backed by generated source strings.
 - `scripts/verify-objective-build.js` checks the new module graph, final dist, and absence of obsolete source-generation files.
 
-## Remaining Inventory
+## Baseline Remaining Inventory - Completed
+
+The inventory below is the baseline from plan creation. It is no longer present after the `bootstrap-0.4.524` cutover.
 
 ### Registry Fragments
 
@@ -85,7 +102,7 @@ Plan count from this baseline: 8 remaining migration release slices. This keeps 
 
 The count below is release-slice count. The repository gate may still create a paired documentation commit per slice unless code and docs are intentionally committed together.
 
-### 1. `bootstrap-0.4.517` - Thin Prelude Wrapper Collapse
+### 1. `bootstrap-0.4.517` - Thin Prelude Wrapper Collapse - Completed
 
 Target:
 
@@ -106,7 +123,7 @@ Verification focus:
 - Final dist still bundles `attack-worth`, `opportunity-pick`, `patrol`, `opportunity-clear`, `runtime-utils`, `array-count`, and `exit-motion` helpers.
 - Verifier rejects the deleted wrapper files and obsolete registry imports.
 
-### 2. `bootstrap-0.4.518` - Source Helper Generator Cleanup
+### 2. `bootstrap-0.4.518` - Source Helper Generator Cleanup - Completed
 
 Target:
 
@@ -127,7 +144,7 @@ Verification focus:
 - Consumers still clear opportunity choice, summarize pending exits, persist pending exits, finalize leave display reasons, and read relogin holds through direct runtime helper calls.
 - `opportunity-candidate-source.js` no longer imports a separate route source generator.
 
-### 3. `bootstrap-0.4.519` - Runtime Bootstrap And State Entry Modules
+### 3. `bootstrap-0.4.519` - Runtime Bootstrap And State Entry Modules - Completed
 
 Target:
 
@@ -148,7 +165,7 @@ Verification focus:
 - Page-global adapter, runtime config/defaults, preserved state, persistent state, pending-exit persistence, and tick safety still initialize in the same order.
 - Helper-entry self-test exercises the new entry module path.
 
-### 4. `bootstrap-0.4.520` - Coin And Opportunity Domain Runtime Cutover
+### 4. `bootstrap-0.4.520` - Coin And Opportunity Domain Runtime Cutover - Completed
 
 Target:
 
@@ -176,7 +193,7 @@ Verification focus:
 - Ordinary profit flow still prioritizes realtime/native visible coins and visible/native AFK targets before snapshot fallback.
 - Coin diagnostics, route planning, progress tracking, ignored-coin cleanup, opportunity stability, post-attack drops, and final action arbitration still call the existing strategy/runtime cores.
 
-### 5. `bootstrap-0.4.521` - Combat Domain Runtime Cutover
+### 5. `bootstrap-0.4.521` - Combat Domain Runtime Cutover - Completed
 
 Target:
 
@@ -201,7 +218,7 @@ Verification focus:
 - Existing combat self-tests and replay self-tests continue to pass.
 - Final dist still contains no snapshot-driven combat target/aim/fire fallback.
 
-### 6. `bootstrap-0.4.522` - Exit, Pending, Login, And Control Runtime Cutover
+### 6. `bootstrap-0.4.522` - Exit, Pending, Login, And Control Runtime Cutover - Completed
 
 Target:
 
@@ -225,7 +242,7 @@ Verification focus:
 - Pending exit persistence, leave confirmation, HTTP 403 rescue, login-point safety, game-session no-self leave, and control-login takeover behavior remain covered.
 - Final dist still blocks unsafe relogin/reload until required logs and pending exits are handled.
 
-### 7. `bootstrap-0.4.523` - UI, Logging, Native, And Network Runtime Cutover
+### 7. `bootstrap-0.4.523` - UI, Logging, Native, And Network Runtime Cutover - Completed
 
 Target:
 
@@ -251,7 +268,7 @@ Verification focus:
 - Status panel, overlay, target whitelist, combat logs, important logs, runtime status, native WebSocket movement/shooting, and network quality diagnostics still render/report correctly in generated dist.
 - `npm run test:remote-bundled` and `node scripts/verify-objective-build.js` prove final bundling has no unresolved runtime imports.
 
-### 8. `bootstrap-0.4.524` - Final Entry And Registry Cutover
+### 8. `bootstrap-0.4.524` - Final Entry And Registry Cutover - Completed
 
 Target:
 
