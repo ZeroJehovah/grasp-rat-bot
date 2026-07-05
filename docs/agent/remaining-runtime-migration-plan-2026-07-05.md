@@ -29,14 +29,14 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.538`：
+进度更新到 `bootstrap-0.4.539`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 65 个可执行运行时模块，约 23,741 行。
+- `src/browser/runtime/*.js`: 68 个可执行运行时模块，约 23,917 行。
 - `src/browser/runtime/control-flow-runtime.js`: 1,614 行。
-- `src/browser/runtime/native-state-runtime.js`: 1,233 行。
-- `scripts/verify-objective-build.js`: 753 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport 的 owner 防回流检查。
-- 10 次实施提交中已完成 6 次，剩余 4 次。
+- `src/browser/runtime/native-state-runtime.js`: 376 行。
+- `scripts/verify-objective-build.js`: 781 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality 的 owner 防回流检查。
+- 10 次实施提交中已完成 7 次，剩余 3 次。
 
 ## 剩余待迁移内容
 
@@ -140,7 +140,7 @@
 - [x] Control-flow Login Gate And Login-point Safety Split (`bootstrap-0.4.536`)
 - [x] Control-flow Pending-exit And Leave Flow Split (`bootstrap-0.4.537`)
 - [x] Native State And Transport Split (`bootstrap-0.4.538`)
-- [ ] Session, Stall, And Network Quality Split
+- [x] Session, Stall, And Network Quality Split (`bootstrap-0.4.539`)
 - [ ] Logging And Important Records Split
 - [ ] Profit Runtime Split
 - [ ] Combat Runtime Split And Final Guard Tightening
@@ -269,7 +269,7 @@ Completed in `bootstrap-0.4.537`: `src/browser/runtime/pending-exit-runtime.js` 
 
 Completed in `bootstrap-0.4.538`: `src/browser/runtime/native-data-runtime.js` owns WebSocket ready-state helpers, page-native snapshot observer, native state/control access, native/realtime entity and coin source normalization, snapshot freshness gates, coin/bullet merge, fetch helper, self summary, and passive-only `refreshGlobalState()`; `src/browser/runtime/native-transport-runtime.js` owns native WS tick/message pump, control summary/sync, local and direct-WS movement state, stop-motion after exit, velocity repeat, action velocity dispatch, aim, native/direct shoot, combat shot metrics, and fallback WS send. `src/browser/runtime/native-state-runtime.js` now composes these through two factories and is down to 1,233 lines, retaining session, stall, and network-quality bodies for the next split. `scripts/verify-objective-build.js` rejects data/transport bodies returning to `native-state-runtime.js`, requires both new modules in the direct esbuild graph, and reports 29 checks across 65 runtime modules.
 
-### 7. Session, Stall, And Network Quality Split
+### 7. Session, Stall, And Network Quality Split - Completed
 
 目标：
 
@@ -285,6 +285,8 @@ Completed in `bootstrap-0.4.538`: `src/browser/runtime/native-data-runtime.js` o
 验证重点：
 
 - panel today/current login 指标、daily stamina delta 修正、network quality pill/status、combat-log network diagnostics 保持兼容。
+
+Completed in `bootstrap-0.4.539`: `src/browser/runtime/session-stats-runtime.js` owns current-login and today-session stamina/coin/kill accounting; `src/browser/runtime/stall-diagnostics-runtime.js` owns server-position stall and action-settlement stall summaries/assessment; and `src/browser/runtime/network-quality-runtime.js` owns latency/loss frame samples plus movement/shot/damage ACK tracking. `src/browser/runtime/native-state-runtime.js` now composes native data, native transport, session stats, stall diagnostics, and network quality through five factories and is down to 376 lines. `scripts/verify-objective-build.js` rejects session/stall/network bodies returning to `native-state-runtime.js`, requires the three new modules in the direct esbuild graph, and reports 29 checks across 68 runtime modules.
 
 ### 8. Logging And Important Records Split
 
