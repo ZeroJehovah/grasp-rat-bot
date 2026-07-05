@@ -665,6 +665,7 @@ async function main() {
   check('control login gate runtimes own extracted login safety bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/control-flow-runtime')"), 'runtime entry does not import control flow runtime module');
     assert(runtimeEntrySource.includes('createControlFlowRuntime({'), 'runtime entry does not create control flow runtime bindings');
+    assert(runtimeEntrySource.includes('stopMotionAfterExit: (...args) => stopMotionAfterExit(...args)'), 'runtime entry must defer stopMotionAfterExit until native state initializes it');
     assert(runtimeControlFlowSource.includes("require('./post-login-zoom-runtime')"), 'control flow runtime does not import post-login zoom runtime');
     assert(runtimeControlFlowSource.includes("require('./login-point-safety-runtime')"), 'control flow runtime does not import login-point safety runtime');
     assert(runtimeControlFlowSource.includes("require('./control-login-runtime')"), 'control flow runtime does not import control-login runtime');
