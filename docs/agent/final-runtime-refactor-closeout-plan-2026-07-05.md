@@ -43,7 +43,7 @@ Implementation status:
 - [x] Commit 3 - Introduce Runtime Domain Contexts
 - [x] Commit 4 - Move Orchestration Composition To Domain Contexts
 - [x] Commit 5 - Move Orchestration Decision To Domain Contexts
-- [ ] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
+- [x] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
 - [ ] Commit 7 - Split Remaining Control-Flow Owners
 - [ ] Commit 8 - Final Documentation, Budgets, And Release Closeout
 
@@ -324,6 +324,8 @@ Completion criteria:
 
 - Tick runtime dependency width is materially lower.
 - Local CDP/eval and production bundled runtime both still use the direct entry path.
+
+Completed in `bootstrap-0.4.550`: `createOrchestrationTickRuntime()` now accepts `domainContexts`, resolves grouped bootstrap/state/entity/native/control/profit/combat/logging/ui/safety dependencies, and reads the orchestration-local `chooseAction` binding from a small `decision` context. `createOrchestrationRuntime()` now builds `tickDomainContexts` instead of spreading the flat runtime context into tick/startup. Static verification guards this wiring and tightens the tick dependency-width budget to `1/10`; runtime-helper-entry and remote-bundled self-tests still pass on the direct entry path.
 
 ### Commit 7 - Split Remaining Control-Flow Owners
 
