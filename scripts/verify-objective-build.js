@@ -85,9 +85,9 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'combat composition runtime': 220,
   'profit composition runtime': 220,
   'native state composition runtime': 420,
-  'control flow composition runtime': 850,
-  'session recovery runtime': 850,
-  'relogin gate runtime': 260,
+  'control flow composition runtime': 820,
+  'session recovery runtime': 835,
+  'relogin gate runtime': 240,
   'orchestration runtime': 360,
   'orchestration safety runtime': 450,
   'orchestration decision runtime': 1160,
@@ -116,7 +116,7 @@ const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
   },
   'control flow composition runtime': {
     factory: 'createControlFlowRuntime',
-    max: 75
+    max: 74
   }
 };
 
