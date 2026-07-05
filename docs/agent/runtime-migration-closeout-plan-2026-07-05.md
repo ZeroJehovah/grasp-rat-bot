@@ -113,7 +113,7 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 
 - [x] Commit 1 - Docs Current-State Closeout
 - [x] Commit 2 - Post-Migration Guard Baseline
-- [ ] Commit 3 - Extract Orchestration Safety Helpers
+- [x] Commit 3 - Extract Orchestration Safety Helpers
 - [ ] Commit 4 - Extract Decision Selection Runtime
 - [ ] Commit 5 - Extract Tick And Startup Runtime
 - [ ] Commit 6 - Split Combat Log Frame And Diagnostics Owners
@@ -193,6 +193,8 @@ Completed after `bootstrap-0.4.542`: `scripts/verify-objective-build.js` now kee
 
 - Return-block safety 仍保持 priority/hard-gate 语义，不变成 coin-per-stamina scoring。
 - Verifier 拒绝 `markRecentMovement()`、`returnBlockRadius()`、`buildReturnBlockScanAction()`、`blockThreatReturnAction()` 回流 `orchestration-runtime.js`。
+
+Completed in `bootstrap-0.4.543`: `src/browser/runtime/orchestration-safety-runtime.js` now owns recent movement, flee direction/lock, return-block radius/scan/pressure helpers, threat merging/picking, and `blockThreatReturnAction()`. `src/browser/runtime/orchestration-runtime.js` composes the safety module and is down to 2,173 lines while retaining `classify()`, `chooseAction()`, `tick()`, and startup bodies for Commit 4/5. `scripts/verify-objective-build.js` rejects safety bodies returning to entry/orchestration, tightens orchestration to a 2,200-line budget, adds a 450-line safety budget, and reports 31 checks across 81 runtime modules. Release commit: `85ff011`; manifest SHA-256: `b40c77b7fd6647960437e36fd0589b93a875a69021b1d4b7e0f94a8e193abc7e`.
 
 ### Commit 4 - Extract Decision Selection Runtime
 
