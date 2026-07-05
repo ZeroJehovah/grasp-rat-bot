@@ -42,6 +42,8 @@ const REQUIRED_DIST_TOKENS = [
   'function createPendingExitRuntime',
   'function createClashLeaveRescueRuntime',
   'function createLeaveFlowRuntime',
+  'function createSessionRecoveryRuntime',
+  'function createReloginGateRuntime',
   'function createNativeDataRuntime',
   'function createNativeTransportRuntime',
   'function createSessionStatsRuntime',
@@ -83,7 +85,9 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'combat composition runtime': 220,
   'profit composition runtime': 220,
   'native state composition runtime': 420,
-  'control flow composition runtime': 1700,
+  'control flow composition runtime': 850,
+  'session recovery runtime': 850,
+  'relogin gate runtime': 260,
   'orchestration runtime': 360,
   'orchestration safety runtime': 450,
   'orchestration decision runtime': 1160,
@@ -112,7 +116,7 @@ const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
   },
   'control flow composition runtime': {
     factory: 'createControlFlowRuntime',
-    max: 90
+    max: 75
   }
 };
 
@@ -346,6 +350,8 @@ async function main() {
   const runtimePendingExitSource = readText('src/browser/runtime/pending-exit-runtime.js');
   const runtimeClashLeaveRescueSource = readText('src/browser/runtime/clash-leave-rescue-runtime.js');
   const runtimeLeaveFlowSource = readText('src/browser/runtime/leave-flow-runtime.js');
+  const runtimeSessionRecoverySource = readText('src/browser/runtime/session-recovery-runtime.js');
+  const runtimeReloginGateSource = readText('src/browser/runtime/relogin-gate-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
@@ -735,7 +741,7 @@ async function main() {
     assert(runtimeLeaveFlowSource.includes('function updatePursuitTracking'), 'pursuit tracking body missing from leave-flow module');
   });
 
-  check('control flow runtime owns remaining reload session and relogin gate bodies', () => {
+  check('session recovery and relogin gate runtimes own remaining control-flow bodies', () => {
     assert(!/function\s+requestReload\s*\(/.test(runtimeEntrySource), 'runtime entry still owns reload request body');
     assert(!/function\s+handlePendingExit\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pending exit body');
     assert(!/async\s+function\s+maybeStartAutoLogin\s*\(/.test(runtimeEntrySource), 'runtime entry still owns auto-login body');
@@ -743,10 +749,26 @@ async function main() {
     assert(!/function\s+updatePursuitTracking\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pursuit tracking body');
     assert(!/async\s+function\s+issueLeaveCommand\s*\(/.test(runtimeEntrySource), 'runtime entry still owns leave command body');
     assert(runtimeControlFlowSource.includes('function createControlFlowRuntime'), 'control flow runtime factory missing');
-    assert(runtimeControlFlowSource.includes('function requestReload'), 'reload request body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('function hasNativeGameSession'), 'native game-session body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('function summarizeReloginGateStatus'), 'relogin gate summary body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('function clearCurrentReloginHold'), 'manual relogin-hold clear body missing from control flow module');
+    assert(runtimeControlFlowSource.includes("require('./session-recovery-runtime')"), 'control flow runtime does not import session-recovery runtime');
+    assert(runtimeControlFlowSource.includes("require('./relogin-gate-runtime')"), 'control flow runtime does not import relogin-gate runtime');
+    assert(runtimeControlFlowSource.includes('createSessionRecoveryRuntime({'), 'control flow runtime does not create session-recovery bindings');
+    assert(runtimeControlFlowSource.includes('createReloginGateRuntime({'), 'control flow runtime does not create relogin-gate bindings');
+    assert(!/function\s+requestReload\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns reload request body');
+    assert(!/function\s+hasNativeGameSession\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns native game-session body');
+    assert(!/function\s+noSelfGameSessionExitState\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns no-self game-session body');
+    assert(!/function\s+liveSessionMismatchTakeoverState\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns live-session takeover body');
+    assert(!/function\s+summarizeReloginGateStatus\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns relogin gate summary body');
+    assert(!/function\s+clearCurrentReloginHold\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns manual relogin-hold clear body');
+    assert(runtimeSessionRecoverySource.includes('function createSessionRecoveryRuntime'), 'session-recovery runtime factory missing');
+    assert(runtimeSessionRecoverySource.includes('function requestReload'), 'reload request body missing from session-recovery module');
+    assert(runtimeSessionRecoverySource.includes('function requestSessionMismatchRecoveryReload'), 'session mismatch recovery reload body missing from session-recovery module');
+    assert(runtimeSessionRecoverySource.includes('function cloudflareErrorInfo'), 'Cloudflare error body missing from session-recovery module');
+    assert(runtimeSessionRecoverySource.includes('function noSelfGameSessionExitState'), 'no-self game-session body missing from session-recovery module');
+    assert(runtimeSessionRecoverySource.includes('function liveSessionMismatchTakeoverState'), 'live-session takeover body missing from session-recovery module');
+    assert(runtimeReloginGateSource.includes('function createReloginGateRuntime'), 'relogin-gate runtime factory missing');
+    assert(runtimeReloginGateSource.includes('function reloginCooldownCandidates'), 'relogin cooldown candidates body missing from relogin-gate module');
+    assert(runtimeReloginGateSource.includes('function summarizeReloginGateStatus'), 'relogin gate summary body missing from relogin-gate module');
+    assert(runtimeReloginGateSource.includes('function clearCurrentReloginHold'), 'manual relogin-hold clear body missing from relogin-gate module');
   });
 
   check('native data and transport runtimes own extracted state transport bodies', () => {
@@ -945,6 +967,8 @@ async function main() {
       assertLineBudget(runtimeProfitSource, 'profit composition runtime'),
       assertLineBudget(runtimeNativeStateSource, 'native state composition runtime'),
       assertLineBudget(runtimeControlFlowSource, 'control flow composition runtime'),
+      assertLineBudget(runtimeSessionRecoverySource, 'session recovery runtime'),
+      assertLineBudget(runtimeReloginGateSource, 'relogin gate runtime'),
       assertLineBudget(runtimeOrchestrationSource, 'orchestration runtime'),
       assertLineBudget(runtimeOrchestrationSafetySource, 'orchestration safety runtime'),
       assertLineBudget(runtimeOrchestrationDecisionSource, 'orchestration decision runtime'),

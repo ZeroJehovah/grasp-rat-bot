@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.550" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.551" };
     }
   });
 
@@ -10946,91 +10946,34 @@
     }
   });
 
-  // src/browser/runtime/control-flow-runtime.js
-  var require_control_flow_runtime = __commonJS({
-    "src/browser/runtime/control-flow-runtime.js"(exports, module) {
+  // src/browser/runtime/session-recovery-runtime.js
+  var require_session_recovery_runtime = __commonJS({
+    "src/browser/runtime/session-recovery-runtime.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
-      var { safeJsonClone } = require_runtime_utils2();
       var { arrayCount } = require_array_count();
-      var { formatDurationMs, formatDistance, actorLabel, hpDisplay } = require_display_format2();
+      var { formatDurationMs } = require_display_format2();
       var {
-        pendingExitRetryMsCore,
-        pendingExitDisplayReasonCore,
-        summarizePendingExitCore,
-        leaveDetailHasHttp403Core,
-        leaveDetailSucceededCore,
-        leaveSuccessReloadConfirmationForDetailCore,
-        leaveSuccessReloadConfirmationSatisfiedCore,
-        pendingExitWaitReasonCore
+        pendingExitRetryMsCore: pendingExitRetryMsForSessionRecoveryCore,
+        summarizePendingExitCore: summarizePendingExitForSessionRecoveryCore
       } = require_pending_exit2();
       var {
-        pendingExitDisplayReasonCore: pendingExitDisplayReasonForLeaveCommandCore,
-        leaveDetailHasHttp403Core: leaveDetailHasHttp403ForLeaveCommandCore,
-        leaveDetailSucceededCore: leaveDetailSucceededForLeaveCommandCore
-      } = require_pending_exit2();
-      var {
-        clearLoginSuppressMatchingBoundCore,
-        clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForControlLoginBoundCore,
-        clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore,
-        combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,
-        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForControlLoginBoundCore,
-        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore,
-        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,
-        finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForControlLoginCore,
-        finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore,
-        finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForLeaveFlowCore,
-        injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
-        leaveWaitDisplayCore: leaveWaitDisplayForControlLoginCore,
-        leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore,
-        leaveWaitDisplayCore: leaveWaitDisplayForLeaveFlowCore,
-        offlineExitRequiresUnsafeReloginDelayCore,
-        offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,
-        offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForControlLoginBoundCore,
-        offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore,
-        primePendingStaminaExitLoginSuppressBoundCore,
-        primePendingUnsafeExitLoginSuppressBoundCore,
-        pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,
-        setExitReloginSuppressBoundCore,
-        setOfflineLeaveSuppressBoundCore,
-        startExitAuditBoundCore
+        clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForSessionRecoveryBoundCore,
+        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForSessionRecoveryBoundCore,
+        offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForSessionRecoveryBoundCore
       } = require_exit_relogin();
-      var {
-        leaveCommandFailureMessageCore,
-        summarizeLeaveCommandResultCore,
-        leaveDetailFailedForClashRescueCore,
-        clashLeaveRescueAttemptsCore,
-        nextClashLeaveRescueStageCore,
-        summarizeClashLeaveRescueResultCore,
-        clashLeaveRescueRetryDetailCore,
-        resetClashLeaveRescueRoundCore,
-        resetClashLeaveRescueRoundCore: resetClashLeaveRescueRoundForPendingExitCore
-      } = require_leave_command2();
-      var { createPostLoginZoomRuntime } = require_post_login_zoom_runtime();
-      var { createLoginPointSafetyRuntime } = require_login_point_safety_runtime();
-      var { createControlLoginRuntime } = require_control_login_runtime();
-      var { createPendingExitRuntime } = require_pending_exit_runtime();
-      var { createClashLeaveRescueRuntime } = require_clash_leave_rescue_runtime();
-      var { createLeaveFlowRuntime } = require_leave_flow_runtime();
-      function createControlFlowRuntime(runtime = {}) {
+      function createSessionRecoveryRuntime(runtime = {}) {
         const {
           bot,
           cfg,
           storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
-          pageGlobal = typeof window !== "undefined" ? window : null,
-          botKey,
           pendingExitStateKey,
           sessionMismatchRecoveryKey,
           cloudflareReloadKey,
           loginSuppressKey,
           loginSuppressReasonKey,
-          loginPointSafetyKey,
           enemyLeaveStateKey,
           offlineLeaveStateKey,
-          enemyLeaveStreakKey,
-          readPageGlobal = () => null,
-          installPageGlobal = () => {
-          },
           normalizePendingExitReloadConfirmationCore = (value) => value,
           writePersistentPendingExitStateCore = () => null,
           pendingExitPersistenceCoreHelpers = () => ({}),
@@ -11039,87 +10982,57 @@
           clearPersistentExitState = () => {
           },
           readPersistentExitState = () => null,
-          writePersistentExitState = () => null,
-          normalizeLoginSnapshotGateStateCore = (value) => value || {},
-          loginSnapshotSuccessRequiredCore = () => 0,
-          recordRuntimeDiagnostics = () => {
-          },
           exitAuditFlushPending = () => false,
           exitAuditFlushBlockDetail = (reason) => ({ blocked: true, reason }),
           importantSessionEndFlushPending = () => false,
           importantSessionEndFlushBlockDetail = (reason) => ({ blocked: true, reason }),
           closeCurrentImportantSessionBeforeReload = () => null,
-          closeCurrentImportantSessionBeforeLogin = () => null,
           persistCombatLogPendingEntries = () => 0,
           flushCombatLogs = () => false,
-          ensureExitAuditDetail = () => null,
-          recordExitAuditEvent = () => false,
-          noteImportantSessionExit = () => null,
           logStatus = () => {
-          },
-          updateBotPanel = () => {
-          },
-          removeTargetOverlay = () => {
-          },
-          stopMotionSafely = () => {
-          },
-          stopMotionAfterExit = () => {
-          },
-          clearCombatEngagement = () => {
-          },
-          sendActionVelocity = () => false,
-          shootAt = () => false,
-          triggerNativeTick = () => false,
-          recordUnhandledTickError = () => {
           },
           activeEnemyLeaveDetail = () => null,
           activeOfflineLeaveDetail = () => null,
           exitMotionStopLockRemainingMs = () => 0,
           unsafeExitReloginMinDelayMs = () => 0,
           getNativeControl = () => null,
-          getNativeState = () => null,
-          getOwnEntity = () => null,
-          getSelf = () => null,
+          getCurrentUserId = () => 0,
+          getSessionToken = () => "",
           summarizeSelf = (value) => value,
-          summarizeControl = () => null,
           snapshotDataAgeMs = () => Infinity,
           snapshotSelfFreshEnough = () => false,
           isOfflineishWsReadyState = () => false,
           isAlive = (value) => Boolean(value),
-          isInvulnerable: isInvulnerable2 = () => false,
-          isJoinModeActive: isJoinModeActive2 = () => false,
-          isFiringEntity = () => false,
-          isMovingThreat = () => false,
-          truthyFlag = (value) => Boolean(value),
-          staminaRemaining = () => null,
-          staminaLimitValue = (_entity, _windowName, fallback) => fallback,
-          dropValue: dropValue2 = () => 0,
-          clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
-          dist = () => 0,
-          speed: speed2 = () => 0,
-          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
-          isFullHp = () => true,
-          threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
-          returnBlockRadius = () => 0,
-          staleOfflineStaminaHoldContradicted = () => false,
-          staminaBudgetReloginDelayMs = () => 0,
-          staminaResetHoldUntil = () => 0,
-          staminaBudgetCoinLeaveSummary = () => "",
-          staminaExhaustedWindowLabel = () => "",
-          reloginDelayForHpCore = () => 0
+          findLoginControl = () => null,
+          hasLoginRequiredText = () => false,
+          loginSuppressRemainingMs = () => 0,
+          snapshotLoginGateStatus = () => ({}),
+          staleOfflineStaminaHoldContradicted = () => false
         } = runtime;
         const localStorage2 = storage;
-        const BOT_KEY = botKey;
         const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
         const SESSION_MISMATCH_RECOVERY_KEY = sessionMismatchRecoveryKey;
         const CLOUDFLARE_RELOAD_KEY = cloudflareReloadKey;
         const LOGIN_SUPPRESS_KEY = loginSuppressKey;
         const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
-        const LOGIN_POINT_SAFETY_KEY = loginPointSafetyKey;
         const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
         const OFFLINE_LEAVE_STATE_KEY = offlineLeaveStateKey;
-        const ENEMY_LEAVE_STREAK_KEY = enemyLeaveStreakKey;
-        const recordRuntimeDiagnosticsCore = (_bot, detail) => recordRuntimeDiagnostics(detail);
+        function pendingExitSummaryForRecovery(pending) {
+          if (!pending) return null;
+          const nowMs = Date.now();
+          const reloadConfirmation = normalizePendingExitReloadConfirmationCore(pending.reloadConfirmation, pending, nowMs);
+          return summarizePendingExitForSessionRecoveryCore(pending, {
+            nowMs,
+            retryMs: pendingExitRetryMsForSessionRecoveryCore(pending, {
+              leaveRetryMinMs: cfg.leaveRetryMinMs,
+              leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+              offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+              combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+              pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+            }),
+            reloadConfirmation
+          });
+        }
         function requestReload(reason) {
           if (cfg.dryRun || cfg.once) return;
           if (bot.reloadRequestedAt) return;
@@ -11183,23 +11096,7 @@
               dx: 0,
               dy: 0,
               self: bot.lastSelf,
-              pendingExit: (() => {
-                const pendingExitSummaryPending = pending;
-                if (!pendingExitSummaryPending) return null;
-                const pendingExitSummaryNow = Date.now();
-                const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
-                return summarizePendingExitForControlLoginCore(pendingExitSummaryPending, {
-                  nowMs: pendingExitSummaryNow,
-                  retryMs: pendingExitRetryMsForControlLoginCore(pendingExitSummaryPending, {
-                    leaveRetryMinMs: cfg.leaveRetryMinMs,
-                    leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
-                    offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
-                    combatLeaveRetryMs: cfg.combatLeaveRetryMs,
-                    pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
-                  }),
-                  reloadConfirmation: pendingExitSummaryReload
-                });
-              })(),
+              pendingExit: pendingExitSummaryForRecovery(pending),
               exitAuditFlush: blocked,
               displayReason: "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210\uFF0C\u6682\u4E0D\u5237\u65B0\u786E\u8BA4\u9000\u51FA"
             });
@@ -11238,23 +11135,7 @@
           logStatus("leave confirmation reload: " + reason, {
             kind: "wait",
             reason: "leave-success-refresh-confirmation",
-            pendingExit: (() => {
-              const pendingExitSummaryPending = pending;
-              if (!pendingExitSummaryPending) return null;
-              const pendingExitSummaryNow = Date.now();
-              const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
-              return summarizePendingExitForControlLoginCore(pendingExitSummaryPending, {
-                nowMs: pendingExitSummaryNow,
-                retryMs: pendingExitRetryMsForControlLoginCore(pendingExitSummaryPending, {
-                  leaveRetryMinMs: cfg.leaveRetryMinMs,
-                  leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
-                  offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
-                  combatLeaveRetryMs: cfg.combatLeaveRetryMs,
-                  pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
-                }),
-                reloadConfirmation: pendingExitSummaryReload
-              });
-            })(),
+            pendingExit: pendingExitSummaryForRecovery(pending),
             reloadConfirmation,
             displayReason: "leave\u63A5\u53E3\u5DF2\u8FD4\u56DE\u6210\u529F\uFF0C\u5237\u65B0\u9875\u9762\u786E\u8BA4\u670D\u52A1\u7AEF\u5728\u7EBF\u72B6\u6001"
           });
@@ -11359,9 +11240,9 @@
           if (location.origin !== "https://grasp-rat-game.h-e.top") return null;
           const title = String(document.title || "");
           const text = String(document.body?.innerText || "").slice(0, 5e3);
-          const combined = title + "\\n" + text;
-          const isCloudflareError = /Error\\s*1033/i.test(combined) || /Cloudflare\\s+Tunnel\\s+error/i.test(combined) || /Cloudflare/i.test(combined) && /unable\\s+to\\s+resolve/i.test(combined);
-          const isBunkerWebError = /BunkerWeb/i.test(combined) && (/\\b403\\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\\s+error/i.test(combined) || /Access\\s+is\\s+forbidden/i.test(combined));
+          const combined = title + "\n" + text;
+          const isCloudflareError = /Error\s*1033/i.test(combined) || /Cloudflare\s+Tunnel\s+error/i.test(combined) || /Cloudflare/i.test(combined) && /unable\s+to\s+resolve/i.test(combined);
+          const isBunkerWebError = /BunkerWeb/i.test(combined) && (/\b403\b/i.test(combined) || /Forbidden/i.test(combined) || /client-side\s+error/i.test(combined) || /Access\s+is\s+forbidden/i.test(combined));
           if (!isCloudflareError && !isBunkerWebError) return null;
           const t = Date.now();
           const provider = isBunkerWebError ? "bunkerweb" : "cloudflare";
@@ -11373,7 +11254,7 @@
           }
           const elapsedMs = lastReloadAt ? t - lastReloadAt : intervalMs;
           const remainingMs = Math.max(0, intervalMs - elapsedMs);
-          const code = /Error\\s*1033/i.test(combined) ? "1033" : isBunkerWebError ? "403" : "";
+          const code = /Error\s*1033/i.test(combined) ? "1033" : isBunkerWebError ? "403" : "";
           const label = isBunkerWebError ? "BunkerWeb 403 \u9519\u8BEF\u9875" : code ? "Cloudflare Error " + code : "Cloudflare \u9519\u8BEF\u9875";
           return {
             error: true,
@@ -11429,12 +11310,6 @@
           logStatus("reload: cloudflare error", { kind: "wait", reason: "cloudflare-error-refresh", cloudflare: info, displayReason: info.displayReason });
           location.reload();
           return true;
-        }
-        function getCurrentUserId() {
-          return Number(localStorage2.getItem("tmpGameUserId") || document.getElementById("userId")?.value || bot.control.currentUserId || 0);
-        }
-        function getSessionToken() {
-          return localStorage2.getItem("tmpGameSessionToken") || "";
         }
         function wsReadyStateNumber(value) {
           if (value === null || value === void 0 || value === "") return NaN;
@@ -11692,8 +11567,30 @@
           } catch (_) {
           }
           const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs(t);
-          const enemyHoldRemainingMs = enemyReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage2, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
-          const offlineHoldRemainingMs = offlineReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage2, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForControlLoginBoundCore(bot, localStorage2, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage2, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
+          const enemyHoldRemainingMs = enemyReloginHoldRemainingMsForSessionRecoveryBoundCore(bot, localStorage2, {
+            loginSuppressKey: LOGIN_SUPPRESS_KEY,
+            loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+            readPersistentExitState,
+            enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+            now: Date.now
+          });
+          const offlineHoldRemainingMs = offlineReloginHoldRemainingMsForSessionRecoveryBoundCore(bot, localStorage2, {
+            loginSuppressKey: LOGIN_SUPPRESS_KEY,
+            loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+            readPersistentExitState,
+            offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+            staleOfflineStaminaHoldContradicted,
+            clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForSessionRecoveryBoundCore(bot, localStorage2, reason, {
+              now: Date.now,
+              writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage2, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()),
+              clearPersistentPendingExitState,
+              clearPersistentExitState,
+              loginSuppressKey: LOGIN_SUPPRESS_KEY,
+              loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+              offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY
+            }),
+            now: Date.now
+          });
           const gate = snapshotLoginGateStatus(t);
           const resetReason = String(gate?.resetReason || "");
           const exitGateReset = Boolean(
@@ -11741,23 +11638,7 @@
             snapshotSelf,
             reconnectChurn,
             wsOfflineish,
-            pendingExit: (() => {
-              const pendingExitSummaryPending = bot.pendingExit;
-              if (!pendingExitSummaryPending) return null;
-              const pendingExitSummaryNow = Date.now();
-              const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
-              return summarizePendingExitForControlLoginCore(pendingExitSummaryPending, {
-                nowMs: pendingExitSummaryNow,
-                retryMs: pendingExitRetryMsForControlLoginCore(pendingExitSummaryPending, {
-                  leaveRetryMinMs: cfg.leaveRetryMinMs,
-                  leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
-                  offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
-                  combatLeaveRetryMs: cfg.combatLeaveRetryMs,
-                  pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
-                }),
-                reloadConfirmation: pendingExitSummaryReload
-              });
-            })(),
+            pendingExit: pendingExitSummaryForRecovery(bot.pendingExit),
             suppressRemainingMs: Math.max(0, Math.round(suppressRemainingMs)),
             suppressReason,
             enemyHoldRemainingMs,
@@ -11789,6 +11670,431 @@
               hasToken: Boolean(control.hasToken)
             } : null
           };
+        }
+        return {
+          requestReload,
+          requestLeaveConfirmationReload,
+          requestSessionMismatchRecoveryReload,
+          cloudflareErrorInfo,
+          maybeReloadCloudflareError,
+          wsReadyStateNumber,
+          isWsConnectingOrOpen,
+          hasNativeGameSession,
+          controlHasNativeGameSession,
+          snapshotSelfPresenceState,
+          controlHasAuthoritativeSessionMismatch,
+          noSelfGameSessionExitState,
+          recentUnsafeExitContext,
+          firstRecentUnsafeExitContext,
+          sessionMismatchRecoveryReloadMaxAgeMs,
+          pageTimeOriginMs,
+          normalizeSessionMismatchRecoveryState,
+          readSessionMismatchRecoveryState,
+          writeSessionMismatchRecoveryState,
+          clearSessionMismatchRecoveryState,
+          sessionMismatchRecoveryStateMatches,
+          sessionMismatchRecoveryPageReloadedAfter,
+          sessionMismatchRecoveryReloadSatisfied,
+          summarizeSessionMismatchRecoveryStatus,
+          liveSessionMismatchTakeoverState
+        };
+      }
+      module.exports = {
+        createSessionRecoveryRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/relogin-gate-runtime.js
+  var require_relogin_gate_runtime = __commonJS({
+    "src/browser/runtime/relogin-gate-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { formatDurationMs } = require_display_format2();
+      var {
+        finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForReloginGateCore,
+        leaveWaitDisplayCore: leaveWaitDisplayForReloginGateCore
+      } = require_exit_relogin();
+      function createReloginGateRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          loginSuppressKey,
+          loginSuppressReasonKey,
+          enemyLeaveStateKey,
+          offlineLeaveStateKey,
+          clearPersistentPendingExitState = () => {
+          },
+          clearPersistentExitState = () => {
+          },
+          activeEnemyLeaveDetail = () => null,
+          activeOfflineLeaveDetail = () => null,
+          loginSuppressStatus = () => ({}),
+          snapshotLoginGateStatus = () => ({}),
+          loginPointSafetyStatus = () => ({})
+        } = runtime;
+        const localStorage2 = storage;
+        const LOGIN_SUPPRESS_KEY = loginSuppressKey;
+        const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
+        const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
+        const OFFLINE_LEAVE_STATE_KEY = offlineLeaveStateKey;
+        function reloginCooldownCandidates(t = Date.now()) {
+          const suppress = loginSuppressStatus(t);
+          const candidates = [];
+          const pushCandidate = (source, remainingMs, totalMs = 0, reason = "", until = 0) => {
+            const remaining = Math.max(0, Math.round(Number(remainingMs || 0) || 0));
+            const total = Math.max(remaining, Math.round(Number(totalMs || 0) || 0));
+            if (!remaining && !total) return;
+            candidates.push({
+              source,
+              reason: String(reason || ""),
+              remainingMs: remaining,
+              totalMs: total,
+              until: Number(until || 0) || 0
+            });
+          };
+          const loginCooldownTotalMs = Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0));
+          const loginCooldownRemainingMs = bot.lastLoginAt ? Math.max(0, Math.round(Number(bot.lastLoginAt || 0) + loginCooldownTotalMs - t)) : 0;
+          pushCandidate("login-cooldown", loginCooldownRemainingMs, loginCooldownTotalMs, "login cooldown", Number(bot.lastLoginAt || 0) + loginCooldownTotalMs);
+          pushCandidate("login-suppress", suppress.remainingMs, suppress.remainingMs, suppress.reason || "login suppress", suppress.until);
+          const enemyDetail = activeEnemyLeaveDetail(t);
+          const enemyUntil = Math.max(Number(enemyDetail?.reloginUntil || 0) || 0, Number(bot.pursuitReloginUntil || 0) || 0);
+          const enemyRemainingMs = Math.max(
+            0,
+            Math.round(Number(enemyDetail?.holdRemainingMs || 0) || 0),
+            Math.round(enemyUntil - t)
+          );
+          pushCandidate(
+            "enemy-hold",
+            enemyRemainingMs,
+            Number(enemyDetail?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || enemyRemainingMs || 0),
+            enemyDetail?.reason || enemyDetail?.summary || "enemy leave hold",
+            enemyUntil
+          );
+          const offlineDetail = activeOfflineLeaveDetail(t);
+          const offlineUntil = Math.max(Number(offlineDetail?.reloginUntil || 0) || 0, Number(bot.offlineReloginUntil || 0) || 0);
+          const offlineRemainingMs = Math.max(
+            0,
+            Math.round(Number(offlineDetail?.holdRemainingMs || 0) || 0),
+            Math.round(offlineUntil - t)
+          );
+          pushCandidate(
+            "offline-hold",
+            offlineRemainingMs,
+            Number(offlineDetail?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || offlineRemainingMs || 0),
+            offlineDetail?.reason || offlineDetail?.summary || "offline leave hold",
+            offlineUntil
+          );
+          const lastLoginResult = bot.lastLoginResult && typeof bot.lastLoginResult === "object" ? bot.lastLoginResult : null;
+          pushCandidate(
+            "last-login-result",
+            Number(lastLoginResult?.cooldownRemainingMs || 0) || 0,
+            Number(lastLoginResult?.cooldownTotalMs || lastLoginResult?.cooldownRemainingMs || 0) || 0,
+            lastLoginResult?.suppressReason || lastLoginResult?.reason || "last login result",
+            0
+          );
+          return candidates.sort((a, b) => {
+            const remainingDelta = Number(b.remainingMs || 0) - Number(a.remainingMs || 0);
+            if (remainingDelta) return remainingDelta;
+            return Number(b.totalMs || 0) - Number(a.totalMs || 0);
+          });
+        }
+        function summarizeReloginGateStatus(t = Date.now()) {
+          const snapshotGate = snapshotLoginGateStatus(t);
+          const pointSafety = snapshotGate.pointSafety || loginPointSafetyStatus(t);
+          const cooldowns = reloginCooldownCandidates(t);
+          const cooldown = cooldowns[0] || {
+            source: "none",
+            reason: "",
+            remainingMs: 0,
+            totalMs: Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0)),
+            until: 0
+          };
+          const safetyRequired = Math.max(0, Math.round(Number(pointSafety.required || 0) || 0));
+          const safetyStreak = Math.max(0, Math.min(safetyRequired, Math.round(Number(pointSafety.streak || 0) || 0)));
+          return {
+            satisfied: Boolean(
+              Number(cooldown.remainingMs || 0) <= 0 && Boolean(pointSafety.satisfied)
+            ),
+            cooldown: {
+              source: cooldown.source,
+              reason: cooldown.reason,
+              remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
+              totalMs: Math.max(0, Math.round(Number(cooldown.totalMs || 0) || 0)),
+              until: Number(cooldown.until || 0) || 0,
+              candidates: cooldowns.slice(0, 5)
+            },
+            snapshot: {
+              ok: true,
+              streak: Math.max(0, Math.round(Number(snapshotGate.streak || 0) || 0)),
+              required: 0,
+              remaining: 0,
+              lastSampleAgeMs: snapshotGate.lastSampleAgeMs ?? null,
+              lastOkAgeMs: snapshotGate.lastOkAgeMs ?? null,
+              lastErrorAgeMs: snapshotGate.lastErrorAgeMs ?? null,
+              lastError: String(snapshotGate.lastError || ""),
+              resetReason: String(snapshotGate.resetReason || "")
+            },
+            loginPointSafety: {
+              ok: Boolean(pointSafety.satisfied),
+              hasPoint: Boolean(pointSafety.hasPoint),
+              missingPoint: Boolean(pointSafety.missingPoint),
+              streak: safetyStreak,
+              required: safetyRequired,
+              remaining: Math.max(0, safetyRequired - safetyStreak),
+              radius: Number(pointSafety.radius || 0) || 0,
+              lastSampleAgeMs: pointSafety.lastSampleAgeMs ?? null,
+              lastOkAgeMs: pointSafety.lastOkAgeMs ?? null,
+              lastUnsafeAgeMs: pointSafety.lastUnsafeAgeMs ?? null,
+              lastErrorAgeMs: pointSafety.lastErrorAgeMs ?? null,
+              lastDanger: pointSafety.lastDanger || null,
+              lastError: String(pointSafety.lastError || ""),
+              resetReason: String(pointSafety.resetReason || "")
+            }
+          };
+        }
+        function clearExitHoldDetail(detail, reason, t = Date.now()) {
+          if (!detail || typeof detail !== "object") return null;
+          const reloginUntil = Number(detail.reloginUntil || 0) || 0;
+          const previousHoldRemainingMs = Math.max(0, Math.round(reloginUntil - t));
+          if (reloginUntil && !detail.manualLoginBypassPreviousReloginUntil) {
+            detail.manualLoginBypassPreviousReloginUntil = reloginUntil;
+          }
+          if (previousHoldRemainingMs && !detail.manualLoginBypassPreviousHoldMs) {
+            detail.manualLoginBypassPreviousHoldMs = previousHoldRemainingMs;
+          }
+          detail.manualLoginBypassAt = t;
+          detail.manualLoginBypassReason = String(reason || "manual force login");
+          detail.reloginUntil = 0;
+          detail.holdRemainingMs = 0;
+          detail.reloginDelayMs = 0;
+          detail.reloginHpDelayMs = 0;
+          detail.reloginMinimumDelayMs = 0;
+          finalizeLeaveDisplayReasonForReloginGateCore(detail, (base, value) => leaveWaitDisplayForReloginGateCore(base, value, formatDurationMs));
+          return detail;
+        }
+        function clearCurrentReloginHold(reason = "manual force login") {
+          const t = Date.now();
+          const enemyDetail = activeEnemyLeaveDetail(t);
+          const offlineDetail = activeOfflineLeaveDetail(t);
+          let suppressUntil = 0;
+          let suppressReason = "";
+          try {
+            suppressUntil = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+            suppressReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
+            localStorage2.removeItem(LOGIN_SUPPRESS_KEY);
+            localStorage2.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+          } catch (_) {
+          }
+          const cleared = {
+            at: t,
+            reason: String(reason || "manual force login"),
+            suppressReason,
+            suppressUntil,
+            suppressRemainingMs: Math.max(0, Math.round(suppressUntil - t)),
+            enemyHoldRemainingMs: Math.max(
+              0,
+              Math.round(Number(enemyDetail?.holdRemainingMs || 0)),
+              Math.round(Number(bot.pursuitReloginUntil || 0) - t)
+            ),
+            offlineHoldRemainingMs: Math.max(
+              0,
+              Math.round(Number(offlineDetail?.holdRemainingMs || 0)),
+              Math.round(Number(bot.offlineReloginUntil || 0) - t)
+            )
+          };
+          bot.pursuitReloginUntil = 0;
+          bot.offlineReloginUntil = 0;
+          bot.lastEnemyLeaveWaitMs = 0;
+          bot.lastOfflineLeaveWaitMs = 0;
+          bot.lastEnemyLeaveResult = clearExitHoldDetail(bot.lastEnemyLeaveResult, reason, t);
+          bot.lastPursuitLeaveResult = clearExitHoldDetail(bot.lastPursuitLeaveResult, reason, t);
+          bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
+          bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
+          bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
+          bot.pendingExit = null;
+          clearPersistentPendingExitState();
+          clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+          clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+          return cleared;
+        }
+        return {
+          reloginCooldownCandidates,
+          summarizeReloginGateStatus,
+          clearExitHoldDetail,
+          clearCurrentReloginHold
+        };
+      }
+      module.exports = {
+        createReloginGateRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/control-flow-runtime.js
+  var require_control_flow_runtime = __commonJS({
+    "src/browser/runtime/control-flow-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var { safeJsonClone } = require_runtime_utils2();
+      var { formatDistance, actorLabel, hpDisplay } = require_display_format2();
+      var {
+        pendingExitDisplayReasonCore,
+        leaveDetailHasHttp403Core,
+        leaveDetailSucceededCore,
+        leaveSuccessReloadConfirmationForDetailCore,
+        leaveSuccessReloadConfirmationSatisfiedCore,
+        pendingExitWaitReasonCore
+      } = require_pending_exit2();
+      var {
+        pendingExitDisplayReasonCore: pendingExitDisplayReasonForLeaveCommandCore,
+        leaveDetailHasHttp403Core: leaveDetailHasHttp403ForLeaveCommandCore,
+        leaveDetailSucceededCore: leaveDetailSucceededForLeaveCommandCore
+      } = require_pending_exit2();
+      var {
+        clearLoginSuppressMatchingBoundCore,
+        clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForPendingExitBoundCore,
+        combatExitSummaryCore: combatExitSummaryForLeaveFlowCore,
+        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForPendingExitBoundCore,
+        enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForLeaveFlowBoundCore,
+        finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForPendingExitCore,
+        finalizeLeaveDisplayReasonCore: finalizeLeaveDisplayReasonForLeaveFlowCore,
+        injuryLeaveSummaryCore: injuryLeaveSummaryForLeaveFlowCore,
+        leaveWaitDisplayCore: leaveWaitDisplayForPendingExitCore,
+        leaveWaitDisplayCore: leaveWaitDisplayForLeaveFlowCore,
+        offlineExitRequiresUnsafeReloginDelayCore,
+        offlineLeaveSummaryCore: offlineLeaveSummaryForLeaveFlowCore,
+        offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForPendingExitBoundCore,
+        primePendingStaminaExitLoginSuppressBoundCore,
+        primePendingUnsafeExitLoginSuppressBoundCore,
+        pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,
+        setExitReloginSuppressBoundCore,
+        setOfflineLeaveSuppressBoundCore,
+        startExitAuditBoundCore
+      } = require_exit_relogin();
+      var {
+        leaveCommandFailureMessageCore,
+        summarizeLeaveCommandResultCore,
+        leaveDetailFailedForClashRescueCore,
+        clashLeaveRescueAttemptsCore,
+        nextClashLeaveRescueStageCore,
+        summarizeClashLeaveRescueResultCore,
+        clashLeaveRescueRetryDetailCore,
+        resetClashLeaveRescueRoundCore,
+        resetClashLeaveRescueRoundCore: resetClashLeaveRescueRoundForPendingExitCore
+      } = require_leave_command2();
+      var { createPostLoginZoomRuntime } = require_post_login_zoom_runtime();
+      var { createLoginPointSafetyRuntime } = require_login_point_safety_runtime();
+      var { createControlLoginRuntime } = require_control_login_runtime();
+      var { createPendingExitRuntime } = require_pending_exit_runtime();
+      var { createClashLeaveRescueRuntime } = require_clash_leave_rescue_runtime();
+      var { createLeaveFlowRuntime } = require_leave_flow_runtime();
+      var { createSessionRecoveryRuntime } = require_session_recovery_runtime();
+      var { createReloginGateRuntime } = require_relogin_gate_runtime();
+      function createControlFlowRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          pageGlobal = typeof window !== "undefined" ? window : null,
+          botKey,
+          pendingExitStateKey,
+          loginSuppressKey,
+          loginSuppressReasonKey,
+          loginPointSafetyKey,
+          enemyLeaveStateKey,
+          offlineLeaveStateKey,
+          enemyLeaveStreakKey,
+          readPageGlobal = () => null,
+          installPageGlobal = () => {
+          },
+          normalizePendingExitReloadConfirmationCore = (value) => value,
+          writePersistentPendingExitStateCore = () => null,
+          pendingExitPersistenceCoreHelpers = () => ({}),
+          clearPersistentPendingExitState = () => {
+          },
+          clearPersistentExitState = () => {
+          },
+          readPersistentExitState = () => null,
+          writePersistentExitState = () => null,
+          normalizeLoginSnapshotGateStateCore = (value) => value || {},
+          loginSnapshotSuccessRequiredCore = () => 0,
+          recordRuntimeDiagnostics = () => {
+          },
+          exitAuditFlushPending = () => false,
+          exitAuditFlushBlockDetail = (reason) => ({ blocked: true, reason }),
+          importantSessionEndFlushPending = () => false,
+          importantSessionEndFlushBlockDetail = (reason) => ({ blocked: true, reason }),
+          closeCurrentImportantSessionBeforeLogin = () => null,
+          flushCombatLogs = () => false,
+          ensureExitAuditDetail = () => null,
+          recordExitAuditEvent = () => false,
+          noteImportantSessionExit = () => null,
+          logStatus = () => {
+          },
+          updateBotPanel = () => {
+          },
+          removeTargetOverlay = () => {
+          },
+          stopMotionSafely = () => {
+          },
+          stopMotionAfterExit = () => {
+          },
+          clearCombatEngagement = () => {
+          },
+          sendActionVelocity = () => false,
+          shootAt = () => false,
+          triggerNativeTick = () => false,
+          recordUnhandledTickError = () => {
+          },
+          activeEnemyLeaveDetail = () => null,
+          activeOfflineLeaveDetail = () => null,
+          getNativeControl = () => null,
+          getNativeState = () => null,
+          getOwnEntity = () => null,
+          getSelf = () => null,
+          summarizeSelf = (value) => value,
+          summarizeControl = () => null,
+          snapshotSelfFreshEnough = () => false,
+          isAlive = (value) => Boolean(value),
+          isInvulnerable: isInvulnerable2 = () => false,
+          isJoinModeActive: isJoinModeActive2 = () => false,
+          isFiringEntity = () => false,
+          isMovingThreat = () => false,
+          truthyFlag = (value) => Boolean(value),
+          staminaRemaining = () => null,
+          staminaLimitValue = (_entity, _windowName, fallback) => fallback,
+          dropValue: dropValue2 = () => 0,
+          clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
+          dist = () => 0,
+          speed: speed2 = () => 0,
+          now: now2 = () => typeof performance !== "undefined" ? performance.now() : Date.now(),
+          isFullHp = () => true,
+          threatKey = (threat) => String(threat?.id ?? threat?.user_id ?? ""),
+          returnBlockRadius = () => 0,
+          staleOfflineStaminaHoldContradicted = () => false,
+          staminaBudgetReloginDelayMs = () => 0,
+          staminaResetHoldUntil = () => 0,
+          staminaBudgetCoinLeaveSummary = () => "",
+          staminaExhaustedWindowLabel = () => "",
+          reloginDelayForHpCore = () => 0
+        } = runtime;
+        const localStorage2 = storage;
+        const BOT_KEY = botKey;
+        const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
+        const LOGIN_SUPPRESS_KEY = loginSuppressKey;
+        const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
+        const LOGIN_POINT_SAFETY_KEY = loginPointSafetyKey;
+        const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
+        const OFFLINE_LEAVE_STATE_KEY = offlineLeaveStateKey;
+        const ENEMY_LEAVE_STREAK_KEY = enemyLeaveStreakKey;
+        const recordRuntimeDiagnosticsCore = (_bot, detail) => recordRuntimeDiagnostics(detail);
+        function getCurrentUserId() {
+          return Number(localStorage2.getItem("tmpGameUserId") || document.getElementById("userId")?.value || bot.control.currentUserId || 0);
+        }
+        function getSessionToken() {
+          return localStorage2.getItem("tmpGameSessionToken") || "";
         }
         const {
           isVisible,
@@ -11922,186 +12228,89 @@
           summarizeControl: (...args) => summarizeControl(...args),
           updateBotPanel: (...args) => updateBotPanel(...args)
         });
-        function reloginCooldownCandidates(t = Date.now()) {
-          const suppress = loginSuppressStatus(t);
-          const candidates = [];
-          const pushCandidate = (source, remainingMs, totalMs = 0, reason = "", until = 0) => {
-            const remaining = Math.max(0, Math.round(Number(remainingMs || 0) || 0));
-            const total = Math.max(remaining, Math.round(Number(totalMs || 0) || 0));
-            if (!remaining && !total) return;
-            candidates.push({
-              source,
-              reason: String(reason || ""),
-              remainingMs: remaining,
-              totalMs: total,
-              until: Number(until || 0) || 0
-            });
-          };
-          const loginCooldownTotalMs = Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0));
-          const loginCooldownRemainingMs = bot.lastLoginAt ? Math.max(0, Math.round(Number(bot.lastLoginAt || 0) + loginCooldownTotalMs - t)) : 0;
-          pushCandidate("login-cooldown", loginCooldownRemainingMs, loginCooldownTotalMs, "login cooldown", Number(bot.lastLoginAt || 0) + loginCooldownTotalMs);
-          pushCandidate("login-suppress", suppress.remainingMs, suppress.remainingMs, suppress.reason || "login suppress", suppress.until);
-          const enemyDetail = activeEnemyLeaveDetail(t);
-          const enemyUntil = Math.max(Number(enemyDetail?.reloginUntil || 0) || 0, Number(bot.pursuitReloginUntil || 0) || 0);
-          const enemyRemainingMs = Math.max(
-            0,
-            Math.round(Number(enemyDetail?.holdRemainingMs || 0) || 0),
-            Math.round(enemyUntil - t)
-          );
-          pushCandidate(
-            "enemy-hold",
-            enemyRemainingMs,
-            Number(enemyDetail?.reloginDelayMs || bot.lastEnemyLeaveWaitMs || enemyRemainingMs || 0),
-            enemyDetail?.reason || enemyDetail?.summary || "enemy leave hold",
-            enemyUntil
-          );
-          const offlineDetail = activeOfflineLeaveDetail(t);
-          const offlineUntil = Math.max(Number(offlineDetail?.reloginUntil || 0) || 0, Number(bot.offlineReloginUntil || 0) || 0);
-          const offlineRemainingMs = Math.max(
-            0,
-            Math.round(Number(offlineDetail?.holdRemainingMs || 0) || 0),
-            Math.round(offlineUntil - t)
-          );
-          pushCandidate(
-            "offline-hold",
-            offlineRemainingMs,
-            Number(offlineDetail?.reloginDelayMs || bot.lastOfflineLeaveWaitMs || offlineRemainingMs || 0),
-            offlineDetail?.reason || offlineDetail?.summary || "offline leave hold",
-            offlineUntil
-          );
-          const lastLoginResult = bot.lastLoginResult && typeof bot.lastLoginResult === "object" ? bot.lastLoginResult : null;
-          pushCandidate(
-            "last-login-result",
-            Number(lastLoginResult?.cooldownRemainingMs || 0) || 0,
-            Number(lastLoginResult?.cooldownTotalMs || lastLoginResult?.cooldownRemainingMs || 0) || 0,
-            lastLoginResult?.suppressReason || lastLoginResult?.reason || "last login result",
-            0
-          );
-          return candidates.sort((a, b) => {
-            const remainingDelta = Number(b.remainingMs || 0) - Number(a.remainingMs || 0);
-            if (remainingDelta) return remainingDelta;
-            return Number(b.totalMs || 0) - Number(a.totalMs || 0);
-          });
-        }
-        function summarizeReloginGateStatus(t = Date.now()) {
-          const snapshotGate = snapshotLoginGateStatus(t);
-          const pointSafety = snapshotGate.pointSafety || loginPointSafetyStatus(t);
-          const cooldowns = reloginCooldownCandidates(t);
-          const cooldown = cooldowns[0] || {
-            source: "none",
-            reason: "",
-            remainingMs: 0,
-            totalMs: Math.max(0, Math.round(Number(cfg.loginCooldownMs || 0) || 0)),
-            until: 0
-          };
-          const safetyRequired = Math.max(0, Math.round(Number(pointSafety.required || 0) || 0));
-          const safetyStreak = Math.max(0, Math.min(safetyRequired, Math.round(Number(pointSafety.streak || 0) || 0)));
-          return {
-            satisfied: Boolean(
-              Number(cooldown.remainingMs || 0) <= 0 && Boolean(pointSafety.satisfied)
-            ),
-            cooldown: {
-              source: cooldown.source,
-              reason: cooldown.reason,
-              remainingMs: Math.max(0, Math.round(Number(cooldown.remainingMs || 0) || 0)),
-              totalMs: Math.max(0, Math.round(Number(cooldown.totalMs || 0) || 0)),
-              until: Number(cooldown.until || 0) || 0,
-              candidates: cooldowns.slice(0, 5)
-            },
-            snapshot: {
-              ok: true,
-              streak: Math.max(0, Math.round(Number(snapshotGate.streak || 0) || 0)),
-              required: 0,
-              remaining: 0,
-              lastSampleAgeMs: snapshotGate.lastSampleAgeMs ?? null,
-              lastOkAgeMs: snapshotGate.lastOkAgeMs ?? null,
-              lastErrorAgeMs: snapshotGate.lastErrorAgeMs ?? null,
-              lastError: String(snapshotGate.lastError || ""),
-              resetReason: String(snapshotGate.resetReason || "")
-            },
-            loginPointSafety: {
-              ok: Boolean(pointSafety.satisfied),
-              hasPoint: Boolean(pointSafety.hasPoint),
-              missingPoint: Boolean(pointSafety.missingPoint),
-              streak: safetyStreak,
-              required: safetyRequired,
-              remaining: Math.max(0, safetyRequired - safetyStreak),
-              radius: Number(pointSafety.radius || 0) || 0,
-              lastSampleAgeMs: pointSafety.lastSampleAgeMs ?? null,
-              lastOkAgeMs: pointSafety.lastOkAgeMs ?? null,
-              lastUnsafeAgeMs: pointSafety.lastUnsafeAgeMs ?? null,
-              lastErrorAgeMs: pointSafety.lastErrorAgeMs ?? null,
-              lastDanger: pointSafety.lastDanger || null,
-              lastError: String(pointSafety.lastError || ""),
-              resetReason: String(pointSafety.resetReason || "")
-            }
-          };
-        }
-        function clearExitHoldDetail(detail, reason, t = Date.now()) {
-          if (!detail || typeof detail !== "object") return null;
-          const reloginUntil = Number(detail.reloginUntil || 0) || 0;
-          const previousHoldRemainingMs = Math.max(0, Math.round(reloginUntil - t));
-          if (reloginUntil && !detail.manualLoginBypassPreviousReloginUntil) {
-            detail.manualLoginBypassPreviousReloginUntil = reloginUntil;
-          }
-          if (previousHoldRemainingMs && !detail.manualLoginBypassPreviousHoldMs) {
-            detail.manualLoginBypassPreviousHoldMs = previousHoldRemainingMs;
-          }
-          detail.manualLoginBypassAt = t;
-          detail.manualLoginBypassReason = String(reason || "manual force login");
-          detail.reloginUntil = 0;
-          detail.holdRemainingMs = 0;
-          detail.reloginDelayMs = 0;
-          detail.reloginHpDelayMs = 0;
-          detail.reloginMinimumDelayMs = 0;
-          finalizeLeaveDisplayReasonForControlLoginCore(detail, (base, value) => leaveWaitDisplayForControlLoginCore(base, value, formatDurationMs));
-          return detail;
-        }
-        function clearCurrentReloginHold(reason = "manual force login") {
-          const t = Date.now();
-          const enemyDetail = activeEnemyLeaveDetail(t);
-          const offlineDetail = activeOfflineLeaveDetail(t);
-          let suppressUntil = 0;
-          let suppressReason = "";
-          try {
-            suppressUntil = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-            suppressReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-            localStorage2.removeItem(LOGIN_SUPPRESS_KEY);
-            localStorage2.removeItem(LOGIN_SUPPRESS_REASON_KEY);
-          } catch (_) {
-          }
-          const cleared = {
-            at: t,
-            reason: String(reason || "manual force login"),
-            suppressReason,
-            suppressUntil,
-            suppressRemainingMs: Math.max(0, Math.round(suppressUntil - t)),
-            enemyHoldRemainingMs: Math.max(
-              0,
-              Math.round(Number(enemyDetail?.holdRemainingMs || 0)),
-              Math.round(Number(bot.pursuitReloginUntil || 0) - t)
-            ),
-            offlineHoldRemainingMs: Math.max(
-              0,
-              Math.round(Number(offlineDetail?.holdRemainingMs || 0)),
-              Math.round(Number(bot.offlineReloginUntil || 0) - t)
-            )
-          };
-          bot.pursuitReloginUntil = 0;
-          bot.offlineReloginUntil = 0;
-          bot.lastEnemyLeaveWaitMs = 0;
-          bot.lastOfflineLeaveWaitMs = 0;
-          bot.lastEnemyLeaveResult = clearExitHoldDetail(bot.lastEnemyLeaveResult, reason, t);
-          bot.lastPursuitLeaveResult = clearExitHoldDetail(bot.lastPursuitLeaveResult, reason, t);
-          bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
-          bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
-          bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
-          bot.pendingExit = null;
-          clearPersistentPendingExitState();
-          clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-          clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-          return cleared;
-        }
+        const {
+          requestReload,
+          requestLeaveConfirmationReload,
+          requestSessionMismatchRecoveryReload,
+          cloudflareErrorInfo,
+          maybeReloadCloudflareError,
+          wsReadyStateNumber,
+          isWsConnectingOrOpen,
+          hasNativeGameSession,
+          controlHasNativeGameSession,
+          snapshotSelfPresenceState,
+          controlHasAuthoritativeSessionMismatch,
+          noSelfGameSessionExitState,
+          recentUnsafeExitContext,
+          firstRecentUnsafeExitContext,
+          sessionMismatchRecoveryReloadMaxAgeMs,
+          pageTimeOriginMs,
+          normalizeSessionMismatchRecoveryState,
+          readSessionMismatchRecoveryState,
+          writeSessionMismatchRecoveryState,
+          clearSessionMismatchRecoveryState,
+          sessionMismatchRecoveryStateMatches,
+          sessionMismatchRecoveryPageReloadedAfter,
+          sessionMismatchRecoveryReloadSatisfied,
+          summarizeSessionMismatchRecoveryStatus,
+          liveSessionMismatchTakeoverState
+        } = createSessionRecoveryRuntime({
+          ...runtime,
+          bot,
+          cfg,
+          storage: localStorage2,
+          pendingExitStateKey: PENDING_EXIT_STATE_KEY,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+          normalizePendingExitReloadConfirmationCore,
+          writePersistentPendingExitStateCore,
+          pendingExitPersistenceCoreHelpers,
+          clearPersistentPendingExitState,
+          clearPersistentExitState,
+          readPersistentExitState,
+          exitAuditFlushPending,
+          exitAuditFlushBlockDetail,
+          importantSessionEndFlushPending,
+          importantSessionEndFlushBlockDetail,
+          flushCombatLogs,
+          logStatus,
+          activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
+          activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
+          getNativeControl: (...args) => getNativeControl(...args),
+          getCurrentUserId: (...args) => getCurrentUserId(...args),
+          getSessionToken: (...args) => getSessionToken(...args),
+          summarizeSelf: (...args) => summarizeSelf(...args),
+          snapshotSelfFreshEnough: (...args) => snapshotSelfFreshEnough(...args),
+          isAlive,
+          findLoginControl: (...args) => findLoginControl(...args),
+          hasLoginRequiredText: (...args) => hasLoginRequiredText(...args),
+          loginSuppressRemainingMs: (...args) => loginSuppressRemainingMs(...args),
+          snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
+          staleOfflineStaminaHoldContradicted
+        });
+        const {
+          reloginCooldownCandidates,
+          summarizeReloginGateStatus,
+          clearExitHoldDetail,
+          clearCurrentReloginHold
+        } = createReloginGateRuntime({
+          bot,
+          cfg,
+          storage: localStorage2,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+          clearPersistentPendingExitState,
+          clearPersistentExitState,
+          activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
+          activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
+          loginSuppressStatus: (...args) => loginSuppressStatus(...args),
+          snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
+          loginPointSafetyStatus: (...args) => loginPointSafetyStatus(...args)
+        });
         let issueLeaveCommand;
         let scheduleClashLeaveRescueRetry;
         const {
