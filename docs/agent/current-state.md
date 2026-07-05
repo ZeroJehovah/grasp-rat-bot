@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.556`.
-- Latest manifest SHA-256: `ed6bc81b902f4107e97dd10a11798b413741d41ebe53c930a9fed1438b61538a`.
-- Latest remote release commit: `b3795fc` (`bootstrap-0.4.556` wire combat stamina budget).
+- Latest remote bot: `bootstrap-0.4.557`.
+- Latest manifest SHA-256: `2c2cf501cbb8087b779656c29b1dc098d808e0f4417ad31e9b85875e9b307faa`.
+- Latest remote release commit: `ccfd4c5` (`bootstrap-0.4.557` wire high-value coin priority).
 - Latest bootstrap A versions: Tampermonkey `0.4.73`, extension `0.1.52`.
-- Latest direct entry/config SHA-256: `770df148fd71ad0659acfc2defe1ee3a3f9489669f3a0842d260ff2b6fd5f716`.
+- Latest direct entry/config SHA-256: `d22aadc2a163e53b25cfc38bb699c7b6ffd98f014f7306f194a55e0737481fe3`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.557` passes `highValueCoinPriorityAmount` into the profit opportunity runtime and adds an objective-build smoke for `opportunityChoiceCoreOptions()`; missing-held opportunity checks should no longer throw `highValueCoinPriorityAmount is not defined`.
 - `bootstrap-0.4.556` passes `opportunityLongStaminaBudget` from the combat composition runtime into combat-target runtime; active-combat budget checks should no longer throw `opportunityLongStaminaBudget is not defined`.
 - `bootstrap-0.4.555` restores the control-flow dependencies for `newExitAuditRequestId` and `syncPausedFromPage`; the control-flow runtime now instantiates cleanly with stub dependencies and should no longer fail with `newExitAuditRequestId is not defined`.
 - `bootstrap-0.4.554` defers the control-flow `stopMotionAfterExit` dependency until native state initializes it; remote startup should no longer fail with `Cannot access 'stopMotionAfterExit' before initialization`.
@@ -33,7 +34,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.556` release validation passed:
+The latest `bootstrap-0.4.557` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -50,7 +51,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.556
+node scripts/build-remote-bot.js --version bootstrap-0.4.557
 node scripts/verify-objective-build.js
 git diff --check
 ```
