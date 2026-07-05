@@ -8,9 +8,9 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 14,845 lines.
-- Function declarations inside the direct entry: 483.
-- Existing executable helper modules: 48 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 11,026 lines.
+- Function declarations inside the direct entry: 327.
+- Existing executable helper modules: 49 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
@@ -18,7 +18,7 @@ The previous runtime bundler migration is complete: production and local injecti
 - [x] Runtime shell and context (`bootstrap-0.4.525`).
 - [x] UI, overlay, status, whitelist, and stamina (`bootstrap-0.4.526`).
 - [x] Logging and history (`bootstrap-0.4.527`).
-- [ ] Login, exit, pending exit, and leave flow.
+- [x] Login, exit, pending exit, and leave flow (`bootstrap-0.4.528`).
 - [ ] Native state, transport, session stats, and network quality.
 - [ ] Coin, opportunity, profit, and arbitration.
 - [ ] Combat domain.
@@ -40,18 +40,15 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status module wiring, and logging/tick factory wiring: lines 1-813.
-- Reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 814-3141.
-- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 3142-5241.
-- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 5242-6908.
-- Important logging factory wiring and entity refresh: lines 6909-7135.
-- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 7136-8584.
-- Target selection and combat movement/aim/state/fire/leave/action: lines 8585-13015.
-- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 13016-14845.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick factory wiring, and control-flow factory wiring: lines 1-1014.
+- Pause handling, page-native snapshot observer, native state/control, session stats, network quality, important logging factory wiring, and entity refresh setup: lines 1015-3412.
+- Native movement/shooting, motion helpers, coin motion options, return-block, classify, offline safety, and coin safety: lines 3413-4615.
+- Visible coin/profit helpers, target selection, combat movement/aim/state/fire/leave/action, opportunity builders, and action arbitration helpers: lines 4616-9196.
+- `chooseAction`, coin tracking, `tick`, and startup tail: lines 9197-11026.
 
 ## Commit Plan
 
-Plan count from current state: 5 future migration commits after the completed shell/context, UI/status, and logging/history slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 4 future migration commits after the completed shell/context, UI/status, logging/history, and control-flow slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -121,6 +118,8 @@ Expected result:
 Validation focus:
 
 - Login gate summaries, relogin holds, 403 risk holds, pending combat leave, and Clash rescue retry behavior remain stable.
+
+Completed in `bootstrap-0.4.528`: reload requests, session mismatch/no-self exit recovery, login gate interception, login-point safety, post-login zoom, pending-exit confirmation/retry, leave command execution, auto-login, Clash rescue retry handling, and leave-flow wrappers moved behind `createControlFlowRuntime()` in `src/browser/runtime/control-flow-runtime.js`; and `scripts/verify-objective-build.js` now rejects these control-flow bodies returning to `runtime-entry.js`.
 
 ### 5. Native State, Transport, Session Stats, And Network Quality
 
