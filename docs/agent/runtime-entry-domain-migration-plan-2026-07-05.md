@@ -8,9 +8,9 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 7,969 lines.
-- Function declarations inside the direct entry: 129.
-- Existing executable helper modules: 51 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 4,568 lines.
+- Function declarations inside the direct entry: 30.
+- Existing executable helper modules: 52 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
@@ -21,7 +21,7 @@ The previous runtime bundler migration is complete: production and local injecti
 - [x] Login, exit, pending exit, and leave flow (`bootstrap-0.4.528`).
 - [x] Native state, transport, session stats, and network quality (`bootstrap-0.4.529`).
 - [x] Coin, opportunity, profit, and arbitration (`bootstrap-0.4.530`).
-- [ ] Combat domain.
+- [x] Combat domain (`bootstrap-0.4.531`).
 - [ ] Final orchestrator and verifier tightening.
 
 ## Remaining Migration Scope
@@ -40,14 +40,13 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, and recent movement setup: lines 1-1873.
-- Recent-activity marking, classify, offline safety, combat/profit bridge helpers, and profit factory wiring: lines 1874-2908.
-- Target selection and combat movement/aim/state/fire/leave/action: lines 2909-6269.
-- `chooseAction`, `tick`, and startup tail: lines 6270-7969.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status/logging/tick/control-flow/native factory wiring, and important logging setup: lines 1-1881.
+- Recent-activity marking, return-block helpers, classify, profit factory wiring, and combat factory wiring: lines 1882-2868.
+- `chooseAction`, `tick`, and startup tail: lines 2869-4568.
 
 ## Commit Plan
 
-Plan count from current state: 2 future migration commits after the completed shell/context, UI/status, logging/history, control-flow, native-state, and profit slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 1 future migration commit after the completed shell/context, UI/status, logging/history, control-flow, native-state, profit, and combat slices. The implementation commit should be behavior-preserving unless explicitly called out and validated separately.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -170,6 +169,8 @@ Validation focus:
 
 - Combat target, aim, and fire logic still uses native/realtime visible state only.
 - Existing replay self-tests pass. If this slice touches behavior due to unavoidable coupling, run the referenced offline replay and prove an improvement before shipping.
+
+Completed in `bootstrap-0.4.531`: combat engagement state, offline-safety combat checks, active-combat wait handling, target selection, bullet pressure/dodge movement, aim and shooting plans, combat tick-gap offline handling, leave-cover action construction, and combat action building moved behind `createCombatRuntime()` in `src/browser/runtime/combat-runtime.js`; and `scripts/verify-objective-build.js` now rejects these combat bodies returning to `runtime-entry.js` while checking native/realtime-only combat target, aim, and fire anchors in the combat module.
 
 ### 8. Final Orchestrator And Verifier Tightening
 
