@@ -102,6 +102,7 @@ function createCombatRuntime(runtime = {}) {
     summarizeControl,
     dist,
     speed,
+    opportunityLongStaminaBudget,
     scoreEnemyOpportunity,
     opportunityEnemyStaminaCost,
     estimatedKillShots,

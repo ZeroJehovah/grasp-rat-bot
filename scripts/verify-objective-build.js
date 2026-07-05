@@ -936,6 +936,7 @@ async function main() {
     assert(runtimeCombatSource.includes("require('./combat-aim-runtime')"), 'combat runtime does not import aim runtime module');
     assert(runtimeCombatSource.includes("require('./combat-action-runtime')"), 'combat runtime does not import action runtime module');
     assert(runtimeCombatSource.includes('createCombatTargetRuntime({'), 'combat runtime does not create target runtime bindings');
+    assert(/createCombatTargetRuntime\(\{[\s\S]*?\bopportunityLongStaminaBudget,/.test(runtimeCombatSource), 'combat runtime does not pass opportunityLongStaminaBudget into target runtime');
     assert(runtimeCombatSource.includes('createCombatMovementRuntime({'), 'combat runtime does not create movement runtime bindings');
     assert(runtimeCombatSource.includes('createCombatAimRuntime({'), 'combat runtime does not create aim runtime bindings');
     assert(runtimeCombatSource.includes('createCombatActionRuntime({'), 'combat runtime does not create action runtime bindings');
@@ -950,6 +951,7 @@ async function main() {
     assert(!/function\s+nativeTickMinIntervalMs\s*\(/.test(runtimeCombatSource), 'combat runtime still owns native tick combat interval');
     assert(!/async\s+function\s+handleTickReentryCombatGap\s*\(/.test(runtimeCombatSource), 'combat runtime still owns combat tick reentry gap handler');
     assert(runtimeCombatTargetSource.includes('function createCombatTargetRuntime'), 'combat target runtime factory missing');
+    assert(factoryRuntimeDestructuringFields(runtimeCombatTargetSource, 'createCombatTargetRuntime').some(field => /^opportunityLongStaminaBudget\b/.test(field)), 'combat target runtime does not receive opportunityLongStaminaBudget dependency');
     assert(runtimeCombatTargetSource.includes('function rememberCombatEngagement'), 'combat engagement body missing from combat target module');
     assert(runtimeCombatTargetSource.includes('function pickCombatTarget'), 'combat target picker missing from combat target module');
     assert(runtimeCombatTargetSource.includes('function combatTickActiveFromState'), 'combat tick active state missing from combat target module');
