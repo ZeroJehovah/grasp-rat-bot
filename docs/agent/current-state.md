@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.555`.
-- Latest manifest SHA-256: `a7f98552f05ee4c5dc7059577460b328ca8e12d918414542295e5c955b9122a5`.
-- Latest remote release commit: `9a8900e` (`bootstrap-0.4.555` restore control-flow wiring).
+- Latest remote bot: `bootstrap-0.4.556`.
+- Latest manifest SHA-256: `ed6bc81b902f4107e97dd10a11798b413741d41ebe53c930a9fed1438b61538a`.
+- Latest remote release commit: `b3795fc` (`bootstrap-0.4.556` wire combat stamina budget).
 - Latest bootstrap A versions: Tampermonkey `0.4.73`, extension `0.1.52`.
-- Latest direct entry/config SHA-256: `10e021b785fa2de606085746beecd34ebe4afb4a529f378f571909a4e0d3e741`.
+- Latest direct entry/config SHA-256: `770df148fd71ad0659acfc2defe1ee3a3f9489669f3a0842d260ff2b6fd5f716`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.556` passes `opportunityLongStaminaBudget` from the combat composition runtime into combat-target runtime; active-combat budget checks should no longer throw `opportunityLongStaminaBudget is not defined`.
 - `bootstrap-0.4.555` restores the control-flow dependencies for `newExitAuditRequestId` and `syncPausedFromPage`; the control-flow runtime now instantiates cleanly with stub dependencies and should no longer fail with `newExitAuditRequestId is not defined`.
 - `bootstrap-0.4.554` defers the control-flow `stopMotionAfterExit` dependency until native state initializes it; remote startup should no longer fail with `Cannot access 'stopMotionAfterExit' before initialization`.
 - `bootstrap-0.4.553` restores the combat-log session boundary helpers that were dropped during the logging runtime split; remote startup should no longer fail with `startCombatLogSession is not defined`.
@@ -32,7 +33,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.555` release validation passed:
+The latest `bootstrap-0.4.556` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -49,7 +50,7 @@ node --check extension/popup.js
 cd combat-log-service && npm test
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.555
+node scripts/build-remote-bot.js --version bootstrap-0.4.556
 node scripts/verify-objective-build.js
 git diff --check
 ```
