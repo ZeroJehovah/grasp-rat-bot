@@ -61,6 +61,7 @@ const REQUIRED_DIST_TOKENS = [
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
+  'function createOrchestrationSafetyRuntime',
   'function chooseAction',
   'async function tick',
   'function safeStringify',
@@ -78,7 +79,8 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'profit composition runtime': 220,
   'native state composition runtime': 420,
   'control flow composition runtime': 1700,
-  'orchestration runtime': 2600,
+  'orchestration runtime': 2200,
+  'orchestration safety runtime': 450,
   'combat log runtime': 1340,
   'combat target runtime': 1260,
   'combat movement runtime': 1110,
@@ -251,6 +253,7 @@ async function main() {
   const runtimeCombatAimSource = readText('src/browser/runtime/combat-aim-runtime.js');
   const runtimeCombatActionSource = readText('src/browser/runtime/combat-action-runtime.js');
   const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
+  const runtimeOrchestrationSafetySource = readText('src/browser/runtime/orchestration-safety-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -785,6 +788,7 @@ async function main() {
       assertLineBudget(runtimeNativeStateSource, 'native state composition runtime'),
       assertLineBudget(runtimeControlFlowSource, 'control flow composition runtime'),
       assertLineBudget(runtimeOrchestrationSource, 'orchestration runtime'),
+      assertLineBudget(runtimeOrchestrationSafetySource, 'orchestration safety runtime'),
       assertLineBudget(runtimeCombatLogSource, 'combat log runtime'),
       assertLineBudget(runtimeCombatTargetSource, 'combat target runtime'),
       assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
@@ -793,21 +797,33 @@ async function main() {
     ].join(', ');
   });
 
-  check('orchestration runtime owns classify chooseAction tick and startup bodies', () => {
+  check('orchestration safety runtime owns recent movement and return-block bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/orchestration-runtime')"), 'runtime entry does not import orchestration runtime module');
     assert(runtimeEntrySource.includes('createOrchestrationRuntime({'), 'runtime entry does not create orchestration runtime bindings');
     assert(runtimeEntrySource.includes('return orchestrationRuntime.startRuntime();'), 'runtime entry does not delegate startup to orchestration runtime');
     assert(!/function\s+markRecentMovement\s*\(/.test(runtimeEntrySource), 'runtime entry still owns recent movement marker');
     assert(!/function\s+returnBlockRadius\s*\(/.test(runtimeEntrySource), 'runtime entry still owns return-block radius body');
     assert(!/function\s+buildReturnBlockScanAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns return-block scan action body');
+    assert(!/function\s+blockThreatReturnAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns return-block action body');
+    assert(runtimeOrchestrationSource.includes("require('./orchestration-safety-runtime')"), 'orchestration runtime does not import safety runtime module');
+    assert(runtimeOrchestrationSource.includes('createOrchestrationSafetyRuntime({'), 'orchestration runtime does not create safety runtime bindings');
+    assert(!/function\s+markRecentMovement\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns recent movement marker');
+    assert(!/function\s+returnBlockRadius\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns return-block radius body');
+    assert(!/function\s+buildReturnBlockScanAction\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns return-block scan action body');
+    assert(!/function\s+blockThreatReturnAction\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns return-block action body');
+    assert(runtimeOrchestrationSafetySource.includes('function createOrchestrationSafetyRuntime'), 'orchestration safety runtime factory missing');
+    assert(runtimeOrchestrationSafetySource.includes('function markRecentMovement'), 'recent movement marker missing from safety module');
+    assert(runtimeOrchestrationSafetySource.includes('function returnBlockRadius'), 'return-block radius missing from safety module');
+    assert(runtimeOrchestrationSafetySource.includes('function buildReturnBlockScanAction'), 'return-block scan action missing from safety module');
+    assert(runtimeOrchestrationSafetySource.includes('function blockThreatReturnAction'), 'return-block action missing from safety module');
+  });
+
+  check('orchestration runtime owns classify chooseAction tick and startup bodies', () => {
     assert(!/function\s+classify\s*\(/.test(runtimeEntrySource), 'runtime entry still owns classify body');
     assert(!/function\s+chooseAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns chooseAction body');
     assert(!/async\s+function\s+tick\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick body');
     assert(!/function\s+startRuntime\s*\(/.test(runtimeEntrySource), 'runtime entry still owns startup body');
     assert(runtimeOrchestrationSource.includes('function createOrchestrationRuntime'), 'orchestration runtime factory missing');
-    assert(runtimeOrchestrationSource.includes('function markRecentMovement'), 'recent movement marker missing from orchestration module');
-    assert(runtimeOrchestrationSource.includes('function returnBlockRadius'), 'return-block radius missing from orchestration module');
-    assert(runtimeOrchestrationSource.includes('function buildReturnBlockScanAction'), 'return-block scan action missing from orchestration module');
     assert(runtimeOrchestrationSource.includes('function classify'), 'classify body missing from orchestration module');
     assert(runtimeOrchestrationSource.includes('function chooseAction'), 'chooseAction body missing from orchestration module');
     assert(runtimeOrchestrationSource.includes('async function tick'), 'tick body missing from orchestration module');
