@@ -29,18 +29,18 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.541`：
+进度更新到 `bootstrap-0.4.542`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 76 个可执行运行时模块，约 24,386 行。
+- `src/browser/runtime/*.js`: 80 个可执行运行时模块，约 24,670 行。
 - `src/browser/runtime/control-flow-runtime.js`: 1,614 行。
 - `src/browser/runtime/native-state-runtime.js`: 376 行。
 - `src/browser/runtime/combat-log-runtime.js`: 1,305 行。
 - `src/browser/runtime/important-logging-runtime.js`: 76 行。
 - `src/browser/runtime/profit-runtime.js`: 161 行。
-- `src/browser/runtime/combat-runtime.js`: 3,831 行。
-- `scripts/verify-objective-build.js`: 859 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality、combat-log queue、exit-audit、important-session、kill-attribution、profit coin/opportunity/post-attack/arbitration 的 owner 防回流检查。
-- 10 次实施提交中已完成 9 次，剩余 1 次。
+- `src/browser/runtime/combat-runtime.js`: 189 行。
+- `scripts/verify-objective-build.js`: 905 行，当前报告 30 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality、combat-log queue、exit-audit、important-session、kill-attribution、profit coin/opportunity/post-attack/arbitration、combat target/movement/aim/action 的 owner 防回流检查，以及 runtime-entry/composition 大模块行数预算。
+- 10 次实施提交已全部完成，剩余 0 次。
 
 ## 剩余待迁移内容
 
@@ -89,18 +89,16 @@
 
 后续拆分应保持“combat 决策只用 native/realtime visible state”的边界，不允许把 snapshot fallback 引入 combat target/aim/fire。
 
-### 5. Combat 域模块仍包含多个可独立验证的子域
+### 5. Combat 域模块已完成本轮子域拆分
 
-`combat-runtime.js` 目前集中承载：
+`combat-runtime.js` 已在 `bootstrap-0.4.542` 拆出：
 
-- combat engagement state、offline safety、active combat wait。
-- target selection、engaged target、defensive/profit target gating。
-- bullet pressure、threat field、strafe、spacing、close/reengage/finish pressure。
-- motion samples、opponent profile、trade estimate、combat trend。
-- shooting plan、aim source、dynamic/live/intercept strategy。
-- leave cover 和 final combat action builder。
+- `combat-target-runtime.js`: combat engagement state、offline safety、active combat wait、target selection、engaged target、defensive/profit target gating、combat tick-gap/native tick state。
+- `combat-movement-runtime.js`: bullet pressure、threat field、strafe、spacing、close/reengage/finish pressure、out-of-range dodge action。
+- `combat-aim-runtime.js`: motion samples、opponent profile、trade estimate、combat trend inputs、shooting plan、aim source、dynamic/live/intercept strategy。
+- `combat-action-runtime.js`: leave cover 和 final combat action builder。
 
-这里的拆分风险最高。后续提交必须保持结构性迁移为主；只要触碰行为判断，应按战斗记录变更规则跑离线 replay 并证明收益。
+本次拆分为结构性迁移，未按战斗记录调参；native/realtime visible combat target、aim、fire 锚点继续由 verifier 检查。
 
 ### 6. Profit 域模块已完成本轮机会链路拆分
 
@@ -145,7 +143,7 @@
 - [x] Session, Stall, And Network Quality Split (`bootstrap-0.4.539`)
 - [x] Logging And Important Records Split (`bootstrap-0.4.540`)
 - [x] Profit Runtime Split (`bootstrap-0.4.541`)
-- [ ] Combat Runtime Split And Final Guard Tightening
+- [x] Combat Runtime Split And Final Guard Tightening (`bootstrap-0.4.542`)
 
 ### 1. Entry Public API And Status Split - Completed
 
@@ -335,7 +333,7 @@ Completed in `bootstrap-0.4.540`: `src/browser/runtime/combat-log-queue-runtime.
 
 Completed in `bootstrap-0.4.541`: `src/browser/runtime/profit-coin-runtime.js` owns coin motion options, pickup failure counts, approach locks, coin diagnostics, threat filtering, realtime/local/field/distant/high-value coin pickers, and high-value coin priority gates; `src/browser/runtime/profit-opportunity-runtime.js` owns stamina budget helpers, snapshot coin wait/fallback helpers, coin/enemy opportunity scoring, AFK stamina cooldown, route opportunity choice, stable opportunity choice, and profitable combat target comparison; `src/browser/runtime/profit-post-attack-runtime.js` owns post-attack drop wait plus coin/enemy action builders; and `src/browser/runtime/profit-arbitration-runtime.js` owns coin target helpers, incidental pickup tracking, collected-coin marking, coin progress state machine, final action arbitration, and target-switch diagnostics. `src/browser/runtime/profit-runtime.js` now composes those four modules and is down to 161 lines. `scripts/verify-objective-build.js` rejects those bodies returning to `profit-runtime.js`, requires the four new modules in the direct esbuild graph, and reports 29 checks across 76 runtime modules.
 
-### 10. Combat Runtime Split And Final Guard Tightening
+### 10. Combat Runtime Split And Final Guard Tightening - Completed
 
 目标：
 
@@ -357,6 +355,8 @@ Completed in `bootstrap-0.4.541`: `src/browser/runtime/profit-coin-runtime.js` o
 - native/realtime visible combat target、aim、fire anchor 保持。
 - replay self-tests 通过。
 - 若拆分触及行为判断或战斗记录驱动变更，必须运行对应 battle replay 并证明改进。
+
+Completed in `bootstrap-0.4.542`: `src/browser/runtime/combat-target-runtime.js` owns combat engagement state, offline safety, active-combat wait, target selection, engaged target retention, defensive/profit target gating, opportunistic AFK shot helpers, combat tick-gap offline state, native tick combat interval, and tick-reentry combat-gap handling; `src/browser/runtime/combat-movement-runtime.js` owns incoming bullet pressure, threat-field scoring, strafe locks, spacing, pressure close/reengage/finish movement, passive-runner close movement, pressure threat summaries, and out-of-range dodge action; `src/browser/runtime/combat-aim-runtime.js` owns motion samples, opponent profile, trade estimate, shooting plan, no-damage aim widening, live/native aim source, dynamic aim strategy, intercept solve, and `combatAimTarget()`; and `src/browser/runtime/combat-action-runtime.js` owns `combatLeaveCoverAction()` and `buildCombatAction()`. `src/browser/runtime/combat-runtime.js` now composes those four modules and is down to 189 lines. `scripts/verify-objective-build.js` rejects those bodies returning to `combat-runtime.js`, requires the four new modules in the direct esbuild graph, keeps combat target/aim/fire native/realtime-visible checks on the new modules, adds line-budget guards for runtime-entry and major composition modules, and reports 30 checks across 80 runtime modules.
 
 ## 每次实施提交的共同要求
 
