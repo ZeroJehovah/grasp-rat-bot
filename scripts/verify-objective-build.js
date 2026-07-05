@@ -72,6 +72,20 @@ const REQUIRED_DIST_TOKENS = [
   'function recordActionSwitchDiagnosticsCore'
 ];
 
+const POST_MIGRATION_LINE_BUDGETS = {
+  'runtime entry': 2200,
+  'combat composition runtime': 220,
+  'profit composition runtime': 220,
+  'native state composition runtime': 420,
+  'control flow composition runtime': 1700,
+  'orchestration runtime': 2600,
+  'combat log runtime': 1340,
+  'combat target runtime': 1260,
+  'combat movement runtime': 1110,
+  'combat aim runtime': 940,
+  'target overlay runtime': 630
+};
+
 function readText(relPath) {
   return fs.readFileSync(path.join(ROOT, relPath), 'utf8');
 }
@@ -109,6 +123,14 @@ function escapeRegExp(text) {
 
 function lineCount(text) {
   return String(text || '').split(/\r?\n/).length;
+}
+
+function assertLineBudget(text, label) {
+  const budget = POST_MIGRATION_LINE_BUDGETS[label];
+  assert(Number.isFinite(budget), `${label} line budget missing`);
+  const lines = lineCount(text);
+  assert(lines <= budget, `${label} exceeded post-migration line budget (${lines}/${budget})`);
+  return `${label}: ${lines}/${budget}`;
 }
 
 function functionBody(text, name) {
@@ -756,11 +778,19 @@ async function main() {
   });
 
   check('runtime module size guards prevent post-migration backflow', () => {
-    assert(lineCount(runtimeEntrySource) <= 2200, 'runtime entry exceeded post-migration line budget');
-    assert(lineCount(runtimeCombatSource) <= 220, 'combat composition runtime exceeded line budget');
-    assert(lineCount(runtimeProfitSource) <= 220, 'profit composition runtime exceeded line budget');
-    assert(lineCount(runtimeNativeStateSource) <= 420, 'native state composition runtime exceeded line budget');
-    assert(lineCount(runtimeControlFlowSource) <= 1700, 'control flow composition runtime exceeded line budget');
+    return [
+      assertLineBudget(runtimeEntrySource, 'runtime entry'),
+      assertLineBudget(runtimeCombatSource, 'combat composition runtime'),
+      assertLineBudget(runtimeProfitSource, 'profit composition runtime'),
+      assertLineBudget(runtimeNativeStateSource, 'native state composition runtime'),
+      assertLineBudget(runtimeControlFlowSource, 'control flow composition runtime'),
+      assertLineBudget(runtimeOrchestrationSource, 'orchestration runtime'),
+      assertLineBudget(runtimeCombatLogSource, 'combat log runtime'),
+      assertLineBudget(runtimeCombatTargetSource, 'combat target runtime'),
+      assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
+      assertLineBudget(runtimeCombatAimSource, 'combat aim runtime'),
+      assertLineBudget(runtimeTargetOverlaySource, 'target overlay runtime')
+    ].join(', ');
   });
 
   check('orchestration runtime owns classify chooseAction tick and startup bodies', () => {
