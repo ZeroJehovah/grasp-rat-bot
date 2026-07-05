@@ -63,6 +63,7 @@ const REQUIRED_DIST_TOKENS = [
   'function createOrchestrationRuntime',
   'function createOrchestrationSafetyRuntime',
   'function createOrchestrationDecisionRuntime',
+  'function createOrchestrationTickRuntime',
   'function chooseAction',
   'async function tick',
   'function safeStringify',
@@ -80,9 +81,10 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'profit composition runtime': 220,
   'native state composition runtime': 420,
   'control flow composition runtime': 1700,
-  'orchestration runtime': 1350,
+  'orchestration runtime': 360,
   'orchestration safety runtime': 450,
   'orchestration decision runtime': 1160,
+  'orchestration tick runtime': 1280,
   'combat log runtime': 1340,
   'combat target runtime': 1260,
   'combat movement runtime': 1110,
@@ -257,6 +259,7 @@ async function main() {
   const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
   const runtimeOrchestrationSafetySource = readText('src/browser/runtime/orchestration-safety-runtime.js');
   const runtimeOrchestrationDecisionSource = readText('src/browser/runtime/orchestration-decision-runtime.js');
+  const runtimeOrchestrationTickSource = readText('src/browser/runtime/orchestration-tick-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -793,6 +796,7 @@ async function main() {
       assertLineBudget(runtimeOrchestrationSource, 'orchestration runtime'),
       assertLineBudget(runtimeOrchestrationSafetySource, 'orchestration safety runtime'),
       assertLineBudget(runtimeOrchestrationDecisionSource, 'orchestration decision runtime'),
+      assertLineBudget(runtimeOrchestrationTickSource, 'orchestration tick runtime'),
       assertLineBudget(runtimeCombatLogSource, 'combat log runtime'),
       assertLineBudget(runtimeCombatTargetSource, 'combat target runtime'),
       assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
@@ -834,12 +838,17 @@ async function main() {
     assert(runtimeOrchestrationDecisionSource.includes('function chooseAction'), 'chooseAction body missing from decision module');
   });
 
-  check('orchestration runtime owns tick and startup bodies', () => {
+  check('orchestration tick runtime owns tick and startup bodies', () => {
     assert(!/async\s+function\s+tick\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick body');
     assert(!/function\s+startRuntime\s*\(/.test(runtimeEntrySource), 'runtime entry still owns startup body');
     assert(runtimeOrchestrationSource.includes('function createOrchestrationRuntime'), 'orchestration runtime factory missing');
-    assert(runtimeOrchestrationSource.includes('async function tick'), 'tick body missing from orchestration module');
-    assert(runtimeOrchestrationSource.includes('function startRuntime'), 'startup body missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes("require('./orchestration-tick-runtime')"), 'orchestration runtime does not import tick runtime module');
+    assert(runtimeOrchestrationSource.includes('createOrchestrationTickRuntime({'), 'orchestration runtime does not create tick runtime bindings');
+    assert(!/async\s+function\s+tick\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns tick body');
+    assert(!/function\s+startRuntime\s*\(/.test(runtimeOrchestrationSource), 'orchestration runtime still owns startup body');
+    assert(runtimeOrchestrationTickSource.includes('function createOrchestrationTickRuntime'), 'orchestration tick runtime factory missing');
+    assert(runtimeOrchestrationTickSource.includes('async function tick'), 'tick body missing from tick module');
+    assert(runtimeOrchestrationTickSource.includes('function startRuntime'), 'startup body missing from tick module');
   });
 
   check('obsolete source-fragment files are absent', () => {
