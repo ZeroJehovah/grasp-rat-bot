@@ -24,6 +24,7 @@ function createProfitOpportunityRuntime(runtime = {}) {
     recordCoinFilterDiagnostic = () => {},
     coinThreatDangerRadius = () => 0,
     coinBlockedByThreat = () => false,
+    highValueCoinPriorityAmount = () => 1,
     buildCoinAction = () => null,
     coinTargetCoreOptions = () => ({}),
     coinMatchesTrackedTargetCore = () => false,

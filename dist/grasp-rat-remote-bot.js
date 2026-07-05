@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.556" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.557" };
     }
   });
 
@@ -18831,7 +18831,7 @@
           if (!candidates.length) return null;
           return candidates[0];
         }
-        function highValueCoinPriorityAmount2() {
+        function highValueCoinPriorityAmount() {
           const value = Number(cfg.highValueCoinPriorityAmount ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
           return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
         }
@@ -18840,7 +18840,7 @@
           return Math.max(1, Number.isFinite(value) ? value : OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_HEALTHY_HP);
         }
         function pickHighValueVisibleCoin(self, coins, activeThreats, options = {}) {
-          const minAmount = highValueCoinPriorityAmount2();
+          const minAmount = highValueCoinPriorityAmount();
           const maxDistance = Math.max(0, Number(cfg.globalCoinMaxDistance || cfg.opportunityVisibleDistance || cfg.coinMaxDistance || 0));
           const threats = options.ignoreThreats ? [] : activeThreats;
           return safeCoinCandidates((coins || []).filter((coin) => !isSnapshotOnlyCoin(coin)), threats, maxDistance, self).filter((coin) => Number(coin.amount || 0) >= minAmount).filter((coin) => coinStaminaAffordableWithDiagnostic(self, coin))[0] || null;
@@ -18911,7 +18911,7 @@
           pickCoin,
           pickCoinField,
           pickDistantCoin,
-          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityAmount,
           highValueCoinPriorityHealthyHp,
           pickHighValueVisibleCoin,
           nearbyThreatBlocksLowHpHighValueCoin,
@@ -20222,6 +20222,7 @@
           },
           coinThreatDangerRadius = () => 0,
           coinBlockedByThreat = () => false,
+          highValueCoinPriorityAmount = () => 1,
           buildCoinAction = () => null,
           coinTargetCoreOptions = () => ({}),
           coinMatchesTrackedTargetCore = () => false,
@@ -25812,7 +25813,7 @@
           currentHeldCoinRouteChoice,
           dailyStaminaBudgetIsLimitingCore,
           dailyStaminaFinalCoinAction,
-          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityAmount,
           highValueCoinPriorityHealthyHp,
           highValueVisibleCoinPriorityNeeded,
           isSnapshotCoinWaitAction,
@@ -26207,7 +26208,7 @@
             action.ignoreReturnBlock = true;
             action.highValueCoinPriority = {
               amount: Number(highValuePriorityCoin.amount || 0),
-              minAmount: highValueCoinPriorityAmount2(),
+              minAmount: highValueCoinPriorityAmount(),
               hp: Math.round(hpValue(self)),
               healthyHp: highValueCoinPriorityHealthyHp()
             };
@@ -26871,7 +26872,7 @@
           currentHeldCoinRouteChoice,
           dailyStaminaBudgetIsLimitingCore,
           dailyStaminaFinalCoinAction,
-          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityAmount,
           highValueCoinPriorityHealthyHp,
           highValueVisibleCoinPriorityNeeded,
           isSnapshotCoinWaitAction,
@@ -28008,7 +28009,7 @@
           globalSamplingOutageOfflineState,
           handlePendingExit,
           handleTickReentryCombatGap,
-          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityAmount,
           highValueCoinPriorityHealthyHp,
           highValueVisibleCoinPriorityNeeded,
           hpDisplay,
@@ -29343,7 +29344,7 @@
           pickCoin,
           pickCoinField,
           pickDistantCoin,
-          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityAmount,
           highValueCoinPriorityHealthyHp,
           pickHighValueVisibleCoin,
           nearbyThreatBlocksLowHpHighValueCoin,
@@ -29786,7 +29787,7 @@
           globalSamplingOutageOfflineState,
           handlePendingExit,
           handleTickReentryCombatGap,
-          highValueCoinPriorityAmount: highValueCoinPriorityAmount2,
+          highValueCoinPriorityAmount,
           highValueCoinPriorityHealthyHp,
           highValueVisibleCoinPriorityNeeded,
           hpDisplay,

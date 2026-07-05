@@ -297,6 +297,28 @@ function functionBody(text, name) {
   throw new Error(`${name} function body not closed`);
 }
 
+function assertProfitOpportunityRuntimeSmoke() {
+  const { createProfitOpportunityRuntime } = require(path.join(ROOT, 'src/browser/runtime/profit-opportunity-runtime'));
+  const runtime = createProfitOpportunityRuntime({
+    bot: { globalState: {}, lastTarget: null, opportunityChoice: null, opportunitySwitchLock: null },
+    cfg: {
+      opportunitySameCoinRadius: 900,
+      coinCollectedPruneRadius: 900,
+      opportunitySwitchMargin: 0.15,
+      opportunitySwitchRelativeMargin: 0.1,
+      opportunitySwitchHoldMs: 1500,
+      opportunityOscillationSwitchLimit: 3
+    },
+    highValueCoinPriorityAmount: () => 17,
+    dist: () => 0,
+    now: () => 123456
+  });
+  assert(typeof runtime.opportunityChoiceCoreOptions === 'function', 'profit opportunity runtime did not expose opportunityChoiceCoreOptions');
+  const options = runtime.opportunityChoiceCoreOptions();
+  assert(options.highValueCoinPriorityAmount === 17, 'profit opportunity smoke did not use highValueCoinPriorityAmount dependency');
+  assert(options.nowMs === 123456, 'profit opportunity smoke did not use now dependency');
+}
+
 function sourceGenerationFiles() {
   return fs.readdirSync(path.join(ROOT, 'src', 'browser'))
     .filter(name => name.endsWith('source.js') || name === 'runtime-fragment-registry.js')
@@ -900,6 +922,8 @@ async function main() {
     assert(runtimeProfitCoinSource.includes('function pickRealtimeLocalCoin'), 'realtime local coin picker missing from profit coin module');
     assert(runtimeProfitCoinSource.includes('function pickCoinField'), 'field coin picker missing from profit coin module');
     assert(runtimeProfitOpportunitySource.includes('function createProfitOpportunityRuntime'), 'profit opportunity runtime factory missing');
+    assert(factoryRuntimeDestructuringFields(runtimeProfitOpportunitySource, 'createProfitOpportunityRuntime').some(field => /^highValueCoinPriorityAmount\b/.test(field)), 'profit opportunity runtime does not receive highValueCoinPriorityAmount dependency');
+    assertProfitOpportunityRuntimeSmoke();
     assert(runtimeProfitOpportunitySource.includes('function scoreCoinOpportunity'), 'coin opportunity scoring missing from profit opportunity module');
     assert(runtimeProfitOpportunitySource.includes('function scoreEnemyOpportunity'), 'enemy opportunity scoring missing from profit opportunity module');
     assert(runtimeProfitOpportunitySource.includes('function pickProfitableCombatTarget'), 'profitable combat target picker missing from profit opportunity module');
