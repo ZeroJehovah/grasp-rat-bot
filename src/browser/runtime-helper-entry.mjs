@@ -836,6 +836,7 @@ function helperStatus(config = {}) {
     formatDistance: displayFormat.formatDistance
   });
   const exitReloginInjurySummary = exitRelogin.injuryLeaveSummaryCore({
+    nearestActive: { name: '远处无敌', distance: 50000, invulnerable: true },
     nearestHuman: { name: '伤害者' },
     previousHp: 90,
     currentHp: 55

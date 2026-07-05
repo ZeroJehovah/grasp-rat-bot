@@ -259,7 +259,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
   const { chooseAction } = runtimeDomainContexts.decision || {};
 
   const { postExitDecisionWithoutTargetCore: postExitDecisionWithoutTargetForTickCore } = require('./exit-motion');
-  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./exit-relogin');
+  const { clearEnemyReloginHoldBoundCore: clearEnemyReloginHoldForTickBoundCore, clearOfflineReloginHoldBoundCore: clearOfflineReloginHoldForTickBoundCore, currentOfflineDisplayReasonCore: currentOfflineDisplayReasonForTickCore, enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForTickBoundCore, healthyHighValueCoinInjuryLeaveSuppressedCore: healthyHighValueCoinInjuryLeaveSuppressedForTickCore, injuryLeaveSummaryCore: injuryLeaveSummaryForTickCore, offlineLeaveSummaryCore: offlineLeaveSummaryForTickCore, offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForTickBoundCore, pursuitLeaveSummaryCore: pursuitLeaveSummaryForTickCore } = require('./exit-relogin');
   const { pendingExitRetryMsCore: pendingExitRetryMsForTickCore, summarizePendingExitCore: summarizePendingExitForTickCore } = require('./pending-exit');
 
   async function tick(source = 'timer') {
@@ -972,23 +972,27 @@ function createOrchestrationTickRuntime(runtime = {}) {
 	          nearestHuman: bot.lastSafety?.nearestHuman || bot.pendingInjuryLeave.nearestHuman || null
 	        };
 	        bot.pendingInjuryLeave = null;
-	        const skippedLeave = pendingExitSkipNewLeave('injury', 'injury hp drop', {
-	          injury,
-	          summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
-	        });
-	        if (!skippedLeave) {
-	          Promise.resolve(leaveForInjury(injury)).catch(err => recordUnhandledTickError('injury-leave', err));
+	        if (healthyHighValueCoinInjuryLeaveSuppressedForTickCore(injury, action, { healthyHp: typeof highValueCoinPriorityHealthyHp === 'function' ? highValueCoinPriorityHealthyHp() : cfg?.highValueCoinPriorityHealthyHp, combatLowHpLeaveThreshold: cfg?.combatLowHpLeaveThreshold })) {
+	          action = { ...action, injury: { ...injury, suppressedByHighValueCoin: true, suppressedReason: 'healthy-high-value-coin-priority' } };
+	        } else {
+	          const skippedLeave = pendingExitSkipNewLeave('injury', 'injury hp drop', {
+	            injury,
+	            summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
+	          });
+	          if (!skippedLeave) {
+	            Promise.resolve(leaveForInjury(injury)).catch(err => recordUnhandledTickError('injury-leave', err));
+	          }
+	          action = {
+	            ...action,
+	            injury: skippedLeave ? { ...injury, suppressedByPendingExit: true } : injury,
+	            pendingExitIntent: skippedLeave
+	              ? pendingExitIntentForSkippedLeave('injury', 'injury hp drop', skippedLeave)
+	              : {
+	                reason: 'injury-leave',
+	                summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
+	              }
+	          };
 	        }
-	        action = {
-	          ...action,
-	          injury: skippedLeave ? { ...injury, suppressedByPendingExit: true } : injury,
-	          pendingExitIntent: skippedLeave
-	            ? pendingExitIntentForSkippedLeave('injury', 'injury hp drop', skippedLeave)
-	            : {
-	              reason: 'injury-leave',
-	              summary: injuryLeaveSummaryForTickCore(injury, { actorLabel, hpDisplay })
-	            }
-	        };
 	      }
 		      action = attachCoinDiagnostics(applyCoinProgressAction(action, self));
       const escape = bot.staleCoinEscape;
