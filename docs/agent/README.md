@@ -12,7 +12,8 @@ Read only what is needed for the current task:
 - [combat-logging.md](combat-logging.md): combat-log service, analyzer, daily summary, and live monitoring notes.
 - [coin-balance-reporting.md](coin-balance-reporting.md): known-good Elysiver API method, auth variables, monthly coin report command, and fetch retry behavior.
 - [test-coverage.md](test-coverage.md): current self-test/static/replay coverage notes and known validation gaps.
-- [runtime-bundler-migration-plan-2026-07-05.md](runtime-bundler-migration-plan-2026-07-05.md): remaining browser runtime bundler/source-fragment migration inventory and release-slice plan.
+- [runtime-bundler-migration-plan-2026-07-05.md](runtime-bundler-migration-plan-2026-07-05.md): completed browser runtime bundler/source-fragment migration inventory and release-slice plan.
+- [runtime-entry-domain-migration-plan-2026-07-05.md](runtime-entry-domain-migration-plan-2026-07-05.md): remaining direct runtime entry decomposition inventory and commit plan.
 
 ## Maintenance Rules
 
