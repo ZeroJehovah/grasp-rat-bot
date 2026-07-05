@@ -29,6 +29,13 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
+进度更新到 `bootstrap-0.4.535`：
+
+- `src/browser/runtime-entry.js`: 2,139 行。
+- `src/browser/runtime/*.js`: 57 个可执行运行时模块，约 22,614 行。
+- `scripts/verify-objective-build.js`: 632 行，当前报告 26 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue 的 owner 防回流检查。
+- 10 次实施提交中已完成 3 次，剩余 7 次。
+
 ## 剩余待迁移内容
 
 ### 1. 入口仍保留的公共 API 和状态汇总
@@ -127,7 +134,7 @@
 
 - [x] Entry Public API And Status Split (`bootstrap-0.4.533`)
 - [x] Shared Entity Predicate Split (`bootstrap-0.4.534`)
-- [ ] Exit Detail, Pause, And Entry Glue Split
+- [x] Exit Detail, Pause, And Entry Glue Split (`bootstrap-0.4.535`)
 - [ ] Control-flow Login Gate And Login-point Safety Split
 - [ ] Control-flow Pending-exit And Leave Flow Split
 - [ ] Native State And Transport Split
@@ -179,7 +186,7 @@ Completed in `bootstrap-0.4.533`: `src/browser/runtime/bot-api-runtime.js` owns 
 
 Completed in `bootstrap-0.4.534`: `src/browser/runtime/entity-state-runtime.js` owns shared math helpers, HP/stamina helpers, invulnerability aliases, Active/firing/moving classification, AFK recent-activity gates, idle-invulnerable handling, recovery/conserve predicates, and active threat decoration. `runtime-entry.js` now creates those helpers through `createEntityStateRuntime()` and passes explicit bindings into the existing domain factories. `scripts/verify-objective-build.js` rejects those predicate bodies returning to `runtime-entry.js` and checks the direct esbuild graph with 55 runtime modules.
 
-### 3. Exit Detail, Pause, And Entry Glue Split
+### 3. Exit Detail, Pause, And Entry Glue Split - Completed
 
 目标：
 
@@ -197,6 +204,8 @@ Completed in `bootstrap-0.4.534`: `src/browser/runtime/entity-state-runtime.js` 
 
 - relogin/no-self safety wait 的 preserved exit reason 仍优先于 wait-only/gate text。
 - post-exit target cleanup、opportunity choice clear、target overlay removal 行为不变。
+
+Completed in `bootstrap-0.4.535`: `src/browser/runtime/exit-detail-runtime.js` owns enemy/offline leave detail refresh plus latest enemy leave summary/display helpers, and `src/browser/runtime/entry-glue-runtime.js` owns post-exit target cleanup, pause reason/sync, own-entity lookup, and status logging glue. `runtime-entry.js` now composes these through `createExitDetailRuntime()` and `createEntryGlueRuntime()`. `scripts/verify-objective-build.js` rejects those helper bodies returning to `runtime-entry.js`, requires both modules in the direct esbuild graph, and reports 26 checks across 57 runtime modules.
 
 ### 4. Control-flow Login Gate And Login-point Safety Split
 
