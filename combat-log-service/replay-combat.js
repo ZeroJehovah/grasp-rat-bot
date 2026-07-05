@@ -56,6 +56,7 @@ const DEFAULTS = {
   combatOpponentProbeReserveMs: 5600,
   combatOpponentProbeEveryMs: 520,
   combatPassiveRunnerCloseRange: 4500,
+  combatPassiveRunnerPrecisionRange: 5500,
   combatPassiveRunnerInterceptSpreadScale: 0,
   combatOutOfRangeReengageRange: 15000,
   combatOutOfRangeReengageMinHp: 60,
@@ -1048,11 +1049,21 @@ function dynamicAimForShot(shot, options) {
   const radialMax = Math.max(0, Number(options.combatAimRadialPrecisionLateralRatio || 0));
   const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
   const realBulletPrecision = Boolean(live && moving && incomingRealBullet(frame) && withinAttackRange);
+  const passiveRunnerPrecisionRange = Math.max(0, Number(options.combatPassiveRunnerPrecisionRange || 0));
+  const passiveRunnerPrecision = Boolean(
+    live
+    && moving
+    && passiveRunnerActive(frame, options)
+    && passiveRunnerPrecisionRange > 0
+    && Number(liveDistance) <= passiveRunnerPrecisionRange
+    && withinAttackRange
+  );
   const passiveRunnerIntercept = Boolean(
     live
     && moving
     && movement
     && passiveRunnerActive(frame, options)
+    && !passiveRunnerPrecision
     && withinAttackRange
   );
   const liveIntercept = Boolean(
@@ -1078,6 +1089,7 @@ function dynamicAimForShot(shot, options) {
     && withinAttackRange
   );
   if (live && divergence.active) return live;
+  if (passiveRunnerPrecision) return live;
   if (passiveRunnerIntercept) return liveInterceptAimForShot(shot, options);
   if (realBulletPrecision && liveIntercept) return liveInterceptAimForShot(shot, options);
   if (realBulletPrecision) return live;
@@ -1976,6 +1988,15 @@ function selfTest() {
       targetId: '33607',
       targetName: 'biliee',
       expectOpponentProbeReserveImproved: true
+    },
+    {
+      id: '2026-07-06-xuanze00-passive-runner-close-precision',
+      file: path.join(__dirname, 'logs/2026-07-06/combat/20260705171540-self-28886-vs-xuanze00.jsonl'),
+      startLine: 96,
+      endLine: 2316,
+      selfId: '28886',
+      targetId: '34711',
+      targetName: 'xuanze00'
     }
   ];
   const skipped = [];

@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.563" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.564" };
     }
   });
 
@@ -257,6 +257,7 @@
           combatOpponentProbeReserveMs: 5600,
           combatOpponentProbeEveryMs: 520,
           combatPassiveRunnerCloseRange: 4500,
+          combatPassiveRunnerPrecisionRange: 5500,
           combatPassiveRunnerInterceptSpreadScale: 0,
           combatShootHardReserveMs: 1800,
           combatShootConserveEveryMs: 360,
@@ -22527,7 +22528,9 @@
           const radialMax = Math.max(0, Number(cfg.combatAimRadialPrecisionLateralRatio || 0));
           const realBulletPrecision = Boolean(live && moving && options.realBulletPressure && (!attackRange || Number(distance) <= attackRange));
           const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
-          const passiveRunnerIntercept = Boolean(live && moving && movement && options.passiveRunner && (!attackRange || Number(distance) <= attackRange));
+          const passiveRunnerPrecisionRange = Math.max(0, Number(cfg.combatPassiveRunnerPrecisionRange || 0));
+          const passiveRunnerPrecision = Boolean(live && moving && options.passiveRunner && passiveRunnerPrecisionRange > 0 && Number(distance) <= passiveRunnerPrecisionRange && (!attackRange || Number(distance) <= attackRange));
+          const passiveRunnerIntercept = Boolean(live && moving && movement && options.passiveRunner && !passiveRunnerPrecision && (!attackRange || Number(distance) <= attackRange));
           const liveIntercept = Boolean(live && moving && movement && (passiveRunnerIntercept || lateralRatio > radialMax && (realBulletPrecision || serverStall.stalled && (!attackRange || Number(distance) <= attackRange))));
           const radialPrecision = Boolean(live && moving && radialMax > 0 && movement && Number(movement.targetSpeed || 0) >= Number(cfg.combatStationarySpeed || 0) && lateralRatio <= radialMax && (!attackRange || Number(distance) <= attackRange));
           let mode = moving ? "intercept" : "exact";
@@ -22541,6 +22544,12 @@
             strategy = "live-precision";
             reason = "coordinate-divergence";
             precision = true;
+          } else if (passiveRunnerPrecision) {
+            mode = "live-precision";
+            strategy = "live-precision";
+            reason = "passive-runner-close";
+            precision = true;
+            passiveRunnerAim = true;
           } else if (passiveRunnerIntercept) {
             strategy = "live-intercept";
             reason = "passive-runner-intercept";

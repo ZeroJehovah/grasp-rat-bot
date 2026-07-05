@@ -575,10 +575,18 @@ function createCombatAimRuntime(runtime = {}) {
       && options.realBulletPressure
       && (!attackRange || Number(distance) <= attackRange));
     const lateralRatio = Math.abs(Number(movement?.lateralRatio || 0));
+    const passiveRunnerPrecisionRange = Math.max(0, Number(cfg.combatPassiveRunnerPrecisionRange || 0));
+    const passiveRunnerPrecision = Boolean(live
+      && moving
+      && options.passiveRunner
+      && passiveRunnerPrecisionRange > 0
+      && Number(distance) <= passiveRunnerPrecisionRange
+      && (!attackRange || Number(distance) <= attackRange));
     const passiveRunnerIntercept = Boolean(live
       && moving
       && movement
       && options.passiveRunner
+      && !passiveRunnerPrecision
       && (!attackRange || Number(distance) <= attackRange));
     const liveIntercept = Boolean(live
       && moving
@@ -608,6 +616,12 @@ function createCombatAimRuntime(runtime = {}) {
       strategy = 'live-precision';
       reason = 'coordinate-divergence';
       precision = true;
+    } else if (passiveRunnerPrecision) {
+      mode = 'live-precision';
+      strategy = 'live-precision';
+      reason = 'passive-runner-close';
+      precision = true;
+      passiveRunnerAim = true;
     } else if (passiveRunnerIntercept) {
       strategy = 'live-intercept';
       reason = 'passive-runner-intercept';
