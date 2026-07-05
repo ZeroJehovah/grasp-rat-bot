@@ -1,6 +1,6 @@
 'use strict';
 
-const { browserRuntimeFragments } = require('./runtime-fragments-source');
+const { browserRuntimeFragmentEntries } = require('./runtime-fragment-registry');
 
 function browserRuntimeConfig(options = {}) {
   const config = {
@@ -24,6 +24,27 @@ function browserRuntimeBodySource(options = {}) {
   return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));
 }
 
+function runtimeFragment(name, source) {
+  if (typeof name !== 'string' || !name) {
+    throw new TypeError('runtime fragment name must be a non-empty string');
+  }
+  if (source === undefined || source === null) {
+    throw new TypeError(`runtime fragment ${name} source is required`);
+  }
+  return { name, source };
+}
+
+function materializeRuntimeFragments(entries) {
+  if (!Array.isArray(entries)) {
+    throw new TypeError('runtime fragment entries must be an array');
+  }
+  return entries.map(([name, source]) => runtimeFragment(name, source));
+}
+
+function browserRuntimeFragments(config) {
+  return materializeRuntimeFragments(browserRuntimeFragmentEntries(config));
+}
+
 function remoteBrowserRuntimeSource(options = {}) {
   return browserRuntimeSource({
     dryRun: false,
@@ -38,9 +59,12 @@ module.exports = {
   browserRuntimeConfig,
   browserRuntimeBodySource,
   browserRuntimeSource,
+  browserRuntimeFragments,
+  materializeRuntimeFragments,
   remoteBrowserRuntimeSource,
   renderRuntimeFragment,
   renderRuntimeFragments,
+  runtimeFragment,
   wrapBrowserRuntimeIife
 };
 
