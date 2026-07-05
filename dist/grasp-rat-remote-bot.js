@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.531" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.532" };
     }
   });
 
@@ -817,7 +817,7 @@
     "src/shared/exit-summary.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
-      function staminaExhaustedWindowLabel2(staminaState) {
+      function staminaExhaustedWindowLabel(staminaState) {
         return staminaExhaustedLongWindows(staminaState).join("/");
       }
       function staminaExhaustedLongWindows(staminaState) {
@@ -856,7 +856,7 @@
       }
       function offlineLeaveSummaryText(reason, offlineSafety) {
         if (offlineSafety?.staminaBudgetExit) return "\u4E00\u5C0F\u65F6\u4F53\u529B\u4E0D\u8DB3\u4EE5\u62FE\u53D6\u6700\u8FD1\u91D1\u5E01\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
-        const staminaLabel = staminaExhaustedWindowLabel2(offlineSafety?.staminaExhausted);
+        const staminaLabel = staminaExhaustedWindowLabel(offlineSafety?.staminaExhausted);
         if (staminaLabel === "1h") return "\u4E00\u5C0F\u65F6\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
         if (staminaLabel === "1d") return "\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
         if (staminaLabel === "1h/1d") return "\u4E00\u5C0F\u65F6\u548C\u4E00\u5929\u4F53\u529B\u5230\u8FBE\u9650\u5236\uFF0C\u9000\u51FA\u7B49\u5F85\u91CD\u8FDE";
@@ -904,7 +904,7 @@
       }
       module.exports = {
         staminaExhaustedLongWindows,
-        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2,
+        staminaExhaustedWindowLabel,
         staminaEvidenceRemaining,
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
@@ -920,7 +920,7 @@
       init_define_GRASP_RAT_RUNTIME_CONFIG();
       var {
         staminaExhaustedLongWindows,
-        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2,
+        staminaExhaustedWindowLabel,
         staminaEvidenceRemaining,
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
@@ -928,7 +928,7 @@
       } = require_exit_summary();
       module.exports = {
         staminaExhaustedLongWindows,
-        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2,
+        staminaExhaustedWindowLabel,
         staminaEvidenceRemaining,
         staminaHoldContradictedByStaminaEvidence,
         offlineLeaveSummaryText,
@@ -2014,7 +2014,7 @@
         if (currentSummary) return currentSummary;
         return leaveDisplay || String(offlineDetail?.displayReason || "") || String(fallback || "");
       }
-      function reloginDelayForHpCore2(selfLike, detail, helpers) {
+      function reloginDelayForHpCore(selfLike, detail, helpers) {
         const cfg = helpers.cfg;
         const info = helpers.hpInfoForRelogin(selfLike, detail);
         const minMs = Math.max(0, Number(cfg.enemyReloginMinDelayMs ?? 0) || 0);
@@ -2555,7 +2555,7 @@
         injuryLeaveSummaryCore,
         offlineLeaveSummaryCore,
         currentOfflineDisplayReasonCore,
-        reloginDelayForHpCore: reloginDelayForHpCore2,
+        reloginDelayForHpCore,
         isExitLoginSuppressReasonCore,
         unsafeExitReloginMinDelayMsCore,
         pendingExitSuppressReasonCore,
@@ -2778,7 +2778,7 @@
         safeStringify
       } = require_runtime_utils2();
       var {
-        staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2
+        staminaExhaustedWindowLabel
       } = require_exit_summary2();
       function fallbackNow() {
         return Date.now();
@@ -2805,7 +2805,7 @@
             detail,
             (summaryReason, summarySafety) => offlineLeaveSummaryCore(summaryReason, summarySafety, {
               staminaBudgetCoinLeaveSummary: staminaBudgetCoinLeaveSummaryForRuntimeState,
-              staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2
+              staminaExhaustedWindowLabel
             }),
             (value) => finalizeLeaveDisplayReasonCore(value, (base, detailValue) => leaveWaitDisplayCore(base, detailValue, formatDurationMs)),
             t
@@ -4363,7 +4363,7 @@
           summarizePendingCombatLeave = () => null,
           summarizePursuit = (value) => value,
           summarizeControl = () => null,
-          snapshotLoginGateStatus: snapshotLoginGateStatus2 = () => null,
+          snapshotLoginGateStatus = () => null,
           recordRuntimeDiagnostics = () => {
           }
         } = runtime;
@@ -4755,7 +4755,7 @@
                 reloadConfirmation: pendingExitSummaryReload
               });
             })(),
-            loginSnapshotGate: snapshotLoginGateStatus2(),
+            loginSnapshotGate: snapshotLoginGateStatus(),
             request: extra.request || null,
             leave: {
               attempted: Boolean(detail.attempted),
@@ -5194,7 +5194,7 @@
             coinDrops: arrayCount(bot.globalState.coinDrops),
             minimapPoints: bot.globalState.minimap?.points?.length || 0,
             error: bot.globalState.error || "",
-            loginSnapshotGate: snapshotLoginGateStatus2()
+            loginSnapshotGate: snapshotLoginGateStatus()
           };
         }
         function combatLogDecisionSummary(decision) {
@@ -5274,7 +5274,7 @@
             enemyHoldRemainingMs: enemyReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage2, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now }),
             offlineHoldUntil: Number(bot.offlineReloginUntil || 0),
             offlineHoldRemainingMs: offlineReloginHoldRemainingMsForCombatLogBoundCore(bot, localStorage2, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForCombatLogBoundCore(bot, localStorage2, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage2, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now }),
-            snapshotGate: snapshotLoginGateStatus2(),
+            snapshotGate: snapshotLoginGateStatus(),
             lastLoginAt: Number(bot.lastLoginAt || 0),
             lastLogin: combatLogLoginResultSummary(bot.lastLoginResult),
             decisionLogin: combatLogLoginResultSummary(decision?.login),
@@ -6356,10 +6356,10 @@
           activeEnemyLeaveDetail = () => null,
           activeOfflineLeaveDetail = () => null,
           exitMotionStopLockRemainingMs = () => 0,
-          unsafeExitReloginMinDelayMs: unsafeExitReloginMinDelayMs2 = () => 0,
+          unsafeExitReloginMinDelayMs = () => 0,
           getNativeControl = () => null,
           getNativeState = () => null,
-          getOwnEntity: getOwnEntity2 = () => null,
+          getOwnEntity = () => null,
           getSelf = () => null,
           summarizeSelf = (value) => value,
           summarizeControl = () => null,
@@ -6386,8 +6386,8 @@
           staminaBudgetReloginDelayMs = () => 0,
           staminaResetHoldUntil = () => 0,
           staminaBudgetCoinLeaveSummary = () => "",
-          staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2 = () => "",
-          reloginDelayForHpCore: reloginDelayForHpCore2 = () => 0
+          staminaExhaustedWindowLabel = () => "",
+          reloginDelayForHpCore = () => 0
         } = runtime;
         const localStorage2 = storage;
         const BOT_KEY = botKey;
@@ -6809,7 +6809,7 @@
             } : null
           };
         }
-        function recentUnsafeExitContext(detail, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs2()) {
+        function recentUnsafeExitContext(detail, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
           if (!detail || typeof detail !== "object") return null;
           const at = Number(
             detail.confirmedAt || detail.completedAt || detail.exitTriggeredAt || detail.leaveRequestSentAt || detail.at || 0
@@ -6835,7 +6835,7 @@
             at
           };
         }
-        function firstRecentUnsafeExitContext(details, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs2()) {
+        function firstRecentUnsafeExitContext(details, t = Date.now(), maxAgeMs = unsafeExitReloginMinDelayMs()) {
           for (const detail of Array.isArray(details) ? details : [details]) {
             const context = recentUnsafeExitContext(detail, t, maxAgeMs);
             if (context) return context;
@@ -6910,7 +6910,7 @@
             return null;
           }
         }
-        function clearSessionMismatchRecoveryState2(reason = "resolved") {
+        function clearSessionMismatchRecoveryState(reason = "resolved") {
           try {
             localStorage2.removeItem(SESSION_MISMATCH_RECOVERY_KEY);
           } catch (_) {
@@ -6933,7 +6933,7 @@
           const origin = pageTimeOriginMs();
           return Boolean(requestedAt && origin && origin >= requestedAt - 500);
         }
-        function sessionMismatchRecoveryReloadSatisfied2(control, noSelfExit, t = Date.now()) {
+        function sessionMismatchRecoveryReloadSatisfied(control, noSelfExit, t = Date.now()) {
           const state2 = readSessionMismatchRecoveryState(t);
           if (!sessionMismatchRecoveryStateMatches(state2, control, noSelfExit)) return null;
           if (!sessionMismatchRecoveryPageReloadedAfter(state2)) return null;
@@ -6972,16 +6972,16 @@
             suppressReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
           } catch (_) {
           }
-          const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs(t);
+          const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs(t);
           const enemyHoldRemainingMs = enemyReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage2, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, now: Date.now });
           const offlineHoldRemainingMs = offlineReloginHoldRemainingMsForControlLoginBoundCore(bot, localStorage2, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, readPersistentExitState, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, staleOfflineStaminaHoldContradicted, clearOfflineReloginHold: (reason) => clearOfflineReloginHoldForControlLoginBoundCore(bot, localStorage2, reason, { now: Date.now, writePersistentPendingExitState: (pending) => writePersistentPendingExitStateCore(localStorage2, PENDING_EXIT_STATE_KEY, pending || bot.pendingExit, Date.now(), pendingExitPersistenceCoreHelpers()), clearPersistentPendingExitState, clearPersistentExitState, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY }), now: Date.now });
-          const gate = snapshotLoginGateStatus2(t);
+          const gate = snapshotLoginGateStatus(t);
           const resetReason = String(gate?.resetReason || "");
           const exitGateReset = Boolean(
             !gate.satisfied && (resetReason.includes("exit-trigger:") || resetReason.includes("exit-confirmed:"))
           );
           const recentWindowMs = Math.max(
-            unsafeExitReloginMinDelayMs2(),
+            unsafeExitReloginMinDelayMs(),
             Number(cfg.loginCooldownMs || 0) || 0,
             6e4
           );
@@ -7003,7 +7003,7 @@
           if (reconnectChurn) blockedBy.push("native-reconnect-churn");
           if (wsOfflineish) blockedBy.push("ws-offlineish");
           if (bot.pendingExit) blockedBy.push("pending-exit-active");
-          if (exitMotionLockRemainingMs2 > 0) blockedBy.push("exit-motion-lock");
+          if (exitMotionLockRemainingMs > 0) blockedBy.push("exit-motion-lock");
           if (enemyHoldRemainingMs > 0) blockedBy.push("enemy-relogin-hold");
           if (offlineHoldRemainingMs > 0) blockedBy.push("offline-relogin-hold");
           if (suppressRemainingMs > 0) blockedBy.push("login-suppress-active");
@@ -7043,7 +7043,7 @@
             suppressReason,
             enemyHoldRemainingMs,
             offlineHoldRemainingMs,
-            exitMotionLockRemainingMs: exitMotionLockRemainingMs2,
+            exitMotionLockRemainingMs,
             snapshotGate: {
               satisfied: Boolean(gate.satisfied),
               streak: Number(gate.streak || 0),
@@ -7919,7 +7919,7 @@
           writeLoginPointSafetyState(state2);
           return loginPointSafetyStatus(t);
         }
-        function rememberLoginPointDamageThreat2(injury, reason = "self-damage") {
+        function rememberLoginPointDamageThreat(injury, reason = "self-damage") {
           const t = Date.now();
           const state2 = readLoginPointSafetyState(t);
           const candidates = [
@@ -7942,7 +7942,7 @@
           writeLoginPointSafetyState(state2);
           return state2;
         }
-        function maybeRecordLoginPoint2(currentSummary) {
+        function maybeRecordLoginPoint(currentSummary) {
           if (!currentSummary || !Number.isFinite(Number(currentSummary.x)) || !Number.isFinite(Number(currentSummary.y))) return null;
           const t = Date.now();
           const loginAt = inferLoginPointLoginAt(t);
@@ -7992,7 +7992,7 @@
           if (candidates.length) return Math.max(...candidates);
           return 0;
         }
-        function snapshotLoginGateStatus2(t = Date.now()) {
+        function snapshotLoginGateStatus(t = Date.now()) {
           const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
           const required = loginSnapshotSuccessRequiredCore();
           state2.required = required;
@@ -8026,7 +8026,7 @@
             resetReason: String(reason || "exit")
           };
           resetLoginPointSafetyGate(reason, exitSelfLike);
-          return snapshotLoginGateStatus2(t);
+          return snapshotLoginGateStatus(t);
         }
         function noteLoginSnapshotProbe(success, detail = {}) {
           const t = Date.now();
@@ -8049,15 +8049,15 @@
             ...detail,
             entities: Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities
           });
-          return snapshotLoginGateStatus2(t);
+          return snapshotLoginGateStatus(t);
         }
         function loginSnapshotGateAllowsLogin(gate) {
           if (!gate) return false;
           if (gate.satisfied) return true;
           return Boolean(gate.liveSessionTakeoverBypass && gate.pointSafety?.satisfied);
         }
-        function loginSnapshotGateBlockReason(gate = snapshotLoginGateStatus2()) {
-          const status = gate || snapshotLoginGateStatus2();
+        function loginSnapshotGateBlockReason(gate = snapshotLoginGateStatus()) {
+          const status = gate || snapshotLoginGateStatus();
           if (loginSnapshotGateAllowsLogin(status)) return "";
           const pointSafety = status.pointSafety || loginPointSafetyStatus();
           if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return "login-point-missing";
@@ -8065,7 +8065,7 @@
           return "snapshot-gate";
         }
         async function ensureLoginSnapshotGate(reason = "login", options = {}) {
-          let status = snapshotLoginGateStatus2();
+          let status = snapshotLoginGateStatus();
           if (status.satisfied) return status;
           const allowTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed);
           if (allowTakeoverBypass && status.pointSafety?.satisfied) {
@@ -8082,8 +8082,8 @@
           }
           return status;
         }
-        function loginSnapshotGateDisplayReason(snapshotGate = snapshotLoginGateStatus2()) {
-          const gate = snapshotGate || snapshotLoginGateStatus2();
+        function loginSnapshotGateDisplayReason(snapshotGate = snapshotLoginGateStatus()) {
+          const gate = snapshotGate || snapshotLoginGateStatus();
           if (gate.satisfied) return "";
           const pointSafety = gate.pointSafety || loginPointSafetyStatus();
           if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) {
@@ -8135,7 +8135,7 @@
             return;
           }
           if (manualLoginBypassActive()) return;
-          const gate = snapshotLoginGateStatus2();
+          const gate = snapshotLoginGateStatus();
           if (loginSnapshotGateAllowsLogin(gate)) return;
           const point = gate.pointSafety || loginPointSafetyStatus();
           if (!point?.hasPoint && !point?.missingPoint) return;
@@ -8182,7 +8182,7 @@
               if (typeof previous === "function") return previous.apply(this, args);
               return previous;
             }
-            const gate = snapshotLoginGateStatus2();
+            const gate = snapshotLoginGateStatus();
             if (!loginSnapshotGateAllowsLogin(gate)) {
               const point = gate.pointSafety || loginPointSafetyStatus();
               if (point?.hasPoint || point?.missingPoint) {
@@ -8294,7 +8294,7 @@
           });
         }
         function summarizeReloginGateStatus(t = Date.now()) {
-          const snapshotGate = snapshotLoginGateStatus2(t);
+          const snapshotGate = snapshotLoginGateStatus(t);
           const pointSafety = snapshotGate.pointSafety || loginPointSafetyStatus(t);
           const cooldowns = reloginCooldownCandidates(t);
           const cooldown = cooldowns[0] || {
@@ -8347,7 +8347,7 @@
             }
           };
         }
-        function clearExitHoldDetail2(detail, reason, t = Date.now()) {
+        function clearExitHoldDetail(detail, reason, t = Date.now()) {
           if (!detail || typeof detail !== "object") return null;
           const reloginUntil = Number(detail.reloginUntil || 0) || 0;
           const previousHoldRemainingMs = Math.max(0, Math.round(reloginUntil - t));
@@ -8401,11 +8401,11 @@
           bot.offlineReloginUntil = 0;
           bot.lastEnemyLeaveWaitMs = 0;
           bot.lastOfflineLeaveWaitMs = 0;
-          bot.lastEnemyLeaveResult = clearExitHoldDetail2(bot.lastEnemyLeaveResult, reason, t);
-          bot.lastPursuitLeaveResult = clearExitHoldDetail2(bot.lastPursuitLeaveResult, reason, t);
-          bot.lastCombatLeaveResult = clearExitHoldDetail2(bot.lastCombatLeaveResult, reason, t);
-          bot.lastInjuryLeaveResult = clearExitHoldDetail2(bot.lastInjuryLeaveResult, reason, t);
-          bot.lastOfflineLeaveResult = clearExitHoldDetail2(bot.lastOfflineLeaveResult, reason, t);
+          bot.lastEnemyLeaveResult = clearExitHoldDetail(bot.lastEnemyLeaveResult, reason, t);
+          bot.lastPursuitLeaveResult = clearExitHoldDetail(bot.lastPursuitLeaveResult, reason, t);
+          bot.lastCombatLeaveResult = clearExitHoldDetail(bot.lastCombatLeaveResult, reason, t);
+          bot.lastInjuryLeaveResult = clearExitHoldDetail(bot.lastInjuryLeaveResult, reason, t);
+          bot.lastOfflineLeaveResult = clearExitHoldDetail(bot.lastOfflineLeaveResult, reason, t);
           bot.pendingExit = null;
           clearPersistentPendingExitState();
           clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
@@ -8610,7 +8610,7 @@
           const userId = getCurrentUserId();
           if (!userId) return { known: true, alive: false, source: "no-current-user-id", self: null };
           try {
-            const nativeSelf = typeof getOwnEntity2 === "function" ? getOwnEntity2() : null;
+            const nativeSelf = typeof getOwnEntity === "function" ? getOwnEntity() : null;
             if (nativeSelf && Number(nativeSelf.user_id) === userId) {
               return { known: true, alive: Boolean(isAlive(nativeSelf)), source: "native-own", self: summarizeSelf(nativeSelf) };
             }
@@ -8689,10 +8689,10 @@
           let present = false;
           const sources = [];
           try {
-            if (typeof getOwnEntity2 === "function") {
+            if (typeof getOwnEntity === "function") {
               known = true;
               sources.push("native-own");
-              const nativeSelf = getOwnEntity2();
+              const nativeSelf = getOwnEntity();
               if (nativeSelf && Number(nativeSelf.user_id) === id && isAlive(nativeSelf)) present = true;
             }
           } catch (_) {
@@ -8989,9 +8989,9 @@
           if (bot.lastSafety) bot.lastSafety.pursuit = null;
           clearCombatEngagement("exit-confirmed");
           if (pending.scope === "offline") {
-            setOfflineLeaveSuppressBoundCore(bot, localStorage2, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore2(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage2, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason: (detail2) => finalizeLeaveDisplayReasonForPendingExitCore(detail2, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs)), writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });
+            setOfflineLeaveSuppressBoundCore(bot, localStorage2, detail.reason || "websocket offline", detail, detail.self || pending.self || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage2, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason: (detail2) => finalizeLeaveDisplayReasonForPendingExitCore(detail2, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs)), writePersistentExitState, setLoginSuppress, staminaBudgetReloginDelayMs, staminaResetHoldUntil, now: Date.now });
           } else {
-            setExitReloginSuppressBoundCore(bot, localStorage2, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore2(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage2, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason: (detail2) => finalizeLeaveDisplayReasonForPendingExitCore(detail2, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs)), writePersistentExitState, setLoginSuppress, now: Date.now });
+            setExitReloginSuppressBoundCore(bot, localStorage2, "enemy leave", detail.reason || "enemy leave", detail, detail.self || pending.self || detail.injury?.self || detail.injury || null, suppressOptions, { cfg, loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY, enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY, enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY, offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY, hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), clearLoginSuppressMatching: (pattern) => clearLoginSuppressMatchingBoundCore(localStorage2, pattern, { loginSuppressKey: LOGIN_SUPPRESS_KEY, loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY }), finalizeLeaveDisplayReason: (detail2) => finalizeLeaveDisplayReasonForPendingExitCore(detail2, (base, value) => leaveWaitDisplayForPendingExitCore(base, value, formatDurationMs)), writePersistentExitState, setLoginSuppress, now: Date.now });
             if (pending.source === "combat") bot.lastCombatLeaveResult = detail;
             if (pending.source === "pursuit") bot.lastPursuitLeaveResult = detail;
             if (pending.source === "injury") bot.lastInjuryLeaveResult = detail;
@@ -9850,7 +9850,7 @@
               error: "",
               hasToken: Boolean(getSessionToken()),
               currentUserId: getCurrentUserId(),
-              snapshotGate: snapshotLoginGateStatus2()
+              snapshotGate: snapshotLoginGateStatus()
             };
           }
           if (!cfg.autoLogin || cfg.dryRun || cfg.once) return null;
@@ -9870,7 +9870,7 @@
               hasNativeSession: false,
               nativeWsReadyState: getNativeControl()?.wsReadyState ?? null,
               currentUserId: getCurrentUserId(),
-              snapshotGate: snapshotLoginGateStatus2()
+              snapshotGate: snapshotLoginGateStatus()
             };
           }
           if (manualOverride && exitAuditFlushPending()) {
@@ -9900,7 +9900,7 @@
               hasNativeSession,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
-              snapshotGate: snapshotLoginGateStatus2(),
+              snapshotGate: snapshotLoginGateStatus(),
               liveSessionTakeover,
               self: hasAliveSelf ? summarizeSelf(self) : null
             } : null;
@@ -9920,7 +9920,7 @@
               hasNativeSession,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
-              snapshotGate: snapshotLoginGateStatus2(),
+              snapshotGate: snapshotLoginGateStatus(),
               liveSessionTakeover
             };
           }
@@ -9940,7 +9940,7 @@
               hasNativeSession,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
-              snapshotGate: snapshotLoginGateStatus2(),
+              snapshotGate: snapshotLoginGateStatus(),
               liveSessionTakeover
             };
           }
@@ -9956,12 +9956,12 @@
               hasNativeSession,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
-              snapshotGate: snapshotLoginGateStatus2(),
+              snapshotGate: snapshotLoginGateStatus(),
               liveSessionTakeover
             };
           }
           const snapshotGate = manualOverride ? {
-            ...snapshotLoginGateStatus2(),
+            ...snapshotLoginGateStatus(),
             blockReason: String(reason || "manual login"),
             manualLoginBypass: true
           } : await ensureLoginSnapshotGate(reason, {
@@ -10032,7 +10032,7 @@
         async function forceLoginNow(reason = "panel immediate login") {
           const manualReason = String(reason || "panel immediate login");
           const snapshotGate = {
-            ...snapshotLoginGateStatus2(),
+            ...snapshotLoginGateStatus(),
             blockReason: manualReason,
             manualLoginBypass: true
           };
@@ -10090,13 +10090,13 @@
           const skipped = pendingExitSkipNewLeave("offline", reason, {
             self: selfSummary,
             offlineSafety,
-            summary: offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2 })
+            summary: offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel })
           });
           if (skipped) return skipped;
           const retryMs = Math.max(200, Number(cfg.offlineLeaveRetryMs || cfg.combatLeaveRetryMs || 1e3));
           if (t - Number(bot.lastOfflineLeaveAt || 0) < retryMs) {
             const active = activeOfflineLeaveDetail(t);
-            const summary = offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2 });
+            const summary = offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel });
             const detail2 = {
               attempted: false,
               reason: "cooldown",
@@ -10116,7 +10116,7 @@
             userId: getCurrentUserId() || null,
             self: selfSummary,
             offlineSafety,
-            summary: offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2 }),
+            summary: offlineLeaveSummaryForLeaveFlowCore(reason, offlineSafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }),
             error: ""
           };
           startExitAuditBoundCore(detail, { scope: "offline", source: "offline", reason, self: selfSummary, offlineSafety }, bot, { resetLoginSnapshotGate, loginPointSafetyExitSelfForDetail, ensureExitAuditDetail, recordExitAuditEvent, now: Date.now });
@@ -10125,7 +10125,7 @@
           if (detail.attempted) {
             const staminaSuppress = primePendingStaminaExitLoginSuppressBoundCore(detail, { now: Date.now, staminaBudgetReloginDelayMs, staminaResetHoldUntil, setLoginSuppress });
             if (!staminaSuppress && offlineExitRequiresUnsafeReloginDelayCore(reason, offlineSafety)) {
-              primePendingUnsafeExitLoginSuppressBoundCore("offline leave", reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore2(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
+              primePendingUnsafeExitLoginSuppressBoundCore("offline leave", reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
             }
           }
           if (detail.attempted || detail.exitAuditId) {
@@ -10167,7 +10167,7 @@
           bot.lastInjuryLeaveAt = t;
           await issueLeaveCommand(detail);
           if (detail.attempted) {
-            primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, injury?.self || injury, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore2(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
+            primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, injury?.self || injury, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
           }
           if (detail.attempted || detail.exitAuditId) {
             rememberPendingExit("enemy", "injury", detail, injury?.self || injury);
@@ -10211,7 +10211,7 @@
           bot.lastPursuitLeaveAt = t;
           await issueLeaveCommand(detail);
           if (detail.attempted) {
-            primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore2(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
+            primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
           }
           if (detail.attempted || detail.exitAuditId) {
             rememberPendingExit("enemy", "pursuit", detail, selfSummary);
@@ -10264,7 +10264,7 @@
           bot.lastCombatLeaveAt = t;
           await issueLeaveCommand(detail);
           if (detail.attempted) {
-            primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore2(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
+            primePendingUnsafeExitLoginSuppressBoundCore("enemy leave", detail.reason, detail, selfSummary, {}, { hpInfoForRelogin, reloginDelayForHp: (selfLike, detail2) => reloginDelayForHpCore(selfLike, detail2, { cfg, hpInfoForRelogin, randomBetween, clamp }), cfg, setLoginSuppress, now: Date.now });
           }
           if (detail.attempted || detail.exitAuditId) {
             rememberPendingExit("enemy", "combat", detail, selfSummary);
@@ -10339,10 +10339,10 @@
           normalizeSessionMismatchRecoveryState,
           readSessionMismatchRecoveryState,
           writeSessionMismatchRecoveryState,
-          clearSessionMismatchRecoveryState: clearSessionMismatchRecoveryState2,
+          clearSessionMismatchRecoveryState,
           sessionMismatchRecoveryStateMatches,
           sessionMismatchRecoveryPageReloadedAfter,
-          sessionMismatchRecoveryReloadSatisfied: sessionMismatchRecoveryReloadSatisfied2,
+          sessionMismatchRecoveryReloadSatisfied,
           summarizeSessionMismatchRecoveryStatus,
           liveSessionMismatchTakeoverState,
           isVisible,
@@ -10407,10 +10407,10 @@
           noteLoginPointSafetyProbe,
           loginPointSafetyStatus,
           resetLoginPointSafetyGate,
-          rememberLoginPointDamageThreat: rememberLoginPointDamageThreat2,
-          maybeRecordLoginPoint: maybeRecordLoginPoint2,
+          rememberLoginPointDamageThreat,
+          maybeRecordLoginPoint,
           inferLoginPointLoginAt,
-          snapshotLoginGateStatus: snapshotLoginGateStatus2,
+          snapshotLoginGateStatus,
           resetLoginSnapshotGate,
           noteLoginSnapshotProbe,
           loginSnapshotGateAllowsLogin,
@@ -10425,7 +10425,7 @@
           installNativeLoginGateInterceptors,
           reloginCooldownCandidates,
           summarizeReloginGateStatus,
-          clearExitHoldDetail: clearExitHoldDetail2,
+          clearExitHoldDetail,
           clearCurrentReloginHold,
           randomBetween,
           hpInfoForRelogin,
@@ -10518,7 +10518,7 @@
           },
           getCurrentUserId = () => 0,
           getSessionToken = () => "",
-          getOwnEntity: getOwnEntity2 = () => null,
+          getOwnEntity = () => null,
           targetOverlayRenderEntities = () => [],
           runTickSafely = () => {
           },
@@ -10946,7 +10946,7 @@
         function getSelf() {
           const id = getCurrentUserId();
           if (!id) return null;
-          const nativeSelf = typeof getOwnEntity2 === "function" ? getOwnEntity2() : null;
+          const nativeSelf = typeof getOwnEntity === "function" ? getOwnEntity() : null;
           if (nativeSelf && Number(nativeSelf.user_id) === id) return nativeSelf;
           const nativeState = getNativeState();
           const nativeEntities = Array.isArray(nativeState?.entities) ? nativeState.entities : null;
@@ -13200,7 +13200,7 @@
           });
           const active = bot.importantLogging?.activeCombat;
           if (active && importantCombatMatchesKill(active, summary)) {
-            finishImportantCombat2("kill", { at: summary.at, kill: summary });
+            finishImportantCombat("kill", { at: summary.at, kill: summary });
           }
           return summary;
         }
@@ -13392,7 +13392,7 @@
           if (/flee|recover|retreat/.test(text)) return "retreated";
           return "disengaged";
         }
-        function finishImportantCombat2(reason = "ended", extra = {}) {
+        function finishImportantCombat(reason = "ended", extra = {}) {
           const record = bot.importantLogging?.activeCombat;
           if (!record) return null;
           const t = Number(extra.at || Date.now()) || Date.now();
@@ -13431,7 +13431,7 @@
           const active = bot.importantLogging?.activeCombat || null;
           if (sample) {
             if (active && active.enemyKey && sample.target?.key && active.enemyKey !== sample.target.key) {
-              finishImportantCombat2("target-switched", { at: sample.at });
+              finishImportantCombat("target-switched", { at: sample.at });
             }
             if (!bot.importantLogging.activeCombat) {
               if (sample.exitOnly) return;
@@ -13446,13 +13446,13 @@
           const ageMs = Math.max(0, Date.now() - Number(active.lastSampleAt || Date.now()));
           const postBufferMs = Math.max(1e3, Number(cfg.combatLogPostBufferMs || 1e4) || 1e4);
           if (reason && (importantCombatReasonIsNonCombatSafety(reason) || importantCombatReasonIsPostCombatObservation(reason))) {
-            if (ageMs >= postBufferMs) finishImportantCombat2("post-combat-timeout", { at: Date.now() });
+            if (ageMs >= postBufferMs) finishImportantCombat("post-combat-timeout", { at: Date.now() });
             return;
           }
           if (reason && /leave|exit|offline|pursuit|injury|stamina|login|no-self|not-alive|paused|cloudflare|control-ws|flee|recover/.test(reason)) {
-            finishImportantCombat2(reason, { at: Date.now() });
+            finishImportantCombat(reason, { at: Date.now() });
           } else if (ageMs >= postBufferMs) {
-            finishImportantCombat2("post-combat-timeout", { at: Date.now() });
+            finishImportantCombat("post-combat-timeout", { at: Date.now() });
           }
         }
         function summarizeImportantLoggingStatus() {
@@ -13817,7 +13817,7 @@
           updateImportantCombatRecord,
           importantCombatMatchesKill,
           importantCombatResult,
-          finishImportantCombat: finishImportantCombat2,
+          finishImportantCombat,
           recordImportantCombatTick,
           summarizeImportantLoggingStatus,
           attackPlayerCategory,
@@ -18201,7 +18201,7 @@
           staminaExhaustedThreshold = () => 0,
           combatMovementBlockedByStamina = () => false,
           staminaBudgetCoinLeaveSummary = () => "",
-          staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2 = () => "",
+          staminaExhaustedWindowLabel = () => "",
           isInvulnerable = () => false,
           isCurrentlyActive = () => false,
           isFiringEntity = () => false,
@@ -20195,7 +20195,7 @@
             visibilityState: document.visibilityState || ""
           };
         }
-        async function handleTickReentryCombatGap2(source = "timer") {
+        async function handleTickReentryCombatGap(source = "timer") {
           if (!cfg.combatTickGapOfflineEnabled) return null;
           const thresholdMs = Math.max(1e3, Number(cfg.combatTickGapOfflineMs || 0) || 0);
           if (!(thresholdMs > 0)) return null;
@@ -20243,7 +20243,7 @@
             leaveDelayMs: 0,
             offlineSafety,
             combatTickGap,
-            displayReason: currentOfflineDisplayReasonForCombatStateCore("combat tick gap", offlineSafety, leaveResult, offlineDetail, "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA", { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForCombatStateCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel: staminaExhaustedWindowLabel2 }) }),
+            displayReason: currentOfflineDisplayReasonForCombatStateCore("combat tick gap", offlineSafety, leaveResult, offlineDetail, "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6B63\u5728\u9000\u51FA", { offlineLeaveSummary: (summaryReason, summarySafety) => offlineLeaveSummaryForCombatStateCore(summaryReason, summarySafety, { staminaBudgetCoinLeaveSummary, staminaExhaustedWindowLabel }) }),
             leave: leaveResult,
             tickReentry: true
           };
@@ -21544,7 +21544,8 @@
           combatAimDynamicStrategyState,
           combatAimTarget,
           combatLeaveCoverAction,
-          buildCombatAction
+          buildCombatAction,
+          handleTickReentryCombatGap
         };
       }
       module.exports = {
@@ -21553,1399 +21554,235 @@
     }
   });
 
-  // src/browser/runtime-entry.js
-  var require_runtime_entry = __commonJS({
-    "src/browser/runtime-entry.js"(exports, module) {
+  // src/browser/runtime/orchestration-runtime.js
+  var require_orchestration_runtime = __commonJS({
+    "src/browser/runtime/orchestration-runtime.js"(exports, module) {
+      "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
-      var __graspRatRuntimeStartup = (() => {
-        const { createRuntimeShellContext } = require_runtime_shell();
-        const { createRuntimeBotState } = require_runtime_bot_state();
-        const runtimeShell = createRuntimeShellContext(define_GRASP_RAT_RUNTIME_CONFIG_default, {
-          storage: localStorage,
-          now: Date.now,
-          performanceNow: () => performance.now()
-        });
+      function createOrchestrationRuntime(runtime = {}) {
         const {
-          runtimeBootstrapBindings,
-          runtimeStateBindings,
-          botStatusCores
-        } = runtimeShell;
-        const {
-          pageGlobalObject,
-          resolvePageGlobal,
-          readPageGlobal,
-          installPageGlobal,
-          readPageLocalStorageJson,
-          pageGlobal,
-          baseConfig,
-          runtimeConfig,
-          config,
-          OPPORTUNITY_CONSTANTS,
           BOT_KEY,
-          PANEL_ID,
-          TARGET_OVERLAY_ID,
-          PAUSED_KEY,
-          PAUSE_REASON_KEY,
+          ENEMY_LEAVE_STATE_KEY,
           LOGIN_SUPPRESS_KEY,
           LOGIN_SUPPRESS_REASON_KEY,
-          LOGIN_POINT_SAFETY_KEY,
-          SESSION_MISMATCH_RECOVERY_KEY,
-          EXIT_AUDIT_PENDING_LOGS_KEY,
-          COMBAT_LOG_PENDING_ENTRIES_KEY,
-          IMPORTANT_LOGS_KEY,
-          PENDING_EXIT_STATE_KEY,
-          ENEMY_LEAVE_STREAK_KEY,
-          ENEMY_LEAVE_STATE_KEY,
           OFFLINE_LEAVE_STATE_KEY,
-          LAST_SELF_STATE_KEY,
-          CLOUDFLARE_RELOAD_KEY,
-          normalizeTargetWhitelistName,
-          parseTargetWhitelistNames,
-          deriveTargetWhitelistUrl,
-          staminaExhaustedLongWindows,
-          staminaEvidenceRemaining,
-          staminaHoldContradictedByStaminaEvidence,
-          previousBot,
-          preserved,
-          combatLogEndpointConfigured,
+          PENDING_EXIT_STATE_KEY,
+          activeCombatThreatWaitAction,
+          activeEnemyLeaveDetail,
+          activeOfflineLeaveDetail,
+          actorLabel,
+          applyCoinApproachLockUpdate,
+          applyCoinProgressAction,
+          applyFinalActionArbitration,
+          arrayCount,
+          assessActionSettlementStall,
+          assessOfflineSafety,
+          assessServerPositionStall,
+          attachCoinDiagnostics,
+          attachOpportunisticShot,
+          attackWorthTakingCore,
+          bot,
+          buildCoinAction,
+          buildCoinDiagnostics,
+          buildCombatAction,
+          buildDropMatchedKillCore,
+          buildEnemyAction,
+          buildMissingHeldOpportunityCore,
+          buildNativeCoinSnapshotCore,
+          buildNativeEntityMeta,
+          buildOpportunisticShotWait,
+          buildPostAttackDropWaitAction,
+          canPrioritizeHighValueVisibleCoin,
           cfg,
-          targetWhitelistUrl,
-          preservedTargetWhitelistUrl,
-          preservedTargetWhitelistMatchesUrl,
-          preservedTargetWhitelistNames,
-          targetWhitelistState
-        } = runtimeBootstrapBindings;
-        const {
-          readPersistentLastSelfState,
-          writePersistentLastSelfState,
-          refreshExitDetail,
-          readPersistentExitState,
-          writePersistentExitState,
+          chooseStableOpportunityCore,
+          clearCoinTracking,
+          clearCombatEngagement,
+          clearExitHoldDetail,
+          clearMissingVisibleCoinTarget,
           clearPersistentExitState,
           clearPersistentPendingExitState,
-          pendingExitRetryCoreOptionsForPersistence,
-          pendingExitPersistenceCoreHelpers,
-          normalizePendingExitReloadConfirmationCore,
-          writePersistentPendingExitStateCore,
-          restoredRuntimeState,
-          restoredFailures,
-          restoredEnemyLeaveState,
-          restoredOfflineLeaveState,
-          restoredPendingExitState,
-          initialPendingExitState,
-          loginSnapshotSuccessRequiredCore,
-          normalizeLoginSnapshotGateStateCore,
-          recordRuntimeDiagnosticsCore
-        } = runtimeStateBindings;
-        const {
-          postExitDecisionWithoutTargetForStatusCore,
-          readEnemyLeaveStreakBoundCore,
-          pendingExitRetryMsForBotObjectCore,
-          summarizePendingExitForBotObjectCore
-        } = botStatusCores;
-        const bot = {
-          ...createRuntimeBotState({
-            cfg,
-            config,
-            preserved,
-            previousBot,
-            targetWhitelistState,
-            initialPendingExitState,
-            restoredEnemyLeaveState,
-            restoredOfflineLeaveState,
-            restoredFailures,
-            readPersistentLastSelfState,
-            readPageGlobal,
-            pageGlobal,
-            normalizeLoginSnapshotGateStateCore,
-            loginSnapshotSuccessRequiredCore,
-            performanceNow: () => performance.now()
-          }),
-          stop(reason = "manual") {
-            this.running = false;
-            this.stopReason = reason;
-            if (this.velocityStopTimer) clearTimeout(this.velocityStopTimer);
-            this.velocityStopTimer = 0;
-            this.velocityPulseToken += 1;
-            stopMotionSafely("stop");
-            detachNativeMessagePump();
-            closeControlWs(reason);
-            if (this.timer) clearInterval(this.timer);
-            this.timer = 0;
-            if (this.targetWhitelist?.timer) clearInterval(this.targetWhitelist.timer);
-            if (this.targetWhitelist) this.targetWhitelist.timer = 0;
-            try {
-              if (!String(reason || "").startsWith("replaced by ")) flushCombatLogs(true);
-            } catch (_) {
-            }
-            logStatus("stopped: " + reason);
-            if (readPageGlobal(BOT_KEY, null, pageGlobal) === this) {
-              removeBotPanel();
-              removeTargetOverlay();
-            }
-          },
-          setPaused(paused, reason = "external") {
-            const next = Boolean(paused);
-            const previousReason = this.pauseReason || "";
-            const changed = this.paused !== next;
-            this.paused = next;
-            this.pauseReason = next ? String(reason || "manual") : "";
-            const reasonChanged = previousReason !== this.pauseReason;
-            if (changed) this.pauseChangedAt = Date.now();
-            installPageGlobal("__graspRatBotPaused", next, pageGlobal);
-            installPageGlobal("__graspRatBotPauseReason", this.pauseReason, pageGlobal);
-            try {
-              localStorage.setItem(PAUSED_KEY, next ? "true" : "false");
-              if (next) localStorage.setItem(PAUSE_REASON_KEY, this.pauseReason || "manual");
-              else localStorage.removeItem(PAUSE_REASON_KEY);
-            } catch (_) {
-            }
-            if (changed && next) {
-              stopMotionSafely("paused");
-              removeTargetOverlay();
-            }
-            if (next) {
-              this.lastDecision = {
-                kind: "idle",
-                reason: "paused",
-                dx: 0,
-                dy: 0,
-                self: this.lastSelf,
-                paused: true,
-                pauseReason: this.pauseReason || "manual"
-              };
-              renderTargetOverlay(this.lastDecision);
-            }
-            return this.status();
-          },
-          forceLoginNow(reason = "panel immediate login") {
-            return forceLoginNow(reason);
-          },
-          configureCombatLogging(options = {}) {
-            return configureCombatLogging(options);
-          },
-          configureClashLeaveRescue(options = {}) {
-            if (Object.prototype.hasOwnProperty.call(options || {}, "enabled")) {
-              cfg.clashLeaveRescueEnabled = Boolean(options.enabled);
-            }
-            if (Object.prototype.hasOwnProperty.call(options || {}, "timeoutMs")) {
-              cfg.clashLeaveRescueTimeoutMs = Math.max(1e3, Number(options.timeoutMs || cfg.clashLeaveRescueTimeoutMs || 9e3) || 9e3);
-            }
-            this.clashLeaveRescue.enabled = Boolean(cfg.clashLeaveRescueEnabled);
-            return {
-              enabled: Boolean(cfg.clashLeaveRescueEnabled),
-              timeoutMs: Math.max(1e3, Number(cfg.clashLeaveRescueTimeoutMs || 9e3) || 9e3),
-              lastResult: this.clashLeaveRescue.lastResult || null
-            };
-          },
-          step(source = "external") {
-            return tick(source);
-          },
-          status() {
-            try {
-              if (!this.ticking) syncPausedFromPage2(false);
-            } catch (_) {
-            }
-            if (this.running && !this.ticking && this.lastTickAt && Date.now() - this.lastTickAt > Math.max(3e3, cfg.tickMs * 10)) {
-              triggerNativeTick("status-watchdog", false);
-            }
-            const self = getSelf();
-            const currentSelfSummary = self ? summarizeSelf(self) : null;
-            const displaySelf = currentSelfSummary || this.lastSelf;
-            if (self) updateKillHistory(self);
-            updateSessionStats(currentSelfSummary);
-            const session = summarizeSessionStats(displaySelf);
-            const todaySession = summarizeTodaySessionStats(session, displaySelf);
-            const enemyLeaveDetail = activeEnemyLeaveDetail();
-            const offlineLeaveDetail = activeOfflineLeaveDetail();
-            const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs();
-            const displayLastDecision = exitMotionLockRemainingMs2 > 0 ? postExitDecisionWithoutTargetForStatusCore(this.lastDecision, this.lastExitMotionStopReason || "exit-motion-stopped", { lastExitMotionStopReason: this.lastExitMotionStopReason, exitMotionLockRemainingMs: exitMotionLockRemainingMs2 }) : this.lastDecision;
-            return {
-              version: cfg.version,
-              sourceHash: cfg.sourceHash,
-              sourceUrl: cfg.sourceUrl,
-              injectedBy: cfg.injectedBy,
-              running: this.running,
-              paused: Boolean(this.paused),
-              pauseReason: this.pauseReason || "",
-              pauseChangedAt: this.pauseChangedAt || 0,
-              ticking: Boolean(this.ticking),
-              timerActive: Boolean(this.timer),
-              dryRun: cfg.dryRun,
-              starting: Boolean(this.starting),
-              tickCount: this.tickCount,
-              uptimeMs: Date.now() - this.startedAt,
-              lastTickAt: this.lastTickAt,
-              lastTickAgeMs: this.lastTickAt ? Date.now() - this.lastTickAt : null,
-              lastTickGapMs: this.lastTickGapMs,
-              lastTickSource: this.lastTickSource || "",
-              lastTickCompletedAt: this.lastTickCompletedAt || 0,
-              lastTickCombatActive: Boolean(this.lastTickCombatActive),
-              combatTickGap: this.lastCombatTickGap || null,
-              lastTickReentryGapAt: this.lastTickReentryGapAt || 0,
-              lastNativeTickAgeMs: this.lastNativeTickAt ? now() - this.lastNativeTickAt : null,
-              lastAction: this.lastAction,
-              lastDecision: displayLastDecision,
-              lastTarget: this.lastTarget,
-              combatTarget: this.combatTarget,
-              combatAim: this.combatAim,
-              networkQuality: summarizeNetworkQuality(),
-              targetWhitelist: summarizeTargetWhitelistStatus(),
-              combatLogging: summarizeCombatLoggingStatus(),
-              importantLogging: summarizeImportantLoggingStatus(),
-              exitAudit: {
-                pending: unresolvedExitAuditLogCount(),
-                pendingIds: pendingExitAuditLogIds().slice(0, 12),
-                restored: Number(this.exitAudit?.restored || 0),
-                lastEvent: this.exitAudit?.lastEvent || null,
-                lastBlockedReload: this.exitAudit?.lastBlockedReload || null,
-                lastBlockedLogin: this.exitAudit?.lastBlockedLogin || null
-              },
-              opportunityChoice: this.opportunityChoice,
-              opportunitySwitchLock: this.opportunitySwitchLock,
-              leave403SnapshotRecovery: this.leave403SnapshotRecovery,
-              clashLeaveRescue: {
-                enabled: Boolean(cfg.clashLeaveRescueEnabled),
-                running: Boolean(this.clashLeaveRescue?.running),
-                lastAt: Number(this.clashLeaveRescue?.lastAt || 0) || 0,
-                lastAgeMs: this.clashLeaveRescue?.lastAt ? Math.max(0, Math.round(Date.now() - Number(this.clashLeaveRescue.lastAt || Date.now()))) : null,
-                lastStage: this.clashLeaveRescue?.lastStage || "",
-                lastResult: this.clashLeaveRescue?.lastResult || null,
-                attempts: Array.isArray(this.clashLeaveRescue?.attempts) ? this.clashLeaveRescue.attempts.slice(-8) : []
-              },
-              sessionMismatchRecovery: summarizeSessionMismatchRecoveryStatus(),
-              loginSnapshotGate: snapshotLoginGateStatus(),
-              reloginGate: summarizeReloginGateStatus(),
-              postLoginZoom: this.postLoginZoom,
-              exitMotionStop: {
-                at: this.lastExitMotionStopAt || 0,
-                reason: this.lastExitMotionStopReason || "",
-                lockRemainingMs: exitMotionLockRemainingMs2
-              },
-              self: displaySelf,
-              lastSelf: displaySelf,
-              session,
-              todaySession,
-              safety: this.lastSafety,
-              attackHistory: this.attackHistory.slice(-10),
-              killHistory: this.killHistory.slice(-10),
-              coinProgress: this.coinProgress,
-              lastCoinCollected: this.lastCoinCollected,
-              coinAttempts: Array.from(this.coinAttempts.values()).slice(-8).map((item) => ({
-                id: item.id,
-                bestDistance: Math.round(item.bestDistance),
-                lastDistance: Math.round(item.lastDistance),
-                closeAgeMs: item.closeStartedAt ? Math.max(0, Math.round(now() - item.closeStartedAt)) : 0,
-                lastSeenAgeMs: item.lastSeenAt ? Math.max(0, Math.round(now() - item.lastSeenAt)) : 0
-              })),
-              ignoredCoins: Array.from(this.ignoredCoins.entries()).map(([id, until]) => ({
-                id,
-                remainingMs: Math.max(0, Math.round(until - now()))
-              })),
-              coinFailures: Array.from(this.coinFailures.entries()).slice(-8).map(([id, item]) => ({
-                id,
-                count: Number(item.count || 0),
-                reason: item.reason || "",
-                remainingMs: Math.max(0, Math.round(Number(item.ignoreUntil || 0) - now()))
-              })),
-              snapshotCoinWait: {
-                since: this.snapshotCoinWaitSince || 0,
-                ageMs: Math.max(0, Math.round(Number(this.lastSnapshotCoinWaitAgeMs || 0))),
-                maxMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0))),
-                remainingMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0) - Number(this.lastSnapshotCoinWaitAgeMs || 0)))
-              },
-              coinSources: this.lastCoinSourceSummary,
-              coinDiagnostics: this.coinDiagnostics,
-              targetSwitchDiagnostics: this.targetSwitchDiagnostics,
-              finalActionArbitration: this.finalActionArbitration,
-              globalState: {
-                refreshedAt: this.globalState.refreshedAt,
-                snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
-                snapshotAgeMs: this.globalState.snapshotRefreshedAt ? Date.now() - this.globalState.snapshotRefreshedAt : null,
-                tick: this.globalState.tick,
-                entities: arrayCount(this.globalState.entities),
-                bullets: arrayCount(this.globalState.bullets),
-                coinDrops: arrayCount(this.globalState.coinDrops),
-                minimapPoints: this.globalState.minimap?.points?.length || 0,
-                error: this.globalState.error,
-                samplingOutage: this.globalState.samplingOutage || null,
-                loginSnapshotGate: snapshotLoginGateStatus()
-              },
-              control: summarizeControl(),
-              serverPositionStall: summarizeServerPositionStall(),
-              actionSettlementStall: summarizeActionSettlementStall(),
-              login: {
-                lastAt: this.lastLoginAt || 0,
-                lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
-                lastResult: this.lastLoginResult
-              },
-              pendingExit: (() => {
-                const pendingExitSummaryPending = this.pendingExit;
-                if (!pendingExitSummaryPending) return null;
-                const pendingExitSummaryNow = Date.now();
-                const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
-                return summarizePendingExitForBotObjectCore(pendingExitSummaryPending, {
-                  nowMs: pendingExitSummaryNow,
-                  retryMs: pendingExitRetryMsForBotObjectCore(pendingExitSummaryPending, {
-                    leaveRetryMinMs: cfg.leaveRetryMinMs,
-                    leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
-                    offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
-                    combatLeaveRetryMs: cfg.combatLeaveRetryMs,
-                    pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
-                  }),
-                  reloadConfirmation: pendingExitSummaryReload
-                });
-              })(),
-              offlineLeave: {
-                lastAt: this.lastOfflineLeaveAt || 0,
-                lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
-                holdUntil: this.offlineReloginUntil || 0,
-                holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.offlineReloginUntil || 0) - Date.now())),
-                safety: this.lastOfflineSafety,
-                summary: offlineLeaveDetail?.summary || "",
-                displayReason: offlineLeaveDetail?.displayReason || "",
-                lastWaitMs: this.lastOfflineLeaveWaitMs || offlineLeaveDetail?.reloginDelayMs || offlineLeaveDetail?.holdRemainingMs || 0,
-                lastResult: this.lastOfflineLeaveResult
-              },
-              pursuit: summarizePursuit(this.pursuit),
-              pursuitLeave: {
-                lastAt: this.lastPursuitLeaveAt || 0,
-                lastAgeMs: this.lastPursuitLeaveAt ? Date.now() - this.lastPursuitLeaveAt : null,
-                holdUntil: this.pursuitReloginUntil || 0,
-                holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
-                lastResult: this.lastPursuitLeaveResult
-              },
-              enemyLeave: {
-                holdUntil: this.pursuitReloginUntil || 0,
-                holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
-                reason: enemyLeaveDetail?.reason || this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || "",
-                summary: enemyLeaveDetail?.summary || latestEnemyLeaveSummary(),
-                displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
-                streak: readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY }),
-                lastWaitMs: this.lastEnemyLeaveWaitMs || enemyLeaveDetail?.reloginDelayMs || enemyLeaveDetail?.holdRemainingMs || 0,
-                enemyActor: enemyLeaveDetail?.enemyActor || null,
-                reloginRepeatCount: enemyLeaveDetail?.reloginRepeatCount || enemyLeaveDetail?.enemyLeaveStreak?.count || 0,
-                lastInjuryResult: this.lastInjuryLeaveResult,
-                lastPursuitResult: this.lastPursuitLeaveResult,
-                lastCombatResult: this.lastCombatLeaveResult,
-                lastRetryResult: this.lastEnemyLeaveRetryResult
-              },
-              combatLeave: {
-                lastAt: this.lastCombatLeaveAt || 0,
-                lastAgeMs: this.lastCombatLeaveAt ? Date.now() - this.lastCombatLeaveAt : null,
-                lastResult: this.lastCombatLeaveResult,
-                pending: summarizePendingCombatLeave(this.pendingCombatLeave)
-              },
-              stopReason: this.stopReason,
-              errors: this.errors.slice(-5)
-            };
-          }
-        };
-        const hypot = Math.hypot;
-        const now = () => performance.now();
-        const dist = (a, b) => hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
-        const speed = (e) => hypot(Number(e.vx) || 0, Number(e.vy) || 0);
-        const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-        const isAlive = (e) => e && e.life !== "Dead" && e.life !== "WaitingRevive" && !e.waiting_revive;
-        const dropValue = (e) => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
-        const truthyFlag = (value) => value === true || value === 1 || value === "1" || value === "true";
-        const anyPositiveNumber = (...values) => values.some((value) => Number(value) > 0);
-        const isInvulnerable = (e) => anyPositiveNumber(
-          e?.invulnerable_remaining_ticks,
-          e?.invincible_remaining_ticks,
-          e?.invulnerability_remaining_ticks,
-          e?.invulnerableTicks,
-          e?.invulnerableRemainingTicks,
-          e?.invincibleRemainingTicks,
-          e?.invulnerabilityRemainingTicks,
-          e?.invulnerable_ticks,
-          e?.invincible_ticks,
-          e?.invulnerability_ticks,
-          e?.invulnerable_remaining_ms,
-          e?.invincible_remaining_ms,
-          e?.invulnerability_remaining_ms,
-          e?.invulnerableRemainingMs,
-          e?.invincibleRemainingMs,
-          e?.invulnerabilityRemainingMs,
-          e?.invulnerable_ms,
-          e?.invincible_ms,
-          e?.invulnerability_ms,
-          e?.immune_remaining_ms,
-          e?.immuneRemainingMs,
-          e?.invulnerable_remaining,
-          e?.invincible_remaining,
-          e?.invulnerability_remaining,
-          e?.invulnerableRemaining,
-          e?.invincibleRemaining,
-          e?.invulnerabilityRemaining
-        ) || truthyFlag(e?.invulnerable) || truthyFlag(e?.is_invulnerable) || truthyFlag(e?.isInvulnerable) || truthyFlag(e?.immune) || truthyFlag(e?.is_immune);
-        const isJoinModeActive = (e) => e?.current_join_mode === "Active" || e?.mode === "Active";
-        const isInvulnerableActive = (e) => isJoinModeActive(e) && isInvulnerable(e);
-        const staminaRemaining = (e, windowName) => {
-          const value = Number(e?.["stamina_" + windowName + "_remaining_milli"] ?? NaN);
-          return Number.isFinite(value) ? value : null;
-        };
-        const staminaLimitValue = (e, windowName, fallback) => {
-          const value = Number(e?.["stamina_" + windowName + "_limit_milli"] ?? fallback);
-          return Number.isFinite(value) && value > 0 ? value : fallback;
-        };
-        const staminaExhaustedThreshold = () => Math.max(0, Number(cfg.staminaExhaustedThresholdMs ?? 1e3));
-        const isStaminaWindowExhausted = (e, windowName) => {
-          const value = staminaRemaining(e, windowName);
-          return value !== null && value < staminaExhaustedThreshold();
-        };
-        const combatMovementBlockedByStamina = (self) => isStaminaWindowExhausted(self, "5s");
-        const hasLongWindowStamina = (e) => !isStaminaWindowExhausted(e, "1h") && !isStaminaWindowExhausted(e, "1d");
-        const hasMoveStamina = (e) => Number(e?.stamina_5s_remaining_milli || 0) > 250 && hasLongWindowStamina(e);
-        const hasAttackStamina = (e) => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina && hasLongWindowStamina(e);
-        const staminaLimit = (e) => Number(e?.stamina_5s_limit_milli || 1e4);
-        const hasFullStamina = (e) => {
-          const limit = staminaLimit(e);
-          const stamina = Number(e?.stamina_5s_remaining_milli ?? NaN);
-          return Number.isFinite(stamina) && limit > 0 && stamina >= limit * cfg.staminaFullRatio;
-        };
-        const isFiringEntity = (e) => truthyFlag(e?.shooting) || truthyFlag(e?.is_shooting) || truthyFlag(e?.isShooting) || truthyFlag(e?.firing) || truthyFlag(e?.is_firing) || truthyFlag(e?.attacking) || truthyFlag(e?.is_attacking);
-        const isMovingThreat = (e) => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
-        const isCurrentlyActive = (e) => isMovingThreat(e) || isFiringEntity(e) || isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e));
-        const hasCombatActivitySignal = (e) => isCurrentlyActive(e) || truthyFlag(e?.active) || truthyFlag(e?.currentlyActive) || truthyFlag(e?.combat) || truthyFlag(e?.engagedCombat) || String(e?.combatIntent || "") === "engaged";
-        function entityRecentActivityAgeMs(e) {
-          const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
-          return Number.isFinite(value) && value >= 0 ? value : null;
-        }
-        function recentlyActionedForAfk(e) {
-          const cooldownMs = Math.max(0, Number(cfg.afkRecentActivityCooldownMs || 0) || 0);
-          if (!(cooldownMs > 0)) return false;
-          const ageMs = entityRecentActivityAgeMs(e);
-          return Boolean(e?.recentlyActive || ageMs !== null && ageMs <= cooldownMs);
-        }
-        function isIdleInvulnerableTarget(e) {
-          return Boolean(isInvulnerable(e) && !isMovingThreat(e) && !isFiringEntity(e) && hasFullStamina(e) && !recentlyActionedForAfk(e));
-        }
-        const isAvoidanceThreat = (e) => isInvulnerable(e) && !isIdleInvulnerableTarget(e);
-        const isAfkTarget = (e) => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
-        const isAfkProfitTarget = (e) => !recentlyActionedForAfk(e) && (isAfkTarget(e) || isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
-        const { createTargetWhitelistRuntime } = require_target_whitelist2();
-        const {
-          isWhitelistedTarget,
-          summarizeTargetWhitelistStatus,
-          refreshTargetWhitelist,
-          startTargetWhitelistPolling
-        } = createTargetWhitelistRuntime({
-          bot,
-          cfg,
-          targetWhitelistState,
-          fetchJsonNoStore: (...args) => fetchJsonNoStore(...args),
-          recordUnhandledTickError: (...args) => recordUnhandledTickError(...args),
-          locationHref: () => location.href,
-          now: Date.now,
-          setInterval
-        });
-        const hpValue = (e) => Number(e?.hp ?? 0) || 0;
-        const combatHpValue = (e) => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
-        const knownHpValue = (e) => {
-          if (e && Object.prototype.hasOwnProperty.call(e, "knownHp")) {
-            return Number.isFinite(Number(e.knownHp)) ? Number(e.knownHp) : null;
-          }
-          return e?.hp !== void 0 && e?.hp !== null && Number.isFinite(Number(e.hp)) ? Number(e.hp) : null;
-        };
-        const maxHpValue = (e) => Number(e?.max_hp ?? e?.maxHp ?? 0) || 0;
-        const isFullHp = (self) => {
-          const hp = hpValue(self);
-          const maxHp = maxHpValue(self);
-          if (maxHp > 0) return hp >= maxHp;
-          return hp >= 100;
-        };
-        const decorateActiveThreat = (self, e) => {
-          const moving = isMovingThreat(e);
-          return {
-            ...e,
-            distance: dist(self, e),
-            drop: dropValue(e),
-            speed: speed(e),
-            moving,
-            threatRadius: moving ? cfg.dangerRadius : cfg.stationaryActiveDangerRadius,
-            cautionRadius: moving ? cfg.activeCautionRadius : cfg.stationaryActiveCautionRadius,
-            coinDangerRadius: moving ? cfg.coinDangerRadius : cfg.stationaryActiveCoinDangerRadius
-          };
-        };
-        const isRecovering = (self) => {
-          if (!self) return false;
-          const maxHp = maxHpValue(self);
-          if (maxHp > 0) return hpValue(self) < maxHp;
-          return hpValue(self) < cfg.recoverHpThreshold;
-        };
-        const isConservingStamina = (self) => {
-          const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
-          return stamina < cfg.conserveStaminaThreshold;
-        };
-        const { createStaminaStatusRuntime } = require_stamina_status();
-        const {
-          summarizeStamina,
-          dailyStaminaWindowStartAt,
-          nextDailyStaminaResetAt,
-          staminaBudgetReloginDelayMs,
-          staminaResetHoldUntil,
-          longStaminaHoldContradictedByKnownStamina,
-          startupStaminaSampleLooksUnsettled,
-          deferredStaminaExhaustionLeave,
-          staleOfflineStaminaHoldContradicted
-        } = createStaminaStatusRuntime({
-          bot,
-          cfg,
-          staminaRemaining,
-          staminaLimitValue,
-          staminaExhaustedThreshold,
-          staminaExhaustedLongWindows,
-          staminaHoldContradictedByStaminaEvidence
-        });
-        const { attackWorthTakingCore } = require_attack_worth2();
-        const {
-          exitMotionStopLockRemainingMsCore,
-          postExitDecisionWithoutTargetCore
-        } = require_exit_motion2();
-        function exitMotionStopLockRemainingMs(t = Date.now()) {
-          return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
-        }
-        function clearPostExitTargetState(reason = "exit-confirmed") {
-          bot.lastTarget = null;
-          bot.lastTargetAt = 0;
-          bot.opportunityChoice = null;
-          resetOpportunitySwitchLock();
-          bot.staleCoinEscape = null;
-          bot.coinApproachLock = null;
-          removeTargetOverlay();
-          if (bot.lastDecision && typeof bot.lastDecision === "object") {
-            bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
-              lastExitMotionStopReason: bot.lastExitMotionStopReason,
-              exitMotionLockRemainingMs
-            });
-            try {
-              updateBotPanel(bot.lastDecision);
-            } catch (_) {
-            }
-          }
-        }
-        const { createTargetOverlayRuntime } = require_target_overlay();
-        const {
-          removeTargetOverlay,
-          renderTargetOverlay
-        } = createTargetOverlayRuntime({
-          bot,
-          cfg,
-          targetOverlayId: TARGET_OVERLAY_ID,
-          loginPointSafetyKey: LOGIN_POINT_SAFETY_KEY,
-          storage: localStorage,
-          exitMotionStopLockRemainingMs,
-          getNativeState: () => getNativeState(),
-          getSelf: () => getSelf(),
-          getCurrentUserId: () => getCurrentUserId(),
-          getNativeCoinList: () => getNativeCoinList(),
-          normalizeCoinDrop: (...args) => normalizeCoinDrop(...args),
-          getNativeEntityList: () => getNativeEntityList(),
-          getEntities: () => getEntities(),
-          firstFiniteNumber: (...args) => firstFiniteNumber(...args),
-          dist,
-          isAlive,
-          loginPointSafetyStatus: () => loginPointSafetyStatus()
-        });
-        const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require_display_format2();
-        function activeEnemyLeaveDetail(t = Date.now()) {
-          const current = latestEnemyLeaveResult();
-          const restored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
-          const picked = current || restored || bot.lastEnemyLeaveResult || null;
-          if (!picked) return null;
-          const refreshed = refreshExitDetail(picked, t);
-          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
-            clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-            if (bot.lastEnemyLeaveResult === picked) bot.lastEnemyLeaveResult = null;
-            return null;
-          }
-          bot.lastEnemyLeaveResult = refreshed;
-          if (Number(refreshed?.reloginUntil || 0) > 0) bot.pursuitReloginUntil = Math.max(Number(bot.pursuitReloginUntil || 0), Number(refreshed.reloginUntil));
-          return refreshed;
-        }
-        function activeOfflineLeaveDetail(t = Date.now()) {
-          const picked = bot.lastOfflineLeaveResult || readPersistentExitState(OFFLINE_LEAVE_STATE_KEY, t);
-          if (!picked) return null;
-          const refreshed = refreshExitDetail(picked, t);
-          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
-            clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-            if (bot.lastOfflineLeaveResult === picked) bot.lastOfflineLeaveResult = null;
-            return null;
-          }
-          bot.lastOfflineLeaveResult = refreshed;
-          if (Number(refreshed?.reloginUntil || 0) > 0) bot.offlineReloginUntil = Math.max(Number(bot.offlineReloginUntil || 0), Number(refreshed.reloginUntil));
-          return refreshed;
-        }
-        function latestEnemyLeaveResult() {
-          const candidates = [
-            { at: Number(bot.lastEnemyLeaveResult?.at || 0), result: bot.lastEnemyLeaveResult },
-            { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
-            { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
-            { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
-          ].filter((item) => item.result);
-          return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
-        }
-        function latestEnemyLeaveSummary() {
-          const result = latestEnemyLeaveResult();
-          return result?.summary || result?.exitSummary || result?.enemyLeaveSummary || result?.displayReason || "";
-        }
-        function latestEnemyLeaveDisplayReason() {
-          const result = latestEnemyLeaveResult();
-          return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || "";
-        }
-        const { createStatusPanelRuntime } = require_status_panel();
-        const {
-          removeBotPanel,
-          updateBotPanel
-        } = createStatusPanelRuntime({
-          bot,
-          cfg,
-          panelId: PANEL_ID,
-          renderTargetOverlay,
-          dropValue,
-          summarizeControl: () => summarizeControl(),
-          summarizePursuit: (...args) => summarizePursuit(...args)
-        });
-        function logStatus(text, detail) {
-          bot.lastAction = text;
-          if (detail) bot.lastDecision = detail;
-          if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: "wait", reason: text, self: bot.lastSelf });
-          if (typeof log === "function") log("[bot] " + text, "info");
-          console.log("[grasp-rat-bot]", text, detail || "");
-        }
-        const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
-        const { arrayCount } = require_array_count();
-        let rememberCombatEngagement;
-        let clearCombatEngagement;
-        let summarizeOfflineThreat;
-        let assessOfflineSafety;
-        let pickActiveCombatWaitThreat;
-        let activeCombatThreatWaitAction;
-        let recentCombatInjuryActive;
-        let lowValueActiveDropMax;
-        let isLowValueActiveCombatTarget;
-        let proactiveActiveKillStaminaBudgetMs;
-        let proactiveActiveCombatStaminaAffordable;
-        let activeCombatBudgetBlocked;
-        let activeCombatRequiresThreatEvidence;
-        let incomingOwnerMatchesTarget;
-        let activeCombatThreatensSelf;
-        let lowValueActiveThreatensSelf;
-        let combatDodgeThreatRange;
-        let combatTargetPriority;
-        let isDefensiveCombatTarget;
-        let isProfitableCombatTarget;
-        let combatHpGapDisadvantaged;
-        let profitCombatDisadvantaged;
-        let pickCombatTarget;
-        let combatEngageGraceRange;
-        let combatTargetCandidateRange;
-        let combatDodgeOnlyCandidateRange;
-        let combatEngagedCandidate;
-        let pickEngagedCombatTarget;
-        let defensiveTargetOverridesEngaged;
-        let incomingBulletRequiresTargetSwitch;
-        let pickOpportunisticShotTarget;
-        let actionOpportunityScore;
-        let opportunisticShotBeatsAction;
-        let attachOpportunisticShot;
-        let buildOpportunisticShotWait;
-        let combatMoveVelocityForDirection;
-        let combatBulletThreats;
-        let incomingBulletThreat;
-        let combatThreatFieldCandidate;
-        let combatBulletThreatField;
-        let combatStrafeHoldMs;
-        let combatStrafeKey;
-        let combatStrafeMatchesTarget;
-        let combatPreciseStrafeSign;
-        let selectCombatStrafeSign;
-        let tangentMoveForBullet;
-        let combatMoveClosesDistance;
-        let combatSafeCloseMoveOverride;
-        let combatSpacingVector;
-        let combatSpacingShouldOverrideBullet;
-        let combatLowHpCloseRiskState;
-        let combatPressureDisadvantageState;
-        let combatSustainedPressureDisadvantageState;
-        let combatPressureCloseVector;
-        let combatFarNoDamageCloseVector;
-        let combatRetreatingFighterCloseVector;
-        let combatFinishPressureState;
-        let combatOutOfRangeFinishPressureState;
-        let combatOutOfRangeReengageState;
-        let combatPassiveRunnerState;
-        let combatPassiveRunnerCloseVector;
-        let mergeCombatMove;
-        let combatPressureThreat;
-        let combatOutOfRangeDodgeAction;
-        let combatAimJitterLimit;
-        let combatAimMotionScale;
-        let combatMotionSample;
-        let combatMotionSamplesWithCurrent;
-        let combatOpponentProfile;
-        let combatTradeEstimate;
-        let combatTargetId;
-        let combatRetreatIgnoreActive;
-        let rememberCombatRetreatIgnore;
-        let clearCombatDisadvantageObservation;
-        let combatDisadvantageObservationState;
-        let combatAimDamageState;
-        let combatLowHpNoDamageLeaveState;
-        let combatRetreatingTargetState;
-        let combatServerStallNoDamageLeaveState;
-        let combatTrendState;
-        let combatTickActiveFromState;
-        let globalSamplingOutageOfflineState;
-        let combatTickGapOfflineState;
-        let nativeTickMinIntervalMs;
-        let combatShootingPlan;
-        let combatAimNoDamageLevel;
-        let combatAimNoDamageJitterLimit;
-        let combatAimSteadyNoDamageState;
-        let combatAimFallbackPrecisionState;
-        let combatMovementAimMode;
-        let combatInterceptSolution;
-        let combatLiveAimTarget;
-        let combatAimSourceDivergenceState;
-        let combatAimServerStallState;
-        let combatAimDynamicStrategyState;
-        let combatAimTarget;
-        let combatLeaveCoverAction;
-        let buildCombatAction;
-        let readImportantLogsStore;
-        let restoreImportantLogsForRemote;
-        let markImportantLogsRemoteSent;
-        let markImportantLogsRemoteError;
-        let noteImportantSessionExit;
-        let startImportantSession;
-        let upsertImportantSessionRecord;
-        let importantSessionStaminaSpentMs;
-        let recordImportantCombatTick;
-        let summarizeImportantLoggingStatus;
-        let rememberAttack;
-        let recordKillHistoryItem;
-        let updateKillHistory;
-        const { createCombatLogRuntime } = require_combat_log_runtime();
-        const {
-          configureCombatLogging,
-          summarizeCombatLoggingStatus,
-          pendingExitAuditLogIds,
-          unresolvedExitAuditLogCount,
-          exitAuditFlushPending,
-          exitAuditFlushBlockDetail,
-          importantSessionEndFlushPending,
-          importantSessionEndFlushBlockDetail,
-          closeCurrentImportantSessionBeforeLogin,
-          closeCurrentImportantSessionBeforeReload,
-          restorePersistedExitAuditLogs,
-          restorePersistedCombatLogPendingEntries,
-          persistCombatLogPendingEntries,
-          newExitAuditRequestId: newExitAuditRequestId2,
-          ensureExitAuditDetail,
-          recordExitAuditEvent,
-          combatLogSuspendReason,
-          combatLogIsAfkAttack,
-          queueCombatLogEntry,
-          flushCombatLogs,
-          recordCombatLogTick
-        } = createCombatLogRuntime({
-          bot,
-          cfg,
-          storage: localStorage,
-          combatLogPendingEntriesKey: COMBAT_LOG_PENDING_ENTRIES_KEY,
-          exitAuditPendingLogsKey: EXIT_AUDIT_PENDING_LOGS_KEY,
-          loginSuppressKey: LOGIN_SUPPRESS_KEY,
-          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-          pendingExitStateKey: PENDING_EXIT_STATE_KEY,
-          now,
-          readPersistentExitState,
-          writePersistentPendingExitStateCore,
-          pendingExitPersistenceCoreHelpers,
-          clearPersistentPendingExitState,
-          clearPersistentExitState,
-          normalizePendingExitReloadConfirmationCore,
-          staleOfflineStaminaHoldContradicted: (...args) => staleOfflineStaminaHoldContradicted(...args),
-          readImportantLogsStore: (...args) => readImportantLogsStore(...args),
-          restoreImportantLogsForRemote: (...args) => restoreImportantLogsForRemote(...args),
-          markImportantLogsRemoteSent: (...args) => markImportantLogsRemoteSent(...args),
-          markImportantLogsRemoteError: (...args) => markImportantLogsRemoteError(...args),
-          noteImportantSessionExit: (...args) => noteImportantSessionExit(...args),
-          getCurrentUserId: () => getCurrentUserId(),
-          summarizeSelf: (...args) => summarizeSelf(...args),
-          dropValue,
-          dist,
-          speed,
-          hypot,
-          knownHpValue,
-          isCurrentlyActive,
-          isMovingThreat,
-          isFiringEntity,
-          isInvulnerable,
-          getNativeEntityList: () => getNativeEntityList(),
-          normalizeBullet: (...args) => normalizeBullet(...args),
-          getBullets: () => getBullets(),
-          summarizeServerPositionStall: (...args) => summarizeServerPositionStall(...args),
-          combatTickActiveFromState: (...args) => combatTickActiveFromState(...args),
-          summarizeNetworkQuality: (...args) => summarizeNetworkQuality(...args),
-          getSelf: () => getSelf(),
-          incomingBulletThreat: (...args) => incomingBulletThreat(...args),
-          summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args),
-          summarizePursuit: (...args) => summarizePursuit(...args),
-          summarizeControl: (...args) => summarizeControl(...args),
-          snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
-          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail)
-        });
-        const { createTickSafetyRuntime } = require_tick_safety();
-        const {
-          recordUnhandledTickError,
-          runTickSafely,
-          runCallbackSafely
-        } = createTickSafetyRuntime({
-          bot,
-          now,
-          tick: (...args) => tick(...args),
-          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail)
-        });
-        let requestReload;
-        let requestLeaveConfirmationReload;
-        let requestSessionMismatchRecoveryReload;
-        let cloudflareErrorInfo;
-        let maybeReloadCloudflareError;
-        let getCurrentUserId;
-        let getSessionToken;
-        let hasNativeGameSession;
-        let controlHasNativeGameSession;
-        let snapshotSelfPresenceState;
-        let controlHasAuthoritativeSessionMismatch;
-        let noSelfGameSessionExitState;
-        let summarizeSessionMismatchRecoveryStatus;
-        let liveSessionMismatchTakeoverState;
-        let noteSelfUnavailableForPostLoginZoom;
-        let schedulePostLoginZoomOut;
-        let findLoginControl;
-        let hasLoginRequiredText;
-        let setLoginSuppress;
-        let loginSuppressRemainingMs;
-        let loginSuppressStatus;
-        let loginPointSafetyExitSelfForDetail;
-        let loginPointSafetyStatus;
-        let resetLoginSnapshotGate;
-        let noteLoginSnapshotProbe;
-        let loginSnapshotGateAllowsLogin;
-        let loginSnapshotGateBlockReason;
-        let ensureLoginSnapshotGate;
-        let loginSnapshotGateDisplayReason;
-        let markManualLoginBypass;
-        let manualLoginBypassActive;
-        let installNativeLoginGateInterceptors;
-        let summarizeReloginGateStatus;
-        let clearCurrentReloginHold;
-        let randomBetween;
-        let hpInfoForRelogin;
-        let summarizePursuit;
-        let pendingExitSkipNewLeave;
-        let pendingExitIntentForSkippedLeave;
-        let rememberPendingExit;
-        let noteLeave403SnapshotProbe;
-        let handlePendingExit;
-        let summarizePendingCombatLeave;
-        let pendingCombatLeaveAction;
-        let isCombatStateForInjuryLeave;
-        let updatePursuitTracking;
-        let issueLeaveCommand;
-        let maybeStartAutoLogin;
-        let forceLoginNow;
-        let leaveOffline;
-        let leaveForInjury;
-        let leaveForPursuit;
-        let leaveForCombat;
-        let leaveDuringEnemyHold;
-        const { createControlFlowRuntime } = require_control_flow_runtime();
-        ({
-          requestReload,
-          requestLeaveConfirmationReload,
-          requestSessionMismatchRecoveryReload,
+          clearSessionMismatchRecoveryState,
           cloudflareErrorInfo,
-          maybeReloadCloudflareError,
-          getCurrentUserId,
-          getSessionToken,
-          hasNativeGameSession,
+          coinBlockedByThreat,
+          coinDiagnosticsLimit,
+          coinDiagnosticsNearDistance,
+          coinDirectionToCore,
+          coinMotionCoreOptions,
+          coinMotionMetaCore,
+          coinPickupAttemptSlowCount,
+          coinPickupFailureCount,
+          coinRouteCoreOptions,
+          coinRouteKey,
+          coinStaminaAffordableWithDiagnostic,
+          coinTargetCoreOptions,
+          coinTargetKeyCore,
+          coinThreatDiagnostics,
+          combatDodgeOnlyCandidateRange,
+          combatHpValue,
+          combatTargetCandidateRange,
+          combatTickActiveFromState,
+          combatTickGapOfflineState,
           controlHasNativeGameSession,
-          snapshotSelfPresenceState,
-          controlHasAuthoritativeSessionMismatch,
-          noSelfGameSessionExitState,
-          summarizeSessionMismatchRecoveryStatus,
-          liveSessionMismatchTakeoverState,
-          noteSelfUnavailableForPostLoginZoom,
-          schedulePostLoginZoomOut,
-          findLoginControl,
-          hasLoginRequiredText,
-          setLoginSuppress,
-          loginSuppressRemainingMs,
-          loginSuppressStatus,
-          loginPointSafetyExitSelfForDetail,
-          loginPointSafetyStatus,
-          resetLoginSnapshotGate,
-          noteLoginSnapshotProbe,
-          loginSnapshotGateAllowsLogin,
-          loginSnapshotGateBlockReason,
-          ensureLoginSnapshotGate,
-          loginSnapshotGateDisplayReason,
-          markManualLoginBypass,
-          manualLoginBypassActive,
-          installNativeLoginGateInterceptors,
-          summarizeReloginGateStatus,
-          clearCurrentReloginHold,
-          randomBetween,
-          hpInfoForRelogin,
-          summarizePursuit,
-          pendingExitSkipNewLeave,
-          pendingExitIntentForSkippedLeave,
-          rememberPendingExit,
-          noteLeave403SnapshotProbe,
+          currentHeldCoinChoice,
+          currentHeldCoinRouteChoice,
+          dailyStaminaBudgetIsLimitingCore,
+          dailyStaminaFinalCoinAction,
+          decorateActiveThreat,
+          defensiveTargetOverridesEngaged,
+          deferredStaminaExhaustionLeave,
+          dist,
+          dropValue,
+          ensureControlWs,
+          entityFreshEnoughForOffense,
+          exitMotionStopLockRemainingMs,
+          finishImportantCombat,
+          formatDistance,
+          formatDurationMs,
+          getBullets,
+          getCoins,
+          getCurrentUserId,
+          getNativeCoinList,
+          getNativeEntityList,
+          getSelf,
+          globalSamplingOutageOfflineState,
           handlePendingExit,
-          summarizePendingCombatLeave,
-          pendingCombatLeaveAction,
+          handleTickReentryCombatGap,
+          highValueCoinPriorityAmount,
+          highValueCoinPriorityHealthyHp,
+          highValueVisibleCoinPriorityNeeded,
+          hpDisplay,
+          hpValue,
+          hypot,
+          importantSessionStaminaSpentMs,
+          incomingBulletThreat,
+          installNativeLoginGateInterceptors,
+          installPageGlobal,
+          installPageNativeSnapshotObserver,
+          isAfkProfitTarget,
+          isAlive,
+          isAvoidanceThreat,
           isCombatStateForInjuryLeave,
-          updatePursuitTracking,
-          issueLeaveCommand,
-          maybeStartAutoLogin,
-          forceLoginNow,
-          leaveOffline,
+          isConservingStamina,
+          isCurrentlyActive,
+          isFiringEntity,
+          isFullHp,
+          isInvulnerable,
+          isInvulnerableActive,
+          isRecovering,
+          isSnapshotCoinWaitAction,
+          isSnapshotOnlyCoin,
+          isWhitelistedTarget,
+          knownHpValue,
+          latestEnemyLeaveDisplayReason,
+          leaveForCombat,
           leaveForInjury,
           leaveForPursuit,
-          leaveForCombat,
-          leaveDuringEnemyHold
-        } = createControlFlowRuntime({
-          bot,
-          cfg,
-          storage: localStorage,
-          pageGlobal,
-          botKey: BOT_KEY,
-          pendingExitStateKey: PENDING_EXIT_STATE_KEY,
-          sessionMismatchRecoveryKey: SESSION_MISMATCH_RECOVERY_KEY,
-          cloudflareReloadKey: CLOUDFLARE_RELOAD_KEY,
-          loginSuppressKey: LOGIN_SUPPRESS_KEY,
-          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
-          loginPointSafetyKey: LOGIN_POINT_SAFETY_KEY,
-          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
-          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
-          enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY,
-          readPageGlobal,
-          installPageGlobal,
-          normalizePendingExitReloadConfirmationCore,
-          writePersistentPendingExitStateCore,
-          pendingExitPersistenceCoreHelpers,
-          clearPersistentPendingExitState,
-          clearPersistentExitState,
-          readPersistentExitState,
-          writePersistentExitState,
-          normalizeLoginSnapshotGateStateCore,
-          loginSnapshotSuccessRequiredCore,
-          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail),
-          exitAuditFlushPending,
-          exitAuditFlushBlockDetail,
-          importantSessionEndFlushPending,
-          importantSessionEndFlushBlockDetail,
-          closeCurrentImportantSessionBeforeReload,
-          closeCurrentImportantSessionBeforeLogin,
-          persistCombatLogPendingEntries,
-          flushCombatLogs,
-          ensureExitAuditDetail,
-          recordExitAuditEvent,
-          noteImportantSessionExit,
+          leaveOffline,
+          liveSessionMismatchTakeoverState,
           logStatus,
-          updateBotPanel,
-          removeTargetOverlay,
-          stopMotionSafely: (...args) => stopMotionSafely(...args),
-          stopMotionAfterExit,
-          clearCombatEngagement: (...args) => clearCombatEngagement(...args),
-          sendActionVelocity: (...args) => sendActionVelocity(...args),
-          shootAt: (...args) => shootAt(...args),
-          triggerNativeTick: (...args) => triggerNativeTick(...args),
-          recordUnhandledTickError,
-          activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
-          activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
-          exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
-          unsafeExitReloginMinDelayMs: (...args) => unsafeExitReloginMinDelayMs(...args),
-          getNativeControl: (...args) => getNativeControl(...args),
-          getNativeState: (...args) => getNativeState(...args),
-          getOwnEntity: (...args) => getOwnEntity(...args),
-          getSelf: (...args) => getSelf(...args),
-          summarizeSelf: (...args) => summarizeSelf(...args),
-          summarizeControl: (...args) => summarizeControl(...args),
-          snapshotDataAgeMs: (...args) => snapshotDataAgeMs(...args),
-          snapshotSelfFreshEnough: (...args) => snapshotSelfFreshEnough(...args),
-          isOfflineishWsReadyState: (...args) => isOfflineishWsReadyState(...args),
-          isAlive,
-          isInvulnerable,
-          isJoinModeActive,
-          isFiringEntity,
-          isMovingThreat,
-          truthyFlag,
-          staminaRemaining,
-          staminaLimitValue,
-          dropValue,
-          clamp,
-          dist,
-          speed,
-          now,
-          isFullHp,
-          threatKey: (...args) => threatKey(...args),
-          returnBlockRadius: (...args) => returnBlockRadius(...args),
-          staleOfflineStaminaHoldContradicted: (...args) => staleOfflineStaminaHoldContradicted(...args),
-          staminaBudgetReloginDelayMs,
-          staminaResetHoldUntil,
-          staminaBudgetCoinLeaveSummary: (...args) => staminaBudgetCoinLeaveSummary(...args),
-          staminaExhaustedWindowLabel: (...args) => staminaExhaustedWindowLabel(...args),
-          reloginDelayForHpCore
-        }));
-        function readPauseReason() {
-          let reason = "";
-          try {
-            reason = String(localStorage.getItem(PAUSE_REASON_KEY) || "");
-          } catch (_) {
-          }
-          return String(readPageGlobal("__graspRatBotPauseReason", "", pageGlobal) || reason || "");
-        }
-        function syncPausedFromPage2(stopOnPause = true) {
-          let localPaused = false;
-          try {
-            localPaused = localStorage.getItem(PAUSED_KEY) === "true";
-          } catch (_) {
-          }
-          const paused = Boolean(readPageGlobal("__graspRatBotPaused", false, pageGlobal) === true || localPaused);
-          if (paused !== bot.paused) {
-            bot.paused = paused;
-            bot.pauseChangedAt = Date.now();
-            if (paused) {
-              if (stopOnPause) stopMotionSafely("paused");
-              removeTargetOverlay();
-            }
-          }
-          bot.pauseReason = paused ? readPauseReason() || bot.pauseReason || "manual" : "";
-          return paused;
-        }
-        let pageNativeSnapshotUrl;
-        let pageNativeSnapshotPayload;
-        let pageNativeSnapshotError;
-        let installPageNativeSnapshotObserver;
-        let getNativeState;
-        let getNativeControl;
-        let wsConstant;
-        let isOfflineishWsReadyState;
-        let noteNativeReconnectState;
-        let detachNativeMessagePump;
-        let triggerNativeTick;
-        let ensureNativeMessagePump;
-        let notePageOwnsReconnect;
-        let syncNativeControl;
-        let summarizeControl;
-        let closeControlWs;
-        let ensureControlWs;
-        let getSelf;
-        let getEntities;
-        let realtimeEntityWorldPoint;
-        let realtimeEntityKey;
-        let normalizeRealtimeEntity;
-        let mergeRealtimeEntity;
-        let getNativeEntityList;
-        let listFromNativeCoinValue;
-        let addNativeCoinSource;
-        let getNativeCoinSources;
-        let getNativeCoinList;
-        let entityIdKey;
-        let buildNativeEntityMeta;
-        let snapshotDataAgeMs;
-        let snapshotDataFreshEnough;
-        let snapshotBulletFreshEnough;
-        let snapshotSelfFreshEnough;
-        let entityFreshEnoughForOffense;
-        let snapshotEntityAllowed;
-        let firstFiniteNumber;
-        let normalizeCoinDrop;
-        let coinDropKey;
-        let nativeViewRadiusCm;
-        let snapshotCoinLocalSuppressRadius;
-        let snapshotCoinAllowed;
-        let isSnapshotOnlyCoin;
-        let snapshotCoinFreshEnough;
-        let getCoins;
-        let normalizeBullet;
-        let getBullets;
-        let fetchJsonNoStore;
-        let summarizeSelf;
-        let entityPoint;
-        let pointDistance;
-        let getSnapshotSelf;
-        let currentVelocityCommandActive;
-        let summarizeServerPositionStall;
-        let resetServerPositionStall;
-        let summarizeActionSettlementStall;
-        let resetActionSettlementStall;
-        let actionSettlementNumber;
-        let actionSettlementEntityHp;
-        let actionSettlementTarget;
-        let actionSettlementSample;
-        let actionSettlementStableNumber;
-        let actionSettlementSelfProgress;
-        let actionSettlementTargetProgress;
-        let assessActionSettlementStall;
-        let assessServerPositionStall;
-        let resetSessionStaminaStats;
-        let updateSessionStaminaStats;
-        let updateSessionStats;
-        let summarizeSessionStats;
-        let readTodaySessionRecords;
-        let maybeSetLatestTodayStamina;
-        let dailyStaminaSpentFromRemaining;
-        let addTodaySessionRecord;
-        let summarizeTodaySessionStats;
-        let pushBounded;
-        let networkQualityRound;
-        let networkQualityEma;
-        let ensureNetworkQualityState;
-        let networkQualityPoint;
-        let networkQualityDistance;
-        let networkQualityWindowMs;
-        let networkQualityBaseFrameMs;
-        let networkQualityExpectedFrameMs;
-        let pruneNetworkQualityFrameSamples;
-        let networkQualityFrameLatencySample;
-        let estimateNetworkQualityLostFrames;
-        let observeNativeWsFrame;
-        let recordNetworkQualityMovementCommand;
-        let observeNetworkQualitySelf;
-        let networkQualityTargetId;
-        let recordNetworkQualityShot;
-        let recordNetworkQualityAttackDamage;
-        let summarizeNetworkQuality;
-        let refreshGlobalState;
-        let wsSend;
-        let setNativeKeys;
-        let cancelVelocityStopTimer;
-        let clearNativeMotionState;
-        let stopLocalMotionOnly;
-        let stopMotionSafely;
-        let stopMotionAfterExit;
-        let cancelDirectVelocityRepeat;
-        let directWsVelocityMessage;
-        let sendDirectNativeVelocity;
-        let scheduleDirectVelocityRepeat;
-        let sendNativeVelocity;
-        let safeSendVelocity;
-        let sendActionVelocity;
-        let aimAt;
-        let sendNativeShoot;
-        let recordCombatShotAttempt;
-        let shootAt;
-        const { createNativeStateRuntime } = require_native_state_runtime();
-        ({
-          pageNativeSnapshotUrl,
-          pageNativeSnapshotPayload,
-          pageNativeSnapshotError,
-          installPageNativeSnapshotObserver,
-          getNativeState,
-          getNativeControl,
-          wsConstant,
-          isOfflineishWsReadyState,
-          noteNativeReconnectState,
-          detachNativeMessagePump,
-          triggerNativeTick,
-          ensureNativeMessagePump,
-          notePageOwnsReconnect,
-          syncNativeControl,
-          summarizeControl,
-          closeControlWs,
-          ensureControlWs,
-          getSelf,
-          getEntities,
-          realtimeEntityWorldPoint,
-          realtimeEntityKey,
-          normalizeRealtimeEntity,
-          mergeRealtimeEntity,
-          getNativeEntityList,
-          listFromNativeCoinValue,
-          addNativeCoinSource,
-          getNativeCoinSources,
-          getNativeCoinList,
-          entityIdKey,
-          buildNativeEntityMeta,
-          snapshotDataAgeMs,
-          snapshotDataFreshEnough,
-          snapshotBulletFreshEnough,
-          snapshotSelfFreshEnough,
-          entityFreshEnoughForOffense,
-          snapshotEntityAllowed,
-          firstFiniteNumber,
+          loginSnapshotGateDisplayReason,
+          markCoinCollected,
+          maybeRecordLoginPoint,
+          maybeReloadCloudflareError,
+          maybeStartAutoLogin,
+          noSelfGameSessionExitState,
           normalizeCoinDrop,
-          coinDropKey,
-          nativeViewRadiusCm,
-          snapshotCoinLocalSuppressRadius,
-          snapshotCoinAllowed,
-          isSnapshotOnlyCoin,
-          snapshotCoinFreshEnough,
-          getCoins,
-          normalizeBullet,
-          getBullets,
-          fetchJsonNoStore,
-          summarizeSelf,
-          entityPoint,
-          pointDistance,
-          getSnapshotSelf,
-          currentVelocityCommandActive,
-          summarizeServerPositionStall,
-          resetServerPositionStall,
-          summarizeActionSettlementStall,
-          resetActionSettlementStall,
-          actionSettlementNumber,
-          actionSettlementEntityHp,
-          actionSettlementTarget,
-          actionSettlementSample,
-          actionSettlementStableNumber,
-          actionSettlementSelfProgress,
-          actionSettlementTargetProgress,
-          assessActionSettlementStall,
-          assessServerPositionStall,
-          resetSessionStaminaStats,
-          updateSessionStaminaStats,
-          updateSessionStats,
-          summarizeSessionStats,
-          readTodaySessionRecords,
-          maybeSetLatestTodayStamina,
-          dailyStaminaSpentFromRemaining,
-          addTodaySessionRecord,
-          summarizeTodaySessionStats,
-          pushBounded,
-          networkQualityRound,
-          networkQualityEma,
-          ensureNetworkQualityState,
-          networkQualityPoint,
-          networkQualityDistance,
-          networkQualityWindowMs,
-          networkQualityBaseFrameMs,
-          networkQualityExpectedFrameMs,
-          pruneNetworkQualityFrameSamples,
-          networkQualityFrameLatencySample,
-          estimateNetworkQualityLostFrames,
-          observeNativeWsFrame,
-          recordNetworkQualityMovementCommand,
-          observeNetworkQualitySelf,
-          networkQualityTargetId,
-          recordNetworkQualityShot,
-          recordNetworkQualityAttackDamage,
-          summarizeNetworkQuality,
-          refreshGlobalState,
-          wsSend,
-          setNativeKeys,
-          cancelVelocityStopTimer,
-          clearNativeMotionState,
-          stopLocalMotionOnly,
-          stopMotionSafely,
-          stopMotionAfterExit,
-          cancelDirectVelocityRepeat,
-          directWsVelocityMessage,
-          sendDirectNativeVelocity,
-          scheduleDirectVelocityRepeat,
-          sendNativeVelocity,
-          safeSendVelocity,
-          sendActionVelocity,
-          aimAt,
-          sendNativeShoot,
-          recordCombatShotAttempt,
-          shootAt
-        } = createNativeStateRuntime({
-          bot,
-          cfg,
-          storage: localStorage,
-          pageGlobal,
-          readPageGlobal,
-          installPageGlobal,
-          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail),
-          noteLoginSnapshotProbe: (...args) => noteLoginSnapshotProbe(...args),
-          noteLeave403SnapshotProbe: (...args) => noteLeave403SnapshotProbe(...args),
-          getCurrentUserId: () => getCurrentUserId(),
-          getSessionToken: () => getSessionToken(),
-          getOwnEntity: () => {
-            try {
-              return typeof getOwnEntity === "function" ? getOwnEntity() : null;
-            } catch (_) {
-              return null;
-            }
-          },
-          targetOverlayRenderEntities: () => [],
-          runTickSafely: (...args) => runTickSafely(...args),
-          runCallbackSafely: (...args) => runCallbackSafely(...args),
-          recordUnhandledTickError: (...args) => recordUnhandledTickError(...args),
-          nativeTickMinIntervalMs: (...args) => nativeTickMinIntervalMs(...args),
-          clearPostExitTargetState: (...args) => clearPostExitTargetState(...args),
-          exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
-          noteImportantSessionExit: (...args) => noteImportantSessionExit(...args),
-          startImportantSession: (...args) => startImportantSession(...args),
-          readImportantLogsStore: (...args) => readImportantLogsStore(...args),
-          writePersistentLastSelfState: (...args) => writePersistentLastSelfState(...args),
-          summarizeStamina: (...args) => summarizeStamina(...args),
-          dailyStaminaWindowStartAt: (...args) => dailyStaminaWindowStartAt(...args),
-          dropValue,
-          dist,
-          speed,
-          hypot,
-          clamp,
-          isAlive,
-          isFiringEntity,
-          combatMetricRound: (value) => {
-            const number = Number(value);
-            return Number.isFinite(number) ? Math.round(number) : null;
-          },
-          combatMetricEntityId: (entity) => entity?.id ?? entity?.user_id ?? null,
-          combatMetricHp: (entity) => {
-            const number = Number(entity?.hp);
-            return Number.isFinite(number) ? number : null;
-          },
-          now
-        }));
-        const { createImportantLoggingRuntime } = require_important_logging_runtime();
-        ({
-          readImportantLogsStore,
-          restoreImportantLogsForRemote,
-          markImportantLogsRemoteSent,
-          markImportantLogsRemoteError,
+          normalizePendingExitReloadConfirmationCore,
           noteImportantSessionExit,
-          startImportantSession,
-          upsertImportantSessionRecord,
-          importantSessionStaminaSpentMs,
+          noteSelfUnavailableForPostLoginZoom,
+          now,
+          observeNetworkQualitySelf,
+          opportunityCandidateCoreOptions,
+          opportunityChoiceCoreOptions,
+          opportunityCoinStaminaCost,
+          opportunityEnemyStaminaCost,
+          opportunityLongStaminaBudget,
+          opportunityPriorityTier,
+          opportunityWindowStaminaBudget,
+          pageGlobal,
+          pendingCombatLeaveAction,
+          pendingExitIntentForSkippedLeave,
+          pendingExitPersistenceCoreHelpers,
+          pendingExitSkipNewLeave,
+          pickActiveCombatWaitThreat,
+          pickBestOpportunity,
+          pickBestOpportunityCore,
+          pickCoin,
+          pickCoinField,
+          pickCoinRouteOpportunityCore,
+          pickCombatTarget,
+          pickDistantCoin,
+          pickEngagedCombatTarget,
+          pickHighValueVisibleCoin,
+          pickNearestDailyStaminaFinalCoinCore,
+          pickPostAttackDropCoinCore,
+          pickPostAttackDropWaitTargetCore,
+          pickProfitableCombatTarget,
+          pickRealtimeLocalCoin,
+          postAttackDropResolvedAt,
+          previousBot,
+          readPersistentExitState,
+          recordActionSwitchDiagnostics,
+          recordCoinFilterDiagnostic,
+          recordCombatLogTick,
           recordImportantCombatTick,
-          summarizeImportantLoggingStatus,
-          rememberAttack,
+          recordIncidentalCoinPickups,
           recordKillHistoryItem,
-          updateKillHistory
-        } = createImportantLoggingRuntime({
-          bot,
-          cfg,
-          storage: localStorage,
-          importantLogsKey: IMPORTANT_LOGS_KEY,
-          queueCombatLogEntry,
-          flushCombatLogs,
-          combatLogSuspendReason,
-          combatLogIsAfkAttack,
-          getCurrentUserId: () => getCurrentUserId(),
-          pushBounded,
-          knownHpValue,
-          dropValue,
-          isAfkProfitTarget,
-          isCurrentlyActive,
-          isMovingThreat,
-          isFiringEntity,
-          summarizeSelf: (...args) => summarizeSelf(...args),
-          getNativeEntityList: () => getNativeEntityList(),
-          getEntities: () => getEntities(),
-          isAlive,
-          firstFiniteNumber
-        }));
+          recordUnhandledTickError,
+          refreshGlobalState,
+          rememberAttack,
+          rememberCombatEngagement,
+          rememberLoginPointDamageThreat,
+          rememberOpportunityChoiceCore,
+          requestReload,
+          requestSessionMismatchRecoveryReload,
+          resetOpportunitySwitchLock,
+          resetServerPositionStall,
+          restoreImportantLogsForRemote,
+          restorePersistedCombatLogPendingEntries,
+          restorePersistedExitAuditLogs,
+          runTickSafely,
+          safeCoinCandidates,
+          safeJsonClone,
+          safeStringify,
+          schedulePostLoginZoomOut,
+          scoreCoinOpportunity,
+          sendActionVelocity,
+          sessionMismatchRecoveryReloadSatisfied,
+          setLastTarget,
+          shootAt,
+          shouldClearOpportunityChoiceCore,
+          snapshotCoinAgeMs,
+          snapshotCoinLocalSuppressRadius,
+          snapshotCoinNavigationReasonCore,
+          snapshotDataFreshEnough,
+          snapshotEntityAllowed,
+          speed,
+          staleOfflineStaminaHoldContradicted,
+          staminaBudgetCoinLeaveAction,
+          staminaBudgetCoinLeaveSummary,
+          staminaBudgetReloginDelayMs,
+          staminaExhaustedWindowLabel,
+          startTargetWhitelistPolling,
+          stopMotionSafely,
+          summarizeBlockedStaminaOpportunityCore,
+          summarizeControl,
+          summarizeNearestCoinStaminaBudgetExitCore,
+          summarizePendingCombatLeave,
+          summarizePursuit,
+          summarizeSelf,
+          summarizeSessionMismatchRecoveryStatus,
+          summarizeStamina,
+          syncPausedFromPage: syncPausedFromPage2,
+          uniqueVisibleRouteCoinsCore,
+          updateBotPanel,
+          updateKillHistory,
+          updateOpportunityAfkStaminaObservations,
+          updatePursuitTracking,
+          updateSessionStats,
+          visibleCoinSourcesConfirmTargetMissing,
+          writePersistentPendingExitStateCore
+        } = runtime;
         function markRecentMovement(entities) {
           const t = now();
           const sampleMs = Math.max(1, Number(cfg.combatAimMotionSampleMs || 50));
@@ -23413,394 +22250,6 @@
             bullets
           };
         }
-        const { createProfitRuntime } = require_profit_runtime();
-        const {
-          coinMotionNumber,
-          coinMotionTolerance,
-          coinAxisApproachDirectionCore,
-          coinPickupPrecisionPulseMsCore,
-          coinAxisLockShouldHoldCore,
-          coinNearApproachAxisCore,
-          coinDirectionToCore,
-          coinMotionMetaCore,
-          directionTo,
-          coinMotionCoreOptions,
-          coinPickupFailureCount,
-          coinPickupAttemptSlowCount,
-          applyCoinApproachLockUpdate,
-          coinDiagnosticsSummary,
-          summarizeCoinDiagnosticsList,
-          addCoinFilterDiagnostic,
-          buildCoinDiagnostics,
-          coinThreatDangerRadius,
-          coinHeadingBlockedByInvulnerableThreat,
-          coinBlockedByThreat,
-          coinDiagnosticsNearDistance,
-          coinDiagnosticsLimit,
-          coinThreatDiagnostics,
-          recordCoinFilterDiagnostic,
-          coinStaminaAffordableWithDiagnostic,
-          attachCoinDiagnostics,
-          safeCoinCandidates,
-          pickRealtimeLocalCoin,
-          nearestRealtimeCoinWithin,
-          fieldMigrationBlockedByNearbyCoin,
-          pickCoin,
-          pickCoinField,
-          pickDistantCoin,
-          highValueCoinPriorityAmount,
-          highValueCoinPriorityHealthyHp,
-          pickHighValueVisibleCoin,
-          nearbyThreatBlocksLowHpHighValueCoin,
-          canPrioritizeHighValueVisibleCoin,
-          highValueVisibleCoinPriorityNeeded,
-          dailyStaminaBudgetIsLimitingCore,
-          summarizeBlockedStaminaOpportunityCore,
-          summarizeNearestCoinStaminaBudgetExitCore,
-          pickNearestDailyStaminaFinalCoinCore,
-          opportunityMoveStaminaCost,
-          opportunityCoinStaminaCost,
-          estimatedKillShots,
-          opportunityEnemyStaminaCost,
-          opportunityWindowStaminaBudget,
-          opportunityLongStaminaBudget,
-          opportunityStaminaAffordable,
-          dailyStaminaFinalCoinAction,
-          staminaBudgetCoinLeaveSummary,
-          staminaBudgetCoinLeaveDisplay,
-          staminaBudgetCoinLeaveAction,
-          compareCoinOpportunity,
-          snapshotCoinAgeMs,
-          isSnapshotCoinWaitAction,
-          pickSnapshotCoinDestination,
-          scoreCoinOpportunity,
-          opportunityAfkTargetId,
-          targetStamina5sRemaining,
-          opportunityAfkStaminaState,
-          opportunityAfkStaminaCooldownMs,
-          opportunityAfkStaminaDropThresholdMs,
-          updateOpportunityAfkStaminaObservations,
-          opportunityAfkStaminaCooldownRemaining,
-          afkOpportunityBlockedByStaminaCooldown,
-          scoreEnemyOpportunity,
-          opportunityEffectiveStaminaCostCore,
-          opportunityValueScoreCore,
-          opportunityPriorityTierCore,
-          mergeCoinRouteDisplayCore,
-          uniqueVisibleRouteCoinsCore,
-          buildCoinOpportunityCandidatesCore,
-          buildEnemyOpportunityCandidatesCore,
-          buildOpportunityCandidatesCore,
-          bestCoinOpportunityScoreCore,
-          opportunityPriorityTier,
-          defaultDist,
-          coinRouteKey,
-          coinRouteIdsFrom,
-          coinRouteLegStaminaCostCore,
-          coinRouteLegClearCore,
-          coinRoutePointLimitCore,
-          coinRouteSummaryCore,
-          coinRoutePoints,
-          coinRouteActionMetaCore,
-          buildCoinRouteFromAnchorCore,
-          coinRouteSkipsCloserFirstCoinCore,
-          coinRouteSkipsHeldSingleCoinCore,
-          coinRouteMatchesHeldChoiceCore,
-          heldCoinRouteBeatsSwitchCore,
-          pickCoinRouteOpportunityCore,
-          coinRouteCoreOptions,
-          currentHeldCoinRouteChoice,
-          currentHeldCoinChoice,
-          opportunityCandidateCoreOptions,
-          pickProfitableCombatTarget,
-          postAttackVisibleCoinExistsCore,
-          resolvedRecentPostAttackDropsCore,
-          buildPostAttackDropCoinCandidateCore,
-          pickPostAttackDropCoinCore,
-          pickPostAttackDropWaitTargetCore,
-          attackEntityMatches,
-          recentAttackTargetStillAttackable,
-          postAttackDropResolvedAt,
-          buildPostAttackDropWaitAction,
-          buildCoinAction,
-          buildEnemyAction,
-          opportunityKey,
-          opportunityChoiceType,
-          opportunityChoiceId,
-          opportunityChoiceKey,
-          opportunityPairKey,
-          opportunityByKey,
-          opportunityMatchesChoiceCore,
-          isHighValueCoinOpportunityCore,
-          highValueCoinHoldBlocksEnemySwitchCore,
-          lockedOpportunityChoiceCore,
-          applyOpportunityOscillationLockCore,
-          chooseStableOpportunityCore,
-          opportunityMissingHoldUntilCore,
-          missingHeldCoinCoveredByVisibleAuthorityCore,
-          buildMissingHeldOpportunityCore,
-          opportunityRouteIds,
-          rememberOpportunityChoiceCore,
-          opportunityChoiceCoreOptions,
-          resetOpportunitySwitchLock,
-          opportunitySameCoinRadius,
-          currentVisibleCoinListForMissingHold,
-          visibleCoinSourcesConfirmTargetMissing,
-          clearMissingVisibleCoinTarget,
-          pickBestOpportunityCore,
-          patrolDirectionCore,
-          shouldClearOpportunityChoiceCore,
-          coinFailureIgnoreCore,
-          staleCoinEscapeDirectionCore,
-          coinProgressIntentCore,
-          coinAttemptExpiredCore,
-          updateCoinAttemptCore,
-          updateCoinProgressRecordCore,
-          buildIgnoredCoinProgressCore,
-          buildIgnoredCoinPatrolActionCore,
-          coinIgnoreCleanupIntentCore,
-          coinProgressCoreOptions,
-          actionPriorityBand,
-          actionFocusTargetType,
-          actionFocusId,
-          actionFocusSummary,
-          actionSwitchPairKey,
-          buildPreviousDecisionSummary,
-          recordActionSwitchDiagnosticsCore,
-          finalActionBandRank,
-          finalActionReusable,
-          shouldHoldPreviousFinalAction,
-          applyFinalActionArbitrationCore,
-          targetSwitchHistoryLimit,
-          targetSwitchOscillationWindowMs,
-          roundedNullable,
-          ensureTargetSwitchDiagnostics,
-          finalActionArbitrationHoldMs,
-          finalActionArbitrationHistoryLimit,
-          ensureFinalActionArbitration,
-          coinTargetKeyCore,
-          coinTargetDistance,
-          coinMatchesTrackedTargetCore,
-          trackedCoinTargetForCollectionCore,
-          buildNativeCoinSnapshotCore,
-          pointToSegmentDistanceCore,
-          pickIncidentalCoinPickupsCore,
-          snapshotCoinWorthLongTravelCore,
-          snapshotCoinNavigationReasonCore,
-          setLastTarget,
-          clearCoinTracking,
-          coinTargetCoreOptions,
-          recordIncidentalCoinPickups,
-          markCoinCollected,
-          applyCoinProgressAction,
-          applyFinalActionArbitration,
-          recordActionSwitchDiagnostics,
-          buildDropMatchedKillCore
-        } = createProfitRuntime({
-          bot,
-          cfg,
-          OPPORTUNITY_CONSTANTS,
-          safeJsonClone,
-          arrayCount,
-          formatDistance,
-          formatDurationMs,
-          now,
-          hypot,
-          dist,
-          speed,
-          clamp,
-          staminaRemaining,
-          staminaExhaustedThreshold,
-          staminaBudgetReloginDelayMs,
-          isInvulnerableActive,
-          isInvulnerable,
-          isCurrentlyActive,
-          isFiringEntity,
-          isAfkProfitTarget,
-          isWhitelistedTarget,
-          hasCombatActivitySignal,
-          hpValue,
-          combatHpValue,
-          knownHpValue,
-          dropValue,
-          isFullHp,
-          snapshotCoinLocalSuppressRadius: (...args) => snapshotCoinLocalSuppressRadius(...args),
-          isSnapshotOnlyCoin: (...args) => isSnapshotOnlyCoin(...args),
-          normalizeCoinDrop: (...args) => normalizeCoinDrop(...args),
-          getNativeCoinSources: (...args) => getNativeCoinSources(...args),
-          getNativeCoinList: (...args) => getNativeCoinList(...args),
-          entityFreshEnoughForOffense,
-          isAlive,
-          attackWorthTakingCore,
-          incomingBulletThreat: (...args) => incomingBulletThreat(...args),
-          pickCombatTarget: (...args) => pickCombatTarget(...args),
-          isLowValueActiveCombatTarget: (...args) => isLowValueActiveCombatTarget(...args),
-          lowValueActiveThreatensSelf: (...args) => lowValueActiveThreatensSelf(...args),
-          updateSessionStats,
-          pushBounded,
-          importantSessionStaminaSpentMs,
-          recordKillHistoryItem,
-          upsertImportantSessionRecord,
-          summarizeSelf
-        });
-        const { createCombatRuntime } = require_combat_runtime();
-        ({
-          rememberCombatEngagement,
-          clearCombatEngagement,
-          summarizeOfflineThreat,
-          assessOfflineSafety,
-          pickActiveCombatWaitThreat,
-          activeCombatThreatWaitAction,
-          recentCombatInjuryActive,
-          lowValueActiveDropMax,
-          isLowValueActiveCombatTarget,
-          proactiveActiveKillStaminaBudgetMs,
-          proactiveActiveCombatStaminaAffordable,
-          activeCombatBudgetBlocked,
-          activeCombatRequiresThreatEvidence,
-          incomingOwnerMatchesTarget,
-          activeCombatThreatensSelf,
-          lowValueActiveThreatensSelf,
-          combatDodgeThreatRange,
-          combatTargetPriority,
-          isDefensiveCombatTarget,
-          isProfitableCombatTarget,
-          combatHpGapDisadvantaged,
-          profitCombatDisadvantaged,
-          pickCombatTarget,
-          combatEngageGraceRange,
-          combatTargetCandidateRange,
-          combatDodgeOnlyCandidateRange,
-          combatEngagedCandidate,
-          pickEngagedCombatTarget,
-          defensiveTargetOverridesEngaged,
-          incomingBulletRequiresTargetSwitch,
-          pickOpportunisticShotTarget,
-          actionOpportunityScore,
-          opportunisticShotBeatsAction,
-          attachOpportunisticShot,
-          buildOpportunisticShotWait,
-          combatMoveVelocityForDirection,
-          combatBulletThreats,
-          incomingBulletThreat,
-          combatThreatFieldCandidate,
-          combatBulletThreatField,
-          combatStrafeHoldMs,
-          combatStrafeKey,
-          combatStrafeMatchesTarget,
-          combatPreciseStrafeSign,
-          selectCombatStrafeSign,
-          tangentMoveForBullet,
-          combatMoveClosesDistance,
-          combatSafeCloseMoveOverride,
-          combatSpacingVector,
-          combatSpacingShouldOverrideBullet,
-          combatLowHpCloseRiskState,
-          combatPressureDisadvantageState,
-          combatSustainedPressureDisadvantageState,
-          combatPressureCloseVector,
-          combatFarNoDamageCloseVector,
-          combatRetreatingFighterCloseVector,
-          combatFinishPressureState,
-          combatOutOfRangeFinishPressureState,
-          combatOutOfRangeReengageState,
-          combatPassiveRunnerState,
-          combatPassiveRunnerCloseVector,
-          mergeCombatMove,
-          combatPressureThreat,
-          combatOutOfRangeDodgeAction,
-          combatAimJitterLimit,
-          combatAimMotionScale,
-          combatMotionSample,
-          combatMotionSamplesWithCurrent,
-          combatOpponentProfile,
-          combatTradeEstimate,
-          combatTargetId,
-          combatRetreatIgnoreActive,
-          rememberCombatRetreatIgnore,
-          clearCombatDisadvantageObservation,
-          combatDisadvantageObservationState,
-          combatAimDamageState,
-          combatLowHpNoDamageLeaveState,
-          combatRetreatingTargetState,
-          combatServerStallNoDamageLeaveState,
-          combatTrendState,
-          combatTickActiveFromState,
-          globalSamplingOutageOfflineState,
-          combatTickGapOfflineState,
-          nativeTickMinIntervalMs,
-          combatShootingPlan,
-          combatAimNoDamageLevel,
-          combatAimNoDamageJitterLimit,
-          combatAimSteadyNoDamageState,
-          combatAimFallbackPrecisionState,
-          combatMovementAimMode,
-          combatInterceptSolution,
-          combatLiveAimTarget,
-          combatAimSourceDivergenceState,
-          combatAimServerStallState,
-          combatAimDynamicStrategyState,
-          combatAimTarget,
-          combatLeaveCoverAction,
-          buildCombatAction
-        } = createCombatRuntime({
-          bot,
-          cfg,
-          safeJsonClone,
-          arrayCount,
-          formatDistance,
-          formatDurationMs,
-          actorLabel,
-          hpDisplay,
-          now,
-          hypot,
-          dist,
-          clamp,
-          staminaRemaining,
-          staminaExhaustedThreshold,
-          combatMovementBlockedByStamina,
-          staminaBudgetCoinLeaveSummary,
-          staminaExhaustedWindowLabel,
-          isInvulnerable,
-          isCurrentlyActive,
-          isFiringEntity,
-          isMovingThreat,
-          isAfkProfitTarget,
-          isWhitelistedTarget,
-          hasCombatActivitySignal,
-          isJoinModeActive,
-          hpValue,
-          combatHpValue,
-          knownHpValue,
-          dropValue,
-          isFullHp,
-          isAlive,
-          entityFreshEnoughForOffense,
-          normalizeBullet: (...args) => normalizeBullet(...args),
-          getBullets: () => getBullets(),
-          getNativeEntityList: () => getNativeEntityList(),
-          getSelf: () => getSelf(),
-          classify: (...args) => classify(...args),
-          returnBlockRadius: (...args) => returnBlockRadius(...args),
-          attackWorthTakingCore,
-          recordNetworkQualityAttackDamage: (...args) => recordNetworkQualityAttackDamage(...args),
-          summarizeSelf: (...args) => summarizeSelf(...args),
-          updateSessionStats: (...args) => updateSessionStats(...args),
-          summarizeServerPositionStall: (...args) => summarizeServerPositionStall(...args),
-          stopMotionSafely: (...args) => stopMotionSafely(...args),
-          leaveOffline: (...args) => leaveOffline(...args),
-          activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
-          requestReload: (...args) => requestReload(...args),
-          updateBotPanel: (...args) => updateBotPanel(...args),
-          summarizeControl: (...args) => summarizeControl(...args),
-          directionTo,
-          opportunityLongStaminaBudget,
-          scoreEnemyOpportunity,
-          opportunityEnemyStaminaCost,
-          estimatedKillShots,
-          opportunityStaminaAffordable,
-          scoreCoinOpportunity
-        }));
         function chooseAction(self) {
           const {
             entities,
@@ -24516,8 +22965,8 @@
               if (cfg.once) bot.stop("once");
               return;
             }
-            const exitMotionLockRemainingMs2 = exitMotionStopLockRemainingMs();
-            if (exitMotionLockRemainingMs2 > 0) {
+            const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
+            if (exitMotionLockRemainingMs > 0) {
               bot.pursuit = null;
               stopMotionSafely(bot.lastExitMotionStopReason || "exit-motion-stopped");
               refreshGlobalState(false).catch((err) => {
@@ -24531,8 +22980,8 @@
                 self: self ? summarizeSelf(self) : bot.lastSelf,
                 currentUserId: getCurrentUserId(),
                 control: summarizeControl(),
-                holdRemainingMs: exitMotionLockRemainingMs2
-              }, bot.lastExitMotionStopReason || "exit-motion-stopped", { lastExitMotionStopReason: bot.lastExitMotionStopReason, exitMotionLockRemainingMs: exitMotionLockRemainingMs2 });
+                holdRemainingMs: exitMotionLockRemainingMs
+              }, bot.lastExitMotionStopReason || "exit-motion-stopped", { lastExitMotionStopReason: bot.lastExitMotionStopReason, exitMotionLockRemainingMs });
               updateBotPanel(bot.lastDecision);
               if (cfg.once) bot.stop("once");
               return;
@@ -25310,72 +23759,2154 @@
             bot.ticking = false;
           }
         }
-        restorePersistedExitAuditLogs();
-        restorePersistedCombatLogPendingEntries();
-        restoreImportantLogsForRemote();
-        installNativeLoginGateInterceptors();
-        installPageGlobal(BOT_KEY, bot, pageGlobal);
-        if (previousBot && previousBot !== bot && previousBot.stop) {
-          try {
-            previousBot.stop("replaced by " + cfg.version);
-          } catch (err) {
-            console.warn("[grasp-rat-bot] previous stop failed", err);
+        function startRuntime() {
+          restorePersistedExitAuditLogs();
+          restorePersistedCombatLogPendingEntries();
+          restoreImportantLogsForRemote();
+          installNativeLoginGateInterceptors();
+          installPageGlobal(BOT_KEY, bot, pageGlobal);
+          if (previousBot && previousBot !== bot && previousBot.stop) {
+            try {
+              previousBot.stop("replaced by " + cfg.version);
+            } catch (err) {
+              console.warn("[grasp-rat-bot] previous stop failed", err);
+            }
           }
-        }
-        installPageNativeSnapshotObserver();
-        startTargetWhitelistPolling();
-        return refreshGlobalState(true).catch((err) => {
-          bot.globalState.error = err?.message || String(err);
-          recordUnhandledTickError("startup-refresh", err);
-        }).then(() => tick("startup")).then(() => {
-          bot.starting = false;
-          if (!cfg.once && bot.running) {
-            bot.timer = setInterval(() => {
-              runTickSafely("timer");
-            }, cfg.tickMs);
-          }
-          logStatus(cfg.dryRun ? "started dry-run" : "started live control");
-          return bot.status();
-        }).catch((err) => {
-          recordUnhandledTickError("startup-finalize", err);
-          bot.starting = false;
-          bot.ticking = false;
-          try {
-            stopMotionSafely("startup-error");
-          } catch (stopErr) {
-            recordUnhandledTickError("startup-finalize:stop-motion", stopErr);
-          }
-          if (!bot.lastDecision) {
-            bot.lastDecision = {
-              kind: "wait",
-              reason: "startup-error",
-              dx: 0,
-              dy: 0,
-              self: bot.lastSelf,
-              error: err?.message || String(err)
-            };
-          }
-          try {
-            updateBotPanel(bot.lastDecision);
-          } catch (panelErr) {
-            recordUnhandledTickError("startup-finalize:panel", panelErr);
-          }
-          try {
-            if (!cfg.once && bot.running && !bot.timer) {
+          installPageNativeSnapshotObserver();
+          startTargetWhitelistPolling();
+          return refreshGlobalState(true).catch((err) => {
+            bot.globalState.error = err?.message || String(err);
+            recordUnhandledTickError("startup-refresh", err);
+          }).then(() => tick("startup")).then(() => {
+            bot.starting = false;
+            if (!cfg.once && bot.running) {
               bot.timer = setInterval(() => {
                 runTickSafely("timer");
               }, cfg.tickMs);
             }
-          } catch (timerErr) {
-            recordUnhandledTickError("startup-finalize:timer", timerErr);
-          }
-          try {
+            logStatus(cfg.dryRun ? "started dry-run" : "started live control");
             return bot.status();
-          } catch (statusErr) {
-            recordUnhandledTickError("startup-finalize:status", statusErr);
-            return { running: Boolean(bot.running), starting: Boolean(bot.starting), error: err?.message || String(err) };
-          }
+          }).catch((err) => {
+            recordUnhandledTickError("startup-finalize", err);
+            bot.starting = false;
+            bot.ticking = false;
+            try {
+              stopMotionSafely("startup-error");
+            } catch (stopErr) {
+              recordUnhandledTickError("startup-finalize:stop-motion", stopErr);
+            }
+            if (!bot.lastDecision) {
+              bot.lastDecision = {
+                kind: "wait",
+                reason: "startup-error",
+                dx: 0,
+                dy: 0,
+                self: bot.lastSelf,
+                error: err?.message || String(err)
+              };
+            }
+            try {
+              updateBotPanel(bot.lastDecision);
+            } catch (panelErr) {
+              recordUnhandledTickError("startup-finalize:panel", panelErr);
+            }
+            try {
+              if (!cfg.once && bot.running && !bot.timer) {
+                bot.timer = setInterval(() => {
+                  runTickSafely("timer");
+                }, cfg.tickMs);
+              }
+            } catch (timerErr) {
+              recordUnhandledTickError("startup-finalize:timer", timerErr);
+            }
+            try {
+              return bot.status();
+            } catch (statusErr) {
+              recordUnhandledTickError("startup-finalize:status", statusErr);
+              return { running: Boolean(bot.running), starting: Boolean(bot.starting), error: err?.message || String(err) };
+            }
+          });
+        }
+        return {
+          markRecentMovement,
+          fleeDirection,
+          lockedFleeDirection,
+          actionMovesTowardThreat,
+          isShortSafeCoinAction,
+          returnBlockRadius,
+          returnBlockExitRadius,
+          returnBlockResumeRadius,
+          returnBlockSuppressRadius,
+          hasReturnBlockThreat,
+          markReturnBlockPressure,
+          pickReturnBlockPressure,
+          returnBlockScanDirection,
+          buildReturnBlockScanAction,
+          threatKey,
+          mergeThreatLists,
+          pickReturnBlockThreat,
+          blockThreatReturnAction,
+          classify,
+          chooseAction,
+          tick,
+          startRuntime
+        };
+      }
+      module.exports = {
+        createOrchestrationRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime-entry.js
+  var require_runtime_entry = __commonJS({
+    "src/browser/runtime-entry.js"(exports, module) {
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var __graspRatRuntimeStartup = (() => {
+        const { createRuntimeShellContext } = require_runtime_shell();
+        const { createRuntimeBotState } = require_runtime_bot_state();
+        const runtimeShell = createRuntimeShellContext(define_GRASP_RAT_RUNTIME_CONFIG_default, {
+          storage: localStorage,
+          now: Date.now,
+          performanceNow: () => performance.now()
         });
+        const {
+          runtimeBootstrapBindings,
+          runtimeStateBindings,
+          botStatusCores
+        } = runtimeShell;
+        const {
+          pageGlobalObject,
+          resolvePageGlobal,
+          readPageGlobal,
+          installPageGlobal,
+          readPageLocalStorageJson,
+          pageGlobal,
+          baseConfig,
+          runtimeConfig,
+          config,
+          OPPORTUNITY_CONSTANTS,
+          BOT_KEY,
+          PANEL_ID,
+          TARGET_OVERLAY_ID,
+          PAUSED_KEY,
+          PAUSE_REASON_KEY,
+          LOGIN_SUPPRESS_KEY,
+          LOGIN_SUPPRESS_REASON_KEY,
+          LOGIN_POINT_SAFETY_KEY,
+          SESSION_MISMATCH_RECOVERY_KEY,
+          EXIT_AUDIT_PENDING_LOGS_KEY,
+          COMBAT_LOG_PENDING_ENTRIES_KEY,
+          IMPORTANT_LOGS_KEY,
+          PENDING_EXIT_STATE_KEY,
+          ENEMY_LEAVE_STREAK_KEY,
+          ENEMY_LEAVE_STATE_KEY,
+          OFFLINE_LEAVE_STATE_KEY,
+          LAST_SELF_STATE_KEY,
+          CLOUDFLARE_RELOAD_KEY,
+          normalizeTargetWhitelistName,
+          parseTargetWhitelistNames,
+          deriveTargetWhitelistUrl,
+          staminaExhaustedLongWindows,
+          staminaEvidenceRemaining,
+          staminaHoldContradictedByStaminaEvidence,
+          previousBot,
+          preserved,
+          combatLogEndpointConfigured,
+          cfg,
+          targetWhitelistUrl,
+          preservedTargetWhitelistUrl,
+          preservedTargetWhitelistMatchesUrl,
+          preservedTargetWhitelistNames,
+          targetWhitelistState
+        } = runtimeBootstrapBindings;
+        const {
+          readPersistentLastSelfState,
+          writePersistentLastSelfState,
+          refreshExitDetail,
+          readPersistentExitState,
+          writePersistentExitState,
+          clearPersistentExitState,
+          clearPersistentPendingExitState,
+          pendingExitRetryCoreOptionsForPersistence,
+          pendingExitPersistenceCoreHelpers,
+          normalizePendingExitReloadConfirmationCore,
+          writePersistentPendingExitStateCore,
+          restoredRuntimeState,
+          restoredFailures,
+          restoredEnemyLeaveState,
+          restoredOfflineLeaveState,
+          restoredPendingExitState,
+          initialPendingExitState,
+          loginSnapshotSuccessRequiredCore,
+          normalizeLoginSnapshotGateStateCore,
+          recordRuntimeDiagnosticsCore
+        } = runtimeStateBindings;
+        const {
+          postExitDecisionWithoutTargetForStatusCore,
+          readEnemyLeaveStreakBoundCore,
+          pendingExitRetryMsForBotObjectCore,
+          summarizePendingExitForBotObjectCore
+        } = botStatusCores;
+        const bot = {
+          ...createRuntimeBotState({
+            cfg,
+            config,
+            preserved,
+            previousBot,
+            targetWhitelistState,
+            initialPendingExitState,
+            restoredEnemyLeaveState,
+            restoredOfflineLeaveState,
+            restoredFailures,
+            readPersistentLastSelfState,
+            readPageGlobal,
+            pageGlobal,
+            normalizeLoginSnapshotGateStateCore,
+            loginSnapshotSuccessRequiredCore,
+            performanceNow: () => performance.now()
+          }),
+          stop(reason = "manual") {
+            this.running = false;
+            this.stopReason = reason;
+            if (this.velocityStopTimer) clearTimeout(this.velocityStopTimer);
+            this.velocityStopTimer = 0;
+            this.velocityPulseToken += 1;
+            stopMotionSafely("stop");
+            detachNativeMessagePump();
+            closeControlWs(reason);
+            if (this.timer) clearInterval(this.timer);
+            this.timer = 0;
+            if (this.targetWhitelist?.timer) clearInterval(this.targetWhitelist.timer);
+            if (this.targetWhitelist) this.targetWhitelist.timer = 0;
+            try {
+              if (!String(reason || "").startsWith("replaced by ")) flushCombatLogs(true);
+            } catch (_) {
+            }
+            logStatus("stopped: " + reason);
+            if (readPageGlobal(BOT_KEY, null, pageGlobal) === this) {
+              removeBotPanel();
+              removeTargetOverlay();
+            }
+          },
+          setPaused(paused, reason = "external") {
+            const next = Boolean(paused);
+            const previousReason = this.pauseReason || "";
+            const changed = this.paused !== next;
+            this.paused = next;
+            this.pauseReason = next ? String(reason || "manual") : "";
+            const reasonChanged = previousReason !== this.pauseReason;
+            if (changed) this.pauseChangedAt = Date.now();
+            installPageGlobal("__graspRatBotPaused", next, pageGlobal);
+            installPageGlobal("__graspRatBotPauseReason", this.pauseReason, pageGlobal);
+            try {
+              localStorage.setItem(PAUSED_KEY, next ? "true" : "false");
+              if (next) localStorage.setItem(PAUSE_REASON_KEY, this.pauseReason || "manual");
+              else localStorage.removeItem(PAUSE_REASON_KEY);
+            } catch (_) {
+            }
+            if (changed && next) {
+              stopMotionSafely("paused");
+              removeTargetOverlay();
+            }
+            if (next) {
+              this.lastDecision = {
+                kind: "idle",
+                reason: "paused",
+                dx: 0,
+                dy: 0,
+                self: this.lastSelf,
+                paused: true,
+                pauseReason: this.pauseReason || "manual"
+              };
+              renderTargetOverlay(this.lastDecision);
+            }
+            return this.status();
+          },
+          forceLoginNow(reason = "panel immediate login") {
+            return forceLoginNow(reason);
+          },
+          configureCombatLogging(options = {}) {
+            return configureCombatLogging(options);
+          },
+          configureClashLeaveRescue(options = {}) {
+            if (Object.prototype.hasOwnProperty.call(options || {}, "enabled")) {
+              cfg.clashLeaveRescueEnabled = Boolean(options.enabled);
+            }
+            if (Object.prototype.hasOwnProperty.call(options || {}, "timeoutMs")) {
+              cfg.clashLeaveRescueTimeoutMs = Math.max(1e3, Number(options.timeoutMs || cfg.clashLeaveRescueTimeoutMs || 9e3) || 9e3);
+            }
+            this.clashLeaveRescue.enabled = Boolean(cfg.clashLeaveRescueEnabled);
+            return {
+              enabled: Boolean(cfg.clashLeaveRescueEnabled),
+              timeoutMs: Math.max(1e3, Number(cfg.clashLeaveRescueTimeoutMs || 9e3) || 9e3),
+              lastResult: this.clashLeaveRescue.lastResult || null
+            };
+          },
+          step(source = "external") {
+            return tick(source);
+          },
+          status() {
+            try {
+              if (!this.ticking) syncPausedFromPage2(false);
+            } catch (_) {
+            }
+            if (this.running && !this.ticking && this.lastTickAt && Date.now() - this.lastTickAt > Math.max(3e3, cfg.tickMs * 10)) {
+              triggerNativeTick("status-watchdog", false);
+            }
+            const self = getSelf();
+            const currentSelfSummary = self ? summarizeSelf(self) : null;
+            const displaySelf = currentSelfSummary || this.lastSelf;
+            if (self) updateKillHistory(self);
+            updateSessionStats(currentSelfSummary);
+            const session = summarizeSessionStats(displaySelf);
+            const todaySession = summarizeTodaySessionStats(session, displaySelf);
+            const enemyLeaveDetail = activeEnemyLeaveDetail();
+            const offlineLeaveDetail = activeOfflineLeaveDetail();
+            const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
+            const displayLastDecision = exitMotionLockRemainingMs > 0 ? postExitDecisionWithoutTargetForStatusCore(this.lastDecision, this.lastExitMotionStopReason || "exit-motion-stopped", { lastExitMotionStopReason: this.lastExitMotionStopReason, exitMotionLockRemainingMs }) : this.lastDecision;
+            return {
+              version: cfg.version,
+              sourceHash: cfg.sourceHash,
+              sourceUrl: cfg.sourceUrl,
+              injectedBy: cfg.injectedBy,
+              running: this.running,
+              paused: Boolean(this.paused),
+              pauseReason: this.pauseReason || "",
+              pauseChangedAt: this.pauseChangedAt || 0,
+              ticking: Boolean(this.ticking),
+              timerActive: Boolean(this.timer),
+              dryRun: cfg.dryRun,
+              starting: Boolean(this.starting),
+              tickCount: this.tickCount,
+              uptimeMs: Date.now() - this.startedAt,
+              lastTickAt: this.lastTickAt,
+              lastTickAgeMs: this.lastTickAt ? Date.now() - this.lastTickAt : null,
+              lastTickGapMs: this.lastTickGapMs,
+              lastTickSource: this.lastTickSource || "",
+              lastTickCompletedAt: this.lastTickCompletedAt || 0,
+              lastTickCombatActive: Boolean(this.lastTickCombatActive),
+              combatTickGap: this.lastCombatTickGap || null,
+              lastTickReentryGapAt: this.lastTickReentryGapAt || 0,
+              lastNativeTickAgeMs: this.lastNativeTickAt ? now() - this.lastNativeTickAt : null,
+              lastAction: this.lastAction,
+              lastDecision: displayLastDecision,
+              lastTarget: this.lastTarget,
+              combatTarget: this.combatTarget,
+              combatAim: this.combatAim,
+              networkQuality: summarizeNetworkQuality(),
+              targetWhitelist: summarizeTargetWhitelistStatus(),
+              combatLogging: summarizeCombatLoggingStatus(),
+              importantLogging: summarizeImportantLoggingStatus(),
+              exitAudit: {
+                pending: unresolvedExitAuditLogCount(),
+                pendingIds: pendingExitAuditLogIds().slice(0, 12),
+                restored: Number(this.exitAudit?.restored || 0),
+                lastEvent: this.exitAudit?.lastEvent || null,
+                lastBlockedReload: this.exitAudit?.lastBlockedReload || null,
+                lastBlockedLogin: this.exitAudit?.lastBlockedLogin || null
+              },
+              opportunityChoice: this.opportunityChoice,
+              opportunitySwitchLock: this.opportunitySwitchLock,
+              leave403SnapshotRecovery: this.leave403SnapshotRecovery,
+              clashLeaveRescue: {
+                enabled: Boolean(cfg.clashLeaveRescueEnabled),
+                running: Boolean(this.clashLeaveRescue?.running),
+                lastAt: Number(this.clashLeaveRescue?.lastAt || 0) || 0,
+                lastAgeMs: this.clashLeaveRescue?.lastAt ? Math.max(0, Math.round(Date.now() - Number(this.clashLeaveRescue.lastAt || Date.now()))) : null,
+                lastStage: this.clashLeaveRescue?.lastStage || "",
+                lastResult: this.clashLeaveRescue?.lastResult || null,
+                attempts: Array.isArray(this.clashLeaveRescue?.attempts) ? this.clashLeaveRescue.attempts.slice(-8) : []
+              },
+              sessionMismatchRecovery: summarizeSessionMismatchRecoveryStatus(),
+              loginSnapshotGate: snapshotLoginGateStatus(),
+              reloginGate: summarizeReloginGateStatus(),
+              postLoginZoom: this.postLoginZoom,
+              exitMotionStop: {
+                at: this.lastExitMotionStopAt || 0,
+                reason: this.lastExitMotionStopReason || "",
+                lockRemainingMs: exitMotionLockRemainingMs
+              },
+              self: displaySelf,
+              lastSelf: displaySelf,
+              session,
+              todaySession,
+              safety: this.lastSafety,
+              attackHistory: this.attackHistory.slice(-10),
+              killHistory: this.killHistory.slice(-10),
+              coinProgress: this.coinProgress,
+              lastCoinCollected: this.lastCoinCollected,
+              coinAttempts: Array.from(this.coinAttempts.values()).slice(-8).map((item) => ({
+                id: item.id,
+                bestDistance: Math.round(item.bestDistance),
+                lastDistance: Math.round(item.lastDistance),
+                closeAgeMs: item.closeStartedAt ? Math.max(0, Math.round(now() - item.closeStartedAt)) : 0,
+                lastSeenAgeMs: item.lastSeenAt ? Math.max(0, Math.round(now() - item.lastSeenAt)) : 0
+              })),
+              ignoredCoins: Array.from(this.ignoredCoins.entries()).map(([id, until]) => ({
+                id,
+                remainingMs: Math.max(0, Math.round(until - now()))
+              })),
+              coinFailures: Array.from(this.coinFailures.entries()).slice(-8).map(([id, item]) => ({
+                id,
+                count: Number(item.count || 0),
+                reason: item.reason || "",
+                remainingMs: Math.max(0, Math.round(Number(item.ignoreUntil || 0) - now()))
+              })),
+              snapshotCoinWait: {
+                since: this.snapshotCoinWaitSince || 0,
+                ageMs: Math.max(0, Math.round(Number(this.lastSnapshotCoinWaitAgeMs || 0))),
+                maxMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0))),
+                remainingMs: Math.max(0, Math.round(Number(cfg.snapshotCoinIdleMaxMs || 0) - Number(this.lastSnapshotCoinWaitAgeMs || 0)))
+              },
+              coinSources: this.lastCoinSourceSummary,
+              coinDiagnostics: this.coinDiagnostics,
+              targetSwitchDiagnostics: this.targetSwitchDiagnostics,
+              finalActionArbitration: this.finalActionArbitration,
+              globalState: {
+                refreshedAt: this.globalState.refreshedAt,
+                snapshotRefreshedAt: this.globalState.snapshotRefreshedAt,
+                snapshotAgeMs: this.globalState.snapshotRefreshedAt ? Date.now() - this.globalState.snapshotRefreshedAt : null,
+                tick: this.globalState.tick,
+                entities: arrayCount(this.globalState.entities),
+                bullets: arrayCount(this.globalState.bullets),
+                coinDrops: arrayCount(this.globalState.coinDrops),
+                minimapPoints: this.globalState.minimap?.points?.length || 0,
+                error: this.globalState.error,
+                samplingOutage: this.globalState.samplingOutage || null,
+                loginSnapshotGate: snapshotLoginGateStatus()
+              },
+              control: summarizeControl(),
+              serverPositionStall: summarizeServerPositionStall(),
+              actionSettlementStall: summarizeActionSettlementStall(),
+              login: {
+                lastAt: this.lastLoginAt || 0,
+                lastAgeMs: this.lastLoginAt ? Date.now() - this.lastLoginAt : null,
+                lastResult: this.lastLoginResult
+              },
+              pendingExit: (() => {
+                const pendingExitSummaryPending = this.pendingExit;
+                if (!pendingExitSummaryPending) return null;
+                const pendingExitSummaryNow = Date.now();
+                const pendingExitSummaryReload = normalizePendingExitReloadConfirmationCore(pendingExitSummaryPending.reloadConfirmation, pendingExitSummaryPending, pendingExitSummaryNow);
+                return summarizePendingExitForBotObjectCore(pendingExitSummaryPending, {
+                  nowMs: pendingExitSummaryNow,
+                  retryMs: pendingExitRetryMsForBotObjectCore(pendingExitSummaryPending, {
+                    leaveRetryMinMs: cfg.leaveRetryMinMs,
+                    leaveCommandTimeoutMs: cfg.leaveCommandTimeoutMs,
+                    offlineLeaveRetryMs: cfg.offlineLeaveRetryMs,
+                    combatLeaveRetryMs: cfg.combatLeaveRetryMs,
+                    pursuitLeaveRetryMs: cfg.pursuitLeaveRetryMs
+                  }),
+                  reloadConfirmation: pendingExitSummaryReload
+                });
+              })(),
+              offlineLeave: {
+                lastAt: this.lastOfflineLeaveAt || 0,
+                lastAgeMs: this.lastOfflineLeaveAt ? Date.now() - this.lastOfflineLeaveAt : null,
+                holdUntil: this.offlineReloginUntil || 0,
+                holdRemainingMs: offlineLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.offlineReloginUntil || 0) - Date.now())),
+                safety: this.lastOfflineSafety,
+                summary: offlineLeaveDetail?.summary || "",
+                displayReason: offlineLeaveDetail?.displayReason || "",
+                lastWaitMs: this.lastOfflineLeaveWaitMs || offlineLeaveDetail?.reloginDelayMs || offlineLeaveDetail?.holdRemainingMs || 0,
+                lastResult: this.lastOfflineLeaveResult
+              },
+              pursuit: summarizePursuit(this.pursuit),
+              pursuitLeave: {
+                lastAt: this.lastPursuitLeaveAt || 0,
+                lastAgeMs: this.lastPursuitLeaveAt ? Date.now() - this.lastPursuitLeaveAt : null,
+                holdUntil: this.pursuitReloginUntil || 0,
+                holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+                lastResult: this.lastPursuitLeaveResult
+              },
+              enemyLeave: {
+                holdUntil: this.pursuitReloginUntil || 0,
+                holdRemainingMs: enemyLeaveDetail?.holdRemainingMs ?? Math.max(0, Math.round(Number(this.pursuitReloginUntil || 0) - Date.now())),
+                reason: enemyLeaveDetail?.reason || this.lastInjuryLeaveResult?.reason || this.lastPursuitLeaveResult?.reason || this.lastCombatLeaveResult?.reason || "",
+                summary: enemyLeaveDetail?.summary || latestEnemyLeaveSummary(),
+                displayReason: enemyLeaveDetail?.displayReason || latestEnemyLeaveDisplayReason(),
+                streak: readEnemyLeaveStreakBoundCore(localStorage, bot, cfg, Date.now(), { enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY }),
+                lastWaitMs: this.lastEnemyLeaveWaitMs || enemyLeaveDetail?.reloginDelayMs || enemyLeaveDetail?.holdRemainingMs || 0,
+                enemyActor: enemyLeaveDetail?.enemyActor || null,
+                reloginRepeatCount: enemyLeaveDetail?.reloginRepeatCount || enemyLeaveDetail?.enemyLeaveStreak?.count || 0,
+                lastInjuryResult: this.lastInjuryLeaveResult,
+                lastPursuitResult: this.lastPursuitLeaveResult,
+                lastCombatResult: this.lastCombatLeaveResult,
+                lastRetryResult: this.lastEnemyLeaveRetryResult
+              },
+              combatLeave: {
+                lastAt: this.lastCombatLeaveAt || 0,
+                lastAgeMs: this.lastCombatLeaveAt ? Date.now() - this.lastCombatLeaveAt : null,
+                lastResult: this.lastCombatLeaveResult,
+                pending: summarizePendingCombatLeave(this.pendingCombatLeave)
+              },
+              stopReason: this.stopReason,
+              errors: this.errors.slice(-5)
+            };
+          }
+        };
+        const hypot = Math.hypot;
+        const now = () => performance.now();
+        const dist = (a, b) => hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
+        const speed = (e) => hypot(Number(e.vx) || 0, Number(e.vy) || 0);
+        const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+        const isAlive = (e) => e && e.life !== "Dead" && e.life !== "WaitingRevive" && !e.waiting_revive;
+        const dropValue = (e) => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
+        const truthyFlag = (value) => value === true || value === 1 || value === "1" || value === "true";
+        const anyPositiveNumber = (...values) => values.some((value) => Number(value) > 0);
+        const isInvulnerable = (e) => anyPositiveNumber(
+          e?.invulnerable_remaining_ticks,
+          e?.invincible_remaining_ticks,
+          e?.invulnerability_remaining_ticks,
+          e?.invulnerableTicks,
+          e?.invulnerableRemainingTicks,
+          e?.invincibleRemainingTicks,
+          e?.invulnerabilityRemainingTicks,
+          e?.invulnerable_ticks,
+          e?.invincible_ticks,
+          e?.invulnerability_ticks,
+          e?.invulnerable_remaining_ms,
+          e?.invincible_remaining_ms,
+          e?.invulnerability_remaining_ms,
+          e?.invulnerableRemainingMs,
+          e?.invincibleRemainingMs,
+          e?.invulnerabilityRemainingMs,
+          e?.invulnerable_ms,
+          e?.invincible_ms,
+          e?.invulnerability_ms,
+          e?.immune_remaining_ms,
+          e?.immuneRemainingMs,
+          e?.invulnerable_remaining,
+          e?.invincible_remaining,
+          e?.invulnerability_remaining,
+          e?.invulnerableRemaining,
+          e?.invincibleRemaining,
+          e?.invulnerabilityRemaining
+        ) || truthyFlag(e?.invulnerable) || truthyFlag(e?.is_invulnerable) || truthyFlag(e?.isInvulnerable) || truthyFlag(e?.immune) || truthyFlag(e?.is_immune);
+        const isJoinModeActive = (e) => e?.current_join_mode === "Active" || e?.mode === "Active";
+        const isInvulnerableActive = (e) => isJoinModeActive(e) && isInvulnerable(e);
+        const staminaRemaining = (e, windowName) => {
+          const value = Number(e?.["stamina_" + windowName + "_remaining_milli"] ?? NaN);
+          return Number.isFinite(value) ? value : null;
+        };
+        const staminaLimitValue = (e, windowName, fallback) => {
+          const value = Number(e?.["stamina_" + windowName + "_limit_milli"] ?? fallback);
+          return Number.isFinite(value) && value > 0 ? value : fallback;
+        };
+        const staminaExhaustedThreshold = () => Math.max(0, Number(cfg.staminaExhaustedThresholdMs ?? 1e3));
+        const isStaminaWindowExhausted = (e, windowName) => {
+          const value = staminaRemaining(e, windowName);
+          return value !== null && value < staminaExhaustedThreshold();
+        };
+        const combatMovementBlockedByStamina = (self) => isStaminaWindowExhausted(self, "5s");
+        const hasLongWindowStamina = (e) => !isStaminaWindowExhausted(e, "1h") && !isStaminaWindowExhausted(e, "1d");
+        const hasMoveStamina = (e) => Number(e?.stamina_5s_remaining_milli || 0) > 250 && hasLongWindowStamina(e);
+        const hasAttackStamina = (e) => Number(e?.stamina_5s_remaining_milli || 0) >= cfg.attackMinStamina && hasLongWindowStamina(e);
+        const staminaLimit = (e) => Number(e?.stamina_5s_limit_milli || 1e4);
+        const hasFullStamina = (e) => {
+          const limit = staminaLimit(e);
+          const stamina = Number(e?.stamina_5s_remaining_milli ?? NaN);
+          return Number.isFinite(stamina) && limit > 0 && stamina >= limit * cfg.staminaFullRatio;
+        };
+        const isFiringEntity = (e) => truthyFlag(e?.shooting) || truthyFlag(e?.is_shooting) || truthyFlag(e?.isShooting) || truthyFlag(e?.firing) || truthyFlag(e?.is_firing) || truthyFlag(e?.attacking) || truthyFlag(e?.is_attacking);
+        const isMovingThreat = (e) => speed(e) >= cfg.activeSpeedMin || Boolean(e.recentlyMoved);
+        const isCurrentlyActive = (e) => isMovingThreat(e) || isFiringEntity(e) || isJoinModeActive(e) && (!hasFullStamina(e) || isInvulnerableActive(e));
+        const hasCombatActivitySignal = (e) => isCurrentlyActive(e) || truthyFlag(e?.active) || truthyFlag(e?.currentlyActive) || truthyFlag(e?.combat) || truthyFlag(e?.engagedCombat) || String(e?.combatIntent || "") === "engaged";
+        function entityRecentActivityAgeMs(e) {
+          const value = Number(e?.recentActivityAgeMs ?? e?.activityAgeMs ?? e?.motionAgeMs ?? NaN);
+          return Number.isFinite(value) && value >= 0 ? value : null;
+        }
+        function recentlyActionedForAfk(e) {
+          const cooldownMs = Math.max(0, Number(cfg.afkRecentActivityCooldownMs || 0) || 0);
+          if (!(cooldownMs > 0)) return false;
+          const ageMs = entityRecentActivityAgeMs(e);
+          return Boolean(e?.recentlyActive || ageMs !== null && ageMs <= cooldownMs);
+        }
+        function isIdleInvulnerableTarget(e) {
+          return Boolean(isInvulnerable(e) && !isMovingThreat(e) && !isFiringEntity(e) && hasFullStamina(e) && !recentlyActionedForAfk(e));
+        }
+        const isAvoidanceThreat = (e) => isInvulnerable(e) && !isIdleInvulnerableTarget(e);
+        const isAfkTarget = (e) => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
+        const isAfkProfitTarget = (e) => !recentlyActionedForAfk(e) && (isAfkTarget(e) || isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
+        const { createTargetWhitelistRuntime } = require_target_whitelist2();
+        const {
+          isWhitelistedTarget,
+          summarizeTargetWhitelistStatus,
+          refreshTargetWhitelist,
+          startTargetWhitelistPolling
+        } = createTargetWhitelistRuntime({
+          bot,
+          cfg,
+          targetWhitelistState,
+          fetchJsonNoStore: (...args) => fetchJsonNoStore(...args),
+          recordUnhandledTickError: (...args) => recordUnhandledTickError(...args),
+          locationHref: () => location.href,
+          now: Date.now,
+          setInterval
+        });
+        const hpValue = (e) => Number(e?.hp ?? 0) || 0;
+        const combatHpValue = (e) => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
+        const knownHpValue = (e) => {
+          if (e && Object.prototype.hasOwnProperty.call(e, "knownHp")) {
+            return Number.isFinite(Number(e.knownHp)) ? Number(e.knownHp) : null;
+          }
+          return e?.hp !== void 0 && e?.hp !== null && Number.isFinite(Number(e.hp)) ? Number(e.hp) : null;
+        };
+        const maxHpValue = (e) => Number(e?.max_hp ?? e?.maxHp ?? 0) || 0;
+        const isFullHp = (self) => {
+          const hp = hpValue(self);
+          const maxHp = maxHpValue(self);
+          if (maxHp > 0) return hp >= maxHp;
+          return hp >= 100;
+        };
+        const decorateActiveThreat = (self, e) => {
+          const moving = isMovingThreat(e);
+          return {
+            ...e,
+            distance: dist(self, e),
+            drop: dropValue(e),
+            speed: speed(e),
+            moving,
+            threatRadius: moving ? cfg.dangerRadius : cfg.stationaryActiveDangerRadius,
+            cautionRadius: moving ? cfg.activeCautionRadius : cfg.stationaryActiveCautionRadius,
+            coinDangerRadius: moving ? cfg.coinDangerRadius : cfg.stationaryActiveCoinDangerRadius
+          };
+        };
+        const isRecovering = (self) => {
+          if (!self) return false;
+          const maxHp = maxHpValue(self);
+          if (maxHp > 0) return hpValue(self) < maxHp;
+          return hpValue(self) < cfg.recoverHpThreshold;
+        };
+        const isConservingStamina = (self) => {
+          const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
+          return stamina < cfg.conserveStaminaThreshold;
+        };
+        const { createStaminaStatusRuntime } = require_stamina_status();
+        const {
+          summarizeStamina,
+          dailyStaminaWindowStartAt,
+          nextDailyStaminaResetAt,
+          staminaBudgetReloginDelayMs,
+          staminaResetHoldUntil,
+          longStaminaHoldContradictedByKnownStamina,
+          startupStaminaSampleLooksUnsettled,
+          deferredStaminaExhaustionLeave,
+          staleOfflineStaminaHoldContradicted
+        } = createStaminaStatusRuntime({
+          bot,
+          cfg,
+          staminaRemaining,
+          staminaLimitValue,
+          staminaExhaustedThreshold,
+          staminaExhaustedLongWindows,
+          staminaHoldContradictedByStaminaEvidence
+        });
+        const { attackWorthTakingCore } = require_attack_worth2();
+        const {
+          exitMotionStopLockRemainingMsCore,
+          postExitDecisionWithoutTargetCore
+        } = require_exit_motion2();
+        const {
+          reloginDelayForHpCore,
+          unsafeExitReloginMinDelayMsCore
+        } = require_exit_relogin();
+        const {
+          staminaExhaustedWindowLabel
+        } = require_exit_summary2();
+        const unsafeExitReloginMinDelayMs = () => unsafeExitReloginMinDelayMsCore(cfg);
+        function exitMotionStopLockRemainingMs(t = Date.now()) {
+          return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
+        }
+        function clearPostExitTargetState(reason = "exit-confirmed") {
+          const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
+          bot.lastTarget = null;
+          bot.lastTargetAt = 0;
+          bot.opportunityChoice = null;
+          resetOpportunitySwitchLock();
+          bot.staleCoinEscape = null;
+          bot.coinApproachLock = null;
+          removeTargetOverlay();
+          if (bot.lastDecision && typeof bot.lastDecision === "object") {
+            bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
+              lastExitMotionStopReason: bot.lastExitMotionStopReason,
+              exitMotionLockRemainingMs
+            });
+            try {
+              updateBotPanel(bot.lastDecision);
+            } catch (_) {
+            }
+          }
+        }
+        const { createTargetOverlayRuntime } = require_target_overlay();
+        const {
+          removeTargetOverlay,
+          renderTargetOverlay
+        } = createTargetOverlayRuntime({
+          bot,
+          cfg,
+          targetOverlayId: TARGET_OVERLAY_ID,
+          loginPointSafetyKey: LOGIN_POINT_SAFETY_KEY,
+          storage: localStorage,
+          exitMotionStopLockRemainingMs,
+          getNativeState: () => getNativeState(),
+          getSelf: () => getSelf(),
+          getCurrentUserId: () => getCurrentUserId(),
+          getNativeCoinList: () => getNativeCoinList(),
+          normalizeCoinDrop: (...args) => normalizeCoinDrop(...args),
+          getNativeEntityList: () => getNativeEntityList(),
+          getEntities: () => getEntities(),
+          firstFiniteNumber: (...args) => firstFiniteNumber(...args),
+          dist,
+          isAlive,
+          loginPointSafetyStatus: () => loginPointSafetyStatus()
+        });
+        const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require_display_format2();
+        function activeEnemyLeaveDetail(t = Date.now()) {
+          const current = latestEnemyLeaveResult();
+          const restored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
+          const picked = current || restored || bot.lastEnemyLeaveResult || null;
+          if (!picked) return null;
+          const refreshed = refreshExitDetail(picked, t);
+          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
+            clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
+            if (bot.lastEnemyLeaveResult === picked) bot.lastEnemyLeaveResult = null;
+            return null;
+          }
+          bot.lastEnemyLeaveResult = refreshed;
+          if (Number(refreshed?.reloginUntil || 0) > 0) bot.pursuitReloginUntil = Math.max(Number(bot.pursuitReloginUntil || 0), Number(refreshed.reloginUntil));
+          return refreshed;
+        }
+        function activeOfflineLeaveDetail(t = Date.now()) {
+          const picked = bot.lastOfflineLeaveResult || readPersistentExitState(OFFLINE_LEAVE_STATE_KEY, t);
+          if (!picked) return null;
+          const refreshed = refreshExitDetail(picked, t);
+          if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
+            clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
+            if (bot.lastOfflineLeaveResult === picked) bot.lastOfflineLeaveResult = null;
+            return null;
+          }
+          bot.lastOfflineLeaveResult = refreshed;
+          if (Number(refreshed?.reloginUntil || 0) > 0) bot.offlineReloginUntil = Math.max(Number(bot.offlineReloginUntil || 0), Number(refreshed.reloginUntil));
+          return refreshed;
+        }
+        function latestEnemyLeaveResult() {
+          const candidates = [
+            { at: Number(bot.lastEnemyLeaveResult?.at || 0), result: bot.lastEnemyLeaveResult },
+            { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
+            { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
+            { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
+          ].filter((item) => item.result);
+          return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
+        }
+        function latestEnemyLeaveSummary() {
+          const result = latestEnemyLeaveResult();
+          return result?.summary || result?.exitSummary || result?.enemyLeaveSummary || result?.displayReason || "";
+        }
+        function latestEnemyLeaveDisplayReason() {
+          const result = latestEnemyLeaveResult();
+          return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || "";
+        }
+        const { createStatusPanelRuntime } = require_status_panel();
+        const {
+          removeBotPanel,
+          updateBotPanel
+        } = createStatusPanelRuntime({
+          bot,
+          cfg,
+          panelId: PANEL_ID,
+          renderTargetOverlay,
+          dropValue,
+          summarizeControl: () => summarizeControl(),
+          summarizePursuit: (...args) => summarizePursuit(...args)
+        });
+        function logStatus(text, detail) {
+          bot.lastAction = text;
+          if (detail) bot.lastDecision = detail;
+          if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: "wait", reason: text, self: bot.lastSelf });
+          if (typeof log === "function") log("[bot] " + text, "info");
+          console.log("[grasp-rat-bot]", text, detail || "");
+        }
+        const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require_runtime_utils2();
+        const { arrayCount } = require_array_count();
+        let rememberCombatEngagement;
+        let clearCombatEngagement;
+        let summarizeOfflineThreat;
+        let assessOfflineSafety;
+        let pickActiveCombatWaitThreat;
+        let activeCombatThreatWaitAction;
+        let recentCombatInjuryActive;
+        let lowValueActiveDropMax;
+        let isLowValueActiveCombatTarget;
+        let proactiveActiveKillStaminaBudgetMs;
+        let proactiveActiveCombatStaminaAffordable;
+        let activeCombatBudgetBlocked;
+        let activeCombatRequiresThreatEvidence;
+        let incomingOwnerMatchesTarget;
+        let activeCombatThreatensSelf;
+        let lowValueActiveThreatensSelf;
+        let combatDodgeThreatRange;
+        let combatTargetPriority;
+        let isDefensiveCombatTarget;
+        let isProfitableCombatTarget;
+        let combatHpGapDisadvantaged;
+        let profitCombatDisadvantaged;
+        let pickCombatTarget;
+        let combatEngageGraceRange;
+        let combatTargetCandidateRange;
+        let combatDodgeOnlyCandidateRange;
+        let combatEngagedCandidate;
+        let pickEngagedCombatTarget;
+        let defensiveTargetOverridesEngaged;
+        let incomingBulletRequiresTargetSwitch;
+        let pickOpportunisticShotTarget;
+        let actionOpportunityScore;
+        let opportunisticShotBeatsAction;
+        let attachOpportunisticShot;
+        let buildOpportunisticShotWait;
+        let combatMoveVelocityForDirection;
+        let combatBulletThreats;
+        let incomingBulletThreat;
+        let combatThreatFieldCandidate;
+        let combatBulletThreatField;
+        let combatStrafeHoldMs;
+        let combatStrafeKey;
+        let combatStrafeMatchesTarget;
+        let combatPreciseStrafeSign;
+        let selectCombatStrafeSign;
+        let tangentMoveForBullet;
+        let combatMoveClosesDistance;
+        let combatSafeCloseMoveOverride;
+        let combatSpacingVector;
+        let combatSpacingShouldOverrideBullet;
+        let combatLowHpCloseRiskState;
+        let combatPressureDisadvantageState;
+        let combatSustainedPressureDisadvantageState;
+        let combatPressureCloseVector;
+        let combatFarNoDamageCloseVector;
+        let combatRetreatingFighterCloseVector;
+        let combatFinishPressureState;
+        let combatOutOfRangeFinishPressureState;
+        let combatOutOfRangeReengageState;
+        let combatPassiveRunnerState;
+        let combatPassiveRunnerCloseVector;
+        let mergeCombatMove;
+        let combatPressureThreat;
+        let combatOutOfRangeDodgeAction;
+        let combatAimJitterLimit;
+        let combatAimMotionScale;
+        let combatMotionSample;
+        let combatMotionSamplesWithCurrent;
+        let combatOpponentProfile;
+        let combatTradeEstimate;
+        let combatTargetId;
+        let combatRetreatIgnoreActive;
+        let rememberCombatRetreatIgnore;
+        let clearCombatDisadvantageObservation;
+        let combatDisadvantageObservationState;
+        let combatAimDamageState;
+        let combatLowHpNoDamageLeaveState;
+        let combatRetreatingTargetState;
+        let combatServerStallNoDamageLeaveState;
+        let combatTrendState;
+        let combatTickActiveFromState;
+        let globalSamplingOutageOfflineState;
+        let combatTickGapOfflineState;
+        let nativeTickMinIntervalMs;
+        let combatShootingPlan;
+        let combatAimNoDamageLevel;
+        let combatAimNoDamageJitterLimit;
+        let combatAimSteadyNoDamageState;
+        let combatAimFallbackPrecisionState;
+        let combatMovementAimMode;
+        let combatInterceptSolution;
+        let combatLiveAimTarget;
+        let combatAimSourceDivergenceState;
+        let combatAimServerStallState;
+        let combatAimDynamicStrategyState;
+        let combatAimTarget;
+        let combatLeaveCoverAction;
+        let buildCombatAction;
+        let handleTickReentryCombatGap;
+        let classify;
+        let chooseAction;
+        let tick;
+        let threatKey;
+        let returnBlockRadius;
+        let readImportantLogsStore;
+        let restoreImportantLogsForRemote;
+        let markImportantLogsRemoteSent;
+        let markImportantLogsRemoteError;
+        let noteImportantSessionExit;
+        let startImportantSession;
+        let upsertImportantSessionRecord;
+        let importantSessionStaminaSpentMs;
+        let recordImportantCombatTick;
+        let summarizeImportantLoggingStatus;
+        let finishImportantCombat;
+        let rememberAttack;
+        let recordKillHistoryItem;
+        let updateKillHistory;
+        const { createCombatLogRuntime } = require_combat_log_runtime();
+        const {
+          configureCombatLogging,
+          summarizeCombatLoggingStatus,
+          pendingExitAuditLogIds,
+          unresolvedExitAuditLogCount,
+          exitAuditFlushPending,
+          exitAuditFlushBlockDetail,
+          importantSessionEndFlushPending,
+          importantSessionEndFlushBlockDetail,
+          closeCurrentImportantSessionBeforeLogin,
+          closeCurrentImportantSessionBeforeReload,
+          restorePersistedExitAuditLogs,
+          restorePersistedCombatLogPendingEntries,
+          persistCombatLogPendingEntries,
+          newExitAuditRequestId: newExitAuditRequestId2,
+          ensureExitAuditDetail,
+          recordExitAuditEvent,
+          combatLogSuspendReason,
+          combatLogIsAfkAttack,
+          queueCombatLogEntry,
+          flushCombatLogs,
+          recordCombatLogTick
+        } = createCombatLogRuntime({
+          bot,
+          cfg,
+          storage: localStorage,
+          combatLogPendingEntriesKey: COMBAT_LOG_PENDING_ENTRIES_KEY,
+          exitAuditPendingLogsKey: EXIT_AUDIT_PENDING_LOGS_KEY,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+          pendingExitStateKey: PENDING_EXIT_STATE_KEY,
+          now,
+          readPersistentExitState,
+          writePersistentPendingExitStateCore,
+          pendingExitPersistenceCoreHelpers,
+          clearPersistentPendingExitState,
+          clearPersistentExitState,
+          normalizePendingExitReloadConfirmationCore,
+          staleOfflineStaminaHoldContradicted: (...args) => staleOfflineStaminaHoldContradicted(...args),
+          readImportantLogsStore: (...args) => readImportantLogsStore(...args),
+          restoreImportantLogsForRemote: (...args) => restoreImportantLogsForRemote(...args),
+          markImportantLogsRemoteSent: (...args) => markImportantLogsRemoteSent(...args),
+          markImportantLogsRemoteError: (...args) => markImportantLogsRemoteError(...args),
+          noteImportantSessionExit: (...args) => noteImportantSessionExit(...args),
+          getCurrentUserId: () => getCurrentUserId(),
+          summarizeSelf: (...args) => summarizeSelf(...args),
+          dropValue,
+          dist,
+          speed,
+          hypot,
+          knownHpValue,
+          isCurrentlyActive,
+          isMovingThreat,
+          isFiringEntity,
+          isInvulnerable,
+          getNativeEntityList: () => getNativeEntityList(),
+          normalizeBullet: (...args) => normalizeBullet(...args),
+          getBullets: () => getBullets(),
+          summarizeServerPositionStall: (...args) => summarizeServerPositionStall(...args),
+          combatTickActiveFromState: (...args) => combatTickActiveFromState(...args),
+          summarizeNetworkQuality: (...args) => summarizeNetworkQuality(...args),
+          getSelf: () => getSelf(),
+          incomingBulletThreat: (...args) => incomingBulletThreat(...args),
+          summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args),
+          summarizePursuit: (...args) => summarizePursuit(...args),
+          summarizeControl: (...args) => summarizeControl(...args),
+          snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
+          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail)
+        });
+        const { createTickSafetyRuntime } = require_tick_safety();
+        const {
+          recordUnhandledTickError,
+          runTickSafely,
+          runCallbackSafely
+        } = createTickSafetyRuntime({
+          bot,
+          now,
+          tick: (...args) => tick(...args),
+          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail)
+        });
+        let requestReload;
+        let requestLeaveConfirmationReload;
+        let requestSessionMismatchRecoveryReload;
+        let cloudflareErrorInfo;
+        let maybeReloadCloudflareError;
+        let getCurrentUserId;
+        let getSessionToken;
+        let hasNativeGameSession;
+        let controlHasNativeGameSession;
+        let snapshotSelfPresenceState;
+        let controlHasAuthoritativeSessionMismatch;
+        let noSelfGameSessionExitState;
+        let clearSessionMismatchRecoveryState;
+        let sessionMismatchRecoveryReloadSatisfied;
+        let summarizeSessionMismatchRecoveryStatus;
+        let liveSessionMismatchTakeoverState;
+        let noteSelfUnavailableForPostLoginZoom;
+        let schedulePostLoginZoomOut;
+        let findLoginControl;
+        let hasLoginRequiredText;
+        let setLoginSuppress;
+        let loginSuppressRemainingMs;
+        let loginSuppressStatus;
+        let loginPointSafetyExitSelfForDetail;
+        let loginPointSafetyStatus;
+        let rememberLoginPointDamageThreat;
+        let maybeRecordLoginPoint;
+        let snapshotLoginGateStatus;
+        let resetLoginSnapshotGate;
+        let noteLoginSnapshotProbe;
+        let loginSnapshotGateAllowsLogin;
+        let loginSnapshotGateBlockReason;
+        let ensureLoginSnapshotGate;
+        let loginSnapshotGateDisplayReason;
+        let markManualLoginBypass;
+        let manualLoginBypassActive;
+        let installNativeLoginGateInterceptors;
+        let summarizeReloginGateStatus;
+        let clearCurrentReloginHold;
+        let randomBetween;
+        let hpInfoForRelogin;
+        let summarizePursuit;
+        let pendingExitSkipNewLeave;
+        let pendingExitIntentForSkippedLeave;
+        let rememberPendingExit;
+        let noteLeave403SnapshotProbe;
+        let handlePendingExit;
+        let summarizePendingCombatLeave;
+        let pendingCombatLeaveAction;
+        let isCombatStateForInjuryLeave;
+        let updatePursuitTracking;
+        let issueLeaveCommand;
+        let maybeStartAutoLogin;
+        let forceLoginNow;
+        let leaveOffline;
+        let leaveForInjury;
+        let leaveForPursuit;
+        let leaveForCombat;
+        let leaveDuringEnemyHold;
+        let clearExitHoldDetail;
+        const { createControlFlowRuntime } = require_control_flow_runtime();
+        ({
+          requestReload,
+          requestLeaveConfirmationReload,
+          requestSessionMismatchRecoveryReload,
+          cloudflareErrorInfo,
+          maybeReloadCloudflareError,
+          getCurrentUserId,
+          getSessionToken,
+          hasNativeGameSession,
+          controlHasNativeGameSession,
+          snapshotSelfPresenceState,
+          controlHasAuthoritativeSessionMismatch,
+          noSelfGameSessionExitState,
+          clearSessionMismatchRecoveryState,
+          sessionMismatchRecoveryReloadSatisfied,
+          summarizeSessionMismatchRecoveryStatus,
+          liveSessionMismatchTakeoverState,
+          noteSelfUnavailableForPostLoginZoom,
+          schedulePostLoginZoomOut,
+          findLoginControl,
+          hasLoginRequiredText,
+          setLoginSuppress,
+          loginSuppressRemainingMs,
+          loginSuppressStatus,
+          loginPointSafetyExitSelfForDetail,
+          loginPointSafetyStatus,
+          rememberLoginPointDamageThreat,
+          maybeRecordLoginPoint,
+          snapshotLoginGateStatus,
+          resetLoginSnapshotGate,
+          noteLoginSnapshotProbe,
+          loginSnapshotGateAllowsLogin,
+          loginSnapshotGateBlockReason,
+          ensureLoginSnapshotGate,
+          loginSnapshotGateDisplayReason,
+          markManualLoginBypass,
+          manualLoginBypassActive,
+          installNativeLoginGateInterceptors,
+          summarizeReloginGateStatus,
+          clearCurrentReloginHold,
+          randomBetween,
+          hpInfoForRelogin,
+          summarizePursuit,
+          pendingExitSkipNewLeave,
+          pendingExitIntentForSkippedLeave,
+          rememberPendingExit,
+          noteLeave403SnapshotProbe,
+          handlePendingExit,
+          summarizePendingCombatLeave,
+          pendingCombatLeaveAction,
+          isCombatStateForInjuryLeave,
+          updatePursuitTracking,
+          issueLeaveCommand,
+          maybeStartAutoLogin,
+          forceLoginNow,
+          leaveOffline,
+          leaveForInjury,
+          leaveForPursuit,
+          leaveForCombat,
+          leaveDuringEnemyHold,
+          clearExitHoldDetail
+        } = createControlFlowRuntime({
+          bot,
+          cfg,
+          storage: localStorage,
+          pageGlobal,
+          botKey: BOT_KEY,
+          pendingExitStateKey: PENDING_EXIT_STATE_KEY,
+          sessionMismatchRecoveryKey: SESSION_MISMATCH_RECOVERY_KEY,
+          cloudflareReloadKey: CLOUDFLARE_RELOAD_KEY,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          loginPointSafetyKey: LOGIN_POINT_SAFETY_KEY,
+          enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+          offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+          enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY,
+          readPageGlobal,
+          installPageGlobal,
+          normalizePendingExitReloadConfirmationCore,
+          writePersistentPendingExitStateCore,
+          pendingExitPersistenceCoreHelpers,
+          clearPersistentPendingExitState,
+          clearPersistentExitState,
+          readPersistentExitState,
+          writePersistentExitState,
+          normalizeLoginSnapshotGateStateCore,
+          loginSnapshotSuccessRequiredCore,
+          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail),
+          exitAuditFlushPending,
+          exitAuditFlushBlockDetail,
+          importantSessionEndFlushPending,
+          importantSessionEndFlushBlockDetail,
+          closeCurrentImportantSessionBeforeReload,
+          closeCurrentImportantSessionBeforeLogin,
+          persistCombatLogPendingEntries,
+          flushCombatLogs,
+          ensureExitAuditDetail,
+          recordExitAuditEvent,
+          noteImportantSessionExit,
+          logStatus,
+          updateBotPanel,
+          removeTargetOverlay,
+          stopMotionSafely: (...args) => stopMotionSafely(...args),
+          stopMotionAfterExit,
+          clearCombatEngagement: (...args) => clearCombatEngagement(...args),
+          sendActionVelocity: (...args) => sendActionVelocity(...args),
+          shootAt: (...args) => shootAt(...args),
+          triggerNativeTick: (...args) => triggerNativeTick(...args),
+          recordUnhandledTickError,
+          activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
+          activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
+          exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
+          unsafeExitReloginMinDelayMs: (...args) => unsafeExitReloginMinDelayMs(...args),
+          getNativeControl: (...args) => getNativeControl(...args),
+          getNativeState: (...args) => getNativeState(...args),
+          getOwnEntity: (...args) => getOwnEntity(...args),
+          getSelf: (...args) => getSelf(...args),
+          summarizeSelf: (...args) => summarizeSelf(...args),
+          summarizeControl: (...args) => summarizeControl(...args),
+          snapshotDataAgeMs: (...args) => snapshotDataAgeMs(...args),
+          snapshotSelfFreshEnough: (...args) => snapshotSelfFreshEnough(...args),
+          isOfflineishWsReadyState: (...args) => isOfflineishWsReadyState(...args),
+          isAlive,
+          isInvulnerable,
+          isJoinModeActive,
+          isFiringEntity,
+          isMovingThreat,
+          truthyFlag,
+          staminaRemaining,
+          staminaLimitValue,
+          dropValue,
+          clamp,
+          dist,
+          speed,
+          now,
+          isFullHp,
+          threatKey: (...args) => threatKey(...args),
+          returnBlockRadius: (...args) => returnBlockRadius(...args),
+          staleOfflineStaminaHoldContradicted: (...args) => staleOfflineStaminaHoldContradicted(...args),
+          staminaBudgetReloginDelayMs,
+          staminaResetHoldUntil,
+          staminaBudgetCoinLeaveSummary: (...args) => staminaBudgetCoinLeaveSummary(...args),
+          staminaExhaustedWindowLabel: (...args) => staminaExhaustedWindowLabel(...args),
+          reloginDelayForHpCore
+        }));
+        function readPauseReason() {
+          let reason = "";
+          try {
+            reason = String(localStorage.getItem(PAUSE_REASON_KEY) || "");
+          } catch (_) {
+          }
+          return String(readPageGlobal("__graspRatBotPauseReason", "", pageGlobal) || reason || "");
+        }
+        function syncPausedFromPage2(stopOnPause = true) {
+          let localPaused = false;
+          try {
+            localPaused = localStorage.getItem(PAUSED_KEY) === "true";
+          } catch (_) {
+          }
+          const paused = Boolean(readPageGlobal("__graspRatBotPaused", false, pageGlobal) === true || localPaused);
+          if (paused !== bot.paused) {
+            bot.paused = paused;
+            bot.pauseChangedAt = Date.now();
+            if (paused) {
+              if (stopOnPause) stopMotionSafely("paused");
+              removeTargetOverlay();
+            }
+          }
+          bot.pauseReason = paused ? readPauseReason() || bot.pauseReason || "manual" : "";
+          return paused;
+        }
+        function getOwnEntity() {
+          try {
+            return typeof getSelf === "function" ? getSelf() : null;
+          } catch (_) {
+            return null;
+          }
+        }
+        let pageNativeSnapshotUrl;
+        let pageNativeSnapshotPayload;
+        let pageNativeSnapshotError;
+        let installPageNativeSnapshotObserver;
+        let getNativeState;
+        let getNativeControl;
+        let wsConstant;
+        let isOfflineishWsReadyState;
+        let noteNativeReconnectState;
+        let detachNativeMessagePump;
+        let triggerNativeTick;
+        let ensureNativeMessagePump;
+        let notePageOwnsReconnect;
+        let syncNativeControl;
+        let summarizeControl;
+        let closeControlWs;
+        let ensureControlWs;
+        let getSelf;
+        let getEntities;
+        let realtimeEntityWorldPoint;
+        let realtimeEntityKey;
+        let normalizeRealtimeEntity;
+        let mergeRealtimeEntity;
+        let getNativeEntityList;
+        let listFromNativeCoinValue;
+        let addNativeCoinSource;
+        let getNativeCoinSources;
+        let getNativeCoinList;
+        let entityIdKey;
+        let buildNativeEntityMeta;
+        let snapshotDataAgeMs;
+        let snapshotDataFreshEnough;
+        let snapshotBulletFreshEnough;
+        let snapshotSelfFreshEnough;
+        let entityFreshEnoughForOffense;
+        let snapshotEntityAllowed;
+        let firstFiniteNumber;
+        let normalizeCoinDrop;
+        let coinDropKey;
+        let nativeViewRadiusCm;
+        let snapshotCoinLocalSuppressRadius;
+        let snapshotCoinAllowed;
+        let isSnapshotOnlyCoin;
+        let snapshotCoinFreshEnough;
+        let getCoins;
+        let normalizeBullet;
+        let getBullets;
+        let fetchJsonNoStore;
+        let summarizeSelf;
+        let entityPoint;
+        let pointDistance;
+        let getSnapshotSelf;
+        let currentVelocityCommandActive;
+        let summarizeServerPositionStall;
+        let resetServerPositionStall;
+        let summarizeActionSettlementStall;
+        let resetActionSettlementStall;
+        let actionSettlementNumber;
+        let actionSettlementEntityHp;
+        let actionSettlementTarget;
+        let actionSettlementSample;
+        let actionSettlementStableNumber;
+        let actionSettlementSelfProgress;
+        let actionSettlementTargetProgress;
+        let assessActionSettlementStall;
+        let assessServerPositionStall;
+        let resetSessionStaminaStats;
+        let updateSessionStaminaStats;
+        let updateSessionStats;
+        let summarizeSessionStats;
+        let readTodaySessionRecords;
+        let maybeSetLatestTodayStamina;
+        let dailyStaminaSpentFromRemaining;
+        let addTodaySessionRecord;
+        let summarizeTodaySessionStats;
+        let pushBounded;
+        let networkQualityRound;
+        let networkQualityEma;
+        let ensureNetworkQualityState;
+        let networkQualityPoint;
+        let networkQualityDistance;
+        let networkQualityWindowMs;
+        let networkQualityBaseFrameMs;
+        let networkQualityExpectedFrameMs;
+        let pruneNetworkQualityFrameSamples;
+        let networkQualityFrameLatencySample;
+        let estimateNetworkQualityLostFrames;
+        let observeNativeWsFrame;
+        let recordNetworkQualityMovementCommand;
+        let observeNetworkQualitySelf;
+        let networkQualityTargetId;
+        let recordNetworkQualityShot;
+        let recordNetworkQualityAttackDamage;
+        let summarizeNetworkQuality;
+        let refreshGlobalState;
+        let wsSend;
+        let setNativeKeys;
+        let cancelVelocityStopTimer;
+        let clearNativeMotionState;
+        let stopLocalMotionOnly;
+        let stopMotionSafely;
+        let stopMotionAfterExit;
+        let cancelDirectVelocityRepeat;
+        let directWsVelocityMessage;
+        let sendDirectNativeVelocity;
+        let scheduleDirectVelocityRepeat;
+        let sendNativeVelocity;
+        let safeSendVelocity;
+        let sendActionVelocity;
+        let aimAt;
+        let sendNativeShoot;
+        let recordCombatShotAttempt;
+        let shootAt;
+        const { createNativeStateRuntime } = require_native_state_runtime();
+        ({
+          pageNativeSnapshotUrl,
+          pageNativeSnapshotPayload,
+          pageNativeSnapshotError,
+          installPageNativeSnapshotObserver,
+          getNativeState,
+          getNativeControl,
+          wsConstant,
+          isOfflineishWsReadyState,
+          noteNativeReconnectState,
+          detachNativeMessagePump,
+          triggerNativeTick,
+          ensureNativeMessagePump,
+          notePageOwnsReconnect,
+          syncNativeControl,
+          summarizeControl,
+          closeControlWs,
+          ensureControlWs,
+          getSelf,
+          getEntities,
+          realtimeEntityWorldPoint,
+          realtimeEntityKey,
+          normalizeRealtimeEntity,
+          mergeRealtimeEntity,
+          getNativeEntityList,
+          listFromNativeCoinValue,
+          addNativeCoinSource,
+          getNativeCoinSources,
+          getNativeCoinList,
+          entityIdKey,
+          buildNativeEntityMeta,
+          snapshotDataAgeMs,
+          snapshotDataFreshEnough,
+          snapshotBulletFreshEnough,
+          snapshotSelfFreshEnough,
+          entityFreshEnoughForOffense,
+          snapshotEntityAllowed,
+          firstFiniteNumber,
+          normalizeCoinDrop,
+          coinDropKey,
+          nativeViewRadiusCm,
+          snapshotCoinLocalSuppressRadius,
+          snapshotCoinAllowed,
+          isSnapshotOnlyCoin,
+          snapshotCoinFreshEnough,
+          getCoins,
+          normalizeBullet,
+          getBullets,
+          fetchJsonNoStore,
+          summarizeSelf,
+          entityPoint,
+          pointDistance,
+          getSnapshotSelf,
+          currentVelocityCommandActive,
+          summarizeServerPositionStall,
+          resetServerPositionStall,
+          summarizeActionSettlementStall,
+          resetActionSettlementStall,
+          actionSettlementNumber,
+          actionSettlementEntityHp,
+          actionSettlementTarget,
+          actionSettlementSample,
+          actionSettlementStableNumber,
+          actionSettlementSelfProgress,
+          actionSettlementTargetProgress,
+          assessActionSettlementStall,
+          assessServerPositionStall,
+          resetSessionStaminaStats,
+          updateSessionStaminaStats,
+          updateSessionStats,
+          summarizeSessionStats,
+          readTodaySessionRecords,
+          maybeSetLatestTodayStamina,
+          dailyStaminaSpentFromRemaining,
+          addTodaySessionRecord,
+          summarizeTodaySessionStats,
+          pushBounded,
+          networkQualityRound,
+          networkQualityEma,
+          ensureNetworkQualityState,
+          networkQualityPoint,
+          networkQualityDistance,
+          networkQualityWindowMs,
+          networkQualityBaseFrameMs,
+          networkQualityExpectedFrameMs,
+          pruneNetworkQualityFrameSamples,
+          networkQualityFrameLatencySample,
+          estimateNetworkQualityLostFrames,
+          observeNativeWsFrame,
+          recordNetworkQualityMovementCommand,
+          observeNetworkQualitySelf,
+          networkQualityTargetId,
+          recordNetworkQualityShot,
+          recordNetworkQualityAttackDamage,
+          summarizeNetworkQuality,
+          refreshGlobalState,
+          wsSend,
+          setNativeKeys,
+          cancelVelocityStopTimer,
+          clearNativeMotionState,
+          stopLocalMotionOnly,
+          stopMotionSafely,
+          stopMotionAfterExit,
+          cancelDirectVelocityRepeat,
+          directWsVelocityMessage,
+          sendDirectNativeVelocity,
+          scheduleDirectVelocityRepeat,
+          sendNativeVelocity,
+          safeSendVelocity,
+          sendActionVelocity,
+          aimAt,
+          sendNativeShoot,
+          recordCombatShotAttempt,
+          shootAt
+        } = createNativeStateRuntime({
+          bot,
+          cfg,
+          storage: localStorage,
+          pageGlobal,
+          readPageGlobal,
+          installPageGlobal,
+          recordRuntimeDiagnostics: (detail) => recordRuntimeDiagnosticsCore(bot, detail),
+          noteLoginSnapshotProbe: (...args) => noteLoginSnapshotProbe(...args),
+          noteLeave403SnapshotProbe: (...args) => noteLeave403SnapshotProbe(...args),
+          getCurrentUserId: () => getCurrentUserId(),
+          getSessionToken: () => getSessionToken(),
+          getOwnEntity: () => {
+            try {
+              return typeof getOwnEntity === "function" ? getOwnEntity() : null;
+            } catch (_) {
+              return null;
+            }
+          },
+          targetOverlayRenderEntities: () => [],
+          runTickSafely: (...args) => runTickSafely(...args),
+          runCallbackSafely: (...args) => runCallbackSafely(...args),
+          recordUnhandledTickError: (...args) => recordUnhandledTickError(...args),
+          nativeTickMinIntervalMs: (...args) => nativeTickMinIntervalMs(...args),
+          clearPostExitTargetState: (...args) => clearPostExitTargetState(...args),
+          exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
+          noteImportantSessionExit: (...args) => noteImportantSessionExit(...args),
+          startImportantSession: (...args) => startImportantSession(...args),
+          readImportantLogsStore: (...args) => readImportantLogsStore(...args),
+          writePersistentLastSelfState: (...args) => writePersistentLastSelfState(...args),
+          summarizeStamina: (...args) => summarizeStamina(...args),
+          dailyStaminaWindowStartAt: (...args) => dailyStaminaWindowStartAt(...args),
+          dropValue,
+          dist,
+          speed,
+          hypot,
+          clamp,
+          isAlive,
+          isFiringEntity,
+          combatMetricRound: (value) => {
+            const number = Number(value);
+            return Number.isFinite(number) ? Math.round(number) : null;
+          },
+          combatMetricEntityId: (entity) => entity?.id ?? entity?.user_id ?? null,
+          combatMetricHp: (entity) => {
+            const number = Number(entity?.hp);
+            return Number.isFinite(number) ? number : null;
+          },
+          now
+        }));
+        const { createImportantLoggingRuntime } = require_important_logging_runtime();
+        ({
+          readImportantLogsStore,
+          restoreImportantLogsForRemote,
+          markImportantLogsRemoteSent,
+          markImportantLogsRemoteError,
+          noteImportantSessionExit,
+          startImportantSession,
+          upsertImportantSessionRecord,
+          importantSessionStaminaSpentMs,
+          recordImportantCombatTick,
+          summarizeImportantLoggingStatus,
+          finishImportantCombat,
+          rememberAttack,
+          recordKillHistoryItem,
+          updateKillHistory
+        } = createImportantLoggingRuntime({
+          bot,
+          cfg,
+          storage: localStorage,
+          importantLogsKey: IMPORTANT_LOGS_KEY,
+          queueCombatLogEntry,
+          flushCombatLogs,
+          combatLogSuspendReason,
+          combatLogIsAfkAttack,
+          getCurrentUserId: () => getCurrentUserId(),
+          pushBounded,
+          knownHpValue,
+          dropValue,
+          isAfkProfitTarget,
+          isCurrentlyActive,
+          isMovingThreat,
+          isFiringEntity,
+          summarizeSelf: (...args) => summarizeSelf(...args),
+          getNativeEntityList: () => getNativeEntityList(),
+          getEntities: () => getEntities(),
+          isAlive,
+          firstFiniteNumber
+        }));
+        const { createProfitRuntime } = require_profit_runtime();
+        const {
+          coinMotionNumber,
+          coinMotionTolerance,
+          coinAxisApproachDirectionCore,
+          coinPickupPrecisionPulseMsCore,
+          coinAxisLockShouldHoldCore,
+          coinNearApproachAxisCore,
+          coinDirectionToCore,
+          coinMotionMetaCore,
+          directionTo,
+          coinMotionCoreOptions,
+          coinPickupFailureCount,
+          coinPickupAttemptSlowCount,
+          applyCoinApproachLockUpdate,
+          coinDiagnosticsSummary,
+          summarizeCoinDiagnosticsList,
+          addCoinFilterDiagnostic,
+          buildCoinDiagnostics,
+          coinThreatDangerRadius,
+          coinHeadingBlockedByInvulnerableThreat,
+          coinBlockedByThreat,
+          coinDiagnosticsNearDistance,
+          coinDiagnosticsLimit,
+          coinThreatDiagnostics,
+          recordCoinFilterDiagnostic,
+          coinStaminaAffordableWithDiagnostic,
+          attachCoinDiagnostics,
+          safeCoinCandidates,
+          pickRealtimeLocalCoin,
+          nearestRealtimeCoinWithin,
+          fieldMigrationBlockedByNearbyCoin,
+          pickCoin,
+          pickCoinField,
+          pickDistantCoin,
+          highValueCoinPriorityAmount,
+          highValueCoinPriorityHealthyHp,
+          pickHighValueVisibleCoin,
+          nearbyThreatBlocksLowHpHighValueCoin,
+          canPrioritizeHighValueVisibleCoin,
+          highValueVisibleCoinPriorityNeeded,
+          dailyStaminaBudgetIsLimitingCore,
+          summarizeBlockedStaminaOpportunityCore,
+          summarizeNearestCoinStaminaBudgetExitCore,
+          pickNearestDailyStaminaFinalCoinCore,
+          opportunityMoveStaminaCost,
+          opportunityCoinStaminaCost,
+          estimatedKillShots,
+          opportunityEnemyStaminaCost,
+          opportunityWindowStaminaBudget,
+          opportunityLongStaminaBudget,
+          opportunityStaminaAffordable,
+          dailyStaminaFinalCoinAction,
+          staminaBudgetCoinLeaveSummary,
+          staminaBudgetCoinLeaveDisplay,
+          staminaBudgetCoinLeaveAction,
+          compareCoinOpportunity,
+          snapshotCoinAgeMs,
+          isSnapshotCoinWaitAction,
+          pickSnapshotCoinDestination,
+          scoreCoinOpportunity,
+          opportunityAfkTargetId,
+          targetStamina5sRemaining,
+          opportunityAfkStaminaState,
+          opportunityAfkStaminaCooldownMs,
+          opportunityAfkStaminaDropThresholdMs,
+          updateOpportunityAfkStaminaObservations,
+          opportunityAfkStaminaCooldownRemaining,
+          afkOpportunityBlockedByStaminaCooldown,
+          scoreEnemyOpportunity,
+          opportunityEffectiveStaminaCostCore,
+          opportunityValueScoreCore,
+          opportunityPriorityTierCore,
+          mergeCoinRouteDisplayCore,
+          uniqueVisibleRouteCoinsCore,
+          buildCoinOpportunityCandidatesCore,
+          buildEnemyOpportunityCandidatesCore,
+          buildOpportunityCandidatesCore,
+          bestCoinOpportunityScoreCore,
+          opportunityPriorityTier,
+          defaultDist,
+          coinRouteKey,
+          coinRouteIdsFrom,
+          coinRouteLegStaminaCostCore,
+          coinRouteLegClearCore,
+          coinRoutePointLimitCore,
+          coinRouteSummaryCore,
+          coinRoutePoints,
+          coinRouteActionMetaCore,
+          buildCoinRouteFromAnchorCore,
+          coinRouteSkipsCloserFirstCoinCore,
+          coinRouteSkipsHeldSingleCoinCore,
+          coinRouteMatchesHeldChoiceCore,
+          heldCoinRouteBeatsSwitchCore,
+          pickCoinRouteOpportunityCore,
+          coinRouteCoreOptions,
+          currentHeldCoinRouteChoice,
+          currentHeldCoinChoice,
+          opportunityCandidateCoreOptions,
+          pickProfitableCombatTarget,
+          postAttackVisibleCoinExistsCore,
+          resolvedRecentPostAttackDropsCore,
+          buildPostAttackDropCoinCandidateCore,
+          pickPostAttackDropCoinCore,
+          pickPostAttackDropWaitTargetCore,
+          attackEntityMatches,
+          recentAttackTargetStillAttackable,
+          postAttackDropResolvedAt,
+          buildPostAttackDropWaitAction,
+          buildCoinAction,
+          buildEnemyAction,
+          opportunityKey,
+          opportunityChoiceType,
+          opportunityChoiceId,
+          opportunityChoiceKey,
+          opportunityPairKey,
+          opportunityByKey,
+          opportunityMatchesChoiceCore,
+          isHighValueCoinOpportunityCore,
+          highValueCoinHoldBlocksEnemySwitchCore,
+          lockedOpportunityChoiceCore,
+          applyOpportunityOscillationLockCore,
+          chooseStableOpportunityCore,
+          opportunityMissingHoldUntilCore,
+          missingHeldCoinCoveredByVisibleAuthorityCore,
+          buildMissingHeldOpportunityCore,
+          opportunityRouteIds,
+          rememberOpportunityChoiceCore,
+          opportunityChoiceCoreOptions,
+          resetOpportunitySwitchLock,
+          opportunitySameCoinRadius,
+          currentVisibleCoinListForMissingHold,
+          visibleCoinSourcesConfirmTargetMissing,
+          clearMissingVisibleCoinTarget,
+          pickBestOpportunityCore,
+          patrolDirectionCore,
+          shouldClearOpportunityChoiceCore,
+          coinFailureIgnoreCore,
+          staleCoinEscapeDirectionCore,
+          coinProgressIntentCore,
+          coinAttemptExpiredCore,
+          updateCoinAttemptCore,
+          updateCoinProgressRecordCore,
+          buildIgnoredCoinProgressCore,
+          buildIgnoredCoinPatrolActionCore,
+          coinIgnoreCleanupIntentCore,
+          coinProgressCoreOptions,
+          actionPriorityBand,
+          actionFocusTargetType,
+          actionFocusId,
+          actionFocusSummary,
+          actionSwitchPairKey,
+          buildPreviousDecisionSummary,
+          recordActionSwitchDiagnosticsCore,
+          finalActionBandRank,
+          finalActionReusable,
+          shouldHoldPreviousFinalAction,
+          applyFinalActionArbitrationCore,
+          targetSwitchHistoryLimit,
+          targetSwitchOscillationWindowMs,
+          roundedNullable,
+          ensureTargetSwitchDiagnostics,
+          finalActionArbitrationHoldMs,
+          finalActionArbitrationHistoryLimit,
+          ensureFinalActionArbitration,
+          coinTargetKeyCore,
+          coinTargetDistance,
+          coinMatchesTrackedTargetCore,
+          trackedCoinTargetForCollectionCore,
+          buildNativeCoinSnapshotCore,
+          pointToSegmentDistanceCore,
+          pickIncidentalCoinPickupsCore,
+          snapshotCoinWorthLongTravelCore,
+          snapshotCoinNavigationReasonCore,
+          setLastTarget,
+          clearCoinTracking,
+          coinTargetCoreOptions,
+          recordIncidentalCoinPickups,
+          markCoinCollected,
+          applyCoinProgressAction,
+          applyFinalActionArbitration,
+          recordActionSwitchDiagnostics,
+          buildDropMatchedKillCore
+        } = createProfitRuntime({
+          bot,
+          cfg,
+          OPPORTUNITY_CONSTANTS,
+          safeJsonClone,
+          arrayCount,
+          formatDistance,
+          formatDurationMs,
+          now,
+          hypot,
+          dist,
+          speed,
+          clamp,
+          staminaRemaining,
+          staminaExhaustedThreshold,
+          staminaBudgetReloginDelayMs,
+          isInvulnerableActive,
+          isInvulnerable,
+          isCurrentlyActive,
+          isFiringEntity,
+          isAfkProfitTarget,
+          isWhitelistedTarget,
+          hasCombatActivitySignal,
+          hpValue,
+          combatHpValue,
+          knownHpValue,
+          dropValue,
+          isFullHp,
+          snapshotCoinLocalSuppressRadius: (...args) => snapshotCoinLocalSuppressRadius(...args),
+          isSnapshotOnlyCoin: (...args) => isSnapshotOnlyCoin(...args),
+          normalizeCoinDrop: (...args) => normalizeCoinDrop(...args),
+          getNativeCoinSources: (...args) => getNativeCoinSources(...args),
+          getNativeCoinList: (...args) => getNativeCoinList(...args),
+          entityFreshEnoughForOffense,
+          isAlive,
+          attackWorthTakingCore,
+          incomingBulletThreat: (...args) => incomingBulletThreat(...args),
+          pickCombatTarget: (...args) => pickCombatTarget(...args),
+          isLowValueActiveCombatTarget: (...args) => isLowValueActiveCombatTarget(...args),
+          lowValueActiveThreatensSelf: (...args) => lowValueActiveThreatensSelf(...args),
+          updateSessionStats,
+          pushBounded,
+          importantSessionStaminaSpentMs,
+          recordKillHistoryItem,
+          upsertImportantSessionRecord,
+          summarizeSelf
+        });
+        const { createCombatRuntime } = require_combat_runtime();
+        ({
+          rememberCombatEngagement,
+          clearCombatEngagement,
+          summarizeOfflineThreat,
+          assessOfflineSafety,
+          pickActiveCombatWaitThreat,
+          activeCombatThreatWaitAction,
+          recentCombatInjuryActive,
+          lowValueActiveDropMax,
+          isLowValueActiveCombatTarget,
+          proactiveActiveKillStaminaBudgetMs,
+          proactiveActiveCombatStaminaAffordable,
+          activeCombatBudgetBlocked,
+          activeCombatRequiresThreatEvidence,
+          incomingOwnerMatchesTarget,
+          activeCombatThreatensSelf,
+          lowValueActiveThreatensSelf,
+          combatDodgeThreatRange,
+          combatTargetPriority,
+          isDefensiveCombatTarget,
+          isProfitableCombatTarget,
+          combatHpGapDisadvantaged,
+          profitCombatDisadvantaged,
+          pickCombatTarget,
+          combatEngageGraceRange,
+          combatTargetCandidateRange,
+          combatDodgeOnlyCandidateRange,
+          combatEngagedCandidate,
+          pickEngagedCombatTarget,
+          defensiveTargetOverridesEngaged,
+          incomingBulletRequiresTargetSwitch,
+          pickOpportunisticShotTarget,
+          actionOpportunityScore,
+          opportunisticShotBeatsAction,
+          attachOpportunisticShot,
+          buildOpportunisticShotWait,
+          combatMoveVelocityForDirection,
+          combatBulletThreats,
+          incomingBulletThreat,
+          combatThreatFieldCandidate,
+          combatBulletThreatField,
+          combatStrafeHoldMs,
+          combatStrafeKey,
+          combatStrafeMatchesTarget,
+          combatPreciseStrafeSign,
+          selectCombatStrafeSign,
+          tangentMoveForBullet,
+          combatMoveClosesDistance,
+          combatSafeCloseMoveOverride,
+          combatSpacingVector,
+          combatSpacingShouldOverrideBullet,
+          combatLowHpCloseRiskState,
+          combatPressureDisadvantageState,
+          combatSustainedPressureDisadvantageState,
+          combatPressureCloseVector,
+          combatFarNoDamageCloseVector,
+          combatRetreatingFighterCloseVector,
+          combatFinishPressureState,
+          combatOutOfRangeFinishPressureState,
+          combatOutOfRangeReengageState,
+          combatPassiveRunnerState,
+          combatPassiveRunnerCloseVector,
+          mergeCombatMove,
+          combatPressureThreat,
+          combatOutOfRangeDodgeAction,
+          combatAimJitterLimit,
+          combatAimMotionScale,
+          combatMotionSample,
+          combatMotionSamplesWithCurrent,
+          combatOpponentProfile,
+          combatTradeEstimate,
+          combatTargetId,
+          combatRetreatIgnoreActive,
+          rememberCombatRetreatIgnore,
+          clearCombatDisadvantageObservation,
+          combatDisadvantageObservationState,
+          combatAimDamageState,
+          combatLowHpNoDamageLeaveState,
+          combatRetreatingTargetState,
+          combatServerStallNoDamageLeaveState,
+          combatTrendState,
+          combatTickActiveFromState,
+          globalSamplingOutageOfflineState,
+          combatTickGapOfflineState,
+          nativeTickMinIntervalMs,
+          combatShootingPlan,
+          combatAimNoDamageLevel,
+          combatAimNoDamageJitterLimit,
+          combatAimSteadyNoDamageState,
+          combatAimFallbackPrecisionState,
+          combatMovementAimMode,
+          combatInterceptSolution,
+          combatLiveAimTarget,
+          combatAimSourceDivergenceState,
+          combatAimServerStallState,
+          combatAimDynamicStrategyState,
+          combatAimTarget,
+          combatLeaveCoverAction,
+          buildCombatAction,
+          handleTickReentryCombatGap
+        } = createCombatRuntime({
+          bot,
+          cfg,
+          safeJsonClone,
+          arrayCount,
+          formatDistance,
+          formatDurationMs,
+          actorLabel,
+          hpDisplay,
+          now,
+          hypot,
+          dist,
+          clamp,
+          staminaRemaining,
+          staminaExhaustedThreshold,
+          combatMovementBlockedByStamina,
+          staminaBudgetCoinLeaveSummary,
+          staminaExhaustedWindowLabel,
+          isInvulnerable,
+          isCurrentlyActive,
+          isFiringEntity,
+          isMovingThreat,
+          isAfkProfitTarget,
+          isWhitelistedTarget,
+          hasCombatActivitySignal,
+          isJoinModeActive,
+          hpValue,
+          combatHpValue,
+          knownHpValue,
+          dropValue,
+          isFullHp,
+          isAlive,
+          entityFreshEnoughForOffense,
+          normalizeBullet: (...args) => normalizeBullet(...args),
+          getBullets: () => getBullets(),
+          getNativeEntityList: () => getNativeEntityList(),
+          getSelf: () => getSelf(),
+          classify: (...args) => classify(...args),
+          returnBlockRadius: (...args) => returnBlockRadius(...args),
+          attackWorthTakingCore,
+          recordNetworkQualityAttackDamage: (...args) => recordNetworkQualityAttackDamage(...args),
+          summarizeSelf: (...args) => summarizeSelf(...args),
+          updateSessionStats: (...args) => updateSessionStats(...args),
+          summarizeServerPositionStall: (...args) => summarizeServerPositionStall(...args),
+          stopMotionSafely: (...args) => stopMotionSafely(...args),
+          leaveOffline: (...args) => leaveOffline(...args),
+          activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
+          requestReload: (...args) => requestReload(...args),
+          updateBotPanel: (...args) => updateBotPanel(...args),
+          summarizeControl: (...args) => summarizeControl(...args),
+          directionTo,
+          opportunityLongStaminaBudget,
+          scoreEnemyOpportunity,
+          opportunityEnemyStaminaCost,
+          estimatedKillShots,
+          opportunityStaminaAffordable,
+          scoreCoinOpportunity
+        }));
+        const { createOrchestrationRuntime } = require_orchestration_runtime();
+        const orchestrationRuntime = createOrchestrationRuntime({
+          BOT_KEY,
+          ENEMY_LEAVE_STATE_KEY,
+          LOGIN_SUPPRESS_KEY,
+          LOGIN_SUPPRESS_REASON_KEY,
+          OFFLINE_LEAVE_STATE_KEY,
+          PENDING_EXIT_STATE_KEY,
+          activeCombatThreatWaitAction,
+          activeEnemyLeaveDetail,
+          activeOfflineLeaveDetail,
+          actorLabel,
+          applyCoinApproachLockUpdate,
+          applyCoinProgressAction,
+          applyFinalActionArbitration,
+          arrayCount,
+          assessActionSettlementStall,
+          assessOfflineSafety,
+          assessServerPositionStall,
+          attachCoinDiagnostics,
+          attachOpportunisticShot,
+          attackWorthTakingCore,
+          bot,
+          buildCoinAction,
+          buildCoinDiagnostics,
+          buildCombatAction,
+          buildDropMatchedKillCore,
+          buildEnemyAction,
+          buildMissingHeldOpportunityCore,
+          buildNativeCoinSnapshotCore,
+          buildNativeEntityMeta,
+          buildOpportunisticShotWait,
+          buildPostAttackDropWaitAction,
+          canPrioritizeHighValueVisibleCoin,
+          cfg,
+          chooseStableOpportunityCore,
+          clearCoinTracking,
+          clearCombatEngagement,
+          clearExitHoldDetail,
+          clearMissingVisibleCoinTarget,
+          clearPersistentExitState,
+          clearPersistentPendingExitState,
+          clearSessionMismatchRecoveryState,
+          cloudflareErrorInfo,
+          coinBlockedByThreat,
+          coinDiagnosticsLimit,
+          coinDiagnosticsNearDistance,
+          coinDirectionToCore,
+          coinMotionCoreOptions,
+          coinMotionMetaCore,
+          coinPickupAttemptSlowCount,
+          coinPickupFailureCount,
+          coinRouteCoreOptions,
+          coinRouteKey,
+          coinStaminaAffordableWithDiagnostic,
+          coinTargetCoreOptions,
+          coinTargetKeyCore,
+          coinThreatDiagnostics,
+          combatDodgeOnlyCandidateRange,
+          combatHpValue,
+          combatTargetCandidateRange,
+          combatTickActiveFromState,
+          combatTickGapOfflineState,
+          controlHasNativeGameSession,
+          currentHeldCoinChoice,
+          currentHeldCoinRouteChoice,
+          dailyStaminaBudgetIsLimitingCore,
+          dailyStaminaFinalCoinAction,
+          decorateActiveThreat,
+          defensiveTargetOverridesEngaged,
+          deferredStaminaExhaustionLeave,
+          dist,
+          dropValue,
+          ensureControlWs,
+          entityFreshEnoughForOffense,
+          exitMotionStopLockRemainingMs,
+          finishImportantCombat,
+          formatDistance,
+          formatDurationMs,
+          getBullets,
+          getCoins,
+          getCurrentUserId,
+          getNativeCoinList,
+          getNativeEntityList,
+          getSelf,
+          globalSamplingOutageOfflineState,
+          handlePendingExit,
+          handleTickReentryCombatGap,
+          highValueCoinPriorityAmount,
+          highValueCoinPriorityHealthyHp,
+          highValueVisibleCoinPriorityNeeded,
+          hpDisplay,
+          hpValue,
+          hypot,
+          importantSessionStaminaSpentMs,
+          incomingBulletThreat,
+          installNativeLoginGateInterceptors,
+          installPageGlobal,
+          installPageNativeSnapshotObserver,
+          isAfkProfitTarget,
+          isAlive,
+          isAvoidanceThreat,
+          isCombatStateForInjuryLeave,
+          isConservingStamina,
+          isCurrentlyActive,
+          isFiringEntity,
+          isFullHp,
+          isInvulnerable,
+          isInvulnerableActive,
+          isRecovering,
+          isSnapshotCoinWaitAction,
+          isSnapshotOnlyCoin,
+          isWhitelistedTarget,
+          knownHpValue,
+          latestEnemyLeaveDisplayReason,
+          leaveForCombat,
+          leaveForInjury,
+          leaveForPursuit,
+          leaveOffline,
+          liveSessionMismatchTakeoverState,
+          logStatus,
+          loginSnapshotGateDisplayReason,
+          markCoinCollected,
+          maybeRecordLoginPoint,
+          maybeReloadCloudflareError,
+          maybeStartAutoLogin,
+          noSelfGameSessionExitState,
+          normalizeCoinDrop,
+          normalizePendingExitReloadConfirmationCore,
+          noteImportantSessionExit,
+          noteSelfUnavailableForPostLoginZoom,
+          now,
+          observeNetworkQualitySelf,
+          opportunityCandidateCoreOptions,
+          opportunityChoiceCoreOptions,
+          opportunityCoinStaminaCost,
+          opportunityEnemyStaminaCost,
+          opportunityLongStaminaBudget,
+          opportunityPriorityTier,
+          opportunityWindowStaminaBudget,
+          pageGlobal,
+          pendingCombatLeaveAction,
+          pendingExitIntentForSkippedLeave,
+          pendingExitPersistenceCoreHelpers,
+          pendingExitSkipNewLeave,
+          pickActiveCombatWaitThreat,
+          pickBestOpportunityCore,
+          pickCoin,
+          pickCoinField,
+          pickCoinRouteOpportunityCore,
+          pickCombatTarget,
+          pickDistantCoin,
+          pickEngagedCombatTarget,
+          pickHighValueVisibleCoin,
+          pickNearestDailyStaminaFinalCoinCore,
+          pickPostAttackDropCoinCore,
+          pickPostAttackDropWaitTargetCore,
+          pickProfitableCombatTarget,
+          pickRealtimeLocalCoin,
+          postAttackDropResolvedAt,
+          previousBot,
+          readPersistentExitState,
+          recordActionSwitchDiagnostics,
+          recordCoinFilterDiagnostic,
+          recordCombatLogTick,
+          recordImportantCombatTick,
+          recordIncidentalCoinPickups,
+          recordKillHistoryItem,
+          recordUnhandledTickError,
+          refreshGlobalState,
+          rememberAttack,
+          rememberCombatEngagement,
+          rememberLoginPointDamageThreat,
+          rememberOpportunityChoiceCore,
+          requestReload,
+          requestSessionMismatchRecoveryReload,
+          resetOpportunitySwitchLock,
+          resetServerPositionStall,
+          restoreImportantLogsForRemote,
+          restorePersistedCombatLogPendingEntries,
+          restorePersistedExitAuditLogs,
+          runTickSafely,
+          safeCoinCandidates,
+          safeJsonClone,
+          safeStringify,
+          schedulePostLoginZoomOut,
+          scoreCoinOpportunity,
+          sendActionVelocity,
+          sessionMismatchRecoveryReloadSatisfied,
+          setLastTarget,
+          shootAt,
+          shouldClearOpportunityChoiceCore,
+          snapshotCoinAgeMs,
+          snapshotCoinLocalSuppressRadius,
+          snapshotCoinNavigationReasonCore,
+          snapshotDataFreshEnough,
+          snapshotEntityAllowed,
+          speed,
+          staleOfflineStaminaHoldContradicted,
+          staminaBudgetCoinLeaveAction,
+          staminaBudgetCoinLeaveSummary,
+          staminaBudgetReloginDelayMs,
+          staminaExhaustedWindowLabel,
+          startTargetWhitelistPolling,
+          stopMotionSafely,
+          summarizeBlockedStaminaOpportunityCore,
+          summarizeControl,
+          summarizeNearestCoinStaminaBudgetExitCore,
+          summarizePendingCombatLeave,
+          summarizePursuit,
+          summarizeSelf,
+          summarizeSessionMismatchRecoveryStatus,
+          summarizeStamina,
+          syncPausedFromPage: syncPausedFromPage2,
+          uniqueVisibleRouteCoinsCore,
+          updateBotPanel,
+          updateKillHistory,
+          updateOpportunityAfkStaminaObservations,
+          updatePursuitTracking,
+          updateSessionStats,
+          visibleCoinSourcesConfirmTargetMissing,
+          writePersistentPendingExitStateCore
+        });
+        ({
+          classify,
+          chooseAction,
+          tick,
+          threatKey,
+          returnBlockRadius
+        } = orchestrationRuntime);
+        return orchestrationRuntime.startRuntime();
       })();
       module.exports = __graspRatRuntimeStartup;
       module.exports.default = __graspRatRuntimeStartup;

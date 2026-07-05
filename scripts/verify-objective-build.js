@@ -33,6 +33,7 @@ const REQUIRED_DIST_TOKENS = [
   'function createRuntimeStateBindings',
   'function updateBotPanel',
   'function getNativeState',
+  'function createOrchestrationRuntime',
   'function chooseAction',
   'async function tick',
   'function safeStringify',
@@ -169,6 +170,7 @@ async function main() {
   const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
   const runtimeProfitSource = readText('src/browser/runtime/profit-runtime.js');
   const runtimeCombatSource = readText('src/browser/runtime/combat-runtime.js');
+  const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -403,6 +405,27 @@ async function main() {
     assert(runtimeCombatSource.includes('async function handleTickReentryCombatGap'), 'combat tick reentry gap handler missing from combat module');
   });
 
+  check('orchestration runtime owns classify chooseAction tick and startup bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/orchestration-runtime')"), 'runtime entry does not import orchestration runtime module');
+    assert(runtimeEntrySource.includes('createOrchestrationRuntime({'), 'runtime entry does not create orchestration runtime bindings');
+    assert(runtimeEntrySource.includes('return orchestrationRuntime.startRuntime();'), 'runtime entry does not delegate startup to orchestration runtime');
+    assert(!/function\s+markRecentMovement\s*\(/.test(runtimeEntrySource), 'runtime entry still owns recent movement marker');
+    assert(!/function\s+returnBlockRadius\s*\(/.test(runtimeEntrySource), 'runtime entry still owns return-block radius body');
+    assert(!/function\s+buildReturnBlockScanAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns return-block scan action body');
+    assert(!/function\s+classify\s*\(/.test(runtimeEntrySource), 'runtime entry still owns classify body');
+    assert(!/function\s+chooseAction\s*\(/.test(runtimeEntrySource), 'runtime entry still owns chooseAction body');
+    assert(!/async\s+function\s+tick\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick body');
+    assert(!/function\s+startRuntime\s*\(/.test(runtimeEntrySource), 'runtime entry still owns startup body');
+    assert(runtimeOrchestrationSource.includes('function createOrchestrationRuntime'), 'orchestration runtime factory missing');
+    assert(runtimeOrchestrationSource.includes('function markRecentMovement'), 'recent movement marker missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes('function returnBlockRadius'), 'return-block radius missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes('function buildReturnBlockScanAction'), 'return-block scan action missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes('function classify'), 'classify body missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes('function chooseAction'), 'chooseAction body missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes('async function tick'), 'tick body missing from orchestration module');
+    assert(runtimeOrchestrationSource.includes('function startRuntime'), 'startup body missing from orchestration module');
+  });
+
   check('obsolete source-fragment files are absent', () => {
     const remaining = sourceGenerationFiles();
     assert(remaining.length === 0, `obsolete browser source-generation files remain: ${remaining.join(', ')}`);
@@ -468,7 +491,7 @@ async function main() {
   });
 
   check('ordinary profit flow keeps visible/native priority before snapshot fallback', () => {
-    const chooseActionBody = functionBody(runtimeEntrySource, 'chooseAction');
+    const chooseActionBody = functionBody(runtimeOrchestrationSource, 'chooseAction');
     const visibleCoinIndex = chooseActionBody.indexOf('pickHighValueVisibleCoin');
     const visibleOpportunityIndex = chooseActionBody.indexOf('const opportunityCoinGroups');
     const snapshotIndex = chooseActionBody.indexOf('snapshotCoinNavigationReasonCore');
