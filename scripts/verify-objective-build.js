@@ -43,6 +43,9 @@ const REQUIRED_DIST_TOKENS = [
   'function createLeaveFlowRuntime',
   'function createNativeDataRuntime',
   'function createNativeTransportRuntime',
+  'function createSessionStatsRuntime',
+  'function createStallDiagnosticsRuntime',
+  'function createNetworkQualityRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -192,6 +195,9 @@ async function main() {
   const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
   const runtimeNativeDataSource = readText('src/browser/runtime/native-data-runtime.js');
   const runtimeNativeTransportSource = readText('src/browser/runtime/native-transport-runtime.js');
+  const runtimeSessionStatsSource = readText('src/browser/runtime/session-stats-runtime.js');
+  const runtimeStallDiagnosticsSource = readText('src/browser/runtime/stall-diagnostics-runtime.js');
+  const runtimeNetworkQualitySource = readText('src/browser/runtime/network-quality-runtime.js');
   const runtimeProfitSource = readText('src/browser/runtime/profit-runtime.js');
   const runtimeCombatSource = readText('src/browser/runtime/combat-runtime.js');
   const runtimeOrchestrationSource = readText('src/browser/runtime/orchestration-runtime.js');
@@ -539,18 +545,40 @@ async function main() {
     assert(runtimeNativeTransportSource.includes('function shootAt'), 'shoot transport body missing from native transport module');
   });
 
-  check('native state runtime owns remaining session stall and network bodies', () => {
+  check('native session stall and network runtimes own extracted bodies', () => {
     assert(runtimeNativeStateSource.includes('function createNativeStateRuntime'), 'native state runtime factory missing');
-    assert(runtimeNativeStateSource.includes('function summarizeServerPositionStall'), 'server-position stall summary missing from native state module');
-    assert(runtimeNativeStateSource.includes('function assessServerPositionStall'), 'server-position stall assessment missing from native state module');
-    assert(runtimeNativeStateSource.includes('function summarizeActionSettlementStall'), 'action-settlement stall summary missing from native state module');
-    assert(runtimeNativeStateSource.includes('function assessActionSettlementStall'), 'action-settlement stall assessment missing from native state module');
-    assert(runtimeNativeStateSource.includes('function summarizeSessionStats'), 'session summary body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function summarizeTodaySessionStats'), 'today-session summary body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function summarizeNetworkQuality'), 'network quality summary body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function observeNativeWsFrame'), 'native WS frame observation missing from native state module');
-    assert(runtimeNativeStateSource.includes('function recordNetworkQualityMovementCommand'), 'network quality movement command body missing from native state module');
-    assert(runtimeNativeStateSource.includes('function recordNetworkQualityShot'), 'network quality shot body missing from native state module');
+    assert(runtimeNativeStateSource.includes("require('./session-stats-runtime')"), 'native state runtime does not import session stats runtime');
+    assert(runtimeNativeStateSource.includes("require('./stall-diagnostics-runtime')"), 'native state runtime does not import stall diagnostics runtime');
+    assert(runtimeNativeStateSource.includes("require('./network-quality-runtime')"), 'native state runtime does not import network quality runtime');
+    assert(runtimeNativeStateSource.includes('createSessionStatsRuntime({'), 'native state runtime does not create session stats bindings');
+    assert(runtimeNativeStateSource.includes('createStallDiagnosticsRuntime({'), 'native state runtime does not create stall diagnostics bindings');
+    assert(runtimeNativeStateSource.includes('createNetworkQualityRuntime({'), 'native state runtime does not create network quality bindings');
+    assert(!/function\s+summarizeServerPositionStall\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns server-position stall summary');
+    assert(!/function\s+assessServerPositionStall\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns server-position stall assessment');
+    assert(!/function\s+summarizeActionSettlementStall\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns action-settlement stall summary');
+    assert(!/function\s+assessActionSettlementStall\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns action-settlement stall assessment');
+    assert(!/function\s+summarizeSessionStats\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns session summary body');
+    assert(!/function\s+summarizeTodaySessionStats\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns today-session summary body');
+    assert(!/function\s+summarizeNetworkQuality\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns network quality summary body');
+    assert(!/function\s+observeNativeWsFrame\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns native WS frame observation');
+    assert(!/function\s+recordNetworkQualityMovementCommand\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns network quality movement command body');
+    assert(!/function\s+recordNetworkQualityShot\s*\(/.test(runtimeNativeStateSource), 'native state runtime still owns network quality shot body');
+    assert(runtimeSessionStatsSource.includes('function createSessionStatsRuntime'), 'session stats runtime factory missing');
+    assert(runtimeSessionStatsSource.includes('function resetSessionStaminaStats'), 'session stamina reset missing from session stats module');
+    assert(runtimeSessionStatsSource.includes('function updateSessionStats'), 'session update body missing from session stats module');
+    assert(runtimeSessionStatsSource.includes('function summarizeSessionStats'), 'session summary body missing from session stats module');
+    assert(runtimeSessionStatsSource.includes('function summarizeTodaySessionStats'), 'today-session summary body missing from session stats module');
+    assert(runtimeStallDiagnosticsSource.includes('function createStallDiagnosticsRuntime'), 'stall diagnostics runtime factory missing');
+    assert(runtimeStallDiagnosticsSource.includes('function summarizeServerPositionStall'), 'server-position stall summary missing from stall diagnostics module');
+    assert(runtimeStallDiagnosticsSource.includes('function assessServerPositionStall'), 'server-position stall assessment missing from stall diagnostics module');
+    assert(runtimeStallDiagnosticsSource.includes('function summarizeActionSettlementStall'), 'action-settlement stall summary missing from stall diagnostics module');
+    assert(runtimeStallDiagnosticsSource.includes('function assessActionSettlementStall'), 'action-settlement stall assessment missing from stall diagnostics module');
+    assert(runtimeNetworkQualitySource.includes('function createNetworkQualityRuntime'), 'network quality runtime factory missing');
+    assert(runtimeNetworkQualitySource.includes('function summarizeNetworkQuality'), 'network quality summary body missing from network quality module');
+    assert(runtimeNetworkQualitySource.includes('function observeNativeWsFrame'), 'native WS frame observation missing from network quality module');
+    assert(runtimeNetworkQualitySource.includes('function recordNetworkQualityMovementCommand'), 'network quality movement command body missing from network quality module');
+    assert(runtimeNetworkQualitySource.includes('function recordNetworkQualityShot'), 'network quality shot body missing from network quality module');
+    assert(runtimeNetworkQualitySource.includes('function recordNetworkQualityAttackDamage'), 'network quality attack-damage body missing from network quality module');
   });
 
   check('profit runtime owns coin opportunity progress and arbitration bodies', () => {
