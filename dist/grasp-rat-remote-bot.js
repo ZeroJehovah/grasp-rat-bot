@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.552" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.553" };
     }
   });
 
@@ -6986,6 +6986,63 @@
           const maxEntries = Math.max(20, Math.ceil(Math.max(250, Number(cfg.combatLogPreBufferMs) || 1e4) / Math.max(50, Number(cfg.tickMs) || 120)) + 10);
           while (state2.preBuffer.length && Number(state2.preBuffer[0].at || 0) < cutoff) state2.preBuffer.shift();
           while (state2.preBuffer.length > maxEntries) state2.preBuffer.shift();
+        }
+        function startCombatLogSession(entry, decision, triggerReason) {
+          const state2 = bot.combatLogging;
+          const prior = Array.isArray(state2.preBuffer) ? state2.preBuffer.slice() : [];
+          state2.active = true;
+          state2.startedAt = entry?.at || Date.now();
+          state2.lastCombatAt = entry?.at || Date.now();
+          state2.combatId = makeCombatLogId(entry, decision);
+          state2.sequence = 0;
+          state2.lastError = "";
+          queueCombatLogEntry({
+            type: "combat-start",
+            at: state2.startedAt,
+            triggerReason,
+            source: entry?.source || "",
+            version: cfg.version,
+            sourceHash: cfg.sourceHash,
+            injectedBy: cfg.injectedBy,
+            self: entry?.self || null,
+            target: entry?.target || null,
+            decision: entry?.decision || null,
+            runtime: entry?.runtime || null,
+            login: entry?.login || null,
+            combatMetrics: entry?.combatMetrics || null,
+            nearbyEntities: entry?.nearbyEntities || [],
+            exit: entry?.exit || null,
+            enemyExit: entry?.enemyExit || null
+          });
+          for (const pre of prior) {
+            if (combatLogIsAfkAttack(pre)) continue;
+            queueCombatLogEntry({ ...pre, type: "combat-pre-frame", phase: "pre" });
+          }
+        }
+        function endCombatLogSession(entry, reason = "post-buffer-elapsed") {
+          const state2 = bot.combatLogging;
+          queueCombatLogEntry({
+            type: "combat-end",
+            at: entry?.at || Date.now(),
+            reason,
+            source: entry?.source || "",
+            version: cfg.version,
+            sourceHash: cfg.sourceHash,
+            injectedBy: cfg.injectedBy,
+            self: entry?.self || null,
+            decision: entry?.decision || null,
+            runtime: entry?.runtime || null,
+            login: entry?.login || null,
+            combatMetrics: entry?.combatMetrics || null,
+            exit: entry?.exit || null,
+            enemyExit: entry?.enemyExit || null,
+            sent: state2.sent,
+            dropped: state2.dropped
+          });
+          state2.active = false;
+          state2.combatId = "";
+          state2.startedAt = 0;
+          state2.lastCombatAt = 0;
         }
         function recordCombatLogTick(source, decision = bot.lastDecision) {
           const recordStartedAt = Date.now();

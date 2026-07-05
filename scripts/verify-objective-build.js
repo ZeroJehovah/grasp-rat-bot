@@ -53,6 +53,8 @@ const REQUIRED_DIST_TOKENS = [
   'function createCombatLogFrameRuntime',
   'function createCombatLogDiagnosticsRuntime',
   'function createExitAuditRuntime',
+  'function startCombatLogSession',
+  'function endCombatLogSession',
   'function createImportantSessionRuntime',
   'function createKillAttributionRuntime',
   'function createProfitCoinRuntime',
@@ -92,7 +94,7 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'orchestration safety runtime': 450,
   'orchestration decision runtime': 1160,
   'orchestration tick runtime': 1280,
-  'combat log runtime': 450,
+  'combat log runtime': 480,
   'combat log frame runtime': 940,
   'combat log diagnostics runtime': 260,
   'combat target runtime': 1260,
@@ -626,6 +628,8 @@ async function main() {
     assert(!/function\s+updateKillHistory\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns chat kill history body');
     assert(runtimeCombatLogSource.includes('function createCombatLogRuntime'), 'combat log runtime factory missing');
     assert(runtimeCombatLogSource.includes('function recordCombatLogTick'), 'combat log tick body missing from module');
+    assert(runtimeCombatLogSource.includes('function startCombatLogSession'), 'combat log session start body missing from module');
+    assert(runtimeCombatLogSource.includes('function endCombatLogSession'), 'combat log session end body missing from module');
     assert(runtimeCombatLogQueueSource.includes('function createCombatLogQueueRuntime'), 'combat-log queue runtime factory missing');
     assert(runtimeCombatLogQueueSource.includes('function combatLogEntryFailureKey'), 'combat log failure key missing from queue module');
     assert(runtimeCombatLogQueueSource.includes('function readPersistedCombatLogPendingEntries'), 'combat log pending persistence missing from queue module');
