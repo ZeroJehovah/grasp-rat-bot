@@ -126,6 +126,7 @@ function createCombatRuntime(runtime = {}) {
     isFiringEntity,
     isMovingThreat,
     hpValue,
+    dropValue,
     normalizeBullet,
     getBullets,
     ...targetRuntime

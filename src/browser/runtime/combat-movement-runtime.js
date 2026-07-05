@@ -15,6 +15,7 @@ function createCombatMovementRuntime(runtime = {}) {
     isFiringEntity = () => false,
     isMovingThreat = () => false,
     hpValue = () => 0,
+    dropValue = () => 0,
     normalizeBullet = value => value,
     getBullets = () => [],
     recentCombatInjuryActive = () => null,
