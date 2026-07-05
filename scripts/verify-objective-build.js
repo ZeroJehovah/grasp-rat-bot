@@ -329,6 +329,52 @@ function assertProfitOpportunityRuntimeSmoke() {
   assert(options.nowMs === 123456, 'profit opportunity smoke did not use now dependency');
 }
 
+function assertCombatMovementRuntimeSmoke() {
+  const { createCombatMovementRuntime } = require(path.join(ROOT, 'src/browser/runtime/combat-movement-runtime'));
+  const nowMs = Date.now();
+  const target = { user_id: 'target-1', x: 1000, y: 0, drop: 3, active: true, combatIntent: 'profit' };
+  const runtime = createCombatMovementRuntime({
+    bot: {
+      combatTarget: {
+        id: 'target-1',
+        user_id: 'target-1',
+        intent: 'profit',
+        originIntent: 'profit',
+        firstSeenAt: nowMs - 5000,
+        motionSamples: [{ selfHp: 100 }, { selfHp: 100 }]
+      }
+    },
+    cfg: {
+      combatPassiveRunnerMinSelfHp: 80,
+      combatPassiveRunnerMinDrop: 1,
+      combatPassiveRunnerConfirmMs: 2500,
+      combatStationarySpeed: 0.1,
+      combatAimMovingScaleThreshold: 0.15,
+      combatStrafeLockMs: 1000
+    },
+    speed: entity => entity === target ? 1 : 0,
+    hpValue: entity => entity?.user_id === 'self' ? 100 : 90,
+    dropValue: entity => Number(entity?.drop || 0),
+    isCurrentlyActive: entity => Boolean(entity?.active),
+    isFiringEntity: () => false,
+    isInvulnerable: () => false,
+    combatTargetId: entity => {
+      const id = entity?.user_id ?? entity?.id;
+      return id === null || id === undefined ? '' : String(id);
+    }
+  });
+  const state = runtime.combatPassiveRunnerState(
+    { user_id: 'self', x: 0, y: 0 },
+    target,
+    1000,
+    { noDamageMs: 3000 },
+    null,
+    1
+  );
+  assert(state.active === true, 'combat movement passive runner smoke did not preserve active runner state');
+  assert(state.combatIntent === 'profit', 'combat movement passive runner smoke lost combat intent');
+}
+
 function sourceGenerationFiles() {
   return fs.readdirSync(path.join(ROOT, 'src', 'browser'))
     .filter(name => name.endsWith('source.js') || name === 'runtime-fragment-registry.js')
@@ -1000,6 +1046,8 @@ async function main() {
     assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^dropValue\b/.test(field)), 'combat movement runtime does not receive dropValue dependency');
     assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^speed\b/.test(field)), 'combat movement runtime does not receive speed dependency');
     assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^isInvulnerable\b/.test(field)), 'combat movement runtime does not receive isInvulnerable dependency');
+    assert(factoryRuntimeDestructuringFields(runtimeCombatMovementSource, 'createCombatMovementRuntime').some(field => /^combatTargetId\b/.test(field)), 'combat movement runtime does not receive combatTargetId dependency');
+    assertCombatMovementRuntimeSmoke();
     assert(runtimeCombatMovementSource.includes('function incomingBulletThreat'), 'incoming bullet threat missing from combat movement module');
     assert(runtimeCombatMovementSource.includes('function combatPressureThreat'), 'combat pressure threat missing from combat movement module');
     assert(runtimeCombatMovementSource.includes('function combatOutOfRangeDodgeAction'), 'combat out-of-range dodge action missing from combat movement module');

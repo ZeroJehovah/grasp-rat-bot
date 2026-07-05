@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.560" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.561" };
     }
   });
 
@@ -21325,7 +21325,7 @@
           },
           clearCombatDisadvantageObservation = () => {
           },
-          combatTargetId: combatTargetId2 = () => "",
+          combatTargetId = () => "",
           combatAimMotionScale = () => 0,
           combatPressureThreat = () => null,
           tangentMoveForBullet = () => ({ active: false, dx: 0, dy: 0 }),
@@ -21476,7 +21476,7 @@
           const targetHp = combatHpValue(target);
           const targetDistance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : dist(self, target);
           const targetMotionScale = combatAimMotionScale(target);
-          const currentCombatTarget = bot.combatTarget && combatTargetId2(bot.combatTarget) === combatTargetId2(target) ? bot.combatTarget : null;
+          const currentCombatTarget = bot.combatTarget && combatTargetId(bot.combatTarget) === combatTargetId(target) ? bot.combatTarget : null;
           const combatOriginIntent = String(target?.combatEngagement?.originIntent || currentCombatTarget?.originIntent || target.combatIntent || "");
           const combatOriginReason = String(target?.combatEngagement?.originReason || currentCombatTarget?.originReason || "");
           const seenTargetRealBulletAt = Number(target?.combatEngagement?.seenTargetRealBulletAt || currentCombatTarget?.seenTargetRealBulletAt || 0);
@@ -21534,7 +21534,7 @@
           if (passiveRunner.active && pressure?.synthetic && pressure.reason === "target-pressure") pressure = null;
           const realBulletPressure = Boolean(pressure && !pressure.synthetic);
           const targetRealBulletPressure = Boolean(
-            pressure && !pressure.synthetic && pressure.ownerId !== null && pressure.ownerId !== void 0 && combatTargetId2(target) && String(pressure.ownerId) === String(combatTargetId2(target))
+            pressure && !pressure.synthetic && pressure.ownerId !== null && pressure.ownerId !== void 0 && combatTargetId(target) && String(pressure.ownerId) === String(combatTargetId(target))
           );
           const closeRisk = combatLowHpCloseRiskState(selfHp, targetHp, spacing, realBulletPressure);
           if (closeRisk) {
@@ -21991,7 +21991,7 @@
           isAlive = (value) => Boolean(value),
           getNativeEntityList = () => [],
           summarizeServerPositionStall = () => null,
-          combatTargetId: combatTargetId2 = () => "",
+          combatTargetId = () => "",
           combatAimDamageState = () => ({ noDamageMs: 0, widenMs: 0 }),
           combatTrendState = () => ({})
         } = runtime;
@@ -22049,7 +22049,7 @@
           };
         }
         function combatMotionSamplesWithCurrent(self, target, t = Date.now(), windowMsOverride = null) {
-          const id = combatTargetId2(target);
+          const id = combatTargetId(target);
           const previous = bot.combatTarget || null;
           const same = previous && id && String(previous.id ?? "") === id;
           const windowMs = Math.max(250, Number(windowMsOverride || cfg.combatMotionHistoryWindowMs || 2e3));
@@ -22120,7 +22120,7 @@
         }
         function combatTradeEstimate(self, target) {
           const previous = bot.combatTarget || null;
-          const id = combatTargetId2(target);
+          const id = combatTargetId(target);
           const same = previous && id && String(previous.id ?? "") === id;
           if (!same) return null;
           const t = Date.now();
@@ -22424,14 +22424,14 @@
           };
         }
         function combatLiveAimTarget(self, target) {
-          const targetId = combatTargetId2(target);
+          const targetId = combatTargetId(target);
           const targetName = String(target?.name || "").trim();
           let live = null;
           try {
             const nativeEntities = Array.isArray(bot.testNativeEntities) ? bot.testNativeEntities : typeof getNativeEntityList === "function" ? getNativeEntityList() : [];
             if (Array.isArray(nativeEntities) && nativeEntities.length) {
               live = nativeEntities.find((entity) => {
-                const id = combatTargetId2(entity);
+                const id = combatTargetId(entity);
                 return targetId && id && String(id) === targetId;
               }) || null;
               if (!live && targetName) live = nativeEntities.find((entity) => String(entity?.name || "").trim() === targetName) || null;
@@ -22609,7 +22609,7 @@
           const stepMs = Math.max(1, Number(cfg.combatAimNoDamageStepMs) || 800);
           const noDamageLevel = combatAimNoDamageLevel(damage.widenMs);
           const jitterLimit = combatAimNoDamageJitterLimit(baseLimit, noDamageLevel);
-          const targetId = combatTargetId2(aimSource);
+          const targetId = combatTargetId(aimSource);
           const previousAim = bot.combatAim;
           let sign = Math.sign(movement.lateralSpeed || 0);
           if (!sign && previousAim && String(previousAim.targetId || "") === targetId) sign = Math.sign(Number(previousAim.sign || 0));
@@ -22808,7 +22808,8 @@
           normalizeBullet = (value) => value,
           getBullets = () => [],
           recentCombatInjuryActive = () => null,
-          combatDodgeThreatRange = () => 0
+          combatDodgeThreatRange = () => 0,
+          combatTargetId = () => ""
         } = runtime;
         function combatMoveVelocityForDirection(dx, dy) {
           const x = clamp(Math.round(Number(dx) || 0), -1, 1);
@@ -24296,12 +24297,12 @@
             opportunisticShot: shot
           };
         }
-        function combatTargetId2(target) {
+        function combatTargetId(target) {
           const id = target?.user_id ?? target?.id;
           return id === null || id === void 0 ? "" : String(id);
         }
         function combatRetreatIgnoreActive(target, t = Date.now()) {
-          const id = combatTargetId2(target);
+          const id = combatTargetId(target);
           if (!id || !bot.combatRetreatIgnore) return false;
           const until = Number(bot.combatRetreatIgnore.get(id) || 0);
           if (!until) return false;
@@ -24312,7 +24313,7 @@
           return true;
         }
         function rememberCombatRetreatIgnore(target, t = Date.now()) {
-          const id = combatTargetId2(target);
+          const id = combatTargetId(target);
           if (!id) return;
           if (!bot.combatRetreatIgnore) bot.combatRetreatIgnore = /* @__PURE__ */ new Map();
           bot.combatRetreatIgnore.set(id, t + Math.max(1e3, Number(cfg.combatRetreatIgnoreMs || 0) || 15e3));
@@ -24323,7 +24324,7 @@
           bot.combatDisadvantageObservation = null;
         }
         function combatDisadvantageObservationState(target, kind, evidence = {}) {
-          const id = combatTargetId2(target);
+          const id = combatTargetId(target);
           if (!id || !kind) return null;
           const t = Date.now();
           const previous = bot.combatDisadvantageObservation || null;
@@ -24366,7 +24367,7 @@
           return state2;
         }
         function combatAimDamageState(target) {
-          const id = combatTargetId2(target);
+          const id = combatTargetId(target);
           const previous = bot.combatTarget;
           const same = previous && id && String(previous.id ?? "") === id;
           const t = Date.now();
@@ -24410,7 +24411,7 @@
           const vy = Number(target?.vy) || 0;
           const radialSpeed = dx / d * vx + dy / d * vy;
           const previous = bot.combatTarget;
-          const same = previous && combatTargetId2(previous) && combatTargetId2(previous) === combatTargetId2(target);
+          const same = previous && combatTargetId(previous) && combatTargetId(previous) === combatTargetId(target);
           const previousDistance = same && Number.isFinite(Number(previous.distance)) ? Number(previous.distance) : null;
           const distanceDelta = previousDistance === null ? 0 : distance - previousDistance;
           const receding = Boolean(
@@ -24779,7 +24780,7 @@
           opportunisticShotBeatsAction,
           attachOpportunisticShot,
           buildOpportunisticShotWait,
-          combatTargetId: combatTargetId2,
+          combatTargetId,
           combatRetreatIgnoreActive,
           rememberCombatRetreatIgnore,
           clearCombatDisadvantageObservation,
@@ -28661,7 +28662,7 @@
         let combatMotionSamplesWithCurrent;
         let combatOpponentProfile;
         let combatTradeEstimate;
-        let combatTargetId2;
+        let combatTargetId;
         let combatRetreatIgnoreActive;
         let rememberCombatRetreatIgnore;
         let clearCombatDisadvantageObservation;
@@ -29619,7 +29620,7 @@
           combatMotionSamplesWithCurrent,
           combatOpponentProfile,
           combatTradeEstimate,
-          combatTargetId: combatTargetId2,
+          combatTargetId,
           combatRetreatIgnoreActive,
           rememberCombatRetreatIgnore,
           clearCombatDisadvantageObservation,
