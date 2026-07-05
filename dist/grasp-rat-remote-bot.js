@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.553" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.554" };
     }
   });
 
@@ -28943,7 +28943,7 @@
           updateBotPanel,
           removeTargetOverlay,
           stopMotionSafely: (...args) => stopMotionSafely(...args),
-          stopMotionAfterExit,
+          stopMotionAfterExit: (...args) => stopMotionAfterExit(...args),
           clearCombatEngagement: (...args) => clearCombatEngagement(...args),
           sendActionVelocity: (...args) => sendActionVelocity(...args),
           shootAt: (...args) => shootAt(...args),

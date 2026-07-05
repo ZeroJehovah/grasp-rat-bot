@@ -720,7 +720,7 @@ const __graspRatRuntimeStartup = (() => {
     updateBotPanel,
     removeTargetOverlay,
     stopMotionSafely: (...args) => stopMotionSafely(...args),
-    stopMotionAfterExit,
+    stopMotionAfterExit: (...args) => stopMotionAfterExit(...args),
     clearCombatEngagement: (...args) => clearCombatEngagement(...args),
     sendActionVelocity: (...args) => sendActionVelocity(...args),
     shootAt: (...args) => shootAt(...args),
