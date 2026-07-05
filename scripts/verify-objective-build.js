@@ -157,6 +157,10 @@ async function main() {
   const runtimeEntrySource = readText(RUNTIME_ENTRY_LABEL);
   const runtimeShellSource = readText('src/browser/runtime/runtime-shell.js');
   const runtimeBotStateSource = readText('src/browser/runtime/runtime-bot-state.js');
+  const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
+  const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
+  const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
+  const runtimeStatusPanelSource = readText('src/browser/runtime/status-panel.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -229,6 +233,33 @@ async function main() {
     assert(runtimeBotStateSource.includes('running: true'), 'runtime bot-state module does not own base running state');
     assert(runtimeBotStateSource.includes('combatLogging: {'), 'runtime bot-state module does not own combat logging state initialization');
     assert(runtimeBotStateSource.includes('ignoredCoins: new Map(restoredFailures'), 'runtime bot-state module does not own restored coin failure initialization');
+  });
+
+  check('ui status runtime modules own whitelist stamina overlay and panel bodies', () => {
+    assert(runtimeEntrySource.includes("require('./runtime/target-whitelist')"), 'runtime entry does not import target whitelist runtime module');
+    assert(runtimeEntrySource.includes('createTargetWhitelistRuntime({'), 'runtime entry does not create target whitelist runtime bindings');
+    assert(runtimeEntrySource.includes("require('./runtime/stamina-status')"), 'runtime entry does not import stamina status runtime module');
+    assert(runtimeEntrySource.includes('createStaminaStatusRuntime({'), 'runtime entry does not create stamina status runtime bindings');
+    assert(runtimeEntrySource.includes("require('./runtime/target-overlay')"), 'runtime entry does not import target overlay runtime module');
+    assert(runtimeEntrySource.includes('createTargetOverlayRuntime({'), 'runtime entry does not create target overlay runtime bindings');
+    assert(runtimeEntrySource.includes("require('./runtime/status-panel')"), 'runtime entry does not import status panel runtime module');
+    assert(runtimeEntrySource.includes('createStatusPanelRuntime({'), 'runtime entry does not create status panel runtime bindings');
+    assert(!/function\s+targetWhitelistFetchUrl\s*\(/.test(runtimeEntrySource), 'runtime entry still owns target whitelist URL cache-busting');
+    assert(!/function\s+summarizeStamina\s*\(/.test(runtimeEntrySource), 'runtime entry still owns stamina summary body');
+    assert(!/function\s+renderTargetOverlay\s*\(/.test(runtimeEntrySource), 'runtime entry still owns target overlay renderer');
+    assert(!/function\s+targetOverlayWorldPoint\s*\(/.test(runtimeEntrySource), 'runtime entry still owns target overlay coordinate extraction');
+    assert(!/function\s+formatStaminaDisplay\s*\(/.test(runtimeEntrySource), 'runtime entry still owns status panel stamina formatter');
+    assert(!/function\s+updateBotPanel\s*\(/.test(runtimeEntrySource), 'runtime entry still owns status panel renderer');
+    assert(runtimeTargetWhitelistSource.includes('function createTargetWhitelistRuntime'), 'target whitelist runtime factory missing');
+    assert(runtimeTargetWhitelistSource.includes('async function refreshTargetWhitelist'), 'target whitelist refresh body missing from module');
+    assert(runtimeStaminaStatusSource.includes('function createStaminaStatusRuntime'), 'stamina status runtime factory missing');
+    assert(runtimeStaminaStatusSource.includes('function summarizeStamina'), 'stamina summary body missing from module');
+    assert(runtimeTargetOverlaySource.includes('function createTargetOverlayRuntime'), 'target overlay runtime factory missing');
+    assert(runtimeTargetOverlaySource.includes('function renderTargetOverlay'), 'target overlay renderer missing from module');
+    assert(runtimeTargetOverlaySource.includes('function targetOverlayLoginPointState'), 'target overlay login-point state body missing from module');
+    assert(runtimeStatusPanelSource.includes('function createStatusPanelRuntime'), 'status panel runtime factory missing');
+    assert(runtimeStatusPanelSource.includes('function updateBotPanel'), 'status panel renderer missing from module');
+    assert(runtimeStatusPanelSource.includes('function reasonText'), 'status reason text formatter missing from module');
   });
 
   check('obsolete source-fragment files are absent', () => {

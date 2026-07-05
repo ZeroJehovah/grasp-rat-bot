@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.525" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.526" };
     }
   });
 
@@ -705,7 +705,106 @@
         parseTargetWhitelistNames,
         deriveTargetWhitelistUrl
       } = require_target_whitelist();
+      function createTargetWhitelistRuntime(runtime = {}) {
+        const bot = runtime.bot || null;
+        const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
+        const targetWhitelistState = runtime.targetWhitelistState || null;
+        const fetchJsonNoStore = typeof runtime.fetchJsonNoStore === "function" ? runtime.fetchJsonNoStore : async () => null;
+        const recordUnhandledTickError = typeof runtime.recordUnhandledTickError === "function" ? runtime.recordUnhandledTickError : () => {
+        };
+        const now = typeof runtime.now === "function" ? runtime.now : Date.now;
+        const locationHref = typeof runtime.locationHref === "function" ? runtime.locationHref : () => typeof location === "object" && location ? location.href : "";
+        const setTimer = typeof runtime.setInterval === "function" ? runtime.setInterval : setInterval;
+        function currentState() {
+          return bot?.targetWhitelist || targetWhitelistState || {};
+        }
+        function isWhitelistedTarget(e) {
+          if (!e) return false;
+          const name = normalizeTargetWhitelistName(e.name);
+          return Boolean(name && bot?.targetWhitelist?.nameSet?.has(name));
+        }
+        function summarizeTargetWhitelistStatus() {
+          const state2 = currentState();
+          return {
+            url: String(state2?.url || ""),
+            names: Array.isArray(state2?.names) ? state2.names.slice() : [],
+            count: Array.isArray(state2?.names) ? state2.names.length : 0,
+            loaded: Boolean(state2?.lastOkAt),
+            fetching: Boolean(state2?.fetching),
+            lastFetchAt: Number(state2?.lastFetchAt || 0) || 0,
+            lastOkAt: Number(state2?.lastOkAt || 0) || 0,
+            lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
+            lastError: String(state2?.lastError || ""),
+            lastReason: String(state2?.lastReason || "")
+          };
+        }
+        function targetWhitelistFetchUrl(url) {
+          const raw = String(url || "").trim();
+          if (!raw) return "";
+          try {
+            const parsed = new URL(raw, locationHref());
+            parsed.searchParams.set("_graspRatWhitelistTs", String(now()));
+            return parsed.toString();
+          } catch (_) {
+            return raw + (raw.includes("?") ? "&" : "?") + "_graspRatWhitelistTs=" + now();
+          }
+        }
+        async function refreshTargetWhitelist(reason = "manual") {
+          const state2 = currentState();
+          const url = String(state2.url || "").trim();
+          const t = now();
+          if (!url) {
+            state2.lastFetchAt = t;
+            state2.lastReason = "no-url";
+            return summarizeTargetWhitelistStatus();
+          }
+          if (state2.fetching) return summarizeTargetWhitelistStatus();
+          state2.fetching = true;
+          state2.lastFetchAt = t;
+          try {
+            const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
+            const validPayload = Array.isArray(payload) || Array.isArray(payload?.names) || Array.isArray(payload?.usernames);
+            if (!validPayload) throw new Error("target whitelist JSON must be an array or contain names/usernames array");
+            const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
+            state2.names = names;
+            state2.nameSet = new Set(names);
+            state2.lastOkAt = now();
+            state2.lastError = "";
+            state2.lastErrorAt = 0;
+            state2.lastReason = String(reason || "refresh");
+            return summarizeTargetWhitelistStatus();
+          } catch (err) {
+            state2.lastError = err?.message || String(err);
+            state2.lastErrorAt = now();
+            state2.lastReason = String(reason || "refresh") + "-failed";
+            return summarizeTargetWhitelistStatus();
+          } finally {
+            state2.fetching = false;
+          }
+        }
+        function startTargetWhitelistPolling() {
+          const state2 = currentState();
+          if (!String(state2.url || "").trim()) {
+            state2.lastReason = "no-url";
+            return;
+          }
+          refreshTargetWhitelist("startup").catch((err) => recordUnhandledTickError("target-whitelist-startup", err));
+          const pollMs = Math.max(0, Number(cfg.targetWhitelistPollMs || 0) || 0);
+          if (pollMs > 0 && !cfg.once) {
+            state2.timer = setTimer(() => {
+              refreshTargetWhitelist("interval").catch((err) => recordUnhandledTickError("target-whitelist-interval", err));
+            }, pollMs);
+          }
+        }
+        return {
+          isWhitelistedTarget,
+          summarizeTargetWhitelistStatus,
+          refreshTargetWhitelist,
+          startTargetWhitelistPolling
+        };
+      }
       module.exports = {
+        createTargetWhitelistRuntime,
         normalizeTargetWhitelistName,
         parseTargetWhitelistNames,
         deriveTargetWhitelistUrl
@@ -3199,6 +3298,149 @@
     }
   });
 
+  // src/browser/runtime/stamina-status.js
+  var require_stamina_status = __commonJS({
+    "src/browser/runtime/stamina-status.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function defaultStaminaExhaustedLongWindows(staminaState) {
+        return Array.isArray(staminaState?.longExhausted) ? staminaState.longExhausted : [];
+      }
+      function defaultHoldContradicted() {
+        return false;
+      }
+      function createStaminaStatusRuntime(runtime = {}) {
+        const bot = runtime.bot || null;
+        const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
+        const staminaRemaining = typeof runtime.staminaRemaining === "function" ? runtime.staminaRemaining : () => null;
+        const staminaLimitValue = typeof runtime.staminaLimitValue === "function" ? runtime.staminaLimitValue : (_self, _windowName, fallback) => fallback;
+        const staminaExhaustedThreshold = typeof runtime.staminaExhaustedThreshold === "function" ? runtime.staminaExhaustedThreshold : () => Math.max(0, Number(cfg.staminaExhaustedThresholdMs ?? 1e3));
+        const staminaExhaustedLongWindows = typeof runtime.staminaExhaustedLongWindows === "function" ? runtime.staminaExhaustedLongWindows : defaultStaminaExhaustedLongWindows;
+        const staminaHoldContradictedByStaminaEvidence = typeof runtime.staminaHoldContradictedByStaminaEvidence === "function" ? runtime.staminaHoldContradictedByStaminaEvidence : defaultHoldContradicted;
+        function summarizeStamina(self) {
+          const windows = [
+            { key: "5s", fallback: 1e4 },
+            { key: "1h", fallback: 3e6 },
+            { key: "1d", fallback: 2e7 }
+          ];
+          const thresholdMs = staminaExhaustedThreshold();
+          const items = windows.map((item) => {
+            const remaining = staminaRemaining(self, item.key);
+            const limit = staminaLimitValue(self, item.key, item.fallback);
+            return {
+              key: item.key,
+              remaining,
+              limit,
+              exhausted: remaining !== null && remaining < thresholdMs
+            };
+          });
+          const exhausted = items.filter((item) => item.exhausted).map((item) => item.key);
+          const longExhausted = exhausted.filter((key) => key === "1h" || key === "1d");
+          const byKey = Object.fromEntries(items.map((item) => [item.key, item]));
+          return {
+            thresholdMs,
+            stamina5s: byKey["5s"].remaining,
+            stamina5sLimit: byKey["5s"].limit,
+            stamina1h: byKey["1h"].remaining,
+            stamina1hLimit: byKey["1h"].limit,
+            stamina1d: byKey["1d"].remaining,
+            stamina1dLimit: byKey["1d"].limit,
+            exhausted,
+            longExhausted,
+            movementBlocked: exhausted.length > 0,
+            mustLeave: longExhausted.length > 0
+          };
+        }
+        function dailyStaminaWindowStartAt(t = Date.now()) {
+          const dayMs = 24 * 60 * 60 * 1e3;
+          const utc8OffsetMs = 8 * 60 * 60 * 1e3;
+          return Math.floor((t + utc8OffsetMs) / dayMs) * dayMs - utc8OffsetMs;
+        }
+        function nextDailyStaminaResetAt(t = Date.now()) {
+          const dayMs = 24 * 60 * 60 * 1e3;
+          return dailyStaminaWindowStartAt(t) + dayMs;
+        }
+        function staminaBudgetReloginDelayMs() {
+          return Math.max(1e3, Number(cfg.staminaBudgetReloginDelayMs || 18e5));
+        }
+        function staminaResetHoldUntil(staminaState, t = Date.now()) {
+          const exhausted = Array.isArray(staminaState?.longExhausted) ? staminaState.longExhausted : [];
+          let until = 0;
+          let resetAt = 0;
+          let fixedDelayMs = 0;
+          if (exhausted.includes("1h")) {
+            fixedDelayMs = staminaBudgetReloginDelayMs();
+            until = Math.max(until, t + fixedDelayMs);
+          }
+          if (exhausted.includes("1d")) {
+            resetAt = nextDailyStaminaResetAt(t);
+            until = Math.max(until, resetAt);
+          }
+          if (!until) return null;
+          const graceMs = resetAt && until === resetAt ? Math.max(0, Number(cfg.staminaResetGraceMs || 0)) : 0;
+          return {
+            until: until + graceMs,
+            resetAt,
+            graceMs,
+            fixedDelayMs: resetAt && resetAt >= t + fixedDelayMs ? 0 : fixedDelayMs,
+            fixed: Boolean(fixedDelayMs && !(resetAt && resetAt >= t + fixedDelayMs)),
+            exhausted
+          };
+        }
+        function longStaminaHoldContradictedByKnownStamina(staminaState) {
+          const thresholdMs = staminaExhaustedThreshold();
+          const sources = [
+            bot?.lastSelf,
+            bot?.lastDecision?.self,
+            bot?.session
+          ];
+          return sources.some((source) => staminaHoldContradictedByStaminaEvidence(staminaState, source, thresholdMs));
+        }
+        function startupStaminaSampleLooksUnsettled(staminaState, t = Date.now()) {
+          const windows = staminaExhaustedLongWindows(staminaState);
+          if (!windows.length) return false;
+          const allZero = ["5s", "1h", "1d"].every((key) => Number(staminaState?.["stamina" + key] ?? NaN) === 0);
+          if (!allZero) return false;
+          const graceMs = Math.max(0, Number(cfg.staminaExhaustionPostLoginGraceMs ?? 15e3));
+          if (!graceMs) return false;
+          const sessionAgeMs = bot?.session?.startedAt ? t - Number(bot.session.startedAt || t) : Infinity;
+          const loginAgeMs = bot?.lastLoginAt ? t - Number(bot.lastLoginAt || t) : Infinity;
+          return sessionAgeMs <= graceMs || loginAgeMs <= graceMs;
+        }
+        function deferredStaminaExhaustionLeave(staminaState, t = Date.now()) {
+          if (!staminaState?.mustLeave) return null;
+          if (startupStaminaSampleLooksUnsettled(staminaState, t)) {
+            return {
+              reason: "startup-zero-stamina-sample",
+              graceMs: Math.max(0, Number(cfg.staminaExhaustionPostLoginGraceMs ?? 15e3)),
+              sessionAgeMs: bot?.session?.startedAt ? Math.max(0, Math.round(t - Number(bot.session.startedAt || t))) : null,
+              loginAgeMs: bot?.lastLoginAt ? Math.max(0, Math.round(t - Number(bot.lastLoginAt || t))) : null
+            };
+          }
+          return null;
+        }
+        function staleOfflineStaminaHoldContradicted(detail) {
+          const staminaState = detail?.offlineSafety?.staminaExhausted;
+          return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
+        }
+        return {
+          summarizeStamina,
+          dailyStaminaWindowStartAt,
+          nextDailyStaminaResetAt,
+          staminaBudgetReloginDelayMs,
+          staminaResetHoldUntil,
+          longStaminaHoldContradictedByKnownStamina,
+          startupStaminaSampleLooksUnsettled,
+          deferredStaminaExhaustionLeave,
+          staleOfflineStaminaHoldContradicted
+        };
+      }
+      module.exports = {
+        createStaminaStatusRuntime
+      };
+    }
+  });
+
   // src/strategy/attack-worth.js
   var require_attack_worth = __commonJS({
     "src/strategy/attack-worth.js"(exports, module) {
@@ -3230,6 +3472,811 @@
       } = require_attack_worth();
       module.exports = {
         attackWorthTakingCore
+      };
+    }
+  });
+
+  // src/browser/runtime/target-overlay.js
+  var require_target_overlay = __commonJS({
+    "src/browser/runtime/target-overlay.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function noop() {
+      }
+      function createTargetOverlayRuntime(runtime = {}) {
+        const bot = runtime.bot || null;
+        const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
+        const targetOverlayId = String(runtime.targetOverlayId || "grasp-rat-target-overlay");
+        const loginPointSafetyKey = String(runtime.loginPointSafetyKey || "graspRatLoginPointSafety");
+        const storage = runtime.storage || (typeof localStorage === "object" ? localStorage : null);
+        const getNativeState = typeof runtime.getNativeState === "function" ? runtime.getNativeState : () => null;
+        const getSelf = typeof runtime.getSelf === "function" ? runtime.getSelf : () => null;
+        const getCurrentUserId = typeof runtime.getCurrentUserId === "function" ? runtime.getCurrentUserId : () => 0;
+        const getNativeCoinList = typeof runtime.getNativeCoinList === "function" ? runtime.getNativeCoinList : () => [];
+        const normalizeCoinDrop = typeof runtime.normalizeCoinDrop === "function" ? runtime.normalizeCoinDrop : (value) => value;
+        const getNativeEntityList = typeof runtime.getNativeEntityList === "function" ? runtime.getNativeEntityList : () => [];
+        const getEntities = typeof runtime.getEntities === "function" ? runtime.getEntities : () => [];
+        const firstFiniteNumber = typeof runtime.firstFiniteNumber === "function" ? runtime.firstFiniteNumber : (...values) => values.map(Number).find(Number.isFinite);
+        const dist = typeof runtime.dist === "function" ? runtime.dist : (a, b) => Math.hypot(Number(a?.x) - Number(b?.x), Number(a?.y) - Number(b?.y));
+        const isAlive = typeof runtime.isAlive === "function" ? runtime.isAlive : (e) => e && e.life !== "Dead" && e.life !== "WaitingRevive" && !e.waiting_revive;
+        const loginPointSafetyStatus = typeof runtime.loginPointSafetyStatus === "function" ? runtime.loginPointSafetyStatus : () => null;
+        const exitMotionStopLockRemainingMs = typeof runtime.exitMotionStopLockRemainingMs === "function" ? runtime.exitMotionStopLockRemainingMs : () => 0;
+        const onError = typeof runtime.onError === "function" ? runtime.onError : noop;
+        function doc() {
+          return typeof document === "object" && document ? document : null;
+        }
+        function win() {
+          return typeof window === "object" && window ? window : null;
+        }
+        function removeTargetOverlay() {
+          const documentRef = doc();
+          const overlay = documentRef?.getElementById(targetOverlayId);
+          if (overlay) overlay.remove();
+        }
+        function targetOverlaySuppressedAfterExit(decision) {
+          if (exitMotionStopLockRemainingMs() > 0) return true;
+          if (decision?.exitMotionStopped) return true;
+          if (decision?.leave?.exitConfirmed) return true;
+          const reason = String(decision?.reason || "");
+          return reason === "leave-success" || reason === "leave-http-403" || reason === "exit-confirmed" || reason === "enemy-leave-wait" || reason === "offline-leave-wait" || reason === "pursuit-leave-wait";
+        }
+        function targetOverlayStyle(decision) {
+          const target = decision?.target || null;
+          if (!target) return null;
+          if (decision?.combat) return { stroke: "rgba(248,113,113,.48)" };
+          const coinLike = targetOverlayCoinLike(decision, target);
+          if (coinLike) return { stroke: "rgba(250,204,21,.44)" };
+          const playerLike = targetOverlayPlayerLike(decision, target);
+          if (playerLike) return { stroke: "rgba(74,222,128,.44)" };
+          return null;
+        }
+        function targetOverlayCoinLike(decision, target = decision?.target || null) {
+          const kind = String(decision?.kind || "");
+          return Boolean(target && (kind === "coin" || kind === "seek-coin" || target.amount !== void 0 && target.amount !== null && Number.isFinite(Number(target.amount))));
+        }
+        function targetOverlayPlayerLike(decision, target = decision?.target || null) {
+          const kind = String(decision?.kind || "");
+          return Boolean(target && (decision?.combat || kind === "attack" || kind === "seek-enemy" || kind === "seek-drop" || target.name || target.drop !== void 0 && target.drop !== null && Number.isFinite(Number(target.drop))));
+        }
+        function ensureTargetOverlayCanvas(world, shell) {
+          const documentRef = doc();
+          if (!world || !shell || !documentRef?.body) return null;
+          const worldRect = world.getBoundingClientRect();
+          const shellRect = shell.getBoundingClientRect();
+          if (!(worldRect.width > 0) || !(worldRect.height > 0) || !(shellRect.width > 0) || !(shellRect.height > 0)) return null;
+          let overlay = documentRef.getElementById(targetOverlayId);
+          if (!overlay) {
+            overlay = documentRef.createElement("canvas");
+            overlay.id = targetOverlayId;
+            overlay.setAttribute("aria-hidden", "true");
+          }
+          if (overlay.parentElement !== shell) shell.appendChild(overlay);
+          const shellPosition = getComputedStyle(shell).position;
+          if (!shellPosition || shellPosition === "static") shell.style.position = "relative";
+          overlay.style.cssText = [
+            "position:absolute",
+            "left:0",
+            "top:0",
+            "width:" + shellRect.width + "px",
+            "height:" + shellRect.height + "px",
+            "z-index:5",
+            "pointer-events:none"
+          ].join(";");
+          const dpr = Math.max(1, Number(win()?.devicePixelRatio || 1));
+          const width = Math.max(1, Math.round(shellRect.width * dpr));
+          const height = Math.max(1, Math.round(shellRect.height * dpr));
+          if (overlay.width !== width) overlay.width = width;
+          if (overlay.height !== height) overlay.height = height;
+          return {
+            overlay,
+            width: shellRect.width,
+            height: shellRect.height,
+            dpr,
+            worldWidth: worldRect.width,
+            worldHeight: worldRect.height,
+            worldOffsetX: worldRect.left - shellRect.left,
+            worldOffsetY: worldRect.top - shellRect.top
+          };
+        }
+        function targetOverlayScaleTextRadiusCm() {
+          const text = String(doc()?.getElementById("scaleText")?.textContent || "");
+          const match = text.match(/r\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b/i);
+          if (!match) return 0;
+          const value = Number(match[1]);
+          if (!Number.isFinite(value) || value <= 0) return 0;
+          return /km/i.test(match[2]) ? value * 1e5 : value * 100;
+        }
+        function currentViewRadiusCm() {
+          const nativeState = getNativeState();
+          const values = [
+            targetOverlayScaleTextRadiusCm(),
+            nativeState?.viewRadiusCm,
+            nativeState?.view_radius_cm,
+            nativeState?.viewRadius,
+            nativeState?.view_radius
+          ];
+          for (const value of values) {
+            const radius = Number(value);
+            if (Number.isFinite(radius) && radius > 0) return radius;
+          }
+          return 1e4;
+        }
+        function targetOverlayPageViewParams() {
+          const windowRef = win();
+          const fn = typeof viewParams === "function" ? viewParams : windowRef?.viewParams;
+          if (typeof fn !== "function") return null;
+          try {
+            const params = fn.call(windowRef);
+            const units = Number(params?.units);
+            const cx = Number(params?.cx);
+            const cy = Number(params?.cy);
+            const centerX = Number(params?.centerX);
+            const centerY = Number(params?.centerY);
+            if ([units, cx, cy, centerX, centerY].every(Number.isFinite) && units > 0) {
+              return { units, cx, cy, centerX, centerY, source: "viewParams" };
+            }
+          } catch (_) {
+          }
+          return null;
+        }
+        function targetOverlayScreenCenter(canvasWidth, canvasHeight) {
+          const width = Math.max(1, Number(canvasWidth) || 1);
+          const height = Math.max(1, Number(canvasHeight) || 1);
+          let narrow = false;
+          try {
+            narrow = Boolean(win()?.matchMedia?.("(max-aspect-ratio: 1/1)")?.matches);
+          } catch (_) {
+            narrow = width <= height;
+          }
+          const reservedLeft = narrow ? 0 : Math.min(368, Math.max(0, width - 320));
+          return {
+            x: reservedLeft + (width - reservedLeft) / 2,
+            y: height / 2
+          };
+        }
+        function targetOverlayProjection2(self, view) {
+          const nativeView = targetOverlayPageViewParams();
+          if (nativeView) {
+            return {
+              ...nativeView,
+              offsetX: Number(view?.worldOffsetX) || 0,
+              offsetY: Number(view?.worldOffsetY) || 0
+            };
+          }
+          const selfPoint = targetOverlayWorldPoint(self);
+          const selfX = Number(selfPoint?.x);
+          const selfY = Number(selfPoint?.y);
+          if (!Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
+          const canvasWidth = Math.max(1, Number(view?.worldWidth || view?.width) || 1);
+          const canvasHeight = Math.max(1, Number(view?.worldHeight || view?.height) || 1);
+          const shortSide = Math.max(1, Math.min(canvasWidth, canvasHeight));
+          const units = Math.max(1, currentViewRadiusCm()) * 2 / shortSide;
+          const center = targetOverlayScreenCenter(canvasWidth, canvasHeight);
+          return {
+            units,
+            cx: center.x,
+            cy: center.y,
+            centerX: selfX,
+            centerY: selfY,
+            offsetX: Number(view?.worldOffsetX) || 0,
+            offsetY: Number(view?.worldOffsetY) || 0,
+            source: "fallback"
+          };
+        }
+        function targetOverlayPoint2(point, self, view, projection = null) {
+          const targetPoint = targetOverlayWorldPoint(point);
+          const viewProjection = projection || targetOverlayProjection2(self, view);
+          const x = Number(targetPoint?.x);
+          const y = Number(targetPoint?.y);
+          const units = Number(viewProjection?.units);
+          const cx = Number(viewProjection?.cx);
+          const cy = Number(viewProjection?.cy);
+          const centerX = Number(viewProjection?.centerX);
+          const centerY = Number(viewProjection?.centerY);
+          if (![x, y, units, cx, cy, centerX, centerY].every(Number.isFinite) || units <= 0) return null;
+          return {
+            x: (Number(viewProjection?.offsetX) || 0) + cx + (x - centerX) / units,
+            y: (Number(viewProjection?.offsetY) || 0) + cy + (y - centerY) / units
+          };
+        }
+        function targetOverlayWorldPoint(value) {
+          if (!value || typeof value !== "object") return null;
+          const point = value.position || value.pos || value.point || value.coord || null;
+          const renderX = firstFiniteNumber(value.visual_x, value.visualX, value.render_x, value.renderX);
+          const renderY = firstFiniteNumber(value.visual_y, value.visualY, value.render_y, value.renderY);
+          const x = firstFiniteNumber(
+            renderX,
+            value.x,
+            value.pos_x,
+            value.posX,
+            value.world_x,
+            value.worldX,
+            value.coord_x,
+            value.coordX,
+            value.center_x,
+            value.centerX,
+            value.visual_x,
+            value.visualX,
+            value.render_x,
+            value.renderX,
+            point?.x
+          );
+          const y = firstFiniteNumber(
+            renderY,
+            value.y,
+            value.pos_y,
+            value.posY,
+            value.world_y,
+            value.worldY,
+            value.coord_y,
+            value.coordY,
+            value.center_y,
+            value.centerY,
+            point?.y
+          );
+          return Number.isFinite(x) && Number.isFinite(y) ? { ...value, x, y } : null;
+        }
+        function targetOverlayListFromValue(value) {
+          if (Array.isArray(value)) return value;
+          if (value instanceof Map || value instanceof Set) return Array.from(value.values());
+          if (value && typeof value === "object") {
+            if (targetOverlayWorldPoint(value)) return [value];
+            const values = Object.values(value);
+            if (values.length && values.every((item) => item && typeof item === "object")) return values;
+          }
+          return [];
+        }
+        function targetOverlayCallList(label, fn, thisArg = null) {
+          if (typeof fn !== "function") return [];
+          try {
+            return targetOverlayListFromValue(fn.call(thisArg)).map((item) => item && typeof item === "object" ? { ...item, overlaySource: label } : item);
+          } catch (_) {
+            return [];
+          }
+        }
+        function targetOverlayRenderEntities2() {
+          const windowRef = win();
+          const nativeState = getNativeState();
+          return [
+            ...targetOverlayCallList("render", typeof getRenderEntities === "function" ? getRenderEntities : windowRef?.getRenderEntities, windowRef),
+            ...targetOverlayCallList("state.getRenderEntities()", nativeState?.getRenderEntities, nativeState),
+            ...targetOverlayListFromValue(nativeState?.renderEntities).map((item) => item && typeof item === "object" ? { ...item, overlaySource: "state.renderEntities" } : item),
+            ...targetOverlayListFromValue(nativeState?.render_entities).map((item) => item && typeof item === "object" ? { ...item, overlaySource: "state.render_entities" } : item)
+          ].filter(Boolean);
+        }
+        function targetOverlayFindEntity(list, target) {
+          if (!Array.isArray(list) || !list.length || !target) return null;
+          const targetId = target?.id ?? target?.user_id ?? target?.userId;
+          if (targetId !== void 0 && targetId !== null && targetId !== "") {
+            const exact = list.find((entity) => String(entity?.user_id ?? entity?.userId ?? entity?.id ?? "") === String(targetId));
+            if (exact) return exact;
+          }
+          const name = String(target?.name || "");
+          if (name) {
+            const exactName = list.find((entity) => String(entity?.name || "") === name);
+            if (exactName) return exactName;
+          }
+          return null;
+        }
+        function targetOverlayVisualSelf() {
+          const id = getCurrentUserId();
+          if (id) {
+            const renderSelf = targetOverlayFindEntity(targetOverlayRenderEntities2(), { id });
+            if (renderSelf) return targetOverlayWorldPoint(renderSelf) || renderSelf;
+          }
+          const nativeState = getNativeState();
+          const visual = targetOverlayWorldPoint(nativeState?.localVisual) || targetOverlayWorldPoint(nativeState?.local_visual) || targetOverlayWorldPoint(nativeState?.visualSelf) || targetOverlayWorldPoint(nativeState?.visual_self);
+          if (visual) return visual;
+          return getSelf();
+        }
+        function targetOverlayResolvedCoin(target) {
+          const nativeCoins = (getNativeCoinList() || []).map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
+          if (!nativeCoins.length) return null;
+          const targetId = target?.id ?? target?.drop_id ?? target?.dropId ?? target?.coin_id ?? target?.coinId;
+          if (targetId !== void 0 && targetId !== null && targetId !== "") {
+            const exact = nativeCoins.find((coin) => String(coin.drop_id ?? coin.id ?? "") === String(targetId));
+            if (exact) return exact;
+          }
+          const targetX = Number(target?.x);
+          const targetY = Number(target?.y);
+          if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return null;
+          const targetAmount = Number(target?.amount);
+          const maxDistance = 1400;
+          return nativeCoins.map((coin) => ({
+            coin,
+            distance: dist({ x: targetX, y: targetY }, coin),
+            amountMatches: !Number.isFinite(targetAmount) || Math.round(Number(coin.amount || 0)) === Math.round(targetAmount)
+          })).filter((item) => item.amountMatches && item.distance <= maxDistance).sort((a, b) => a.distance - b.distance)[0]?.coin || null;
+        }
+        function targetOverlayRoutePoints(decision, target) {
+          const route = decision?.coinRoute || target?.coinRoute || null;
+          const points = Array.isArray(route?.points) ? route.points : [];
+          if (!points.length) return [];
+          const targetKey = targetOverlayRoutePointKey(target);
+          const firstKey = targetOverlayRoutePointKey(points[0]);
+          if (targetKey && firstKey && targetKey !== firstKey) return [];
+          const resolved = points.map((point) => targetOverlayResolvedCoin(point) || point).map(targetOverlayWorldPoint).filter(Boolean);
+          if (resolved.length && target) {
+            const first = targetOverlayWorldPoint(target);
+            if (first) resolved[0] = first;
+          }
+          return resolved;
+        }
+        function targetOverlayRoutePointKey(point) {
+          const id = point?.id ?? point?.drop_id ?? point?.dropId ?? point?.coin_id ?? point?.coinId;
+          if (id !== void 0 && id !== null && id !== "") return "id:" + String(id);
+          const x = Number(point?.x);
+          const y = Number(point?.y);
+          const amount = Number(point?.amount);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
+          return "xy:" + Math.round(x) + ":" + Math.round(y) + ":" + (Number.isFinite(amount) ? Math.round(amount) : "");
+        }
+        function targetOverlayResolvedEntity(target) {
+          const targetId = target?.id ?? target?.user_id ?? target?.userId;
+          const name = String(target?.name || "");
+          const renderEntity = targetOverlayFindEntity(targetOverlayRenderEntities2(), target);
+          if (renderEntity) return targetOverlayWorldPoint(renderEntity) || renderEntity;
+          const entities = getNativeEntityList() || getEntities() || [];
+          if (!Array.isArray(entities) || !entities.length) return null;
+          if (targetId !== void 0 && targetId !== null && targetId !== "") {
+            const exact = entities.find((entity) => String(entity.user_id ?? entity.id ?? "") === String(targetId));
+            if (exact) return exact;
+          }
+          if (name) {
+            const exactName = entities.find((entity) => String(entity.name || "") === name);
+            if (exactName) return exactName;
+          }
+          return null;
+        }
+        function targetOverlayResolvedTarget(decision) {
+          const target = decision?.target || null;
+          if (!target) return null;
+          if (targetOverlayCoinLike(decision, target)) return targetOverlayResolvedCoin(target) || target;
+          if (targetOverlayPlayerLike(decision, target)) return targetOverlayResolvedEntity(target) || target;
+          return target;
+        }
+        function targetOverlayHasAliveSelf() {
+          const self = getSelf();
+          if (!self) return false;
+          try {
+            if (typeof isAlive === "function") return Boolean(isAlive(self));
+          } catch (_) {
+          }
+          const life = String(self.life ?? self.status ?? "").toLowerCase();
+          if (life) return /alive|live|living|存活/.test(life) && !/dead|death|死亡/.test(life);
+          const hp = Number(self.hp ?? self.health);
+          return Number.isFinite(hp) && hp > 0;
+        }
+        function targetOverlayStoredLoginPointSafety() {
+          try {
+            const stored = JSON.parse(storage?.getItem(loginPointSafetyKey) || "null");
+            return stored && typeof stored === "object" ? stored : null;
+          } catch (_) {
+            return null;
+          }
+        }
+        function targetOverlayLoginPointStatus(decision) {
+          try {
+            const status = loginPointSafetyStatus();
+            if (status?.point) return status;
+          } catch (_) {
+          }
+          const candidates = [
+            decision?.login?.snapshotGate?.pointSafety,
+            decision?.snapshotGate?.pointSafety,
+            decision?.loginSnapshotGate?.pointSafety,
+            decision?.reloginGate?.loginPointSafety,
+            bot?.lastLoginResult?.snapshotGate?.pointSafety,
+            bot?.loginSnapshotGate?.pointSafety,
+            bot?.loginPointSafety,
+            targetOverlayStoredLoginPointSafety()
+          ];
+          return candidates.find((item) => item?.point) || null;
+        }
+        function targetOverlayLoginPointRadius(status) {
+          const configured = Number(status?.radius);
+          if (Number.isFinite(configured) && configured > 0) return configured;
+          const lastExitSelfHp = Number(status?.lastExitSelfHp);
+          const threshold = Math.max(0, Number(cfg.loginPointSafetyHealthyHpThreshold ?? 80) || 80);
+          if (Number.isFinite(lastExitSelfHp) && lastExitSelfHp >= threshold) {
+            return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 17e3) || 17e3);
+          }
+          return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 3e4) || 3e4);
+        }
+        function targetOverlayLoginPointState(decision) {
+          if (targetOverlayHasAliveSelf()) return null;
+          const status = targetOverlayLoginPointStatus(decision);
+          const point = targetOverlayWorldPoint(status?.point);
+          const radius = targetOverlayLoginPointRadius(status);
+          if (!point || !(radius > 0)) return null;
+          const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 3) || 3);
+          const streak = Math.max(0, Number(status?.streak || 0) || 0);
+          return {
+            ...status,
+            point,
+            radius,
+            required,
+            streak,
+            satisfied: Boolean(status?.satisfied || (required <= 0 || streak >= required)),
+            unsafe: Boolean(status?.lastDanger || status?.lastError)
+          };
+        }
+        function drawLoginPointOverlay(ctx, view, state2) {
+          if (!ctx || !view || !state2?.point) return false;
+          const projection = targetOverlayProjection2(state2.point, view);
+          const center = targetOverlayPoint2(state2.point, state2.point, view, projection);
+          const units = Number(projection?.units);
+          if (!center || !(units > 0)) return false;
+          const radiusPx = Math.max(1, Number(state2.radius || 0) / units);
+          const tone = state2.unsafe ? { stroke: "rgba(248,113,113,.62)", fill: "rgba(248,113,113,.08)", point: "rgba(248,113,113,.9)" } : state2.satisfied ? { stroke: "rgba(74,222,128,.56)", fill: "rgba(74,222,128,.07)", point: "rgba(74,222,128,.9)" } : { stroke: "rgba(250,204,21,.58)", fill: "rgba(250,204,21,.08)", point: "rgba(250,204,21,.9)" };
+          ctx.save();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = tone.stroke;
+          ctx.fillStyle = tone.fill;
+          ctx.setLineDash([12, 8]);
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.strokeStyle = tone.point;
+          ctx.fillStyle = tone.point;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(center.x - 13, center.y);
+          ctx.lineTo(center.x + 13, center.y);
+          ctx.moveTo(center.x, center.y - 13);
+          ctx.lineTo(center.x, center.y + 13);
+          ctx.stroke();
+          ctx.restore();
+          return true;
+        }
+        function renderTargetOverlay(decision = bot?.lastDecision) {
+          try {
+            const documentRef = doc();
+            if (!documentRef) return;
+            if (bot?.paused || decision?.paused || String(decision?.reason || "") === "paused") {
+              removeTargetOverlay();
+              return;
+            }
+            if (targetOverlaySuppressedAfterExit(decision)) {
+              removeTargetOverlay();
+              return;
+            }
+            const style = targetOverlayStyle(decision);
+            const target = targetOverlayResolvedTarget(decision);
+            const self = targetOverlayVisualSelf() || decision?.self || bot?.lastSelf;
+            const loginPointOverlay = targetOverlayLoginPointState(decision);
+            if (!style || !target || !self) {
+              const world2 = documentRef.getElementById("world");
+              const shell2 = world2?.closest?.(".map-shell") || world2?.parentElement || null;
+              const view2 = loginPointOverlay ? ensureTargetOverlayCanvas(world2, shell2) : null;
+              const ctx2 = view2?.overlay?.getContext("2d") || documentRef.getElementById(targetOverlayId)?.getContext("2d") || null;
+              if (ctx2) {
+                if (view2) ctx2.setTransform(view2.dpr, 0, 0, view2.dpr, 0, 0);
+                ctx2.clearRect(0, 0, view2?.width || ctx2.canvas.width, view2?.height || ctx2.canvas.height);
+                if (view2 && loginPointOverlay) drawLoginPointOverlay(ctx2, view2, loginPointOverlay);
+              }
+              return;
+            }
+            const world = documentRef.getElementById("world");
+            const shell = world?.closest?.(".map-shell") || world?.parentElement || null;
+            const view = ensureTargetOverlayCanvas(world, shell);
+            if (!view) return;
+            const ctx = view.overlay.getContext("2d");
+            if (!ctx) return;
+            ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+            ctx.clearRect(0, 0, view.width, view.height);
+            if (loginPointOverlay) drawLoginPointOverlay(ctx, view, loginPointOverlay);
+            const projection = targetOverlayProjection2(self, view);
+            const start = targetOverlayPoint2(self, self, view, projection);
+            const end = targetOverlayPoint2(target, self, view, projection);
+            if (!start || !end) return;
+            const routePoints = targetOverlayRoutePoints(decision, target).map((point) => targetOverlayPoint2(point, self, view, projection)).filter(Boolean);
+            ctx.save();
+            ctx.strokeStyle = style.stroke;
+            ctx.lineWidth = 2;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.setLineDash([10, 8]);
+            ctx.beginPath();
+            ctx.moveTo(start.x, start.y);
+            if (routePoints.length > 1) {
+              for (const point of routePoints) ctx.lineTo(point.x, point.y);
+            } else {
+              ctx.lineTo(end.x, end.y);
+            }
+            ctx.stroke();
+            if (routePoints.length > 1) {
+              ctx.setLineDash([]);
+              ctx.fillStyle = "rgba(250,204,21,.24)";
+              for (const point of routePoints) {
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+              }
+            }
+            ctx.restore();
+          } catch (err) {
+            onError(err);
+          }
+        }
+        return {
+          removeTargetOverlay,
+          renderTargetOverlay
+        };
+      }
+      module.exports = {
+        createTargetOverlayRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/status-panel.js
+  var require_status_panel = __commonJS({
+    "src/browser/runtime/status-panel.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var {
+        escapeHtml,
+        formatDistance
+      } = require_display_format2();
+      function createStatusPanelRuntime(runtime = {}) {
+        const bot = runtime.bot || null;
+        const cfg = runtime.cfg && typeof runtime.cfg === "object" ? runtime.cfg : {};
+        const panelId = String(runtime.panelId || "grasp-rat-bot-panel");
+        const renderTargetOverlay = typeof runtime.renderTargetOverlay === "function" ? runtime.renderTargetOverlay : () => {
+        };
+        const dropValue = typeof runtime.dropValue === "function" ? runtime.dropValue : (e) => Number(e?.drop || 0) || 0;
+        const summarizeControl = typeof runtime.summarizeControl === "function" ? runtime.summarizeControl : () => ({});
+        const summarizePursuit = typeof runtime.summarizePursuit === "function" ? runtime.summarizePursuit : () => null;
+        function doc() {
+          return typeof document === "object" && document ? document : null;
+        }
+        function ensureBotPanel() {
+          return null;
+          const documentRef = doc();
+          if (!documentRef?.body) return null;
+          let panel = documentRef.getElementById(panelId);
+          if (panel) return panel;
+          panel = documentRef.createElement("div");
+          panel.id = panelId;
+          panel.setAttribute("aria-live", "polite");
+          panel.style.cssText = [
+            "position:fixed",
+            "right:12px",
+            "top:12px",
+            "z-index:2147483647",
+            "width:min(360px,calc(100vw - 24px))",
+            "max-width:360px",
+            "box-sizing:border-box",
+            "padding:10px 12px",
+            "border:1px solid rgba(148,163,184,.35)",
+            "border-radius:8px",
+            "background:rgba(15,23,42,.88)",
+            "color:#e5e7eb",
+            "font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif",
+            "box-shadow:0 10px 32px rgba(0,0,0,.38)",
+            "backdrop-filter:blur(8px)",
+            "pointer-events:none",
+            "white-space:normal"
+          ].join(";");
+          documentRef.body.appendChild(panel);
+          return panel;
+        }
+        function removeBotPanel() {
+          return;
+          const panel = doc()?.getElementById(panelId);
+          if (panel) panel.remove();
+        }
+        function formatStaminaDisplay(self) {
+          if (!self) return "-";
+          const stamina = self.stamina || {};
+          const valueText = (remaining, limit) => {
+            const r = Number(remaining);
+            if (!Number.isFinite(r)) return "-";
+            const l = Number(limit);
+            return Math.floor(r / 1e3) + "/" + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1e3) : "-");
+          };
+          const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
+          const suffix = exhausted.length ? " !" + exhausted.join("/") : "";
+          return "5s " + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli) + " 1h " + valueText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli) + " 1d " + valueText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli) + suffix;
+        }
+        function decisionReasonDetail(decision) {
+          return decision?.leave?.displayReason || decision?.displayReason || decision?.enemyLeave?.displayReason || decision?.offlineLeave?.displayReason || decision?.leave?.summary || decision?.exitSummary || decision?.leave?.exitSummary || decision?.leave?.enemyLeaveSummary || decision?.leave?.enemyLeaveReason || "";
+        }
+        function actionText(decision) {
+          const kind = decision?.kind || "wait";
+          const target = decision?.target || null;
+          const threats = Array.isArray(decision?.threats) ? decision.threats : [];
+          const detail = decisionReasonDetail(decision);
+          if (kind === "coin") return "\u62FE\u53D6\u91D1\u5E01" + (target ? " #" + (target.id ?? "-") + " \u8DDD\u79BB " + formatDistance(target.distance) : "");
+          if (kind === "seek-coin") return "\u524D\u5F80\u91D1\u5E01" + (target ? " #" + (target.id ?? "-") + " \u8DDD\u79BB " + formatDistance(target.distance) : "");
+          if (kind === "attack") return (decision?.combat ? "\u6218\u6597 " : "\u653B\u51FB ") + (target?.name || "#" + (target?.id ?? "-")) + " \u8840\u91CF " + (target?.hp ?? "-") + " Drop " + (target?.drop ?? "-");
+          if (kind === "seek-enemy" || kind === "seek-drop") return "\u524D\u5F80\u76EE\u6807 " + (target?.name || "#" + (target?.id ?? "-")) + (target?.drop ? " Drop " + target.drop : "");
+          if (kind === "flee") {
+            const threat = threats[0];
+            return "\u907F\u9669\u64A4\u79BB" + (threat ? "\uFF1A" + (threat.name || "#" + threat.id) + " \u8DDD\u79BB " + formatDistance(threat.d ?? threat.distance) : "");
+          }
+          if (kind === "recover") return "\u6062\u590D\u4F53\u529B/\u8840\u91CF";
+          if (kind === "patrol") {
+            if (target) return "\u5DE1\u822A\u5230" + (target.amount ? "\u91D1\u5E01" : "\u533A\u57DF") + " #" + (target.id ?? "-") + " \u8DDD\u79BB " + formatDistance(target.distance);
+            return "\u5DE1\u822A\u626B\u63CF";
+          }
+          if (kind === "wait") return "\u7B49\u5F85\uFF1A" + (detail || decision?.reason || "\u72B6\u6001\u4E0D\u8DB3");
+          if (kind === "leave") return "\u9000\u51FA\uFF1A" + (detail || decision?.reason || "\u72B6\u6001\u4E0D\u8DB3");
+          if (kind === "idle") return "\u5F85\u547D";
+          return kind;
+        }
+        function reasonText(reason) {
+          const map = {
+            "active-threat-before-bullet-range": "Active \u73A9\u5BB6\u8FDB\u5165\u5371\u9669\u5708",
+            "active-threat-caution-migration": "Active \u73A9\u5BB6\u8FDB\u5165\u9884\u8B66\u5708",
+            "active-threat-return-block": "\u963B\u6B62\u56DE\u5934\u9760\u8FD1 Active \u73A9\u5BB6",
+            "return-block-lateral-scan": "Active \u8FD4\u7A0B\u51B7\u5374\uFF1A\u6A2A\u5411\u626B\u63CF",
+            "passive-panic-distance": "\u73A9\u5BB6\u8DDD\u79BB\u8FC7\u8FD1",
+            "avoid-invulnerable-target": "\u907F\u5F00\u65E0\u654C/\u5371\u9669\u76EE\u6807",
+            "recovery-avoid-humans": "\u56DE\u8840\u65F6\u907F\u5F00\u9644\u8FD1\u73A9\u5BB6",
+            "recovery-foot-coin": "\u56DE\u8840\u65F6\u987A\u624B\u62FE\u53D6\u811A\u4E0B\u91D1\u5E01",
+            "foot-coin-priority": "\u8D34\u8EAB\u91D1\u5E01\u4F18\u5148\u62FE\u53D6",
+            "foot-coin-before-active-caution": "\u9884\u8B66\u533A\u5185\u53EA\u62FE\u53D6\u8D34\u8EAB\u91D1\u5E01",
+            "near-coin-priority": "\u8FD1\u5904\u5B89\u5168\u91D1\u5E01\u4F18\u5148",
+            "near-coin-before-active-caution": "\u9884\u8B66\u533A\u5185\u53EA\u62FE\u53D6\u8FD1\u5904\u5B89\u5168\u91D1\u5E01",
+            "safe-coin-before-drop-target": "\u5B89\u5168\u91D1\u5E01\u4F18\u5148\u4E8E\u653B\u51FB",
+            "safe-global-coin-before-drop-target": "\u524D\u5F80\u53EF\u89C1\u5B89\u5168\u91D1\u5E01",
+            "safe-patrol-coin": "\u5DE1\u822A\u62FE\u53D6\u5B89\u5168\u91D1\u5E01",
+            "safe-distant-coin": "\u524D\u5F80\u8FDC\u5904\u5B89\u5168\u91D1\u5E01",
+            "post-attack-drop-coin": "\u6218\u6597\u540E\u4F18\u5148\u62FE\u53D6\u6389\u843D",
+            "high-value-visible-coin-priority": "\u9AD8\u4EF7\u503C\u53EF\u89C1\u91D1\u5E01\u4F18\u5148",
+            "best-opportunity-coin": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u62FE\u53D6\u91D1\u5E01",
+            "best-opportunity-coin-route": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u91D1\u5E01\u8DEF\u7EBF",
+            "best-opportunity-visible-coin": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u524D\u5F80\u53EF\u89C1\u91D1\u5E01",
+            "best-opportunity-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u653B\u51FB Drop \u76EE\u6807",
+            "best-opportunity-afk-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u653B\u51FB\u6302\u673A Drop \u76EE\u6807",
+            "approach-profitable-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u9760\u8FD1\u9AD8 Drop \u76EE\u6807",
+            "approach-afk-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u9760\u8FD1\u6302\u673A Drop \u76EE\u6807",
+            "opportunistic-afk-drop-shot": "\u987A\u624B\u5C04\u51FB\u6302\u673A Drop \u76EE\u6807",
+            "migrate-to-known-field": "\u8FC1\u79FB\u5230\u91D1\u5E01\u5BC6\u96C6\u533A\u57DF",
+            "scan-toward-distant-coin": "\u626B\u63CF\u8FDC\u5904\u91D1\u5E01",
+            "snapshot-coin-field": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
+            "snapshot-coin-target": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
+            "snapshot-coin-idle-timeout": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
+            "wait-for-stamina-budget": "\u957F\u671F\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3",
+            "wait-for-visible-coin-refresh": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
+            "stamina-budget-coin-leave": "\u4E00\u5C0F\u65F6\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u9000\u51FA\u7B49\u5F85\u6062\u590D",
+            "stamina-budget-coin-leave-retry": "\u4E00\u5C0F\u65F6\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u91CD\u8BD5\u9000\u51FA",
+            "wait-for-snapshot-coin": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
+            "login-suppressed": "\u7B49\u5F85\u91CD\u8FDE",
+            "exit-log-flush-pending": "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210",
+            "important-log-flush-pending": "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210",
+            "maintain-safe-spacing": "\u907F\u5F00\u9644\u8FD1\u73A9\u5BB6",
+            "ignore-stale-coin-no-progress": "\u91D1\u5E01\u957F\u65F6\u95F4\u65E0\u8FDB\u5C55\uFF0C\u4E34\u65F6\u8131\u79BB",
+            "leave-stale-coin": "\u79BB\u5F00\u7591\u4F3C\u5361\u4F4F\u91D1\u5E01",
+            "wait-for-full-stamina-and-hp": "\u7B49\u5F85\u6062\u590D\u5230\u5B89\u5168\u72B6\u6001",
+            "conserve-stamina-before-chasing": "\u517C\u5BB9\u65E7\u903B\u8F91\uFF1A\u4FDD\u5B58\u4F53\u529B",
+            "save-stamina-for-profitable-coin": "\u517C\u5BB9\u65E7\u903B\u8F91\uFF1A\u7B49\u5F85\u76EE\u6807",
+            "combat-attack": "\u6218\u6597\uFF1A\u8282\u594F\u5F00\u706B",
+            "combat-tangent-dodge": "\u6218\u6597\uFF1A\u5207\u7EBF\u89C4\u907F\u5E76\u8282\u594F\u5F00\u706B",
+            "combat-stamina-hold": "\u6218\u6597\uFF1A\u77ED\u4F53\u529B\u4E0D\u8DB3\uFF0C\u505C\u6B62\u79FB\u52A8\u5E76\u6682\u505C\u5F00\u706B",
+            "combat-stamina-conserve": "\u6218\u6597\uFF1A\u4FDD\u7559\u4F53\u529B\u8EB2\u907F\uFF0C\u6682\u505C\u5F00\u706B",
+            "combat-burst-fire": "\u6218\u6597\uFF1A\u4FDD\u7559\u4F53\u529B\uFF0C\u964D\u9891\u5F00\u706B",
+            "combat-pressure-close": "\u6218\u6597\uFF1A\u4E45\u653B\u672A\u4E2D\uFF0C\u538B\u8FD1\u5E76\u8282\u594F\u5F00\u706B",
+            "combat-far-pressure-close": "\u6218\u6597\uFF1A\u8FDC\u8DDD\u4E45\u653B\u672A\u4E2D\uFF0C\u538B\u8FD1\u5F00\u706B",
+            "combat-retreating-fighter-close": "\u6218\u6597\uFF1A\u9000\u8FB9\u53CD\u51FB\u76EE\u6807\uFF0C\u538B\u8FD1\u5F00\u706B",
+            "combat-finish-pressure": "\u6218\u6597\uFF1A\u6B8B\u8840\u76EE\u6807\u9000\u8FB9\uFF0C\u538B\u8FD1\u8865\u67AA",
+            "combat-finish-reengage": "\u6218\u6597\uFF1A\u6B8B\u8840\u76EE\u6807\u51FA\u5708\uFF0C\u91CD\u65B0\u9760\u8FD1",
+            "combat-spacing": "\u6218\u6597\uFF1A\u4FDD\u6301\u5B89\u5168\u95F4\u8DDD\u5E76\u5F00\u706B",
+            "combat-spacing-dodge": "\u6218\u6597\uFF1A\u89C4\u907F\u8D34\u8FD1\u5E76\u5F00\u706B",
+            "combat-out-of-range-dodge": "\u6218\u6597\uFF1A\u8D85\u8DDD\u6765\u5F39\uFF0C\u53EA\u89C4\u907F",
+            "combat-out-of-range-hold": "\u6218\u6597\uFF1A\u76EE\u6807\u8D85\u51FA\u5C04\u7A0B\uFF0C\u6682\u505C\u8FFD\u51FB",
+            "combat-out-of-range-reengage": "\u6218\u6597\uFF1A\u76EE\u6807\u8F7B\u5FAE\u51FA\u5708\uFF0C\u91CD\u65B0\u9760\u8FD1",
+            "combat-target-retreating": "\u6218\u6597\uFF1A\u76EE\u6807\u9000\u8FB9\uFF0C\u6682\u505C\u5F00\u706B",
+            "combat-active-threat-wait": "\u6218\u6597\uFF1A\u7B49\u5F85 Active \u5A01\u80C1\u660E\u786E",
+            "combat-reengage": "\u6218\u6597\uFF1A\u91CD\u65B0\u9760\u8FD1\u76EE\u6807",
+            "combat-disengage-range": "\u6218\u6597\uFF1A\u76EE\u6807\u8FDC\u79BB\uFF0C\u8131\u79BB\u89C2\u5BDF",
+            "combat-critical-hp-leave": "\u6218\u6597\u8840\u91CF\u4F4E\u4E8E 20\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "combat-low-hp-leave": "\u6218\u6597\u4F4E\u8840\u52A3\u52BF\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "combat-low-hp-no-damage-leave": "\u6218\u6597\u4F4E\u8840\u4E14\u4E45\u653B\u672A\u4E2D\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "combat-hp-disadvantage-leave": "\u6218\u6597\u8840\u91CF\u5DEE\u52A3\u52BF\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "combat-leave": "\u6218\u6597\u52A3\u52BF\u9000\u51FA\u540E\u7B49\u5F85",
+            "combat-leave-retry": "\u6218\u6597\u9000\u51FA\u5931\u8D25\uFF0C\u7B49\u5F85\u8865\u53D1\u9000\u51FA",
+            "injury-leave": "\u53D7\u4F24\u540E\u7ACB\u5373\u9000\u51FA",
+            "enemy-leave-wait": "\u654C\u65B9\u884C\u4E3A\u9000\u51FA\u540E\u7B49\u5F85",
+            "control-ws-offline": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF",
+            "control-ws-offline-unsafe": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u4E14\u5468\u56F4\u5371\u9669\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "control-ws-offline-safe-wait": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u5B89\u5168\u533A\u77ED\u6682\u7B49\u5F85\u91CD\u8FDE",
+            "control-ws-reconnect-churn": "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "control-ws-no-self-game-session": "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u7ACB\u5373\u9000\u51FA",
+            "control-ws-server-position-stalled": "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
+            "control-global-sampling-outage": "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
+            "control-combat-tick-gap": "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
+            "control-action-settlement-stalled": "\u79FB\u52A8/\u5F00\u706B\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
+            "control-stamina-exhausted": "\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
+            "stamina-exhausted-leave": "\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6B63\u5728\u9000\u51FA",
+            "offline-leave": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u6B63\u5728\u9000\u51FA",
+            "offline-leave-wait": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u9000\u51FA\u540E\u7B49\u5F85\u91CD\u8FDE",
+            "cloudflare-error-refresh": "Cloudflare \u9519\u8BEF\u9875\uFF0C\u7B49\u5F85\u5237\u65B0",
+            "leave-success-refresh-confirmation": "\u9000\u51FA\u6210\u529F\u540E\u5237\u65B0\u786E\u8BA4",
+            "post-attack-drop-wait-position": "\u6218\u6597\u540E\u7B49\u5F85\u6389\u843D\u5237\u65B0",
+            "target-whitelisted": "\u76EE\u6807\u5728\u767D\u540D\u5355\u5185\uFF0C\u8DF3\u8FC7\u653B\u51FB",
+            "pursuit-leave": "\u88AB\u540C\u4E00\u73A9\u5BB6\u6301\u7EED\u8FFD\u51FB\uFF0C\u9000\u51FA\u7B49\u5F85",
+            "pursuit-leave-retry": "\u8FFD\u51FB\u9000\u51FA\u5931\u8D25\uFF0C\u7B49\u5F85\u8865\u53D1\u9000\u51FA",
+            "pursuit-leave-wait": "\u8FFD\u51FB\u9000\u51FA\u540E\u7B49\u5F85\u91CD\u65B0\u767B\u5F55",
+            "paused": "\u624B\u52A8\u6682\u505C",
+            "auto-login": "\u81EA\u52A8\u89E6\u53D1\u767B\u5F55/\u52A0\u5165",
+            "login-cooldown": "\u767B\u5F55\u5DF2\u89E6\u53D1\uFF0C\u7B49\u5F85\u9875\u9762\u8DF3\u8F6C",
+            "login-snapshot-gate": "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167",
+            "login-control-missing": "\u7B49\u5F85\u767B\u5F55\u63A7\u4EF6\u51FA\u73B0",
+            "session-mismatch-refresh": "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u5237\u65B0\u786E\u8BA4\u72B6\u6001",
+            "session-mismatch-recovery": "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u5B89\u5168\u6062\u590D\u63A5\u7BA1",
+            "game-session-connecting": "\u5DF2\u767B\u5F55\uFF0C\u7B49\u5F85\u6E38\u620F\u8FDE\u63A5/\u81EA\u8EAB\u5B9E\u4F53",
+            "no-self": "\u672A\u8BFB\u5230\u81EA\u8EAB\u5B9E\u4F53",
+            "not-alive": "\u4E0D\u5728\u5B58\u6D3B\u72B6\u6001",
+            "startup-error": "\u811A\u672C\u542F\u52A8\u5F02\u5E38",
+            "bot-error": "\u811A\u672C\u5F02\u5E38"
+          };
+          return map[reason] || reason || "-";
+        }
+        function updateBotPanel(decision = bot?.lastDecision) {
+          renderTargetOverlay(decision);
+          return;
+          const panel = ensureBotPanel();
+          if (!panel) return;
+          const self = decision?.self || bot?.lastSelf || null;
+          const hp = self?.hp ?? "-";
+          const staminaText = formatStaminaDisplay(self);
+          const selfDrop = self ? self.drop ?? dropValue(self) : "-";
+          const control = summarizeControl();
+          const safety = bot?.lastSafety || {};
+          const nearestActive = safety.nearestActive ? (safety.nearestActive.name || "#" + safety.nearestActive.id) + " " + formatDistance(safety.nearestActive.distance) : "-";
+          const wsLabel = control.wsOpen ? "online" : control.connecting ? "connecting" : "offline";
+          const velocity = control.nativeCurrentVel || control.lastVelocity || "0 0";
+          const version = cfg.version || "dev";
+          const sourceHash = cfg.sourceHash ? String(cfg.sourceHash).slice(0, 8) : "-";
+          const panelLines = [
+            '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + "</div>",
+            '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">\u8FDC\u7AEF ' + escapeHtml(version) + " / " + escapeHtml(sourceHash) + "</div>",
+            "<div>\u539F\u56E0\uFF1A" + escapeHtml(decisionReasonDetail(decision) || reasonText(decision?.reason)) + "</div>",
+            "<div>\u8840\u91CF " + escapeHtml(hp) + " / \u4F53\u529B " + escapeHtml(staminaText) + " / Drop " + escapeHtml(selfDrop || "-") + "</div>",
+            "<div>\u79FB\u52A8 " + escapeHtml(decision?.dx ?? 0) + "," + escapeHtml(decision?.dy ?? 0) + " / \u901F\u5EA6 " + escapeHtml(velocity) + "</div>",
+            "<div>WS " + escapeHtml(wsLabel) + " / \u6700\u8FD1 Active " + escapeHtml(nearestActive) + "</div>"
+          ];
+          if (decision?.target) {
+            const target = decision.target;
+            panelLines.push("<div>\u76EE\u6807\uFF1A" + escapeHtml(target.name || "#" + (target.id ?? "-")) + " \u8DDD\u79BB " + escapeHtml(formatDistance(target.distance)) + " \u91D1\u5E01 " + escapeHtml(target.amount ?? "-") + " Drop " + escapeHtml(target.drop ?? "-") + "</div>");
+          }
+          if (decision?.combat) {
+            panelLines.push("<div>\u6218\u6597\uFF1A\u7784\u51C6 " + escapeHtml(decision?.aimTarget?.mode || "-") + " / \u6765\u5F39 " + escapeHtml(decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : "-") + "</div>");
+          }
+          if (decision?.opportunisticShot) {
+            const shot = decision.opportunisticShot;
+            panelLines.push("<div>\u987A\u624B\u5C04\u51FB\uFF1A" + escapeHtml(shot.name || "#" + (shot.id ?? "-")) + " \u8DDD\u79BB " + escapeHtml(formatDistance(shot.distance)) + " Drop " + escapeHtml(shot.drop ?? "-") + "</div>");
+          }
+          const pursuit = decision?.pursuit || safety.pursuit || summarizePursuit(bot?.pursuit);
+          if (pursuit) {
+            panelLines.push("<div>\u8FFD\u51FB\uFF1A" + escapeHtml(pursuit.name || "#" + pursuit.id) + " " + escapeHtml(formatDistance(pursuit.distance)) + " / " + escapeHtml(Math.round((pursuit.durationMs || 0) / 1e3)) + "s</div>");
+          }
+          if (Array.isArray(bot?.errors) && bot.errors.length) {
+            panelLines.push('<div style="color:#fca5a5">\u9519\u8BEF\uFF1A' + escapeHtml(bot.errors[bot.errors.length - 1]?.message || "") + "</div>");
+          }
+          panel.innerHTML = panelLines.join("");
+        }
+        return {
+          ensureBotPanel,
+          removeBotPanel,
+          formatStaminaDisplay,
+          decisionReasonDetail,
+          actionText,
+          reasonText,
+          updateBotPanel
+        };
+      }
+      module.exports = {
+        createStatusPanelRuntime
       };
     }
   });
@@ -6562,84 +7609,22 @@
         const isAvoidanceThreat = (e) => isInvulnerable(e) && !isIdleInvulnerableTarget(e);
         const isAfkTarget = (e) => !recentlyActionedForAfk(e) && !isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e);
         const isAfkProfitTarget = (e) => !recentlyActionedForAfk(e) && (isAfkTarget(e) || isJoinModeActive(e) && !isCurrentlyActive(e) && !isMovingThreat(e) && !isFiringEntity(e));
-        function isWhitelistedTarget(e) {
-          if (!e) return false;
-          const name = normalizeTargetWhitelistName(e.name);
-          return Boolean(name && bot.targetWhitelist?.nameSet?.has(name));
-        }
-        function summarizeTargetWhitelistStatus() {
-          const state2 = bot.targetWhitelist || targetWhitelistState;
-          return {
-            url: String(state2?.url || ""),
-            names: Array.isArray(state2?.names) ? state2.names.slice() : [],
-            count: Array.isArray(state2?.names) ? state2.names.length : 0,
-            loaded: Boolean(state2?.lastOkAt),
-            fetching: Boolean(state2?.fetching),
-            lastFetchAt: Number(state2?.lastFetchAt || 0) || 0,
-            lastOkAt: Number(state2?.lastOkAt || 0) || 0,
-            lastErrorAt: Number(state2?.lastErrorAt || 0) || 0,
-            lastError: String(state2?.lastError || ""),
-            lastReason: String(state2?.lastReason || "")
-          };
-        }
-        function targetWhitelistFetchUrl(url) {
-          const raw = String(url || "").trim();
-          if (!raw) return "";
-          try {
-            const parsed = new URL(raw, location.href);
-            parsed.searchParams.set("_graspRatWhitelistTs", String(Date.now()));
-            return parsed.toString();
-          } catch (_) {
-            return raw + (raw.includes("?") ? "&" : "?") + "_graspRatWhitelistTs=" + Date.now();
-          }
-        }
-        async function refreshTargetWhitelist(reason = "manual") {
-          const state2 = bot.targetWhitelist || targetWhitelistState;
-          const url = String(state2.url || "").trim();
-          const t = Date.now();
-          if (!url) {
-            state2.lastFetchAt = t;
-            state2.lastReason = "no-url";
-            return summarizeTargetWhitelistStatus();
-          }
-          if (state2.fetching) return summarizeTargetWhitelistStatus();
-          state2.fetching = true;
-          state2.lastFetchAt = t;
-          try {
-            const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
-            const validPayload = Array.isArray(payload) || Array.isArray(payload?.names) || Array.isArray(payload?.usernames);
-            if (!validPayload) throw new Error("target whitelist JSON must be an array or contain names/usernames array");
-            const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
-            state2.names = names;
-            state2.nameSet = new Set(names);
-            state2.lastOkAt = Date.now();
-            state2.lastError = "";
-            state2.lastErrorAt = 0;
-            state2.lastReason = String(reason || "refresh");
-            return summarizeTargetWhitelistStatus();
-          } catch (err) {
-            state2.lastError = err?.message || String(err);
-            state2.lastErrorAt = Date.now();
-            state2.lastReason = String(reason || "refresh") + "-failed";
-            return summarizeTargetWhitelistStatus();
-          } finally {
-            state2.fetching = false;
-          }
-        }
-        function startTargetWhitelistPolling() {
-          const state2 = bot.targetWhitelist || targetWhitelistState;
-          if (!String(state2.url || "").trim()) {
-            state2.lastReason = "no-url";
-            return;
-          }
-          refreshTargetWhitelist("startup").catch((err) => recordUnhandledTickError("target-whitelist-startup", err));
-          const pollMs = Math.max(0, Number(cfg.targetWhitelistPollMs || 0) || 0);
-          if (pollMs > 0 && !cfg.once) {
-            state2.timer = setInterval(() => {
-              refreshTargetWhitelist("interval").catch((err) => recordUnhandledTickError("target-whitelist-interval", err));
-            }, pollMs);
-          }
-        }
+        const { createTargetWhitelistRuntime } = require_target_whitelist2();
+        const {
+          isWhitelistedTarget,
+          summarizeTargetWhitelistStatus,
+          refreshTargetWhitelist,
+          startTargetWhitelistPolling
+        } = createTargetWhitelistRuntime({
+          bot,
+          cfg,
+          targetWhitelistState,
+          fetchJsonNoStore: (...args) => fetchJsonNoStore(...args),
+          recordUnhandledTickError: (...args) => recordUnhandledTickError(...args),
+          locationHref: () => location.href,
+          now: Date.now,
+          setInterval
+        });
         const hpValue = (e) => Number(e?.hp ?? 0) || 0;
         const combatHpValue = (e) => Number.isFinite(Number(e?.hp)) ? Number(e.hp) : 100;
         const knownHpValue = (e) => {
@@ -6678,112 +7663,26 @@
           const stamina = Number(self?.stamina_5s_remaining_milli ?? cfg.conserveStaminaThreshold);
           return stamina < cfg.conserveStaminaThreshold;
         };
-        function summarizeStamina(self) {
-          const windows = [
-            { key: "5s", fallback: 1e4 },
-            { key: "1h", fallback: 3e6 },
-            { key: "1d", fallback: 2e7 }
-          ];
-          const thresholdMs = staminaExhaustedThreshold();
-          const items = windows.map((item) => {
-            const remaining = staminaRemaining(self, item.key);
-            const limit = staminaLimitValue(self, item.key, item.fallback);
-            return {
-              key: item.key,
-              remaining,
-              limit,
-              exhausted: remaining !== null && remaining < thresholdMs
-            };
-          });
-          const exhausted = items.filter((item) => item.exhausted).map((item) => item.key);
-          const longExhausted = exhausted.filter((key) => key === "1h" || key === "1d");
-          const byKey = Object.fromEntries(items.map((item) => [item.key, item]));
-          return {
-            thresholdMs,
-            stamina5s: byKey["5s"].remaining,
-            stamina5sLimit: byKey["5s"].limit,
-            stamina1h: byKey["1h"].remaining,
-            stamina1hLimit: byKey["1h"].limit,
-            stamina1d: byKey["1d"].remaining,
-            stamina1dLimit: byKey["1d"].limit,
-            exhausted,
-            longExhausted,
-            movementBlocked: exhausted.length > 0,
-            mustLeave: longExhausted.length > 0
-          };
-        }
-        function dailyStaminaWindowStartAt(t = Date.now()) {
-          const dayMs = 24 * 60 * 60 * 1e3;
-          const utc8OffsetMs = 8 * 60 * 60 * 1e3;
-          return Math.floor((t + utc8OffsetMs) / dayMs) * dayMs - utc8OffsetMs;
-        }
-        function nextDailyStaminaResetAt(t = Date.now()) {
-          const dayMs = 24 * 60 * 60 * 1e3;
-          return dailyStaminaWindowStartAt(t) + dayMs;
-        }
-        function staminaBudgetReloginDelayMs() {
-          return Math.max(1e3, Number(cfg.staminaBudgetReloginDelayMs || 18e5));
-        }
-        function staminaResetHoldUntil(staminaState, t = Date.now()) {
-          const exhausted = Array.isArray(staminaState?.longExhausted) ? staminaState.longExhausted : [];
-          let until = 0;
-          let resetAt = 0;
-          let fixedDelayMs = 0;
-          if (exhausted.includes("1h")) {
-            fixedDelayMs = staminaBudgetReloginDelayMs();
-            until = Math.max(until, t + fixedDelayMs);
-          }
-          if (exhausted.includes("1d")) {
-            resetAt = nextDailyStaminaResetAt(t);
-            until = Math.max(until, resetAt);
-          }
-          if (!until) return null;
-          const graceMs = resetAt && until === resetAt ? Math.max(0, Number(cfg.staminaResetGraceMs || 0)) : 0;
-          return {
-            until: until + graceMs,
-            resetAt,
-            graceMs,
-            fixedDelayMs: resetAt && resetAt >= t + fixedDelayMs ? 0 : fixedDelayMs,
-            fixed: Boolean(fixedDelayMs && !(resetAt && resetAt >= t + fixedDelayMs)),
-            exhausted
-          };
-        }
-        function longStaminaHoldContradictedByKnownStamina(staminaState) {
-          const thresholdMs = staminaExhaustedThreshold();
-          const sources = [
-            bot.lastSelf,
-            bot.lastDecision?.self,
-            bot.session
-          ];
-          return sources.some((source) => staminaHoldContradictedByStaminaEvidence(staminaState, source, thresholdMs));
-        }
-        function startupStaminaSampleLooksUnsettled(staminaState, t = Date.now()) {
-          const windows = staminaExhaustedLongWindows(staminaState);
-          if (!windows.length) return false;
-          const allZero = ["5s", "1h", "1d"].every((key) => Number(staminaState?.["stamina" + key] ?? NaN) === 0);
-          if (!allZero) return false;
-          const graceMs = Math.max(0, Number(cfg.staminaExhaustionPostLoginGraceMs ?? 15e3));
-          if (!graceMs) return false;
-          const sessionAgeMs = bot.session?.startedAt ? t - Number(bot.session.startedAt || t) : Infinity;
-          const loginAgeMs = bot.lastLoginAt ? t - Number(bot.lastLoginAt || t) : Infinity;
-          return sessionAgeMs <= graceMs || loginAgeMs <= graceMs;
-        }
-        function deferredStaminaExhaustionLeave(staminaState, t = Date.now()) {
-          if (!staminaState?.mustLeave) return null;
-          if (startupStaminaSampleLooksUnsettled(staminaState, t)) {
-            return {
-              reason: "startup-zero-stamina-sample",
-              graceMs: Math.max(0, Number(cfg.staminaExhaustionPostLoginGraceMs ?? 15e3)),
-              sessionAgeMs: bot.session?.startedAt ? Math.max(0, Math.round(t - Number(bot.session.startedAt || t))) : null,
-              loginAgeMs: bot.lastLoginAt ? Math.max(0, Math.round(t - Number(bot.lastLoginAt || t))) : null
-            };
-          }
-          return null;
-        }
-        function staleOfflineStaminaHoldContradicted(detail) {
-          const staminaState = detail?.offlineSafety?.staminaExhausted;
-          return Boolean(staminaState && longStaminaHoldContradictedByKnownStamina(staminaState));
-        }
+        const { createStaminaStatusRuntime } = require_stamina_status();
+        const {
+          summarizeStamina,
+          dailyStaminaWindowStartAt,
+          nextDailyStaminaResetAt,
+          staminaBudgetReloginDelayMs,
+          staminaResetHoldUntil,
+          longStaminaHoldContradictedByKnownStamina,
+          startupStaminaSampleLooksUnsettled,
+          deferredStaminaExhaustionLeave,
+          staleOfflineStaminaHoldContradicted
+        } = createStaminaStatusRuntime({
+          bot,
+          cfg,
+          staminaRemaining,
+          staminaLimitValue,
+          staminaExhaustedThreshold,
+          staminaExhaustedLongWindows,
+          staminaHoldContradictedByStaminaEvidence
+        });
         const { attackWorthTakingCore } = require_attack_worth2();
         const {
           exitMotionStopLockRemainingMsCore,
@@ -6811,552 +7710,30 @@
             }
           }
         }
-        function removeTargetOverlay() {
-          const overlay = document.getElementById(TARGET_OVERLAY_ID);
-          if (overlay) overlay.remove();
-        }
-        function targetOverlaySuppressedAfterExit(decision) {
-          if (exitMotionStopLockRemainingMs() > 0) return true;
-          if (decision?.exitMotionStopped) return true;
-          if (decision?.leave?.exitConfirmed) return true;
-          const reason = String(decision?.reason || "");
-          return reason === "leave-success" || reason === "leave-http-403" || reason === "exit-confirmed" || reason === "enemy-leave-wait" || reason === "offline-leave-wait" || reason === "pursuit-leave-wait";
-        }
-        function targetOverlayStyle(decision) {
-          const target = decision?.target || null;
-          if (!target) return null;
-          if (decision?.combat) return { stroke: "rgba(248,113,113,.48)" };
-          const coinLike = targetOverlayCoinLike(decision, target);
-          if (coinLike) return { stroke: "rgba(250,204,21,.44)" };
-          const playerLike = targetOverlayPlayerLike(decision, target);
-          if (playerLike) return { stroke: "rgba(74,222,128,.44)" };
-          return null;
-        }
-        function targetOverlayCoinLike(decision, target = decision?.target || null) {
-          const kind = String(decision?.kind || "");
-          return Boolean(target && (kind === "coin" || kind === "seek-coin" || target.amount !== void 0 && target.amount !== null && Number.isFinite(Number(target.amount))));
-        }
-        function targetOverlayPlayerLike(decision, target = decision?.target || null) {
-          const kind = String(decision?.kind || "");
-          return Boolean(target && (decision?.combat || kind === "attack" || kind === "seek-enemy" || kind === "seek-drop" || target.name || target.drop !== void 0 && target.drop !== null && Number.isFinite(Number(target.drop))));
-        }
-        function ensureTargetOverlayCanvas(world, shell) {
-          if (!world || !shell || !document.body) return null;
-          const worldRect = world.getBoundingClientRect();
-          const shellRect = shell.getBoundingClientRect();
-          if (!(worldRect.width > 0) || !(worldRect.height > 0) || !(shellRect.width > 0) || !(shellRect.height > 0)) return null;
-          let overlay = document.getElementById(TARGET_OVERLAY_ID);
-          if (!overlay) {
-            overlay = document.createElement("canvas");
-            overlay.id = TARGET_OVERLAY_ID;
-            overlay.setAttribute("aria-hidden", "true");
-          }
-          if (overlay.parentElement !== shell) shell.appendChild(overlay);
-          const shellPosition = getComputedStyle(shell).position;
-          if (!shellPosition || shellPosition === "static") shell.style.position = "relative";
-          overlay.style.cssText = [
-            "position:absolute",
-            "left:0",
-            "top:0",
-            "width:" + shellRect.width + "px",
-            "height:" + shellRect.height + "px",
-            "z-index:5",
-            "pointer-events:none"
-          ].join(";");
-          const dpr = Math.max(1, Number(window.devicePixelRatio || 1));
-          const width = Math.max(1, Math.round(shellRect.width * dpr));
-          const height = Math.max(1, Math.round(shellRect.height * dpr));
-          if (overlay.width !== width) overlay.width = width;
-          if (overlay.height !== height) overlay.height = height;
-          return {
-            overlay,
-            width: shellRect.width,
-            height: shellRect.height,
-            dpr,
-            worldWidth: worldRect.width,
-            worldHeight: worldRect.height,
-            worldOffsetX: worldRect.left - shellRect.left,
-            worldOffsetY: worldRect.top - shellRect.top
-          };
-        }
-        function targetOverlayScaleTextRadiusCm() {
-          const text = String(document.getElementById("scaleText")?.textContent || "");
-          const match = text.match(/r\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b/i);
-          if (!match) return 0;
-          const value = Number(match[1]);
-          if (!Number.isFinite(value) || value <= 0) return 0;
-          return /km/i.test(match[2]) ? value * 1e5 : value * 100;
-        }
-        function currentViewRadiusCm() {
-          const nativeState = getNativeState();
-          const values = [
-            targetOverlayScaleTextRadiusCm(),
-            nativeState?.viewRadiusCm,
-            nativeState?.view_radius_cm,
-            nativeState?.viewRadius,
-            nativeState?.view_radius
-          ];
-          for (const value of values) {
-            const radius = Number(value);
-            if (Number.isFinite(radius) && radius > 0) return radius;
-          }
-          return 1e4;
-        }
-        function targetOverlayPageViewParams() {
-          const win = typeof window === "object" && window ? window : null;
-          const fn = typeof viewParams === "function" ? viewParams : win?.viewParams;
-          if (typeof fn !== "function") return null;
-          try {
-            const params = fn.call(win);
-            const units = Number(params?.units);
-            const cx = Number(params?.cx);
-            const cy = Number(params?.cy);
-            const centerX = Number(params?.centerX);
-            const centerY = Number(params?.centerY);
-            if ([units, cx, cy, centerX, centerY].every(Number.isFinite) && units > 0) {
-              return { units, cx, cy, centerX, centerY, source: "viewParams" };
-            }
-          } catch (_) {
-          }
-          return null;
-        }
-        function targetOverlayScreenCenter(canvasWidth, canvasHeight) {
-          const width = Math.max(1, Number(canvasWidth) || 1);
-          const height = Math.max(1, Number(canvasHeight) || 1);
-          let narrow = false;
-          try {
-            narrow = Boolean(window.matchMedia?.("(max-aspect-ratio: 1/1)")?.matches);
-          } catch (_) {
-            narrow = width <= height;
-          }
-          const reservedLeft = narrow ? 0 : Math.min(368, Math.max(0, width - 320));
-          return {
-            x: reservedLeft + (width - reservedLeft) / 2,
-            y: height / 2
-          };
-        }
-        function targetOverlayProjection(self, view) {
-          const nativeView = targetOverlayPageViewParams();
-          if (nativeView) {
-            return {
-              ...nativeView,
-              offsetX: Number(view?.worldOffsetX) || 0,
-              offsetY: Number(view?.worldOffsetY) || 0
-            };
-          }
-          const selfPoint = targetOverlayWorldPoint(self);
-          const selfX = Number(selfPoint?.x);
-          const selfY = Number(selfPoint?.y);
-          if (!Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
-          const canvasWidth = Math.max(1, Number(view?.worldWidth || view?.width) || 1);
-          const canvasHeight = Math.max(1, Number(view?.worldHeight || view?.height) || 1);
-          const shortSide = Math.max(1, Math.min(canvasWidth, canvasHeight));
-          const units = Math.max(1, currentViewRadiusCm()) * 2 / shortSide;
-          const center = targetOverlayScreenCenter(canvasWidth, canvasHeight);
-          return {
-            units,
-            cx: center.x,
-            cy: center.y,
-            centerX: selfX,
-            centerY: selfY,
-            offsetX: Number(view?.worldOffsetX) || 0,
-            offsetY: Number(view?.worldOffsetY) || 0,
-            source: "fallback"
-          };
-        }
-        function targetOverlayPoint(point, self, view, projection = null) {
-          const targetPoint = targetOverlayWorldPoint(point);
-          const viewProjection = projection || targetOverlayProjection(self, view);
-          const x = Number(targetPoint?.x);
-          const y = Number(targetPoint?.y);
-          const units = Number(viewProjection?.units);
-          const cx = Number(viewProjection?.cx);
-          const cy = Number(viewProjection?.cy);
-          const centerX = Number(viewProjection?.centerX);
-          const centerY = Number(viewProjection?.centerY);
-          if (![x, y, units, cx, cy, centerX, centerY].every(Number.isFinite) || units <= 0) return null;
-          return {
-            x: (Number(viewProjection?.offsetX) || 0) + cx + (x - centerX) / units,
-            y: (Number(viewProjection?.offsetY) || 0) + cy + (y - centerY) / units
-          };
-        }
-        function targetOverlayWorldPoint(value) {
-          if (!value || typeof value !== "object") return null;
-          const point = value.position || value.pos || value.point || value.coord || null;
-          const renderX = firstFiniteNumber(value.visual_x, value.visualX, value.render_x, value.renderX);
-          const renderY = firstFiniteNumber(value.visual_y, value.visualY, value.render_y, value.renderY);
-          const x = firstFiniteNumber(
-            renderX,
-            value.x,
-            value.pos_x,
-            value.posX,
-            value.world_x,
-            value.worldX,
-            value.coord_x,
-            value.coordX,
-            value.center_x,
-            value.centerX,
-            value.visual_x,
-            value.visualX,
-            value.render_x,
-            value.renderX,
-            point?.x
-          );
-          const y = firstFiniteNumber(
-            renderY,
-            value.y,
-            value.pos_y,
-            value.posY,
-            value.world_y,
-            value.worldY,
-            value.coord_y,
-            value.coordY,
-            value.center_y,
-            value.centerY,
-            point?.y
-          );
-          return Number.isFinite(x) && Number.isFinite(y) ? { ...value, x, y } : null;
-        }
-        function targetOverlayListFromValue(value) {
-          if (Array.isArray(value)) return value;
-          if (value instanceof Map || value instanceof Set) return Array.from(value.values());
-          if (value && typeof value === "object") {
-            if (targetOverlayWorldPoint(value)) return [value];
-            const values = Object.values(value);
-            if (values.length && values.every((item) => item && typeof item === "object")) return values;
-          }
-          return [];
-        }
-        function targetOverlayCallList(label, fn, thisArg = null) {
-          if (typeof fn !== "function") return [];
-          try {
-            return targetOverlayListFromValue(fn.call(thisArg)).map((item) => item && typeof item === "object" ? { ...item, overlaySource: label } : item);
-          } catch (_) {
-            return [];
-          }
-        }
-        function targetOverlayRenderEntities() {
-          const win = typeof window === "object" && window ? window : null;
-          const nativeState = getNativeState();
-          return [
-            ...targetOverlayCallList("render", typeof getRenderEntities === "function" ? getRenderEntities : win?.getRenderEntities, win),
-            ...targetOverlayCallList("state.getRenderEntities()", nativeState?.getRenderEntities, nativeState),
-            ...targetOverlayListFromValue(nativeState?.renderEntities).map((item) => item && typeof item === "object" ? { ...item, overlaySource: "state.renderEntities" } : item),
-            ...targetOverlayListFromValue(nativeState?.render_entities).map((item) => item && typeof item === "object" ? { ...item, overlaySource: "state.render_entities" } : item)
-          ].filter(Boolean);
-        }
-        function targetOverlayFindEntity(list, target) {
-          if (!Array.isArray(list) || !list.length || !target) return null;
-          const targetId = target?.id ?? target?.user_id ?? target?.userId;
-          if (targetId !== void 0 && targetId !== null && targetId !== "") {
-            const exact = list.find((entity) => String(entity?.user_id ?? entity?.userId ?? entity?.id ?? "") === String(targetId));
-            if (exact) return exact;
-          }
-          const name = String(target?.name || "");
-          if (name) {
-            const exactName = list.find((entity) => String(entity?.name || "") === name);
-            if (exactName) return exactName;
-          }
-          return null;
-        }
-        function targetOverlayVisualSelf() {
-          const id = getCurrentUserId();
-          if (id) {
-            const renderSelf = targetOverlayFindEntity(targetOverlayRenderEntities(), { id });
-            if (renderSelf) return targetOverlayWorldPoint(renderSelf) || renderSelf;
-          }
-          const nativeState = getNativeState();
-          const visual = targetOverlayWorldPoint(nativeState?.localVisual) || targetOverlayWorldPoint(nativeState?.local_visual) || targetOverlayWorldPoint(nativeState?.visualSelf) || targetOverlayWorldPoint(nativeState?.visual_self);
-          if (visual) return visual;
-          return getSelf();
-        }
-        function targetOverlayResolvedCoin(target) {
-          const nativeCoins = (getNativeCoinList() || []).map((coin) => normalizeCoinDrop(coin, "native")).filter(Boolean);
-          if (!nativeCoins.length) return null;
-          const targetId = target?.id ?? target?.drop_id ?? target?.dropId ?? target?.coin_id ?? target?.coinId;
-          if (targetId !== void 0 && targetId !== null && targetId !== "") {
-            const exact = nativeCoins.find((coin) => String(coin.drop_id ?? coin.id ?? "") === String(targetId));
-            if (exact) return exact;
-          }
-          const targetX = Number(target?.x);
-          const targetY = Number(target?.y);
-          if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return null;
-          const targetAmount = Number(target?.amount);
-          const maxDistance = 1400;
-          return nativeCoins.map((coin) => ({
-            coin,
-            distance: dist({ x: targetX, y: targetY }, coin),
-            amountMatches: !Number.isFinite(targetAmount) || Math.round(Number(coin.amount || 0)) === Math.round(targetAmount)
-          })).filter((item) => item.amountMatches && item.distance <= maxDistance).sort((a, b) => a.distance - b.distance)[0]?.coin || null;
-        }
-        function targetOverlayRoutePoints(decision, target) {
-          const route = decision?.coinRoute || target?.coinRoute || null;
-          const points = Array.isArray(route?.points) ? route.points : [];
-          if (!points.length) return [];
-          const targetKey = targetOverlayRoutePointKey(target);
-          const firstKey = targetOverlayRoutePointKey(points[0]);
-          if (targetKey && firstKey && targetKey !== firstKey) return [];
-          const resolved = points.map((point) => targetOverlayResolvedCoin(point) || point).map(targetOverlayWorldPoint).filter(Boolean);
-          if (resolved.length && target) {
-            const first = targetOverlayWorldPoint(target);
-            if (first) resolved[0] = first;
-          }
-          return resolved;
-        }
-        function targetOverlayRoutePointKey(point) {
-          const id = point?.id ?? point?.drop_id ?? point?.dropId ?? point?.coin_id ?? point?.coinId;
-          if (id !== void 0 && id !== null && id !== "") return "id:" + String(id);
-          const x = Number(point?.x);
-          const y = Number(point?.y);
-          const amount = Number(point?.amount);
-          if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
-          return "xy:" + Math.round(x) + ":" + Math.round(y) + ":" + (Number.isFinite(amount) ? Math.round(amount) : "");
-        }
-        function targetOverlayResolvedEntity(target) {
-          const targetId = target?.id ?? target?.user_id ?? target?.userId;
-          const name = String(target?.name || "");
-          const renderEntity = targetOverlayFindEntity(targetOverlayRenderEntities(), target);
-          if (renderEntity) return targetOverlayWorldPoint(renderEntity) || renderEntity;
-          const entities = getNativeEntityList() || getEntities() || [];
-          if (!Array.isArray(entities) || !entities.length) return null;
-          if (targetId !== void 0 && targetId !== null && targetId !== "") {
-            const exact = entities.find((entity) => String(entity.user_id ?? entity.id ?? "") === String(targetId));
-            if (exact) return exact;
-          }
-          if (name) {
-            const exactName = entities.find((entity) => String(entity.name || "") === name);
-            if (exactName) return exactName;
-          }
-          return null;
-        }
-        function targetOverlayResolvedTarget(decision) {
-          const target = decision?.target || null;
-          if (!target) return null;
-          if (targetOverlayCoinLike(decision, target)) return targetOverlayResolvedCoin(target) || target;
-          if (targetOverlayPlayerLike(decision, target)) return targetOverlayResolvedEntity(target) || target;
-          return target;
-        }
-        function targetOverlayHasAliveSelf() {
-          const self = getSelf();
-          if (!self) return false;
-          try {
-            if (typeof isAlive === "function") return Boolean(isAlive(self));
-          } catch (_) {
-          }
-          const life = String(self.life ?? self.status ?? "").toLowerCase();
-          if (life) return /alive|live|living|存活/.test(life) && !/dead|death|死亡/.test(life);
-          const hp = Number(self.hp ?? self.health);
-          return Number.isFinite(hp) && hp > 0;
-        }
-        function targetOverlayStoredLoginPointSafety() {
-          try {
-            const stored = JSON.parse(localStorage.getItem(LOGIN_POINT_SAFETY_KEY) || "null");
-            return stored && typeof stored === "object" ? stored : null;
-          } catch (_) {
-            return null;
-          }
-        }
-        function targetOverlayLoginPointStatus(decision) {
-          try {
-            if (typeof loginPointSafetyStatus === "function") {
-              const status = loginPointSafetyStatus();
-              if (status?.point) return status;
-            }
-          } catch (_) {
-          }
-          const candidates = [
-            decision?.login?.snapshotGate?.pointSafety,
-            decision?.snapshotGate?.pointSafety,
-            decision?.loginSnapshotGate?.pointSafety,
-            decision?.reloginGate?.loginPointSafety,
-            bot?.lastLoginResult?.snapshotGate?.pointSafety,
-            bot?.loginSnapshotGate?.pointSafety,
-            bot?.loginPointSafety,
-            targetOverlayStoredLoginPointSafety()
-          ];
-          return candidates.find((item) => item?.point) || null;
-        }
-        function targetOverlayLoginPointRadius(status) {
-          const configured = Number(status?.radius);
-          if (Number.isFinite(configured) && configured > 0) return configured;
-          const lastExitSelfHp = Number(status?.lastExitSelfHp);
-          const threshold = Math.max(0, Number(cfg.loginPointSafetyHealthyHpThreshold ?? 80) || 80);
-          if (Number.isFinite(lastExitSelfHp) && lastExitSelfHp >= threshold) {
-            return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 17e3) || 17e3);
-          }
-          return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 3e4) || 3e4);
-        }
-        function targetOverlayLoginPointState(decision) {
-          if (targetOverlayHasAliveSelf()) return null;
-          const status = targetOverlayLoginPointStatus(decision);
-          const point = targetOverlayWorldPoint(status?.point);
-          const radius = targetOverlayLoginPointRadius(status);
-          if (!point || !(radius > 0)) return null;
-          const required = Math.max(0, Number(status?.required ?? cfg.loginPointSafetySuccessRequired ?? 3) || 3);
-          const streak = Math.max(0, Number(status?.streak || 0) || 0);
-          return {
-            ...status,
-            point,
-            radius,
-            required,
-            streak,
-            satisfied: Boolean(status?.satisfied || (required <= 0 || streak >= required)),
-            unsafe: Boolean(status?.lastDanger || status?.lastError)
-          };
-        }
-        function drawLoginPointOverlay(ctx, view, state2) {
-          if (!ctx || !view || !state2?.point) return false;
-          const projection = targetOverlayProjection(state2.point, view);
-          const center = targetOverlayPoint(state2.point, state2.point, view, projection);
-          const units = Number(projection?.units);
-          if (!center || !(units > 0)) return false;
-          const radiusPx = Math.max(1, Number(state2.radius || 0) / units);
-          const tone = state2.unsafe ? { stroke: "rgba(248,113,113,.62)", fill: "rgba(248,113,113,.08)", point: "rgba(248,113,113,.9)" } : state2.satisfied ? { stroke: "rgba(74,222,128,.56)", fill: "rgba(74,222,128,.07)", point: "rgba(74,222,128,.9)" } : { stroke: "rgba(250,204,21,.58)", fill: "rgba(250,204,21,.08)", point: "rgba(250,204,21,.9)" };
-          ctx.save();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = tone.stroke;
-          ctx.fillStyle = tone.fill;
-          ctx.setLineDash([12, 8]);
-          ctx.beginPath();
-          ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.strokeStyle = tone.point;
-          ctx.fillStyle = tone.point;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(center.x, center.y, 5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.moveTo(center.x - 13, center.y);
-          ctx.lineTo(center.x + 13, center.y);
-          ctx.moveTo(center.x, center.y - 13);
-          ctx.lineTo(center.x, center.y + 13);
-          ctx.stroke();
-          ctx.restore();
-          return true;
-        }
-        function renderTargetOverlay(decision = bot.lastDecision) {
-          try {
-            if (bot?.paused || decision?.paused || String(decision?.reason || "") === "paused") {
-              removeTargetOverlay();
-              return;
-            }
-            if (targetOverlaySuppressedAfterExit(decision)) {
-              removeTargetOverlay();
-              return;
-            }
-            const style = targetOverlayStyle(decision);
-            const target = targetOverlayResolvedTarget(decision);
-            const self = targetOverlayVisualSelf() || decision?.self || bot.lastSelf;
-            const loginPointOverlay = targetOverlayLoginPointState(decision);
-            if (!style || !target || !self) {
-              const world2 = document.getElementById("world");
-              const shell2 = world2?.closest?.(".map-shell") || world2?.parentElement || null;
-              const view2 = loginPointOverlay ? ensureTargetOverlayCanvas(world2, shell2) : null;
-              const ctx2 = view2?.overlay?.getContext("2d") || document.getElementById(TARGET_OVERLAY_ID)?.getContext("2d") || null;
-              if (ctx2) {
-                if (view2) ctx2.setTransform(view2.dpr, 0, 0, view2.dpr, 0, 0);
-                ctx2.clearRect(0, 0, view2?.width || ctx2.canvas.width, view2?.height || ctx2.canvas.height);
-                if (view2 && loginPointOverlay) drawLoginPointOverlay(ctx2, view2, loginPointOverlay);
-              }
-              return;
-            }
-            const world = document.getElementById("world");
-            const shell = world?.closest?.(".map-shell") || world?.parentElement || null;
-            const view = ensureTargetOverlayCanvas(world, shell);
-            if (!view) return;
-            const ctx = view.overlay.getContext("2d");
-            if (!ctx) return;
-            ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
-            ctx.clearRect(0, 0, view.width, view.height);
-            if (loginPointOverlay) drawLoginPointOverlay(ctx, view, loginPointOverlay);
-            const projection = targetOverlayProjection(self, view);
-            const start = targetOverlayPoint(self, self, view, projection);
-            const end = targetOverlayPoint(target, self, view, projection);
-            if (!start || !end) return;
-            const routePoints = targetOverlayRoutePoints(decision, target).map((point) => targetOverlayPoint(point, self, view, projection)).filter(Boolean);
-            ctx.save();
-            ctx.strokeStyle = style.stroke;
-            ctx.lineWidth = 2;
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-            ctx.setLineDash([10, 8]);
-            ctx.beginPath();
-            ctx.moveTo(start.x, start.y);
-            if (routePoints.length > 1) {
-              for (const point of routePoints) ctx.lineTo(point.x, point.y);
-            } else {
-              ctx.lineTo(end.x, end.y);
-            }
-            ctx.stroke();
-            if (routePoints.length > 1) {
-              ctx.setLineDash([]);
-              ctx.fillStyle = "rgba(250,204,21,.24)";
-              for (const point of routePoints) {
-                ctx.beginPath();
-                ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-              }
-            }
-            ctx.restore();
-          } catch (_) {
-          }
-        }
+        const { createTargetOverlayRuntime } = require_target_overlay();
+        const {
+          removeTargetOverlay,
+          renderTargetOverlay
+        } = createTargetOverlayRuntime({
+          bot,
+          cfg,
+          targetOverlayId: TARGET_OVERLAY_ID,
+          loginPointSafetyKey: LOGIN_POINT_SAFETY_KEY,
+          storage: localStorage,
+          exitMotionStopLockRemainingMs,
+          getNativeState: () => getNativeState(),
+          getSelf: () => getSelf(),
+          getCurrentUserId: () => getCurrentUserId(),
+          getNativeCoinList: () => getNativeCoinList(),
+          normalizeCoinDrop: (...args) => normalizeCoinDrop(...args),
+          getNativeEntityList: () => getNativeEntityList(),
+          getEntities: () => getEntities(),
+          firstFiniteNumber,
+          dist,
+          isAlive,
+          loginPointSafetyStatus: () => loginPointSafetyStatus()
+        });
         const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require_display_format2();
-        function ensureBotPanel() {
-          return null;
-          if (!document.body) return null;
-          let panel = document.getElementById(PANEL_ID);
-          if (panel) return panel;
-          panel = document.createElement("div");
-          panel.id = PANEL_ID;
-          panel.setAttribute("aria-live", "polite");
-          panel.style.cssText = [
-            "position:fixed",
-            "right:12px",
-            "top:12px",
-            "z-index:2147483647",
-            "width:min(360px,calc(100vw - 24px))",
-            "max-width:360px",
-            "box-sizing:border-box",
-            "padding:10px 12px",
-            "border:1px solid rgba(148,163,184,.35)",
-            "border-radius:8px",
-            "background:rgba(15,23,42,.88)",
-            "color:#e5e7eb",
-            "font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif",
-            "box-shadow:0 10px 32px rgba(0,0,0,.38)",
-            "backdrop-filter:blur(8px)",
-            "pointer-events:none",
-            "white-space:normal"
-          ].join(";");
-          document.body.appendChild(panel);
-          return panel;
-        }
-        function removeBotPanel() {
-          return;
-          const panel = document.getElementById(PANEL_ID);
-          if (panel) panel.remove();
-        }
-        function formatStaminaDisplay(self) {
-          if (!self) return "-";
-          const stamina = self.stamina || {};
-          const valueText = (remaining, limit) => {
-            const r = Number(remaining);
-            if (!Number.isFinite(r)) return "-";
-            const l = Number(limit);
-            return Math.floor(r / 1e3) + "/" + (Number.isFinite(l) && l > 0 ? Math.floor(l / 1e3) : "-");
-          };
-          const exhausted = Array.isArray(stamina.exhausted) ? stamina.exhausted : [];
-          const suffix = exhausted.length ? " !" + exhausted.join("/") : "";
-          return "5s " + valueText(stamina.stamina5s ?? self.stamina5s ?? self.stamina_5s_remaining_milli, stamina.stamina5sLimit ?? self.stamina5sLimit ?? self.stamina_5s_limit_milli) + " 1h " + valueText(stamina.stamina1h ?? self.stamina1h ?? self.stamina_1h_remaining_milli, stamina.stamina1hLimit ?? self.stamina1hLimit ?? self.stamina_1h_limit_milli) + " 1d " + valueText(stamina.stamina1d ?? self.stamina1d ?? self.stamina_1d_remaining_milli, stamina.stamina1dLimit ?? self.stamina1dLimit ?? self.stamina_1d_limit_milli) + suffix;
-        }
-        function decisionReasonDetail(decision) {
-          return decision?.leave?.displayReason || decision?.displayReason || decision?.enemyLeave?.displayReason || decision?.offlineLeave?.displayReason || decision?.leave?.summary || decision?.exitSummary || decision?.leave?.exitSummary || decision?.leave?.enemyLeaveSummary || decision?.leave?.enemyLeaveReason || "";
-        }
         function activeEnemyLeaveDetail(t = Date.now()) {
           const current = latestEnemyLeaveResult();
           const restored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
@@ -7402,182 +7779,19 @@
           const result = latestEnemyLeaveResult();
           return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || "";
         }
-        function actionText(decision) {
-          const kind = decision?.kind || "wait";
-          const target = decision?.target || null;
-          const threats = Array.isArray(decision?.threats) ? decision.threats : [];
-          const detail = decisionReasonDetail(decision);
-          if (kind === "coin") return "\u62FE\u53D6\u91D1\u5E01" + (target ? " #" + (target.id ?? "-") + " \u8DDD\u79BB " + formatDistance(target.distance) : "");
-          if (kind === "seek-coin") return "\u524D\u5F80\u91D1\u5E01" + (target ? " #" + (target.id ?? "-") + " \u8DDD\u79BB " + formatDistance(target.distance) : "");
-          if (kind === "attack") return (decision?.combat ? "\u6218\u6597 " : "\u653B\u51FB ") + (target?.name || "#" + (target?.id ?? "-")) + " \u8840\u91CF " + (target?.hp ?? "-") + " Drop " + (target?.drop ?? "-");
-          if (kind === "seek-enemy" || kind === "seek-drop") return "\u524D\u5F80\u76EE\u6807 " + (target?.name || "#" + (target?.id ?? "-")) + (target?.drop ? " Drop " + target.drop : "");
-          if (kind === "flee") {
-            const threat = threats[0];
-            return "\u907F\u9669\u64A4\u79BB" + (threat ? "\uFF1A" + (threat.name || "#" + threat.id) + " \u8DDD\u79BB " + formatDistance(threat.d ?? threat.distance) : "");
-          }
-          if (kind === "recover") return "\u6062\u590D\u4F53\u529B/\u8840\u91CF";
-          if (kind === "patrol") {
-            if (target) return "\u5DE1\u822A\u5230" + (target.amount ? "\u91D1\u5E01" : "\u533A\u57DF") + " #" + (target.id ?? "-") + " \u8DDD\u79BB " + formatDistance(target.distance);
-            return "\u5DE1\u822A\u626B\u63CF";
-          }
-          if (kind === "wait") return "\u7B49\u5F85\uFF1A" + (detail || decision?.reason || "\u72B6\u6001\u4E0D\u8DB3");
-          if (kind === "leave") return "\u9000\u51FA\uFF1A" + (detail || decision?.reason || "\u72B6\u6001\u4E0D\u8DB3");
-          if (kind === "idle") return "\u5F85\u547D";
-          return kind;
-        }
-        function reasonText(reason) {
-          const map = {
-            "active-threat-before-bullet-range": "Active \u73A9\u5BB6\u8FDB\u5165\u5371\u9669\u5708",
-            "active-threat-caution-migration": "Active \u73A9\u5BB6\u8FDB\u5165\u9884\u8B66\u5708",
-            "active-threat-return-block": "\u963B\u6B62\u56DE\u5934\u9760\u8FD1 Active \u73A9\u5BB6",
-            "return-block-lateral-scan": "Active \u8FD4\u7A0B\u51B7\u5374\uFF1A\u6A2A\u5411\u626B\u63CF",
-            "passive-panic-distance": "\u73A9\u5BB6\u8DDD\u79BB\u8FC7\u8FD1",
-            "avoid-invulnerable-target": "\u907F\u5F00\u65E0\u654C/\u5371\u9669\u76EE\u6807",
-            "recovery-avoid-humans": "\u56DE\u8840\u65F6\u907F\u5F00\u9644\u8FD1\u73A9\u5BB6",
-            "recovery-foot-coin": "\u56DE\u8840\u65F6\u987A\u624B\u62FE\u53D6\u811A\u4E0B\u91D1\u5E01",
-            "foot-coin-priority": "\u8D34\u8EAB\u91D1\u5E01\u4F18\u5148\u62FE\u53D6",
-            "foot-coin-before-active-caution": "\u9884\u8B66\u533A\u5185\u53EA\u62FE\u53D6\u8D34\u8EAB\u91D1\u5E01",
-            "near-coin-priority": "\u8FD1\u5904\u5B89\u5168\u91D1\u5E01\u4F18\u5148",
-            "near-coin-before-active-caution": "\u9884\u8B66\u533A\u5185\u53EA\u62FE\u53D6\u8FD1\u5904\u5B89\u5168\u91D1\u5E01",
-            "safe-coin-before-drop-target": "\u5B89\u5168\u91D1\u5E01\u4F18\u5148\u4E8E\u653B\u51FB",
-            "safe-global-coin-before-drop-target": "\u524D\u5F80\u53EF\u89C1\u5B89\u5168\u91D1\u5E01",
-            "safe-patrol-coin": "\u5DE1\u822A\u62FE\u53D6\u5B89\u5168\u91D1\u5E01",
-            "safe-distant-coin": "\u524D\u5F80\u8FDC\u5904\u5B89\u5168\u91D1\u5E01",
-            "post-attack-drop-coin": "\u6218\u6597\u540E\u4F18\u5148\u62FE\u53D6\u6389\u843D",
-            "high-value-visible-coin-priority": "\u9AD8\u4EF7\u503C\u53EF\u89C1\u91D1\u5E01\u4F18\u5148",
-            "best-opportunity-coin": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u62FE\u53D6\u91D1\u5E01",
-            "best-opportunity-coin-route": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u91D1\u5E01\u8DEF\u7EBF",
-            "best-opportunity-visible-coin": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u524D\u5F80\u53EF\u89C1\u91D1\u5E01",
-            "best-opportunity-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u653B\u51FB Drop \u76EE\u6807",
-            "best-opportunity-afk-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u653B\u51FB\u6302\u673A Drop \u76EE\u6807",
-            "approach-profitable-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u9760\u8FD1\u9AD8 Drop \u76EE\u6807",
-            "approach-afk-drop-target": "\u7EFC\u5408\u6536\u76CA\u6700\u9AD8\uFF1A\u9760\u8FD1\u6302\u673A Drop \u76EE\u6807",
-            "opportunistic-afk-drop-shot": "\u987A\u624B\u5C04\u51FB\u6302\u673A Drop \u76EE\u6807",
-            "migrate-to-known-field": "\u8FC1\u79FB\u5230\u91D1\u5E01\u5BC6\u96C6\u533A\u57DF",
-            "scan-toward-distant-coin": "\u626B\u63CF\u8FDC\u5904\u91D1\u5E01",
-            "snapshot-coin-field": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
-            "snapshot-coin-target": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
-            "snapshot-coin-idle-timeout": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
-            "wait-for-stamina-budget": "\u957F\u671F\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3",
-            "wait-for-visible-coin-refresh": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
-            "stamina-budget-coin-leave": "\u4E00\u5C0F\u65F6\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u9000\u51FA\u7B49\u5F85\u6062\u590D",
-            "stamina-budget-coin-leave-retry": "\u4E00\u5C0F\u65F6\u4F53\u529B\u9884\u7B97\u4E0D\u8DB3\uFF0C\u91CD\u8BD5\u9000\u51FA",
-            "wait-for-snapshot-coin": "\u7B49\u5F85\u89C6\u91CE\u5185\u91D1\u5E01\u5237\u65B0",
-            "login-suppressed": "\u7B49\u5F85\u91CD\u8FDE",
-            "exit-log-flush-pending": "\u7B49\u5F85\u9000\u51FA\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210",
-            "important-log-flush-pending": "\u7B49\u5F85\u4F1A\u8BDD\u7ED3\u675F\u65E5\u5FD7\u53D1\u9001\u5B8C\u6210",
-            "maintain-safe-spacing": "\u907F\u5F00\u9644\u8FD1\u73A9\u5BB6",
-            "ignore-stale-coin-no-progress": "\u91D1\u5E01\u957F\u65F6\u95F4\u65E0\u8FDB\u5C55\uFF0C\u4E34\u65F6\u8131\u79BB",
-            "leave-stale-coin": "\u79BB\u5F00\u7591\u4F3C\u5361\u4F4F\u91D1\u5E01",
-            "wait-for-full-stamina-and-hp": "\u7B49\u5F85\u6062\u590D\u5230\u5B89\u5168\u72B6\u6001",
-            "conserve-stamina-before-chasing": "\u517C\u5BB9\u65E7\u903B\u8F91\uFF1A\u4FDD\u5B58\u4F53\u529B",
-            "save-stamina-for-profitable-coin": "\u517C\u5BB9\u65E7\u903B\u8F91\uFF1A\u7B49\u5F85\u76EE\u6807",
-            "combat-attack": "\u6218\u6597\uFF1A\u8282\u594F\u5F00\u706B",
-            "combat-tangent-dodge": "\u6218\u6597\uFF1A\u5207\u7EBF\u89C4\u907F\u5E76\u8282\u594F\u5F00\u706B",
-            "combat-stamina-hold": "\u6218\u6597\uFF1A\u77ED\u4F53\u529B\u4E0D\u8DB3\uFF0C\u505C\u6B62\u79FB\u52A8\u5E76\u6682\u505C\u5F00\u706B",
-            "combat-stamina-conserve": "\u6218\u6597\uFF1A\u4FDD\u7559\u4F53\u529B\u8EB2\u907F\uFF0C\u6682\u505C\u5F00\u706B",
-            "combat-burst-fire": "\u6218\u6597\uFF1A\u4FDD\u7559\u4F53\u529B\uFF0C\u964D\u9891\u5F00\u706B",
-            "combat-pressure-close": "\u6218\u6597\uFF1A\u4E45\u653B\u672A\u4E2D\uFF0C\u538B\u8FD1\u5E76\u8282\u594F\u5F00\u706B",
-            "combat-far-pressure-close": "\u6218\u6597\uFF1A\u8FDC\u8DDD\u4E45\u653B\u672A\u4E2D\uFF0C\u538B\u8FD1\u5F00\u706B",
-            "combat-retreating-fighter-close": "\u6218\u6597\uFF1A\u9000\u8FB9\u53CD\u51FB\u76EE\u6807\uFF0C\u538B\u8FD1\u5F00\u706B",
-            "combat-finish-pressure": "\u6218\u6597\uFF1A\u6B8B\u8840\u76EE\u6807\u9000\u8FB9\uFF0C\u538B\u8FD1\u8865\u67AA",
-            "combat-finish-reengage": "\u6218\u6597\uFF1A\u6B8B\u8840\u76EE\u6807\u51FA\u5708\uFF0C\u91CD\u65B0\u9760\u8FD1",
-            "combat-spacing": "\u6218\u6597\uFF1A\u4FDD\u6301\u5B89\u5168\u95F4\u8DDD\u5E76\u5F00\u706B",
-            "combat-spacing-dodge": "\u6218\u6597\uFF1A\u89C4\u907F\u8D34\u8FD1\u5E76\u5F00\u706B",
-            "combat-out-of-range-dodge": "\u6218\u6597\uFF1A\u8D85\u8DDD\u6765\u5F39\uFF0C\u53EA\u89C4\u907F",
-            "combat-out-of-range-hold": "\u6218\u6597\uFF1A\u76EE\u6807\u8D85\u51FA\u5C04\u7A0B\uFF0C\u6682\u505C\u8FFD\u51FB",
-            "combat-out-of-range-reengage": "\u6218\u6597\uFF1A\u76EE\u6807\u8F7B\u5FAE\u51FA\u5708\uFF0C\u91CD\u65B0\u9760\u8FD1",
-            "combat-target-retreating": "\u6218\u6597\uFF1A\u76EE\u6807\u9000\u8FB9\uFF0C\u6682\u505C\u5F00\u706B",
-            "combat-active-threat-wait": "\u6218\u6597\uFF1A\u7B49\u5F85 Active \u5A01\u80C1\u660E\u786E",
-            "combat-reengage": "\u6218\u6597\uFF1A\u91CD\u65B0\u9760\u8FD1\u76EE\u6807",
-            "combat-disengage-range": "\u6218\u6597\uFF1A\u76EE\u6807\u8FDC\u79BB\uFF0C\u8131\u79BB\u89C2\u5BDF",
-            "combat-critical-hp-leave": "\u6218\u6597\u8840\u91CF\u4F4E\u4E8E 20\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "combat-low-hp-leave": "\u6218\u6597\u4F4E\u8840\u52A3\u52BF\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "combat-low-hp-no-damage-leave": "\u6218\u6597\u4F4E\u8840\u4E14\u4E45\u653B\u672A\u4E2D\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "combat-hp-disadvantage-leave": "\u6218\u6597\u8840\u91CF\u5DEE\u52A3\u52BF\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "combat-leave": "\u6218\u6597\u52A3\u52BF\u9000\u51FA\u540E\u7B49\u5F85",
-            "combat-leave-retry": "\u6218\u6597\u9000\u51FA\u5931\u8D25\uFF0C\u7B49\u5F85\u8865\u53D1\u9000\u51FA",
-            "injury-leave": "\u53D7\u4F24\u540E\u7ACB\u5373\u9000\u51FA",
-            "enemy-leave-wait": "\u654C\u65B9\u884C\u4E3A\u9000\u51FA\u540E\u7B49\u5F85",
-            "control-ws-offline": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF",
-            "control-ws-offline-unsafe": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u4E14\u5468\u56F4\u5371\u9669\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "control-ws-offline-safe-wait": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u5B89\u5168\u533A\u77ED\u6682\u7B49\u5F85\u91CD\u8FDE",
-            "control-ws-reconnect-churn": "\u7F51\u7EDC\u8FDE\u63A5\u53CD\u590D\u91CD\u8FDE\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "control-ws-no-self-game-session": "\u5DF2\u767B\u5F55\u4F46\u81EA\u8EAB\u5B9E\u4F53\u4E0D\u53EF\u89C1\uFF0C\u7ACB\u5373\u9000\u51FA",
-            "control-ws-server-position-stalled": "\u670D\u52A1\u7AEF\u4F4D\u7F6E\u505C\u6B62\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
-            "control-global-sampling-outage": "\u7F51\u7EDC\u91C7\u6837\u8D85\u65F6\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
-            "control-combat-tick-gap": "\u6218\u6597\u4E3B\u5FAA\u73AF\u65AD\u6863\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
-            "control-action-settlement-stalled": "\u79FB\u52A8/\u5F00\u706B\u7ED3\u7B97\u5361\u6B7B\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
-            "control-stamina-exhausted": "\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6309\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u5904\u7406",
-            "stamina-exhausted-leave": "\u957F\u5468\u671F\u4F53\u529B\u8017\u5C3D\uFF0C\u6B63\u5728\u9000\u51FA",
-            "offline-leave": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\uFF0C\u6B63\u5728\u9000\u51FA",
-            "offline-leave-wait": "\u7F51\u7EDC\u8FDE\u63A5\u79BB\u7EBF\u9000\u51FA\u540E\u7B49\u5F85\u91CD\u8FDE",
-            "cloudflare-error-refresh": "Cloudflare \u9519\u8BEF\u9875\uFF0C\u7B49\u5F85\u5237\u65B0",
-            "leave-success-refresh-confirmation": "\u9000\u51FA\u6210\u529F\u540E\u5237\u65B0\u786E\u8BA4",
-            "post-attack-drop-wait-position": "\u6218\u6597\u540E\u7B49\u5F85\u6389\u843D\u5237\u65B0",
-            "target-whitelisted": "\u76EE\u6807\u5728\u767D\u540D\u5355\u5185\uFF0C\u8DF3\u8FC7\u653B\u51FB",
-            "pursuit-leave": "\u88AB\u540C\u4E00\u73A9\u5BB6\u6301\u7EED\u8FFD\u51FB\uFF0C\u9000\u51FA\u7B49\u5F85",
-            "pursuit-leave-retry": "\u8FFD\u51FB\u9000\u51FA\u5931\u8D25\uFF0C\u7B49\u5F85\u8865\u53D1\u9000\u51FA",
-            "pursuit-leave-wait": "\u8FFD\u51FB\u9000\u51FA\u540E\u7B49\u5F85\u91CD\u65B0\u767B\u5F55",
-            "paused": "\u624B\u52A8\u6682\u505C",
-            "auto-login": "\u81EA\u52A8\u89E6\u53D1\u767B\u5F55/\u52A0\u5165",
-            "login-cooldown": "\u767B\u5F55\u5DF2\u89E6\u53D1\uFF0C\u7B49\u5F85\u9875\u9762\u8DF3\u8F6C",
-            "login-snapshot-gate": "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167",
-            "login-control-missing": "\u7B49\u5F85\u767B\u5F55\u63A7\u4EF6\u51FA\u73B0",
-            "session-mismatch-refresh": "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u5237\u65B0\u786E\u8BA4\u72B6\u6001",
-            "session-mismatch-recovery": "\u754C\u9762\u663E\u793A\u672A\u767B\u5F55\u4F46\u539F\u751F\u4F1A\u8BDD\u4ECD\u5728\u7EBF\uFF0C\u7B49\u5F85\u5B89\u5168\u6062\u590D\u63A5\u7BA1",
-            "game-session-connecting": "\u5DF2\u767B\u5F55\uFF0C\u7B49\u5F85\u6E38\u620F\u8FDE\u63A5/\u81EA\u8EAB\u5B9E\u4F53",
-            "no-self": "\u672A\u8BFB\u5230\u81EA\u8EAB\u5B9E\u4F53",
-            "not-alive": "\u4E0D\u5728\u5B58\u6D3B\u72B6\u6001",
-            "startup-error": "\u811A\u672C\u542F\u52A8\u5F02\u5E38",
-            "bot-error": "\u811A\u672C\u5F02\u5E38"
-          };
-          return map[reason] || reason || "-";
-        }
-        function updateBotPanel(decision = bot.lastDecision) {
-          renderTargetOverlay(decision);
-          return;
-          const panel = ensureBotPanel();
-          if (!panel) return;
-          const self = decision?.self || bot.lastSelf || null;
-          const hp = self?.hp ?? "-";
-          const staminaText = formatStaminaDisplay(self);
-          const selfDrop = self ? self.drop ?? dropValue(self) : "-";
-          const control = summarizeControl();
-          const safety = bot.lastSafety || {};
-          const nearestActive = safety.nearestActive ? (safety.nearestActive.name || "#" + safety.nearestActive.id) + " " + formatDistance(safety.nearestActive.distance) : "-";
-          const wsLabel = control.wsOpen ? "online" : control.connecting ? "connecting" : "offline";
-          const velocity = control.nativeCurrentVel || control.lastVelocity || "0 0";
-          const version = cfg.version || "dev";
-          const sourceHash = cfg.sourceHash ? String(cfg.sourceHash).slice(0, 8) : "-";
-          const panelLines = [
-            '<div style="font-weight:700;font-size:13px;margin-bottom:4px;color:#f8fafc">BOT ' + escapeHtml(actionText(decision)) + "</div>",
-            '<div style="font-size:11px;margin:-2px 0 4px;color:#cbd5e1;word-break:break-all">\u8FDC\u7AEF ' + escapeHtml(version) + " / " + escapeHtml(sourceHash) + "</div>",
-            "<div>\u539F\u56E0\uFF1A" + escapeHtml(decisionReasonDetail(decision) || reasonText(decision?.reason)) + "</div>",
-            "<div>\u8840\u91CF " + escapeHtml(hp) + " / \u4F53\u529B " + escapeHtml(staminaText) + " / Drop " + escapeHtml(selfDrop || "-") + "</div>",
-            "<div>\u79FB\u52A8 " + escapeHtml(decision?.dx ?? 0) + "," + escapeHtml(decision?.dy ?? 0) + " / \u901F\u5EA6 " + escapeHtml(velocity) + "</div>",
-            "<div>WS " + escapeHtml(wsLabel) + " / \u6700\u8FD1 Active " + escapeHtml(nearestActive) + "</div>"
-          ];
-          if (decision?.target) {
-            const target = decision.target;
-            panelLines.push("<div>\u76EE\u6807\uFF1A" + escapeHtml(target.name || "#" + (target.id ?? "-")) + " \u8DDD\u79BB " + escapeHtml(formatDistance(target.distance)) + " \u91D1\u5E01 " + escapeHtml(target.amount ?? "-") + " Drop " + escapeHtml(target.drop ?? "-") + "</div>");
-          }
-          if (decision?.combat) {
-            panelLines.push("<div>\u6218\u6597\uFF1A\u7784\u51C6 " + escapeHtml(decision?.aimTarget?.mode || "-") + " / \u6765\u5F39 " + escapeHtml(decision?.incomingBullet ? formatDistance(decision.incomingBullet.laneDistance) : "-") + "</div>");
-          }
-          if (decision?.opportunisticShot) {
-            const shot = decision.opportunisticShot;
-            panelLines.push("<div>\u987A\u624B\u5C04\u51FB\uFF1A" + escapeHtml(shot.name || "#" + (shot.id ?? "-")) + " \u8DDD\u79BB " + escapeHtml(formatDistance(shot.distance)) + " Drop " + escapeHtml(shot.drop ?? "-") + "</div>");
-          }
-          const pursuit = decision?.pursuit || safety.pursuit || summarizePursuit(bot.pursuit);
-          if (pursuit) {
-            panelLines.push("<div>\u8FFD\u51FB\uFF1A" + escapeHtml(pursuit.name || "#" + pursuit.id) + " " + escapeHtml(formatDistance(pursuit.distance)) + " / " + escapeHtml(Math.round((pursuit.durationMs || 0) / 1e3)) + "s</div>");
-          }
-          if (Array.isArray(bot.errors) && bot.errors.length) {
-            panelLines.push('<div style="color:#fca5a5">\u9519\u8BEF\uFF1A' + escapeHtml(bot.errors[bot.errors.length - 1]?.message || "") + "</div>");
-          }
-          panel.innerHTML = panelLines.join("");
-        }
+        const { createStatusPanelRuntime } = require_status_panel();
+        const {
+          removeBotPanel,
+          updateBotPanel
+        } = createStatusPanelRuntime({
+          bot,
+          cfg,
+          panelId: PANEL_ID,
+          renderTargetOverlay,
+          dropValue,
+          summarizeControl: () => summarizeControl(),
+          summarizePursuit: (...args) => summarizePursuit(...args)
+        });
         function logStatus(text, detail) {
           bot.lastAction = text;
           if (detail) bot.lastDecision = detail;
