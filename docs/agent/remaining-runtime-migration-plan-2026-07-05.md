@@ -29,14 +29,16 @@
   - `src/browser/runtime/exit-relogin.js`: 880 行。
   - `src/browser/runtime/target-overlay.js`: 603 行。
 
-进度更新到 `bootstrap-0.4.539`：
+进度更新到 `bootstrap-0.4.540`：
 
 - `src/browser/runtime-entry.js`: 2,139 行。
-- `src/browser/runtime/*.js`: 68 个可执行运行时模块，约 23,917 行。
+- `src/browser/runtime/*.js`: 72 个可执行运行时模块，约 24,142 行。
 - `src/browser/runtime/control-flow-runtime.js`: 1,614 行。
 - `src/browser/runtime/native-state-runtime.js`: 376 行。
-- `scripts/verify-objective-build.js`: 781 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality 的 owner 防回流检查。
-- 10 次实施提交中已完成 7 次，剩余 3 次。
+- `src/browser/runtime/combat-log-runtime.js`: 1,305 行。
+- `src/browser/runtime/important-logging-runtime.js`: 76 行。
+- `scripts/verify-objective-build.js`: 824 行，当前报告 29 项检查，并覆盖 public API/status、entity-state、exit-detail、entry-glue、control-login、login-point-safety、post-login-zoom、pending-exit、Clash leave rescue、leave-flow、native-data、native-transport、session-stats、stall-diagnostics、network-quality、combat-log queue、exit-audit、important-session、kill-attribution 的 owner 防回流检查。
+- 10 次实施提交中已完成 8 次，剩余 2 次。
 
 ## 剩余待迁移内容
 
@@ -111,13 +113,13 @@
 
 后续可以拆成 coin tracking、opportunity scoring/action、post-attack、arbitration 四个内部模块。
 
-### 7. Logging 与 UI 长尾模块仍有拆分空间
+### 7. Logging 已完成本轮拆分，UI 长尾仍有拆分空间
 
-- `combat-log-runtime.js` 仍包含 combat-log endpoint、exit audit、frame/session 队列、flush/persist/diagnostics 等。
-- `important-logging-runtime.js` 同时负责 important store、remote queue、session record、active combat record、kill attribution、chat/drop kill confirmation。
-- `target-overlay.js` 同时包含 overlay state、login-point overlay、entity/coin rendering 和 DOM/canvas lifecycle。
+- `combat-log-runtime.js` 已在 `bootstrap-0.4.540` 拆出 combat-log queue/flush/pending persistence 与 exit-audit/pending audit/session-end flush blocker；剩余主体负责 combat-log frame/build/diagnostic/session lifecycle。
+- `important-logging-runtime.js` 已在 `bootstrap-0.4.540` 拆出 important store/session/active-combat summaries 与 kill attribution/chat/drop confirmation；剩余文件只负责组合。
+- `target-overlay.js` 仍同时包含 overlay state、login-point overlay、entity/coin rendering 和 DOM/canvas lifecycle。
 
-这些不是构建迁移阻塞项，但会影响日报字段维护、日志字段兼容和 UI 变更审查。
+这些不是构建迁移阻塞项；日志拆分已完成，后续 UI 变更审查仍可单独处理 `target-overlay.js`。
 
 ### 8. Verifier 仍应从“已迁出”升级到“防回流/防膨胀”
 
@@ -141,7 +143,7 @@
 - [x] Control-flow Pending-exit And Leave Flow Split (`bootstrap-0.4.537`)
 - [x] Native State And Transport Split (`bootstrap-0.4.538`)
 - [x] Session, Stall, And Network Quality Split (`bootstrap-0.4.539`)
-- [ ] Logging And Important Records Split
+- [x] Logging And Important Records Split (`bootstrap-0.4.540`)
 - [ ] Profit Runtime Split
 - [ ] Combat Runtime Split And Final Guard Tightening
 
@@ -288,7 +290,7 @@ Completed in `bootstrap-0.4.538`: `src/browser/runtime/native-data-runtime.js` o
 
 Completed in `bootstrap-0.4.539`: `src/browser/runtime/session-stats-runtime.js` owns current-login and today-session stamina/coin/kill accounting; `src/browser/runtime/stall-diagnostics-runtime.js` owns server-position stall and action-settlement stall summaries/assessment; and `src/browser/runtime/network-quality-runtime.js` owns latency/loss frame samples plus movement/shot/damage ACK tracking. `src/browser/runtime/native-state-runtime.js` now composes native data, native transport, session stats, stall diagnostics, and network quality through five factories and is down to 376 lines. `scripts/verify-objective-build.js` rejects session/stall/network bodies returning to `native-state-runtime.js`, requires the three new modules in the direct esbuild graph, and reports 29 checks across 68 runtime modules.
 
-### 8. Logging And Important Records Split
+### 8. Logging And Important Records Split - Completed
 
 目标：
 
@@ -308,6 +310,8 @@ Completed in `bootstrap-0.4.539`: `src/browser/runtime/session-stats-runtime.js`
 
 - `combat-log-service` 测试通过。
 - daily summary 的 login statistics、active-player combat statistics、actual battle profit reporting 字段保持兼容。
+
+Completed in `bootstrap-0.4.540`: `src/browser/runtime/combat-log-queue-runtime.js` owns combat-log endpoint configuration, pending entry keys, pending persistence, queueing, flushing, and combat-log status summaries; `src/browser/runtime/exit-audit-runtime.js` owns persisted exit audit logs, pending audit counts, audit/session-end flush blockers, important-session close before login/reload, and `recordExitAuditEvent()`; `src/browser/runtime/important-session-runtime.js` owns important log store/remote queue, per-login session records, active-player combat summaries, and `recordImportantCombatTick()`; and `src/browser/runtime/kill-attribution-runtime.js` owns attack memory, kill identity matching, kill history, chat/snapshot kill message collection, and `updateKillHistory()`. `src/browser/runtime/combat-log-runtime.js` now composes queue and exit-audit through two factories and is down to 1,305 lines; `src/browser/runtime/important-logging-runtime.js` composes session and kill-attribution through two factories and is down to 76 lines. `scripts/verify-objective-build.js` rejects those bodies returning to the large logging modules, requires the four new modules in the direct esbuild graph, and reports 29 checks across 72 runtime modules.
 
 ### 9. Profit Runtime Split
 
