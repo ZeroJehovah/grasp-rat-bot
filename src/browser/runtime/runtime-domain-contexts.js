@@ -43,6 +43,7 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
   ]),
   native: Object.freeze([
     'assessActionSettlementStall',
+    'assessOfflineSafety',
     'assessServerPositionStall',
     'buildNativeCoinSnapshotCore',
     'buildNativeEntityMeta',
@@ -56,6 +57,7 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'getSelf',
     'installPageGlobal',
     'installPageNativeSnapshotObserver',
+    'now',
     'observeNetworkQualitySelf',
     'refreshGlobalState',
     'resetServerPositionStall',
@@ -91,6 +93,7 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'pendingCombatLeaveAction',
     'pendingExitIntentForSkippedLeave',
     'pendingExitSkipNewLeave',
+    'rememberLoginPointDamageThreat',
     'requestReload',
     'requestSessionMismatchRecoveryReload',
     'schedulePostLoginZoomOut',
@@ -150,6 +153,8 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'opportunityLongStaminaBudget',
     'opportunityPriorityTier',
     'opportunityWindowStaminaBudget',
+    'pickBestOpportunity',
+    'pickBestOpportunityCore',
     'pickCoin',
     'pickCoinField',
     'pickCoinRouteOpportunityCore',
@@ -219,7 +224,8 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'runTickSafely',
     'safeJsonClone',
     'safeStringify',
-    'updateKillHistory'
+    'updateKillHistory',
+    'updateSessionStats'
   ]),
   ui: Object.freeze([
     'actorLabel',
@@ -233,6 +239,26 @@ const DOMAIN_CONTEXT_KEYS = Object.freeze({
     'staminaExhaustedWindowLabel',
     'summarizeStamina',
     'updateBotPanel'
+  ]),
+  safety: Object.freeze([
+    'actionMovesTowardThreat',
+    'blockThreatReturnAction',
+    'buildReturnBlockScanAction',
+    'fleeDirection',
+    'hasReturnBlockThreat',
+    'isShortSafeCoinAction',
+    'lockedFleeDirection',
+    'markRecentMovement',
+    'markReturnBlockPressure',
+    'mergeThreatLists',
+    'pickReturnBlockPressure',
+    'pickReturnBlockThreat',
+    'returnBlockExitRadius',
+    'returnBlockRadius',
+    'returnBlockResumeRadius',
+    'returnBlockScanDirection',
+    'returnBlockSuppressRadius',
+    'threatKey'
   ])
 });
 
