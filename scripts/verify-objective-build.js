@@ -450,6 +450,7 @@ async function main() {
   const manifest = readJson('dist/manifest.json');
   const distSource = readText('dist/grasp-rat-remote-bot.js');
   const sourceBot = readText('grasp-rat-bot.js');
+  const runtimeDefaultsSource = readText('src/shared/runtime-defaults.js');
   const remoteBundleSource = readText('scripts/remote-bot-bundle.js');
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
   const remoteBundledBuildSource = readText('scripts/build-remote-bot-bundled.js');
@@ -803,6 +804,11 @@ async function main() {
     assert(runtimePostLoginZoomSource.includes('function createPostLoginZoomRuntime'), 'post-login zoom runtime factory missing');
     assert(runtimePostLoginZoomSource.includes('function schedulePostLoginZoomOut'), 'post-login zoom scheduling body missing from module');
     assert(runtimePostLoginZoomSource.includes('function noteSelfUnavailableForPostLoginZoom'), 'post-login zoom self-unavailable body missing from module');
+    assert(runtimePostLoginZoomSource.includes("if (ratio < minRatio) return { done: false, direction: 'in'"), 'post-login zoom does not correct over-zoomed visible-range fit');
+    assert(runtimePostLoginZoomSource.includes("schedulePostLoginZoomFallbackClicks(state, before?.error || 'fit measurement unavailable', selfSummary)"), 'post-login zoom fallback clicks do not retain fit rechecks');
+    assert(runtimeDefaultsSource.includes('postLoginZoomFitTargetRatio: 0.98'), 'post-login zoom target ratio default is not near full visible-range fit');
+    assert(runtimeDefaultsSource.includes('postLoginZoomWheelDeltaY: 35'), 'post-login zoom wheel step default is not slowed down');
+    assert(runtimeDefaultsSource.includes('postLoginZoomOutIntervalMs: 220'), 'post-login zoom interval default is not slowed down');
     assert(runtimeLoginPointSafetySource.includes('function createLoginPointSafetyRuntime'), 'login-point safety runtime factory missing');
     assert(runtimeLoginPointSafetySource.includes('function loginPointSafetyStatus'), 'login-point safety status body missing from module');
     assert(runtimeLoginPointSafetySource.includes('function resetLoginPointSafetyGate'), 'login-point safety reset body missing from module');
