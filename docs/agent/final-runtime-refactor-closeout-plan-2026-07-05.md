@@ -40,7 +40,7 @@ Implementation status:
 
 - [x] Commit 1 - Add Final Closeout Plan
 - [x] Commit 2 - Add Dependency Width Guards
-- [ ] Commit 3 - Introduce Runtime Domain Contexts
+- [x] Commit 3 - Introduce Runtime Domain Contexts
 - [ ] Commit 4 - Move Orchestration Composition To Domain Contexts
 - [ ] Commit 5 - Move Orchestration Decision To Domain Contexts
 - [ ] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
@@ -174,6 +174,8 @@ Completion criteria:
 - Runtime behavior remains structurally equivalent.
 - Domain contexts enter the esbuild graph.
 - `runtime-entry.js` still passes its size budget.
+
+Completed in `bootstrap-0.4.547`: `src/browser/runtime/runtime-domain-contexts.js` now owns named domain context key groups for `bootstrap`, `state`, `entity`, `native`, `control`, `profit`, `combat`, `logging`, and `ui`. `src/browser/runtime-entry.js` names the existing orchestration binding object as `runtimeFlatContext`, derives `runtimeDomainContexts`, and passes them forward while leaving current flat consumers intact. Static verification confirms the context module, 86 runtime modules in the esbuild graph, 34 objective checks, and the runtime entry remains under its 2,200-line budget.
 
 ### Commit 4 - Move Orchestration Composition To Domain Contexts
 
