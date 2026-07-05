@@ -6,6 +6,10 @@ const { createOrchestrationTickRuntime } = require('./orchestration-tick-runtime
 
 function createOrchestrationRuntime(runtime = {}) {
   const {
+    domainContexts = null
+  } = runtime;
+  const runtimeContext = domainContexts?.flat || runtime;
+  const {
     BOT_KEY,
     ENEMY_LEAVE_STATE_KEY,
     LOGIN_SUPPRESS_KEY,
@@ -227,7 +231,7 @@ function createOrchestrationRuntime(runtime = {}) {
     updateSessionStats,
     visibleCoinSourcesConfirmTargetMissing,
     writePersistentPendingExitStateCore
-  } = runtime;
+  } = runtimeContext;
 
   const {
     markRecentMovement,

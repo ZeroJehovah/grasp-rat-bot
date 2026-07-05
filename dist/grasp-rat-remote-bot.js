@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.547" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.548" };
     }
   });
 
@@ -27582,6 +27582,10 @@
       var { createOrchestrationTickRuntime } = require_orchestration_tick_runtime();
       function createOrchestrationRuntime(runtime = {}) {
         const {
+          domainContexts = null
+        } = runtime;
+        const runtimeContext = domainContexts?.flat || runtime;
+        const {
           BOT_KEY,
           ENEMY_LEAVE_STATE_KEY,
           LOGIN_SUPPRESS_KEY,
@@ -27803,7 +27807,7 @@
           updateSessionStats,
           visibleCoinSourcesConfirmTargetMissing,
           writePersistentPendingExitStateCore
-        } = runtime;
+        } = runtimeContext;
         const {
           markRecentMovement,
           fleeDirection,
@@ -29567,7 +29571,6 @@
         };
         const runtimeDomainContexts = createRuntimeDomainContexts(runtimeFlatContext);
         const orchestrationRuntime = createOrchestrationRuntime({
-          ...runtimeFlatContext,
           domainContexts: runtimeDomainContexts
         });
         ({

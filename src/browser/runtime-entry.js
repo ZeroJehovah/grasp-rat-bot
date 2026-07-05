@@ -2126,7 +2126,6 @@ const __graspRatRuntimeStartup = (() => {
   };
   const runtimeDomainContexts = createRuntimeDomainContexts(runtimeFlatContext);
   const orchestrationRuntime = createOrchestrationRuntime({
-    ...runtimeFlatContext,
     domainContexts: runtimeDomainContexts
   });
   ({

@@ -100,7 +100,7 @@ const POST_MIGRATION_LINE_BUDGETS = {
 const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
   'orchestration runtime': {
     factory: 'createOrchestrationRuntime',
-    max: 225
+    max: 10
   },
   'orchestration decision runtime': {
     factory: 'createOrchestrationDecisionRuntime',
@@ -468,6 +468,7 @@ async function main() {
     assert(runtimeEntrySource.includes('const runtimeFlatContext = {'), 'runtime entry does not name the flat runtime context');
     assert(runtimeEntrySource.includes('const runtimeDomainContexts = createRuntimeDomainContexts(runtimeFlatContext);'), 'runtime entry does not create runtime domain contexts');
     assert(runtimeEntrySource.includes('domainContexts: runtimeDomainContexts'), 'runtime entry does not pass domain contexts forward for later migration');
+    assert(!runtimeEntrySource.includes('...runtimeFlatContext'), 'runtime entry still spreads flat context into orchestration runtime');
     assert(runtimeDomainContextsSource.includes('const DOMAIN_CONTEXT_KEYS'), 'runtime domain context key map missing');
     assert(runtimeDomainContextsSource.includes('function createRuntimeDomainContexts'), 'runtime domain context factory missing');
     for (const domain of ['bootstrap', 'state', 'entity', 'native', 'control', 'profit', 'combat', 'logging', 'ui']) {
@@ -970,6 +971,7 @@ async function main() {
   check('orchestration safety runtime owns recent movement and return-block bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/orchestration-runtime')"), 'runtime entry does not import orchestration runtime module');
     assert(runtimeEntrySource.includes('createOrchestrationRuntime({'), 'runtime entry does not create orchestration runtime bindings');
+    assert(runtimeOrchestrationSource.includes('const runtimeContext = domainContexts?.flat || runtime;'), 'orchestration runtime does not read through domain contexts');
     assert(runtimeEntrySource.includes('return orchestrationRuntime.startRuntime();'), 'runtime entry does not delegate startup to orchestration runtime');
     assert(!/function\s+markRecentMovement\s*\(/.test(runtimeEntrySource), 'runtime entry still owns recent movement marker');
     assert(!/function\s+returnBlockRadius\s*\(/.test(runtimeEntrySource), 'runtime entry still owns return-block radius body');
