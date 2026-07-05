@@ -7,6 +7,7 @@ function createCombatMovementRuntime(runtime = {}) {
     now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
     hypot = Math.hypot,
     dist = () => Infinity,
+    speed = () => 0,
     clamp = (value, min, max) => Math.max(min, Math.min(max, value)),
     staminaRemaining = () => NaN,
     staminaExhaustedThreshold = () => 0,
