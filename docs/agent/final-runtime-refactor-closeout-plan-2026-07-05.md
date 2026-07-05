@@ -41,7 +41,7 @@ Implementation status:
 - [x] Commit 1 - Add Final Closeout Plan
 - [x] Commit 2 - Add Dependency Width Guards
 - [x] Commit 3 - Introduce Runtime Domain Contexts
-- [ ] Commit 4 - Move Orchestration Composition To Domain Contexts
+- [x] Commit 4 - Move Orchestration Composition To Domain Contexts
 - [ ] Commit 5 - Move Orchestration Decision To Domain Contexts
 - [ ] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
 - [ ] Commit 7 - Split Remaining Control-Flow Owners
@@ -216,6 +216,8 @@ Completion criteria:
 
 - `orchestration-runtime.js` no longer destructures hundreds of flat fields.
 - Safety, decision, and tick outputs remain wired exactly as before.
+
+Completed in `bootstrap-0.4.548`: `createOrchestrationRuntime()` now accepts `domainContexts`, resolves the existing compatibility source through `domainContexts.flat`, and `runtime-entry.js` no longer spreads `runtimeFlatContext` into orchestration. The orchestration composition dependency-width guard is tightened to 10 and reports `1/10`; safety, decision, and tick wiring remain behaviorally unchanged for the next planned migrations.
 
 ### Commit 5 - Move Orchestration Decision To Domain Contexts
 
