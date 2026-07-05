@@ -96,6 +96,25 @@ const POST_MIGRATION_LINE_BUDGETS = {
   'target overlay runtime': 630
 };
 
+const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
+  'orchestration runtime': {
+    factory: 'createOrchestrationRuntime',
+    max: 225
+  },
+  'orchestration decision runtime': {
+    factory: 'createOrchestrationDecisionRuntime',
+    max: 245
+  },
+  'orchestration tick runtime': {
+    factory: 'createOrchestrationTickRuntime',
+    max: 230
+  },
+  'control flow composition runtime': {
+    factory: 'createControlFlowRuntime',
+    max: 90
+  }
+};
+
 function readText(relPath) {
   return fs.readFileSync(path.join(ROOT, relPath), 'utf8');
 }
@@ -141,6 +160,99 @@ function assertLineBudget(text, label) {
   const lines = lineCount(text);
   assert(lines <= budget, `${label} exceeded post-migration line budget (${lines}/${budget})`);
   return `${label}: ${lines}/${budget}`;
+}
+
+function splitTopLevelCommaList(text) {
+  const items = [];
+  let current = '';
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    current += ch;
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+    } else if (ch === '(') {
+      parenDepth += 1;
+    } else if (ch === ')') {
+      parenDepth -= 1;
+    } else if (ch === '{') {
+      braceDepth += 1;
+    } else if (ch === '}') {
+      braceDepth -= 1;
+    } else if (ch === '[') {
+      bracketDepth += 1;
+    } else if (ch === ']') {
+      bracketDepth -= 1;
+    } else if (ch === ',' && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+      items.push(current.slice(0, -1).trim());
+      current = '';
+    }
+  }
+  const tail = current.trim();
+  if (tail) items.push(tail);
+  return items.filter(Boolean);
+}
+
+function factoryRuntimeDestructuringFields(text, factoryName) {
+  const marker = new RegExp(`function\\s+${escapeRegExp(factoryName)}\\s*\\(`);
+  const match = marker.exec(text);
+  const start = match ? match.index : -1;
+  assert(start >= 0, `${factoryName} factory not found`);
+  const constIndex = text.indexOf('const {', start);
+  assert(constIndex >= 0, `${factoryName} runtime destructuring not found`);
+  const open = text.indexOf('{', constIndex);
+  assert(open >= 0, `${factoryName} destructuring open brace not found`);
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+    } else if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const suffix = text.slice(i + 1, i + 80);
+        assert(/^\s*=\s*runtime\s*;/.test(suffix), `${factoryName} first destructuring does not read runtime`);
+        return splitTopLevelCommaList(text.slice(open + 1, i));
+      }
+    }
+  }
+  throw new Error(`${factoryName} runtime destructuring not closed`);
+}
+
+function assertDependencyWidth(text, label) {
+  const budget = POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS[label];
+  assert(budget && Number.isFinite(budget.max), `${label} dependency-width budget missing`);
+  const fields = factoryRuntimeDestructuringFields(text, budget.factory);
+  assert(fields.length <= budget.max, `${label} exceeded dependency-width budget (${fields.length}/${budget.max})`);
+  return `${label}: ${fields.length}/${budget.max}`;
 }
 
 function functionBody(text, name) {
@@ -828,6 +940,15 @@ async function main() {
       assertLineBudget(runtimeCombatMovementSource, 'combat movement runtime'),
       assertLineBudget(runtimeCombatAimSource, 'combat aim runtime'),
       assertLineBudget(runtimeTargetOverlaySource, 'target overlay runtime')
+    ].join(', ');
+  });
+
+  check('runtime dependency-width guards prevent flat composition backflow', () => {
+    return [
+      assertDependencyWidth(runtimeOrchestrationSource, 'orchestration runtime'),
+      assertDependencyWidth(runtimeOrchestrationDecisionSource, 'orchestration decision runtime'),
+      assertDependencyWidth(runtimeOrchestrationTickSource, 'orchestration tick runtime'),
+      assertDependencyWidth(runtimeControlFlowSource, 'control flow composition runtime')
     ].join(', ');
   });
 

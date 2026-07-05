@@ -15,7 +15,7 @@ The goal is not to keep splitting files indefinitely. The goal is to end this re
 - `src/browser/runtime/orchestration-runtime.js`: about 326 lines, but still forwards a very wide dependency object.
 - `src/browser/runtime/orchestration-decision-runtime.js`: about 1,133 lines and roughly 239 injected runtime fields.
 - `src/browser/runtime/orchestration-tick-runtime.js`: about 1,245 lines and roughly 223 injected runtime fields.
-- `src/browser/runtime/control-flow-runtime.js`: about 1,615 lines and roughly 133 injected runtime fields.
+- `src/browser/runtime/control-flow-runtime.js`: about 1,615 lines and 82 top-level injected runtime fields under the verifier's dependency-width parser.
 - `scripts/verify-objective-build.js`: 32 checks, including direct entry, source-string absence, module graph, owner anchors, and line budgets.
 
 ## Final Definition Of Done
@@ -35,6 +35,17 @@ This round is complete only when all of the following are true:
 Plan count: 8 commits.
 
 Only commits 3 through 8 are expected to touch runtime code. Commit 1 is documentation-only. Commit 2 is verifier-only. Commit 8 is the release and documentation closeout. If each code commit is released, versions can start at `bootstrap-0.4.547` and advance sequentially; the actual version should follow the branch state when implemented.
+
+Implementation status:
+
+- [x] Commit 1 - Add Final Closeout Plan
+- [x] Commit 2 - Add Dependency Width Guards
+- [ ] Commit 3 - Introduce Runtime Domain Contexts
+- [ ] Commit 4 - Move Orchestration Composition To Domain Contexts
+- [ ] Commit 5 - Move Orchestration Decision To Domain Contexts
+- [ ] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
+- [ ] Commit 7 - Split Remaining Control-Flow Owners
+- [ ] Commit 8 - Final Documentation, Budgets, And Release Closeout
 
 ### Commit 1 - Add Final Closeout Plan
 
@@ -63,6 +74,8 @@ Completion criteria:
 
 - The plan lists all remaining commits and their validation expectations.
 - Agent docs index points to the new plan.
+
+Completed after `bootstrap-0.4.546`: this plan was added and linked from `docs/agent/README.md`. No runtime code changed and no remote release was needed.
 
 ### Commit 2 - Add Dependency Width Guards
 
@@ -101,6 +114,8 @@ Completion criteria:
 
 - Verifier reports dependency-width details for high-risk runtime factories.
 - Future dependency-width reduction can be enforced by tightening budgets.
+
+Completed after `bootstrap-0.4.546`: `scripts/verify-objective-build.js` now parses the top-level `runtime` destructuring fields for `createOrchestrationRuntime()`, `createOrchestrationDecisionRuntime()`, `createOrchestrationTickRuntime()`, and `createControlFlowRuntime()`. It reports a dedicated dependency-width guard for those high-risk factories while keeping the existing owner and line-budget checks unchanged. No remote release was needed because runtime behavior and generated `dist/` output did not change.
 
 ### Commit 3 - Introduce Runtime Domain Contexts
 
