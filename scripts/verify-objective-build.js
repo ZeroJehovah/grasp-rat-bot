@@ -275,7 +275,6 @@ async function main() {
   const sourceBot = readText('grasp-rat-bot.js');
   const runtimeEntrySourceModule = readText('src/browser/runtime-entry-source.js');
   const runtimeSourceModule = readText('src/browser/runtime-source.js');
-  const runtimeFragmentsSourceModule = readText('src/browser/runtime-fragments-source.js');
   const runtimeFragmentRegistryModule = readText('src/browser/runtime-fragment-registry.js');
   const runtimeBootstrapSourceModule = readText('src/browser/runtime-bootstrap-source.js');
   const runtimeBootstrapBindingsRuntimeModule = readText('src/browser/runtime/runtime-bootstrap-bindings.js');
@@ -415,7 +414,6 @@ async function main() {
     sourceBot,
     runtimeEntrySourceModule,
     runtimeSourceModule,
-    runtimeFragmentsSourceModule,
     runtimeFragmentRegistryModule,
     runtimeBootstrapSourceModule,
     runtimeBootstrapBindingsRuntimeModule,
@@ -660,7 +658,9 @@ async function main() {
     assert(runtimeEntrySourceModule.includes('function runtimeEvalEntrySource(options = {})'), 'runtime eval entry-source factory not found');
     assert(runtimeEntrySourceModule.includes('browserRuntimeSource({'), 'runtime eval entry-source does not build local runtime source');
     assert(runtimeEntrySourceModule.includes('bundledRuntime: true'), 'runtime eval entry-source does not force bundled-runtime fragments');
-    assert(runtimeSourceModule.includes("const { browserRuntimeFragments } = require('./runtime-fragments-source')"), 'runtime source boundary does not own the runtime fragment registry dependency');
+    assert(!fs.existsSync(path.join(ROOT, 'src/browser/runtime-fragments-source.js')), 'obsolete runtime fragments materializer file still exists');
+    assert(runtimeSourceModule.includes("const { browserRuntimeFragmentEntries } = require('./runtime-fragment-registry')"), 'runtime source boundary does not own the runtime fragment registry dependency');
+    assert(!runtimeSourceModule.includes("require('./runtime-fragments-source')"), 'runtime source still imports obsolete materializer file');
     assert(runtimeSourceModule.includes('function browserRuntimeBodySource(options = {})'), 'runtime body source adapter not found');
     assert(runtimeSourceModule.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime body source boundary does not render the runtime fragment registry');
     assert(runtimeSourceModule.includes('function wrapBrowserRuntimeIife(source)'), 'runtime source boundary does not own the runtime IIFE wrapper');
@@ -671,7 +671,7 @@ async function main() {
     assert(runtimeSourceModule.includes('function browserRuntimeSource(options = {})'), 'browser runtime source adapter not found');
     assert(runtimeSourceModule.includes('function remoteBrowserRuntimeSource(options = {})'), 'remote browser runtime source adapter not found');
     assert(functionBody(runtimeSourceModule, 'remoteBrowserRuntimeSource').includes('bundledRuntime: true'), 'remote browser runtime source does not enable bundled-runtime fragments');
-    assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeBodySource,\n  browserRuntimeSource,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
+    assert(runtimeSourceModule.includes('module.exports = {\n  browserRuntimeConfig,\n  browserRuntimeBodySource,\n  browserRuntimeSource,\n  browserRuntimeFragments,\n  materializeRuntimeFragments,\n  remoteBrowserRuntimeSource'), 'runtime source boundary exports not found');
     assert(runtimeSourceModule.includes('function renderRuntimeFragment(fragment)'), 'single-fragment renderer not found');
     assert(runtimeSourceModule.includes("typeof fragment.name !== 'string'"), 'runtime source renderer does not require named fragment objects');
     assert(runtimeSourceModule.includes("Object.prototype.hasOwnProperty.call(fragment, 'source')"), 'runtime source renderer does not require fragment source objects');
@@ -771,19 +771,17 @@ async function main() {
     assert(runtimeFragmentRegistryModule.includes("require('./network-quality-summary-source')"), 'network-quality summary source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./runtime-summary-source')"), 'runtime-summary source module import not found');
     assert(runtimeFragmentRegistryModule.includes("require('./runtime-bootstrap-source')"), 'runtime-bootstrap source module import not found');
-    assert(runtimeFragmentsSourceModule.includes("require('./runtime-fragment-registry')"), 'runtime fragments materializer does not import the provider registry');
-    assert(!runtimeFragmentsSourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime fragments materializer still owns provider imports');
-    assert(runtimeFragmentsSourceModule.includes('function materializeRuntimeFragments(entries)'), 'runtime fragment materializer not found');
+    assert(!runtimeSourceModule.includes("require('./runtime-bootstrap-source')"), 'runtime source materializer still owns provider imports');
+    assert(runtimeSourceModule.includes('function materializeRuntimeFragments(entries)'), 'runtime fragment materializer not found');
     assert(runtimeFragmentRegistryModule.includes('function browserRuntimeFragmentEntries(config)'), 'runtime fragment entries factory not found');
-    assert(runtimeFragmentsSourceModule.includes('function browserRuntimeFragments(config)'), 'runtime fragments source factory not found');
-    assert(runtimeFragmentsSourceModule.includes('module.exports = {\n  runtimeFragment,\n  materializeRuntimeFragments,\n  browserRuntimeFragmentEntries,\n  browserRuntimeFragments'), 'runtime fragments source export not found');
+    assert(runtimeSourceModule.includes('function browserRuntimeFragments(config)'), 'runtime fragments source factory not found');
     assert(runtimeFragmentRegistryModule.includes('module.exports = {\n  browserRuntimeFragmentEntries\n};'), 'runtime fragment registry export not found');
     const runtimeSourceBody = functionBody(runtimeSourceModule, 'browserRuntimeSource');
     const runtimeBodySourceBody = functionBody(runtimeSourceModule, 'browserRuntimeBodySource');
     const runtimeIifeWrapperBody = functionBody(runtimeSourceModule, 'wrapBrowserRuntimeIife');
-    const fragmentRegistryBody = functionBody(runtimeFragmentsSourceModule, 'browserRuntimeFragments');
+    const fragmentRegistryBody = functionBody(runtimeSourceModule, 'browserRuntimeFragments');
     const fragmentEntriesBody = functionBody(runtimeFragmentRegistryModule, 'browserRuntimeFragmentEntries');
-    const fragmentMaterializerBody = functionBody(runtimeFragmentsSourceModule, 'materializeRuntimeFragments');
+    const fragmentMaterializerBody = functionBody(runtimeSourceModule, 'materializeRuntimeFragments');
     assert(runtimeSourceBody.includes('return wrapBrowserRuntimeIife(browserRuntimeBodySource(options));'), 'runtime source does not wrap the runtime body');
     assert(runtimeBodySourceBody.includes('return renderRuntimeFragments(browserRuntimeFragments(browserRuntimeConfig(options)));'), 'runtime body source does not render the fragment registry');
     assert(runtimeIifeWrapperBody.includes('(() => {${source}') && runtimeIifeWrapperBody.includes('})()'), 'runtime IIFE wrapper does not own the browser runtime shell');
@@ -792,10 +790,10 @@ async function main() {
     assert(!runtimeFragmentRegistryModule.includes('runtime-iife-open') && !runtimeFragmentRegistryModule.includes('runtime-iife-close'), 'runtime fragment registry still owns the IIFE shell');
     assert(fragmentMaterializerBody.includes('return entries.map(([name, source]) => runtimeFragment(name, source));'), 'runtime fragment materializer does not convert explicit entries to named fragment objects');
     assert(fragmentRegistryBody.includes('return materializeRuntimeFragments(browserRuntimeFragmentEntries(config));'), 'runtime fragments source does not materialize the explicit entries registry');
-    assert(runtimeFragmentsSourceModule.includes('function runtimeFragment(name, source)'), 'runtime fragment metadata helper not found');
-    assert(runtimeFragmentsSourceModule.includes("typeof name !== 'string'"), 'runtime fragment helper does not validate explicit names');
-    assert(runtimeFragmentsSourceModule.includes('source === undefined || source === null'), 'runtime fragment helper does not validate sources');
-    assert(!runtimeFragmentsSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
+    assert(runtimeSourceModule.includes('function runtimeFragment(name, source)'), 'runtime fragment metadata helper not found');
+    assert(runtimeSourceModule.includes("typeof name !== 'string'"), 'runtime fragment helper does not validate explicit names');
+    assert(runtimeSourceModule.includes('source === undefined || source === null'), 'runtime fragment helper does not validate sources');
+    assert(!runtimeSourceModule.includes('function runtimeFragmentName('), 'runtime fragment names should be explicit, not inferred');
     assert(fragmentEntriesBody.includes("['runtime-bootstrap', () => runtimeBootstrapSource(config)]"), 'runtime-bootstrap fragment is not explicitly named');
     assert(fragmentEntriesBody.includes("['runtime-utility-prelude', () => runtimeUtilityPreludeSource(config)]"), 'runtime-utility-prelude fragment is not config-aware for bundled runtime migration');
     assert(fragmentEntriesBody.includes("['status-panel-runtime', () => statusPanelSource(config)]"), 'status-panel-runtime fragment is not config-aware for bundled runtime migration');
