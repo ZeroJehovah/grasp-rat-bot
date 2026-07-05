@@ -46,6 +46,10 @@ const REQUIRED_DIST_TOKENS = [
   'function createSessionStatsRuntime',
   'function createStallDiagnosticsRuntime',
   'function createNetworkQualityRuntime',
+  'function createCombatLogQueueRuntime',
+  'function createExitAuditRuntime',
+  'function createImportantSessionRuntime',
+  'function createKillAttributionRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -189,7 +193,11 @@ async function main() {
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
   const runtimeStatusPanelSource = readText('src/browser/runtime/status-panel.js');
   const runtimeCombatLogSource = readText('src/browser/runtime/combat-log-runtime.js');
+  const runtimeCombatLogQueueSource = readText('src/browser/runtime/combat-log-queue-runtime.js');
+  const runtimeExitAuditSource = readText('src/browser/runtime/exit-audit-runtime.js');
   const runtimeImportantLoggingSource = readText('src/browser/runtime/important-logging-runtime.js');
+  const runtimeImportantSessionSource = readText('src/browser/runtime/important-session-runtime.js');
+  const runtimeKillAttributionSource = readText('src/browser/runtime/kill-attribution-runtime.js');
   const runtimeTickSafetySource = readText('src/browser/runtime/tick-safety.js');
   const runtimeControlFlowSource = readText('src/browser/runtime/control-flow-runtime.js');
   const runtimeNativeStateSource = readText('src/browser/runtime/native-state-runtime.js');
@@ -394,13 +402,48 @@ async function main() {
     assert(!/function\s+updateKillHistory\s*\(/.test(runtimeEntrySource), 'runtime entry still owns chat kill history updates');
     assert(!/function\s+recordUnhandledTickError\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick error recording');
     assert(!/function\s+runTickSafely\s*\(/.test(runtimeEntrySource), 'runtime entry still owns tick safety wrapper');
+    assert(runtimeCombatLogSource.includes("require('./combat-log-queue-runtime')"), 'combat log runtime does not import combat-log queue runtime');
+    assert(runtimeCombatLogSource.includes("require('./exit-audit-runtime')"), 'combat log runtime does not import exit-audit runtime');
+    assert(runtimeCombatLogSource.includes('createCombatLogQueueRuntime({'), 'combat log runtime does not create queue bindings');
+    assert(runtimeCombatLogSource.includes('createExitAuditRuntime({'), 'combat log runtime does not create exit-audit bindings');
+    assert(!/function\s+combatLogEntryFailureKey\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns queue failure key body');
+    assert(!/function\s+readPersistedCombatLogPendingEntries\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns pending persistence body');
+    assert(!/function\s+queueCombatLogEntry\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns queue body');
+    assert(!/function\s+flushCombatLogs\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns flush body');
+    assert(!/function\s+readPersistedExitAuditLogs\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns exit-audit persistence body');
+    assert(!/function\s+recordExitAuditEvent\s*\(/.test(runtimeCombatLogSource), 'combat log runtime still owns exit-audit event body');
+    assert(runtimeImportantLoggingSource.includes("require('./important-session-runtime')"), 'important logging runtime does not import important-session runtime');
+    assert(runtimeImportantLoggingSource.includes("require('./kill-attribution-runtime')"), 'important logging runtime does not import kill-attribution runtime');
+    assert(runtimeImportantLoggingSource.includes('createImportantSessionRuntime({'), 'important logging runtime does not create session bindings');
+    assert(runtimeImportantLoggingSource.includes('createKillAttributionRuntime({'), 'important logging runtime does not create kill-attribution bindings');
+    assert(!/function\s+readImportantLogsStore\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns important-log store body');
+    assert(!/function\s+recordImportantEvent\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns important event body');
+    assert(!/function\s+startImportantSession\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns important session body');
+    assert(!/function\s+recordImportantCombatTick\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns active combat tick body');
+    assert(!/function\s+rememberAttack\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns attack attribution body');
+    assert(!/function\s+recordKillHistoryItem\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns kill attribution body');
+    assert(!/function\s+updateKillHistory\s*\(/.test(runtimeImportantLoggingSource), 'important logging runtime still owns chat kill history body');
     assert(runtimeCombatLogSource.includes('function createCombatLogRuntime'), 'combat log runtime factory missing');
     assert(runtimeCombatLogSource.includes('function recordCombatLogTick'), 'combat log tick body missing from module');
-    assert(runtimeCombatLogSource.includes('function recordExitAuditEvent'), 'exit audit logging body missing from module');
+    assert(runtimeCombatLogQueueSource.includes('function createCombatLogQueueRuntime'), 'combat-log queue runtime factory missing');
+    assert(runtimeCombatLogQueueSource.includes('function combatLogEntryFailureKey'), 'combat log failure key missing from queue module');
+    assert(runtimeCombatLogQueueSource.includes('function readPersistedCombatLogPendingEntries'), 'combat log pending persistence missing from queue module');
+    assert(runtimeCombatLogQueueSource.includes('function queueCombatLogEntry'), 'combat log queue body missing from queue module');
+    assert(runtimeCombatLogQueueSource.includes('function flushCombatLogs'), 'combat log flush body missing from queue module');
+    assert(runtimeExitAuditSource.includes('function createExitAuditRuntime'), 'exit-audit runtime factory missing');
+    assert(runtimeExitAuditSource.includes('function readPersistedExitAuditLogs'), 'exit-audit persistence missing from exit-audit module');
+    assert(runtimeExitAuditSource.includes('function recordExitAuditEvent'), 'exit audit logging body missing from exit-audit module');
+    assert(runtimeExitAuditSource.includes('function importantSessionEndFlushPending'), 'important session-end flush blocker missing from exit-audit module');
     assert(runtimeImportantLoggingSource.includes('function createImportantLoggingRuntime'), 'important logging runtime factory missing');
-    assert(runtimeImportantLoggingSource.includes('function recordImportantCombatTick'), 'important combat summary body missing from module');
-    assert(runtimeImportantLoggingSource.includes('function recordKillHistoryItem'), 'kill history attribution body missing from module');
-    assert(runtimeImportantLoggingSource.includes('function updateKillHistory'), 'chat kill history body missing from module');
+    assert(runtimeImportantSessionSource.includes('function createImportantSessionRuntime'), 'important-session runtime factory missing');
+    assert(runtimeImportantSessionSource.includes('function readImportantLogsStore'), 'important log store body missing from important-session module');
+    assert(runtimeImportantSessionSource.includes('function recordImportantEvent'), 'important event body missing from important-session module');
+    assert(runtimeImportantSessionSource.includes('function startImportantSession'), 'important session body missing from important-session module');
+    assert(runtimeImportantSessionSource.includes('function recordImportantCombatTick'), 'important combat summary body missing from important-session module');
+    assert(runtimeKillAttributionSource.includes('function createKillAttributionRuntime'), 'kill-attribution runtime factory missing');
+    assert(runtimeKillAttributionSource.includes('function rememberAttack'), 'attack attribution body missing from kill-attribution module');
+    assert(runtimeKillAttributionSource.includes('function recordKillHistoryItem'), 'kill history attribution body missing from kill-attribution module');
+    assert(runtimeKillAttributionSource.includes('function updateKillHistory'), 'chat kill history body missing from kill-attribution module');
     assert(runtimeTickSafetySource.includes('function createTickSafetyRuntime'), 'tick safety runtime factory missing');
     assert(runtimeTickSafetySource.includes('function runTickSafely'), 'tick safety wrapper missing from module');
     assert(runtimeTickSafetySource.includes('function runCallbackSafely'), 'callback safety wrapper missing from module');
