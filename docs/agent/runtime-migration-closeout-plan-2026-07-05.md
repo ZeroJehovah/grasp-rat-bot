@@ -114,7 +114,7 @@ Verifier 已有 `runtime-entry.js`、`combat-runtime.js`、`profit-runtime.js`�
 - [x] Commit 1 - Docs Current-State Closeout
 - [x] Commit 2 - Post-Migration Guard Baseline
 - [x] Commit 3 - Extract Orchestration Safety Helpers
-- [ ] Commit 4 - Extract Decision Selection Runtime
+- [x] Commit 4 - Extract Decision Selection Runtime
 - [ ] Commit 5 - Extract Tick And Startup Runtime
 - [ ] Commit 6 - Split Combat Log Frame And Diagnostics Owners
 - [ ] Commit 7 - Final Closeout Guards And Handoff
@@ -219,6 +219,8 @@ Completed in `bootstrap-0.4.543`: `src/browser/runtime/orchestration-safety-runt
 - Combat target/aim/fire 仍只用 native/realtime visible state。
 - Ordinary profit 仍优先 realtime/native visible coins 和 visible/native AFK targets，再 snapshot fallback。
 - Verifier 的 visible/native profit priority anchors 跟随新的 owner 模块。
+
+Completed in `bootstrap-0.4.544`: `src/browser/runtime/orchestration-decision-runtime.js` now owns `classify()` and `chooseAction()` while `src/browser/runtime/orchestration-runtime.js` composes safety/decision modules and is down to 1,321 lines. `scripts/verify-objective-build.js` rejects decision bodies returning to entry/orchestration, moves visible/native-before-snapshot profit anchors to the decision module, tightens orchestration to a 1,350-line budget, adds a 1,160-line decision budget, and reports 32 checks across 82 runtime modules. Release commit: `cacd516`; manifest SHA-256: `4fde72e55cc6e73e2b9e6d49e035fe9a6cf589effd1e711930caa0ddd93e07e1`.
 
 ### Commit 5 - Extract Tick And Startup Runtime
 
