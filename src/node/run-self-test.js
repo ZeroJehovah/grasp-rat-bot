@@ -20,6 +20,9 @@ const {
   buildBrowserPreservedState
 } = require('../shared/browser-preserved-state');
 const {
+  createNoSelfSnapshotRecoveryRuntime
+} = require('../browser/runtime/no-self-snapshot-recovery-runtime');
+const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
@@ -9148,6 +9151,105 @@ function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|0|true|true'
+    },
+    {
+      name: 'snapshot no-self exit confirmation requires fresh absent self',
+      got: (() => {
+        const botState = {
+          globalState: { entities: [], snapshotRefreshedAt: Date.now() },
+          control: {}
+        };
+        const runtime = createNoSelfSnapshotRecoveryRuntime({
+          bot: botState,
+          cfg,
+          storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+          getCurrentUserId: () => 28886,
+          snapshotDataAgeMs: () => 1000,
+          snapshotSelfFreshEnough: () => true,
+          summarizeSelf: entity => ({ id: entity.user_id }),
+          isAlive: entity => entity?.life !== 'dead'
+        });
+        const control = { currentUserId: 28886, hasToken: true, connecting: true };
+        const base = { shouldLeave: true, ageMs: 30000, userId: 28886 };
+        return [
+          runtime.noSelfSnapshotExitConfirmationState(control, { ...base, snapshotSelf: { known: true, fresh: true, present: false } }).confirmed,
+          runtime.noSelfSnapshotExitConfirmationState(control, { ...base, snapshotSelf: { known: true, fresh: true, present: true } }).confirmed,
+          runtime.noSelfSnapshotExitConfirmationState(control, { ...base, snapshotSelf: { known: false, fresh: false, present: false } }).confirmed,
+          runtime.noSelfSnapshotExitConfirmationState(control, { ...base, shouldLeave: false, snapshotSelf: { known: true, fresh: true, present: false } }).confirmed
+        ].map(String).join('|');
+      })(),
+      want: 'true|false|false|false'
+    },
+    {
+      name: 'snapshot no-self local session reset clears token and keeps login id input',
+      got: (() => {
+        const data = new Map([
+          ['tmpGameSessionToken', 'stale-token'],
+          ['tmpGameUserId', '28886']
+        ]);
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        let closed = false;
+        const nativeWs = {
+          readyState: 1,
+          close: () => {
+            closed = true;
+          }
+        };
+        const input = {
+          value: '',
+          dispatchEvent: () => {}
+        };
+        const oldDocument = global.document;
+        global.document = {
+          getElementById: id => (id === 'userId' ? input : null)
+        };
+        try {
+          const botState = {
+            globalState: { entities: [], snapshotRefreshedAt: Date.now() },
+            control: { hasToken: true, wsOpen: true, nativeWsOpen: true, connecting: true },
+            pendingExit: { reason: 'stale' },
+            offlineSince: 123
+          };
+          const runtime = createNoSelfSnapshotRecoveryRuntime({
+            bot: botState,
+            cfg,
+            storage,
+            getCurrentUserId: () => 28886,
+            getNativeControl: () => ({ ws: nativeWs }),
+            snapshotDataAgeMs: () => 1000,
+            snapshotSelfFreshEnough: () => true,
+            summarizeSelf: entity => ({ id: entity.user_id }),
+            isAlive: entity => entity?.life !== 'dead',
+            clearPersistentPendingExitState: () => {
+              data.set('pendingExitCleared', 'true');
+            }
+          });
+          const result = runtime.clearNoSelfSnapshotLocalSession(
+            { currentUserId: 28886, hasToken: true, connecting: true },
+            { shouldLeave: true, ageMs: 30000, userId: 28886, snapshotSelf: { known: true, fresh: true, present: false } }
+          );
+          return [
+            result.confirmed,
+            data.get('tmpGameSessionToken') === undefined,
+            data.get('tmpGameUserId') === undefined,
+            input.value,
+            result.preservedUserIdInput,
+            result.closedNativeWs,
+            closed,
+            botState.control.hasToken,
+            botState.pendingExit,
+            botState.offlineSince,
+            data.get('pendingExitCleared')
+          ].map(String).join('|');
+        } finally {
+          global.document = oldDocument;
+        }
+      })(),
+      want: 'true|true|true|28886|true|true|true|false|null|0|true'
     },
     {
       name: 'post-exit session mismatch blocks live takeover bypass',

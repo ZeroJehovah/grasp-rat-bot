@@ -54,6 +54,7 @@ const { createPendingExitRuntime } = require('./pending-exit-runtime');
 const { createClashLeaveRescueRuntime } = require('./clash-leave-rescue-runtime');
 const { createLeaveFlowRuntime } = require('./leave-flow-runtime');
 const { createSessionRecoveryRuntime } = require('./session-recovery-runtime');
+const { createNoSelfSnapshotRecoveryRuntime } = require('./no-self-snapshot-recovery-runtime');
 const { createReloginGateRuntime } = require('./relogin-gate-runtime');
 
 function createControlFlowRuntime(runtime = {}) {
@@ -353,6 +354,24 @@ function createControlFlowRuntime(runtime = {}) {
   });
 
   const {
+    noSelfSnapshotExitConfirmationState,
+    clearNoSelfSnapshotLocalSession,
+    handleNoSelfSnapshotExitRecovery,
+    runNoSelfSnapshotExitRecovery
+  } = createNoSelfSnapshotRecoveryRuntime({
+    bot,
+    storage: localStorage,
+    getCurrentUserId: (...args) => getCurrentUserId(...args),
+    getNativeControl: (...args) => getNativeControl(...args),
+    snapshotSelfPresenceState: (...args) => snapshotSelfPresenceState(...args),
+    clearPersistentPendingExitState,
+    noteImportantSessionExit,
+    requestReload: (...args) => requestReload(...args),
+    summarizeControl: (...args) => summarizeControl(...args),
+    updateBotPanel
+  });
+
+  const {
     reloginCooldownCandidates,
     summarizeReloginGateStatus,
     clearExitHoldDetail,
@@ -606,6 +625,10 @@ function createControlFlowRuntime(runtime = {}) {
     snapshotSelfPresenceState,
     controlHasAuthoritativeSessionMismatch,
     noSelfGameSessionExitState,
+    noSelfSnapshotExitConfirmationState,
+    clearNoSelfSnapshotLocalSession,
+    handleNoSelfSnapshotExitRecovery,
+    runNoSelfSnapshotExitRecovery,
     recentUnsafeExitContext,
     firstRecentUnsafeExitContext,
     sessionMismatchRecoveryReloadMaxAgeMs,

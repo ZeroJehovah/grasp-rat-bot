@@ -189,6 +189,7 @@ function createStatusPanelRuntime(runtime = {}) {
       'control-ws-offline-safe-wait': '网络连接离线，安全区短暂等待重连',
       'control-ws-reconnect-churn': '网络连接反复重连，立即退出',
       'control-ws-no-self-game-session': '已登录但自身实体不可见，立即退出',
+      'snapshot-no-self-exit-confirmed': '快照确认已退出，正在重登',
       'control-ws-server-position-stalled': '服务端位置停止，按网络连接离线处理',
       'control-global-sampling-outage': '网络采样超时，按网络连接离线处理',
       'control-combat-tick-gap': '战斗主循环断档，按网络连接离线处理',
