@@ -8,16 +8,16 @@ The previous runtime bundler migration is complete: production and local injecti
 
 - Source-string generation files remaining: 0.
 - Obsolete runtime source layer remaining: 0 (`src/browser/*source.js`, `src/browser/runtime-fragment-registry.js`, `src/browser/runtime-source.js`, and `src/browser/runtime-entry-source.js` are absent).
-- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 17,518 lines.
-- Function declarations inside the direct entry: 622.
-- Existing executable helper modules: 45 files under `src/browser/runtime/`.
+- Direct browser entry still to decompose: `src/browser/runtime-entry.js`, 14,845 lines.
+- Function declarations inside the direct entry: 483.
+- Existing executable helper modules: 48 files under `src/browser/runtime/`.
 - Current top-level browser files: `src/browser/page-global-core.js`, `src/browser/runtime-entry.js`, and `src/browser/runtime-helper-entry.mjs`.
 
 ## Migration Status
 
 - [x] Runtime shell and context (`bootstrap-0.4.525`).
 - [x] UI, overlay, status, whitelist, and stamina (`bootstrap-0.4.526`).
-- [ ] Logging and history.
+- [x] Logging and history (`bootstrap-0.4.527`).
 - [ ] Login, exit, pending exit, and leave flow.
 - [ ] Native state, transport, session stats, and network quality.
 - [ ] Coin, opportunity, profit, and arbitration.
@@ -40,18 +40,18 @@ The remaining work is structural, not a strategy rewrite.
 
 Approximate line ranges in `src/browser/runtime-entry.js`:
 
-- Runtime shell use, shared bindings, `bot` methods, base helpers, and UI/status module wiring: lines 1-716.
-- Combat log, tick safety, reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 717-4804.
-- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 4805-6904.
-- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 6905-9658.
-- Important logs, combat history, kill attribution, and entity refresh: lines 9659-10793.
-- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 10794-11257.
-- Target selection and combat movement/aim/state/fire/leave/action: lines 11258-15319.
-- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 15320-17518.
+- Runtime shell use, shared bindings, `bot` methods, base helpers, UI/status module wiring, and logging/tick factory wiring: lines 1-813.
+- Reload/session controls, login gates, login-point safety, post-login zoom, and pause handling: lines 814-3141.
+- Page-native snapshot observer, pending exit, leave command, auto-login, and leave flow: lines 3142-5241.
+- Native state/control, entity/coin/bullet normalization, session stats, and network quality: lines 5242-6908.
+- Important logging factory wiring and entity refresh: lines 6909-7135.
+- Native movement/shooting, motion helpers, return-block, classify, offline safety, and coin safety: lines 7136-8584.
+- Target selection and combat movement/aim/state/fire/leave/action: lines 8585-13015.
+- Opportunity, coin/profit action builders, action arbitration, coin tracking, `chooseAction`, `tick`, and startup tail: lines 13016-14845.
 
 ## Commit Plan
 
-Plan count from current state: 6 future migration commits after the completed shell/context and UI/status slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
+Plan count from current state: 5 future migration commits after the completed shell/context, UI/status, and logging/history slices. The implementation commits should each be behavior-preserving unless explicitly called out and validated separately.
 
 ### 1. Runtime Shell And Context - Completed
 
@@ -104,6 +104,8 @@ Validation focus:
 
 - `combat-log-service` tests pass.
 - Daily-report dependencies remain intact: per-login stats and per-active-player-combat stats are still logged.
+
+Completed in `bootstrap-0.4.527`: combat-log service integration, exit-audit persistence/flush, frame/session queueing, and logging diagnostics moved behind `createCombatLogRuntime()` in `src/browser/runtime/combat-log-runtime.js`; important-log local store/remote flush, per-login records, active-player combat summaries, attack/kill attribution, and chat/drop kill confirmation moved behind `createImportantLoggingRuntime()` in `src/browser/runtime/important-logging-runtime.js`; tick/callback error safety moved behind `createTickSafetyRuntime()` in `src/browser/runtime/tick-safety.js`; and `scripts/verify-objective-build.js` now rejects these logging/history/tick bodies returning to `runtime-entry.js`.
 
 ### 4. Login, Exit, Pending Exit, And Leave Flow
 
