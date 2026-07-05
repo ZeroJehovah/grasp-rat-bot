@@ -155,6 +155,8 @@ async function main() {
   const buildRemoteSource = readText('scripts/build-remote-bot.js');
   const remoteBundledBuildSource = readText('scripts/build-remote-bot-bundled.js');
   const runtimeEntrySource = readText(RUNTIME_ENTRY_LABEL);
+  const runtimeShellSource = readText('src/browser/runtime/runtime-shell.js');
+  const runtimeBotStateSource = readText('src/browser/runtime/runtime-bot-state.js');
   const userscriptText = readText('userscript/grasp-rat-bootstrap.user.js');
   const extensionBootstrapText = readText('extension/page-bootstrap.js');
   const extensionManifest = readJson('extension/manifest.json');
@@ -203,14 +205,30 @@ async function main() {
 
   check('runtime entry is executable code, not a source-fragment adapter', () => {
     assert(runtimeEntrySource.includes('const __graspRatRuntimeStartup = (() => {'), 'runtime entry does not execute the browser startup IIFE');
-    assert(runtimeEntrySource.includes('createRuntimeBootstrapBindings(__GRASP_RAT_RUNTIME_CONFIG__)'), 'runtime entry does not receive build-time runtime config');
-    assert(runtimeEntrySource.includes("require('./runtime/runtime-bootstrap-bindings')"), 'runtime entry does not import runtime bootstrap bindings directly');
-    assert(runtimeEntrySource.includes("require('./runtime/runtime-state-bindings')"), 'runtime entry does not import runtime state bindings directly');
+    assert(runtimeEntrySource.includes('createRuntimeShellContext(__GRASP_RAT_RUNTIME_CONFIG__'), 'runtime entry does not pass build-time runtime config into the shell context');
+    assert(runtimeEntrySource.includes("require('./runtime/runtime-shell')"), 'runtime entry does not import the runtime shell module');
+    assert(runtimeEntrySource.includes("require('./runtime/runtime-bot-state')"), 'runtime entry does not import the runtime bot-state module');
+    assert(runtimeEntrySource.includes('...createRuntimeBotState({'), 'runtime entry does not create bot state through the extracted module');
     assert(runtimeEntrySource.includes('module.exports.default = __graspRatRuntimeStartup'), 'runtime entry does not expose startup result for local eval');
+    assert(!runtimeEntrySource.includes("require('./runtime/runtime-bootstrap-bindings')"), 'runtime entry still imports bootstrap bindings directly');
+    assert(!runtimeEntrySource.includes("require('./runtime/runtime-state-bindings')"), 'runtime entry still imports state bindings directly');
+    assert(!runtimeEntrySource.includes('ignoredCoins: new Map(restoredFailures'), 'runtime entry still owns bot-state coin failure initialization');
     assert(!runtimeEntrySource.includes("require('./src/browser/runtime/"), 'runtime entry still uses virtual-root runtime helper paths');
     assert(!/function\s+[A-Za-z0-9_$]*(?:InlineSource|RuntimeSource|PreludeSource)\s*\(/.test(runtimeEntrySource), 'runtime entry still declares obsolete source factory functions');
     assert(!runtimeEntrySource.includes('browserRuntimeFragmentEntries'), 'runtime entry still references the fragment registry');
     assert(!runtimeEntrySource.includes('renderRuntimeFragments'), 'runtime entry still renders source fragments');
+  });
+
+  check('runtime shell owns bootstrap, state binding, and bot-state setup', () => {
+    assert(runtimeShellSource.includes("require('./runtime-bootstrap-bindings')"), 'runtime shell does not import bootstrap bindings');
+    assert(runtimeShellSource.includes("require('./runtime-state-bindings')"), 'runtime shell does not import state bindings');
+    assert(runtimeShellSource.includes('createRuntimeBootstrapBindings(baseConfig, options)'), 'runtime shell does not create bootstrap bindings from the injected config');
+    assert(runtimeShellSource.includes('createRuntimeStateBindings({'), 'runtime shell does not create state bindings');
+    assert(runtimeShellSource.includes('botStatusCores'), 'runtime shell does not expose bot status core helpers');
+    assert(runtimeBotStateSource.includes('function createRuntimeBotState'), 'runtime bot-state module does not expose createRuntimeBotState');
+    assert(runtimeBotStateSource.includes('running: true'), 'runtime bot-state module does not own base running state');
+    assert(runtimeBotStateSource.includes('combatLogging: {'), 'runtime bot-state module does not own combat logging state initialization');
+    assert(runtimeBotStateSource.includes('ignoredCoins: new Map(restoredFailures'), 'runtime bot-state module does not own restored coin failure initialization');
   });
 
   check('obsolete source-fragment files are absent', () => {
