@@ -4,14 +4,15 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Release
 
-- Latest remote bot: `bootstrap-0.4.562`.
-- Latest manifest SHA-256: `4a305fe51d66252c35e0127ef273d9ec6914c391977f6004464bbe7dd5d587f3`.
-- Latest remote release commit: `e061cc7` (`bootstrap-0.4.562` wire remaining combat runtime dependencies).
+- Latest remote bot: `bootstrap-0.4.563`.
+- Latest manifest SHA-256: `5c7d0ca641ecd592291357b41443756bc3615ccf65e6e17a96a9b76d4e60927e`.
+- Latest remote release commit: `3e718c9` (`bootstrap-0.4.563` keep healthy high-value coin pickup after minor injury).
 - Latest bootstrap A versions: Tampermonkey `0.4.74`, extension `0.1.53`.
-- Latest direct entry/config SHA-256: `22bcecef3561f002c574fe474e2d03cb6fca02b947e65000e89df3dbe6cb16e8`.
+- Latest direct entry/config SHA-256: `6e855f60fc45e9ae279579fea1e97d5298d0a439833086f478e091b1035d5214`.
 
 ## Current Handoff
 
+- `bootstrap-0.4.563` preserves healthy high-value visible coin pickup after a same-tick minor injury instead of escalating the generic `injury hp drop` fallback to `leave()`, while keeping low-HP/combat-disadvantage exits intact. Injury leave summaries now prefer an explicit bullet owner or closer real human over a farther/invulnerable Active summary, so the displayed attacker should match the nearby player that caused the HP drop.
 - `bootstrap-0.4.562` passes `directionTo` into combat movement runtime and `now` into combat target runtime, with objective-build smoke coverage for passive-runner close movement and sticky combat target selection; the checked browser runtime surface has no unexpected `no-undef` findings beyond known build/page globals.
 - `bootstrap-0.4.561` passes `combatTargetId` into combat movement runtime and adds an objective-build passive-runner smoke for the dependency; passive-runner combat checks should no longer throw `combatTargetId is not defined` when combat starts.
 - `bootstrap-0.4.560` passes `isInvulnerable` into combat movement runtime and adds objective-build guards for the dependency; passive-runner combat checks should no longer throw `isInvulnerable is not defined` when combat starts.
@@ -40,7 +41,7 @@ Update this file for every remote bot release or handoff-relevant state change. 
 
 ## Latest Validation Baseline
 
-The latest `bootstrap-0.4.562` release validation passed:
+The latest `bootstrap-0.4.563` release validation passed:
 
 ```bash
 node grasp-rat-bot.js --self-test
@@ -55,9 +56,10 @@ node --check extension/content-bridge.js
 node --check extension/page-bootstrap.js
 node --check extension/popup.js
 cd combat-log-service && npm test
+cd combat-log-service && npm run replay -- --file logs/2026-07-06/combat/20260705162643-self-28886-vs-mango.jsonl --start-line 890 --end-line 937 --self-id 28886 --target-id 31361 --target-name mango
 npm run test:runtime-helper-entry
 npm run test:remote-bundled
-node scripts/build-remote-bot.js --version bootstrap-0.4.562
+node scripts/build-remote-bot.js --version bootstrap-0.4.563
 node scripts/verify-objective-build.js
 git diff --check
 ```
