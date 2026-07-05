@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.554" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.555" };
     }
   });
 
@@ -3338,7 +3338,7 @@
           forceLoginNow = () => null,
           configureCombatLogging = () => null,
           tick = () => null,
-          syncPausedFromPage: syncPausedFromPage2 = () => false,
+          syncPausedFromPage = () => false,
           triggerNativeTick = () => false,
           getSelf = () => null,
           summarizeSelf = (value) => value,
@@ -3483,7 +3483,7 @@
           status() {
             const current = activeBot(this);
             try {
-              if (!current.ticking) syncPausedFromPage2(false);
+              if (!current.ticking) syncPausedFromPage(false);
             } catch (_) {
             }
             const t = wallNow();
@@ -3995,7 +3995,7 @@
           }
           return String(readPageGlobal("__graspRatBotPauseReason", "", pageGlobal) || reason || "");
         }
-        function syncPausedFromPage2(stopOnPause = true) {
+        function syncPausedFromPage(stopOnPause = true) {
           let localPaused = false;
           try {
             localPaused = Boolean(storage && storage.getItem(pausedKey) === "true");
@@ -4030,7 +4030,7 @@
         return {
           clearPostExitTargetState,
           readPauseReason,
-          syncPausedFromPage: syncPausedFromPage2,
+          syncPausedFromPage,
           getOwnEntity,
           logStatus
         };
@@ -6605,7 +6605,7 @@
           const why = String(reason || "").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "reason";
           return clean + "-" + Date.now().toString(36) + "-" + bot.exitAudit.sequence + "-" + why;
         }
-        function newExitAuditRequestId2(exitAuditId) {
+        function newExitAuditRequestId(exitAuditId) {
           bot.exitAudit.requestSequence = Number(bot.exitAudit.requestSequence || 0) + 1;
           return String(exitAuditId || "exit") + "-req-" + bot.exitAudit.requestSequence;
         }
@@ -6717,7 +6717,7 @@
           closeCurrentImportantSessionBeforeReload,
           restorePersistedExitAuditLogs,
           newExitAuditId,
-          newExitAuditRequestId: newExitAuditRequestId2,
+          newExitAuditRequestId,
           ensureExitAuditDetail,
           exitAuditSelfSummary,
           recordExitAuditEvent
@@ -6825,7 +6825,7 @@
         let closeCurrentImportantSessionBeforeReload;
         let restorePersistedExitAuditLogs;
         let newExitAuditId;
-        let newExitAuditRequestId2;
+        let newExitAuditRequestId;
         let ensureExitAuditDetail;
         let exitAuditSelfSummary;
         let recordExitAuditEvent;
@@ -6932,7 +6932,7 @@
           closeCurrentImportantSessionBeforeReload,
           restorePersistedExitAuditLogs,
           newExitAuditId,
-          newExitAuditRequestId: newExitAuditRequestId2,
+          newExitAuditRequestId,
           ensureExitAuditDetail,
           exitAuditSelfSummary,
           recordExitAuditEvent
@@ -7134,7 +7134,7 @@
           restorePersistedExitAuditLogs,
           restorePersistedCombatLogPendingEntries,
           newExitAuditId,
-          newExitAuditRequestId: newExitAuditRequestId2,
+          newExitAuditRequestId,
           ensureExitAuditDetail,
           exitAuditSelfSummary,
           recordExitAuditEvent,
@@ -9867,7 +9867,7 @@
           confirmPendingExit = (_pending, state2) => state2 || null,
           requestPendingExitLeaveSuccessReload = () => false,
           getSelf = () => null,
-          newExitAuditRequestId: newExitAuditRequestId2 = (exitAuditId) => String(exitAuditId || "") + "-leave"
+          newExitAuditRequestId = (exitAuditId) => String(exitAuditId || "") + "-leave"
         } = runtime;
         const localStorage2 = storage;
         const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
@@ -10140,7 +10140,7 @@
           });
           await prepareDefaultClashLeaveProxy(detail);
           const request = {
-            requestId: newExitAuditRequestId2(detail.exitAuditId),
+            requestId: newExitAuditRequestId(detail.exitAuditId),
             exitAuditId: detail.exitAuditId || "",
             sentAt: Date.now(),
             completedAt: 0,
@@ -10257,7 +10257,7 @@
           getSelf = () => null,
           summarizeSelf = (value) => value,
           summarizeControl = () => null,
-          syncPausedFromPage: syncPausedFromPage2 = () => false,
+          syncPausedFromPage = () => false,
           snapshotLoginGateStatus = () => ({}),
           exitAuditFlushPending = () => false,
           exitAuditFlushBlockDetail = (reason) => ({ blocked: true, reason }),
@@ -10500,7 +10500,7 @@
           const ignoreLoginCooldown = Boolean(options.ignoreLoginCooldown || force);
           const liveSessionTakeover = options.liveSessionTakeover || null;
           const allowLiveSessionTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && liveSessionTakeover?.allowed);
-          if (syncPausedFromPage2() && !manualOverride) {
+          if (syncPausedFromPage() && !manualOverride) {
             return {
               needed: false,
               attempted: false,
@@ -12088,12 +12088,14 @@
           ensureExitAuditDetail = () => null,
           recordExitAuditEvent = () => false,
           noteImportantSessionExit = () => null,
+          newExitAuditRequestId = (exitAuditId) => String(exitAuditId || "") + "-leave",
           logStatus = () => {
           },
           updateBotPanel = () => {
           },
           removeTargetOverlay = () => {
           },
+          syncPausedFromPage = () => false,
           stopMotionSafely = () => {
           },
           stopMotionAfterExit = () => {
@@ -25772,7 +25774,7 @@
           summarizePendingCombatLeave,
           summarizePursuit,
           summarizeSessionMismatchRecoveryStatus,
-          syncPausedFromPage: syncPausedFromPage2,
+          syncPausedFromPage,
           updatePursuitTracking
         } = runtimeDomainContexts.control || {};
         const {
@@ -26831,7 +26833,7 @@
           summarizePendingCombatLeave,
           summarizePursuit,
           summarizeSessionMismatchRecoveryStatus,
-          syncPausedFromPage: syncPausedFromPage2,
+          syncPausedFromPage,
           updatePursuitTracking
         } = runtimeDomainContexts.control || {};
         const {
@@ -27010,7 +27012,7 @@
               if (cfg.once) bot.stop("once");
               return;
             }
-            if (syncPausedFromPage2()) {
+            if (syncPausedFromPage()) {
               bot.lastDecision = {
                 kind: "idle",
                 reason: "paused",
@@ -28130,7 +28132,7 @@
           summarizeSelf,
           summarizeSessionMismatchRecoveryStatus,
           summarizeStamina,
-          syncPausedFromPage: syncPausedFromPage2,
+          syncPausedFromPage,
           uniqueVisibleRouteCoinsCore,
           updateBotPanel,
           updateKillHistory,
@@ -28383,7 +28385,7 @@
         const {
           clearPostExitTargetState,
           readPauseReason,
-          syncPausedFromPage: syncPausedFromPage2,
+          syncPausedFromPage,
           getOwnEntity,
           logStatus
         } = createEntryGlueRuntime({
@@ -28427,7 +28429,7 @@
           forceLoginNow: (...args) => forceLoginNow(...args),
           configureCombatLogging: (...args) => configureCombatLogging(...args),
           tick: (...args) => tick(...args),
-          syncPausedFromPage: (...args) => syncPausedFromPage2(...args),
+          syncPausedFromPage: (...args) => syncPausedFromPage(...args),
           triggerNativeTick: (...args) => triggerNativeTick(...args),
           getSelf: (...args) => getSelf(...args),
           summarizeSelf: (...args) => summarizeSelf(...args),
@@ -28711,7 +28713,7 @@
           restorePersistedExitAuditLogs,
           restorePersistedCombatLogPendingEntries,
           persistCombatLogPendingEntries,
-          newExitAuditRequestId: newExitAuditRequestId2,
+          newExitAuditRequestId,
           ensureExitAuditDetail,
           recordExitAuditEvent,
           combatLogSuspendReason,
@@ -28939,9 +28941,11 @@
           ensureExitAuditDetail,
           recordExitAuditEvent,
           noteImportantSessionExit,
+          newExitAuditRequestId,
           logStatus,
           updateBotPanel,
           removeTargetOverlay,
+          syncPausedFromPage: (...args) => syncPausedFromPage(...args),
           stopMotionSafely: (...args) => stopMotionSafely(...args),
           stopMotionAfterExit: (...args) => stopMotionAfterExit(...args),
           clearCombatEngagement: (...args) => clearCombatEngagement(...args),
@@ -29905,7 +29909,7 @@
           summarizeSelf,
           summarizeSessionMismatchRecoveryStatus,
           summarizeStamina,
-          syncPausedFromPage: syncPausedFromPage2,
+          syncPausedFromPage,
           uniqueVisibleRouteCoinsCore,
           updateBotPanel,
           updateKillHistory,
