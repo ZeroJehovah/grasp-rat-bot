@@ -23,6 +23,9 @@ const {
   createNoSelfSnapshotRecoveryRuntime
 } = require('../browser/runtime/no-self-snapshot-recovery-runtime');
 const {
+  createSessionRecoveryRuntime
+} = require('../browser/runtime/session-recovery-runtime');
+const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
   deriveTargetWhitelistUrl
@@ -9240,6 +9243,8 @@ function runSelfTest() {
             result.preservedUserIdInput,
             result.closedNativeWs,
             closed,
+            Boolean(result.recoveryMarker),
+            data.has('graspRatNoSelfSnapshotRecovery'),
             botState.control.hasToken,
             botState.pendingExit,
             botState.offlineSince,
@@ -9249,7 +9254,53 @@ function runSelfTest() {
           global.document = oldDocument;
         }
       })(),
-      want: 'true|true|true|28886|true|true|true|false|null|0|true'
+      want: 'true|true|true|28886|true|true|true|true|true|false|null|0|true'
+    },
+    {
+      name: 'snapshot no-self recovery marker suppresses repeat leave state',
+      got: (() => {
+        const t = Date.now();
+        const data = new Map([
+          ['graspRatNoSelfSnapshotRecovery', JSON.stringify({
+            reason: 'snapshot-no-self-exit-confirmed',
+            userId: 28886,
+            requestedAt: t,
+            expiresAt: t + 60000
+          })]
+        ]);
+        const storage = {
+          getItem: key => (data.has(key) ? data.get(key) : null),
+          setItem: (key, value) => data.set(key, String(value)),
+          removeItem: key => data.delete(key)
+        };
+        const runtime = createSessionRecoveryRuntime({
+          bot: { globalState: { entities: [], snapshotRefreshedAt: 101000 } },
+          cfg: { ...cfg, gameSessionNoSelfLeaveMs: 30000, loginCooldownMs: 5000 },
+          storage,
+          getCurrentUserId: () => 28886,
+          snapshotDataAgeMs: () => 1000,
+          snapshotSelfFreshEnough: () => true,
+          hasLoginRequiredText: () => false,
+          findLoginControl: () => null,
+          isOfflineishWsReadyState: () => false
+        });
+        const state = runtime.noSelfGameSessionExitState({
+          currentUserId: 28886,
+          hasToken: false,
+          connecting: true,
+          wsReadyState: 0,
+          nativeWsReadyState: 0,
+          transport: 'native-page'
+        }, 45000);
+        return [
+          state.active,
+          state.shouldLeave,
+          state.sessionMismatch,
+          Boolean(state.snapshotExitRecovery),
+          state.snapshotExitRecovery?.userId
+        ].map(String).join('|');
+      })(),
+      want: 'false|false|false|true|28886'
     },
     {
       name: 'post-exit session mismatch blocks live takeover bypass',

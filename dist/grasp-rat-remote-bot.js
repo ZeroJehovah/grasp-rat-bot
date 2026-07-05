@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.566" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.567" };
     }
   });
 
@@ -10286,6 +10286,113 @@
     }
   });
 
+  // src/browser/runtime/no-self-snapshot-recovery-state.js
+  var require_no_self_snapshot_recovery_state = __commonJS({
+    "src/browser/runtime/no-self-snapshot-recovery-state.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY = "graspRatNoSelfSnapshotRecovery";
+      var DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS = 30 * 60 * 1e3;
+      function finiteNumber(value, fallback = 0) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+      }
+      function normalizeNoSelfSnapshotRecoveryState(value, t = Date.now()) {
+        let raw = value;
+        if (typeof raw === "string") {
+          try {
+            raw = JSON.parse(raw || "null");
+          } catch (_) {
+            raw = null;
+          }
+        }
+        if (!raw || typeof raw !== "object") return null;
+        const requestedAt = finiteNumber(raw.requestedAt || raw.at, 0);
+        const expiresAt = finiteNumber(raw.expiresAt, requestedAt ? requestedAt + DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS : 0);
+        if (!requestedAt || expiresAt && t > expiresAt) return null;
+        return {
+          schemaVersion: 1,
+          reason: String(raw.reason || "snapshot-no-self-exit-confirmed"),
+          userId: finiteNumber(raw.userId || raw.currentUserId, 0) || null,
+          requestedAt,
+          expiresAt,
+          source: String(raw.source || "fresh-snapshot-missing-self"),
+          noSelfAgeMs: Math.max(0, Math.round(finiteNumber(raw.noSelfAgeMs, 0))),
+          snapshotAgeMs: Number.isFinite(Number(raw.snapshotAgeMs)) ? Math.max(0, Math.round(Number(raw.snapshotAgeMs))) : null,
+          pageTimeOrigin: finiteNumber(raw.pageTimeOrigin, 0) || 0,
+          ageMs: Math.max(0, Math.round(t - requestedAt)),
+          remainingMs: Math.max(0, Math.round(expiresAt - t))
+        };
+      }
+      function readNoSelfSnapshotRecoveryState(storage, options = {}) {
+        const key = options.key || DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY;
+        const t = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+        let raw = null;
+        try {
+          raw = storage?.getItem ? storage.getItem(key) : null;
+        } catch (_) {
+          raw = null;
+        }
+        const state2 = normalizeNoSelfSnapshotRecoveryState(raw, t);
+        if (!state2 && raw) {
+          try {
+            storage?.removeItem?.(key);
+          } catch (_) {
+          }
+        }
+        return state2;
+      }
+      function activeNoSelfSnapshotRecoveryState(storage, userId = 0, options = {}) {
+        const state2 = readNoSelfSnapshotRecoveryState(storage, options);
+        if (!state2) return null;
+        const currentUserId = finiteNumber(userId, 0) || 0;
+        if (state2.userId && currentUserId && state2.userId !== currentUserId) return null;
+        return state2;
+      }
+      function writeNoSelfSnapshotRecoveryState(storage, detail = {}, options = {}) {
+        const t = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+        const ttlMs = Math.max(1e4, finiteNumber(options.ttlMs, DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS));
+        const state2 = normalizeNoSelfSnapshotRecoveryState({
+          schemaVersion: 1,
+          reason: detail.reason || "snapshot-no-self-exit-confirmed",
+          userId: detail.userId,
+          requestedAt: t,
+          expiresAt: t + ttlMs,
+          source: detail.source || "fresh-snapshot-missing-self",
+          noSelfAgeMs: detail.noSelfAgeMs,
+          snapshotAgeMs: detail.snapshotAgeMs,
+          pageTimeOrigin: detail.pageTimeOrigin
+        }, t);
+        let error = "";
+        try {
+          storage?.setItem?.(options.key || DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY, JSON.stringify(state2));
+        } catch (err) {
+          error = err?.message || String(err);
+        }
+        return { state: state2, error };
+      }
+      function clearNoSelfSnapshotRecoveryState(storage, options = {}) {
+        const key = options.key || DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY;
+        let error = "";
+        try {
+          storage?.removeItem?.(key);
+        } catch (err) {
+          error = err?.message || String(err);
+        }
+        return { clearedAt: Date.now(), reason: String(options.reason || "resolved"), error };
+      }
+      module.exports = {
+        DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+        DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS,
+        normalizeNoSelfSnapshotRecoveryState,
+        readNoSelfSnapshotRecoveryState,
+        activeNoSelfSnapshotRecoveryState,
+        writeNoSelfSnapshotRecoveryState,
+        clearNoSelfSnapshotRecoveryState
+      };
+    }
+  });
+
   // src/browser/runtime/leave-flow-runtime.js
   var require_leave_flow_runtime = __commonJS({
     "src/browser/runtime/leave-flow-runtime.js"(exports, module) {
@@ -10305,12 +10412,18 @@
         pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,
         startExitAuditBoundCore
       } = require_exit_relogin();
+      var {
+        DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+        activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
+        clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
+      } = require_no_self_snapshot_recovery_state();
       function createLeaveFlowRuntime(runtime = {}) {
         const {
           bot,
           cfg,
           storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
           pageGlobal = typeof window !== "undefined" ? window : null,
+          noSelfSnapshotRecoveryKey = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
           loginSuppressKey = "",
           loginSuppressReasonKey = "",
           enemyLeaveStateKey = "",
@@ -10374,6 +10487,7 @@
         const LOGIN_SUPPRESS_KEY = loginSuppressKey;
         const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
         const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
+        const NO_SELF_SNAPSHOT_RECOVERY_KEY = noSelfSnapshotRecoveryKey;
         function summarizePursuit(pursuit = bot.pursuit) {
           if (!pursuit) return null;
           const t = now();
@@ -10610,10 +10724,15 @@
           const loginRequired = hasLoginRequiredText();
           const self = getSelf();
           const hasAliveSelf = Boolean(self && isAlive(self));
+          const snapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+          if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: "self restored before login" });
+          const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
           const currentStartLinuxDoLogin = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
           const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === "function");
-          const hasPageSession = Boolean(hasToken || hasNativeSession);
-          const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || force && canStartLogin && (!hasNativeSession || allowLiveSessionTakeoverBypass));
+          const effectiveHasToken = ignoreStalePageSession ? false : hasToken;
+          const effectiveHasNativeSession = ignoreStalePageSession ? false : hasNativeSession;
+          const hasPageSession = Boolean(effectiveHasToken || effectiveHasNativeSession);
+          const needsLogin = !hasAliveSelf && (loginRequired || !hasPageSession || force && canStartLogin && (!effectiveHasNativeSession || allowLiveSessionTakeoverBypass));
           if (!needsLogin) {
             return force ? {
               needed: false,
@@ -10623,6 +10742,9 @@
               forced: true,
               hasToken,
               hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
               snapshotGate: snapshotLoginGateStatus(),
@@ -10643,6 +10765,9 @@
               importantLogFlush: blocked,
               hasToken,
               hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
               snapshotGate: snapshotLoginGateStatus(),
@@ -10663,6 +10788,9 @@
               suppressReason: localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "login flow",
               hasToken,
               hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
               snapshotGate: snapshotLoginGateStatus(),
@@ -10679,6 +10807,9 @@
               error: lastError,
               hasToken,
               hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
               snapshotGate: snapshotLoginGateStatus(),
@@ -10703,6 +10834,9 @@
               snapshotGate,
               hasToken,
               hasNativeSession,
+              effectiveHasToken,
+              effectiveHasNativeSession,
+              snapshotExitRecovery,
               nativeWsReadyState: native?.wsReadyState ?? null,
               currentUserId: userId,
               liveSessionTakeover
@@ -10714,6 +10848,9 @@
             reason,
             hasToken,
             hasNativeSession,
+            effectiveHasToken,
+            effectiveHasNativeSession,
+            snapshotExitRecovery,
             nativeWsReadyState: native?.wsReadyState ?? null,
             currentUserId: userId,
             loginRequired,
@@ -11086,6 +11223,10 @@
         enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForSessionRecoveryBoundCore,
         offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForSessionRecoveryBoundCore
       } = require_exit_relogin();
+      var {
+        DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+        activeNoSelfSnapshotRecoveryState
+      } = require_no_self_snapshot_recovery_state();
       function createSessionRecoveryRuntime(runtime = {}) {
         const {
           bot,
@@ -11094,6 +11235,7 @@
           pendingExitStateKey,
           sessionMismatchRecoveryKey,
           cloudflareReloadKey,
+          noSelfSnapshotRecoveryKey = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
           loginSuppressKey,
           loginSuppressReasonKey,
           enemyLeaveStateKey,
@@ -11137,6 +11279,7 @@
         const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
         const SESSION_MISMATCH_RECOVERY_KEY = sessionMismatchRecoveryKey;
         const CLOUDFLARE_RELOAD_KEY = cloudflareReloadKey;
+        const NO_SELF_SNAPSHOT_RECOVERY_KEY = noSelfSnapshotRecoveryKey;
         const LOGIN_SUPPRESS_KEY = loginSuppressKey;
         const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
         const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
@@ -11478,9 +11621,10 @@
           const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
           const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
           const snapshotSelf = snapshotSelfPresenceState(userId);
-          const hasSessionEvidence = Boolean(userId && !loginRequired && (control?.hasToken || controlHasNativeGameSession(control) || snapshotSelf.present || control?.transport === "native-page" || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState)) || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))));
+          const snapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+          const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && !loginRequired && (control?.hasToken || controlHasNativeGameSession(control) || snapshotSelf.present || control?.transport === "native-page" || Number.isFinite(wsReadyStateNumber(control?.nativeWsReadyState)) || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))));
           const reconnectChurn = Boolean(control?.nativeReconnectChurn);
-          const sessionMismatch = controlHasAuthoritativeSessionMismatch(control, snapshotSelf);
+          const sessionMismatch = Boolean(!snapshotExitRecovery && controlHasAuthoritativeSessionMismatch(control, snapshotSelf));
           const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
           const leaveMs = Math.max(0, Number(cfg.gameSessionNoSelfLeaveMs || 0) || 0);
           const timedOut = Boolean(leaveMs && ageMs >= leaveMs);
@@ -11507,6 +11651,7 @@
             leaveMs,
             timedOut,
             sessionMismatch,
+            snapshotExitRecovery,
             snapshotSelf,
             mismatchLeaveMs,
             mismatchTimedOut,
@@ -11834,6 +11979,14 @@
     "src/browser/runtime/no-self-snapshot-recovery-runtime.js"(exports, module) {
       "use strict";
       init_define_GRASP_RAT_RUNTIME_CONFIG();
+      var {
+        DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+        DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS,
+        readNoSelfSnapshotRecoveryState: readNoSelfSnapshotRecoveryStateCore,
+        activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
+        writeNoSelfSnapshotRecoveryState,
+        clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
+      } = require_no_self_snapshot_recovery_state();
       function wsReadyStateNumber(value) {
         if (value === null || value === void 0 || value === "") return NaN;
         const n = Number(value);
@@ -11847,6 +12000,9 @@
         const {
           bot,
           storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          transientStorage = typeof sessionStorage !== "undefined" ? sessionStorage : null,
+          noSelfSnapshotRecoveryKey = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+          noSelfSnapshotRecoveryTtlMs = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS,
           getCurrentUserId = () => 0,
           getNativeControl = () => null,
           snapshotSelfPresenceState = () => ({ known: false, fresh: false, present: false }),
@@ -11859,6 +12015,8 @@
           }
         } = runtime;
         const localStorage2 = storage;
+        const browserSessionStorage = transientStorage;
+        const NO_SELF_SNAPSHOT_RECOVERY_KEY = noSelfSnapshotRecoveryKey;
         function noSelfSnapshotExitConfirmationState(control, noSelfExit, t = Date.now()) {
           const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || 0;
           const snapshotSelf = noSelfExit?.snapshotSelf || snapshotSelfPresenceState(userId);
@@ -11909,6 +12067,31 @@
             return false;
           }
         }
+        function removeStorageKey(store, key, label, removedKeys, storageErrors) {
+          try {
+            if (!store?.getItem || !store?.removeItem) return;
+            const hadValue = store.getItem(key) !== null;
+            store.removeItem(key);
+            if (hadValue) removedKeys.push(label);
+          } catch (err) {
+            storageErrors.push({ key: label, error: err?.message || String(err) });
+          }
+        }
+        function readNoSelfSnapshotRecoveryState(t = Date.now()) {
+          const state2 = readNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, now: t });
+          bot.noSelfSnapshotRecovery = state2;
+          return state2;
+        }
+        function activeNoSelfSnapshotRecoveryState(userId = getCurrentUserId(), t = Date.now()) {
+          const state2 = activeNoSelfSnapshotRecoveryStateCore(localStorage2, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, now: t });
+          bot.noSelfSnapshotRecovery = state2;
+          return state2;
+        }
+        function clearNoSelfSnapshotRecoveryState(reason = "resolved") {
+          const result = clearNoSelfSnapshotRecoveryStateCore(localStorage2, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason });
+          bot.noSelfSnapshotRecovery = null;
+          return result;
+        }
         function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = "snapshot no-self exit confirmed") {
           const t = Date.now();
           const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, t);
@@ -11917,14 +12100,22 @@
           const removedKeys = [];
           const storageErrors = [];
           for (const key of ["tmpGameSessionToken", "tmpGameUserId"]) {
-            try {
-              const hadValue = localStorage2.getItem(key) !== null;
-              localStorage2.removeItem(key);
-              if (hadValue) removedKeys.push(key);
-            } catch (err) {
-              storageErrors.push({ key, error: err?.message || String(err) });
-            }
+            removeStorageKey(localStorage2, key, key, removedKeys, storageErrors);
+            removeStorageKey(browserSessionStorage, key, "sessionStorage." + key, removedKeys, storageErrors);
           }
+          const markerResult = writeNoSelfSnapshotRecoveryState(localStorage2, {
+            reason: "snapshot-no-self-exit-confirmed",
+            userId,
+            source: confirmation.source,
+            noSelfAgeMs: confirmation.noSelfAgeMs,
+            snapshotAgeMs: confirmation.snapshotSelf?.snapshotAgeMs,
+            pageTimeOrigin: Number((typeof performance === "object" && performance ? performance.timeOrigin : 0) || 0) || 0
+          }, {
+            key: NO_SELF_SNAPSHOT_RECOVERY_KEY,
+            ttlMs: noSelfSnapshotRecoveryTtlMs,
+            now: t
+          });
+          bot.noSelfSnapshotRecovery = markerResult.state;
           const preservedUserIdInput = preserveUserIdInput(userId);
           let closedNativeWs = false;
           let closeNativeWsError = "";
@@ -11958,6 +12149,8 @@
             clearReason: String(reason || "snapshot no-self exit confirmed"),
             removedKeys,
             storageErrors,
+            recoveryMarker: markerResult.state,
+            recoveryMarkerError: markerResult.error,
             preservedUserIdInput,
             closedNativeWs,
             closeNativeWsError,
@@ -12014,6 +12207,9 @@
         }
         return {
           noSelfSnapshotExitConfirmationState,
+          readNoSelfSnapshotRecoveryState,
+          activeNoSelfSnapshotRecoveryState,
+          clearNoSelfSnapshotRecoveryState,
           clearNoSelfSnapshotLocalSession,
           handleNoSelfSnapshotExitRecovery,
           runNoSelfSnapshotExitRecovery

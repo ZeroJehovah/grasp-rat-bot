@@ -1,5 +1,14 @@
 'use strict';
 
+const {
+  DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+  DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS,
+  readNoSelfSnapshotRecoveryState: readNoSelfSnapshotRecoveryStateCore,
+  activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
+  writeNoSelfSnapshotRecoveryState,
+  clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
+} = require('./no-self-snapshot-recovery-state');
+
 function wsReadyStateNumber(value) {
   if (value === null || value === undefined || value === '') return NaN;
   const n = Number(value);
@@ -15,6 +24,9 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
   const {
     bot,
     storage = typeof localStorage !== 'undefined' ? localStorage : null,
+    transientStorage = typeof sessionStorage !== 'undefined' ? sessionStorage : null,
+    noSelfSnapshotRecoveryKey = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+    noSelfSnapshotRecoveryTtlMs = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_TTL_MS,
     getCurrentUserId = () => 0,
     getNativeControl = () => null,
     snapshotSelfPresenceState = () => ({ known: false, fresh: false, present: false }),
@@ -25,6 +37,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     updateBotPanel = () => {}
   } = runtime;
   const localStorage = storage;
+  const browserSessionStorage = transientStorage;
+  const NO_SELF_SNAPSHOT_RECOVERY_KEY = noSelfSnapshotRecoveryKey;
 
   function noSelfSnapshotExitConfirmationState(control, noSelfExit, t = Date.now()) {
     const userId = Number(control?.currentUserId || getCurrentUserId() || noSelfExit?.userId || 0) || 0;
@@ -76,6 +90,35 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     }
   }
 
+  function removeStorageKey(store, key, label, removedKeys, storageErrors) {
+    try {
+      if (!store?.getItem || !store?.removeItem) return;
+      const hadValue = store.getItem(key) !== null;
+      store.removeItem(key);
+      if (hadValue) removedKeys.push(label);
+    } catch (err) {
+      storageErrors.push({ key: label, error: err?.message || String(err) });
+    }
+  }
+
+  function readNoSelfSnapshotRecoveryState(t = Date.now()) {
+    const state = readNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, now: t });
+    bot.noSelfSnapshotRecovery = state;
+    return state;
+  }
+
+  function activeNoSelfSnapshotRecoveryState(userId = getCurrentUserId(), t = Date.now()) {
+    const state = activeNoSelfSnapshotRecoveryStateCore(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, now: t });
+    bot.noSelfSnapshotRecovery = state;
+    return state;
+  }
+
+  function clearNoSelfSnapshotRecoveryState(reason = 'resolved') {
+    const result = clearNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason });
+    bot.noSelfSnapshotRecovery = null;
+    return result;
+  }
+
   function clearNoSelfSnapshotLocalSession(control, noSelfExit, reason = 'snapshot no-self exit confirmed') {
     const t = Date.now();
     const confirmation = noSelfSnapshotExitConfirmationState(control, noSelfExit, t);
@@ -84,14 +127,22 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
     const removedKeys = [];
     const storageErrors = [];
     for (const key of ['tmpGameSessionToken', 'tmpGameUserId']) {
-      try {
-        const hadValue = localStorage.getItem(key) !== null;
-        localStorage.removeItem(key);
-        if (hadValue) removedKeys.push(key);
-      } catch (err) {
-        storageErrors.push({ key, error: err?.message || String(err) });
-      }
+      removeStorageKey(localStorage, key, key, removedKeys, storageErrors);
+      removeStorageKey(browserSessionStorage, key, 'sessionStorage.' + key, removedKeys, storageErrors);
     }
+    const markerResult = writeNoSelfSnapshotRecoveryState(localStorage, {
+      reason: 'snapshot-no-self-exit-confirmed',
+      userId,
+      source: confirmation.source,
+      noSelfAgeMs: confirmation.noSelfAgeMs,
+      snapshotAgeMs: confirmation.snapshotSelf?.snapshotAgeMs,
+      pageTimeOrigin: Number((typeof performance === 'object' && performance ? performance.timeOrigin : 0) || 0) || 0
+    }, {
+      key: NO_SELF_SNAPSHOT_RECOVERY_KEY,
+      ttlMs: noSelfSnapshotRecoveryTtlMs,
+      now: t
+    });
+    bot.noSelfSnapshotRecovery = markerResult.state;
     const preservedUserIdInput = preserveUserIdInput(userId);
     let closedNativeWs = false;
     let closeNativeWsError = '';
@@ -125,6 +176,8 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
       clearReason: String(reason || 'snapshot no-self exit confirmed'),
       removedKeys,
       storageErrors,
+      recoveryMarker: markerResult.state,
+      recoveryMarkerError: markerResult.error,
       preservedUserIdInput,
       closedNativeWs,
       closeNativeWsError,
@@ -190,6 +243,9 @@ function createNoSelfSnapshotRecoveryRuntime(runtime = {}) {
 
   return {
     noSelfSnapshotExitConfirmationState,
+    readNoSelfSnapshotRecoveryState,
+    activeNoSelfSnapshotRecoveryState,
+    clearNoSelfSnapshotRecoveryState,
     clearNoSelfSnapshotLocalSession,
     handleNoSelfSnapshotExitRecovery,
     runNoSelfSnapshotExitRecovery

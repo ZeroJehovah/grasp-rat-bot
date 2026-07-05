@@ -14,6 +14,11 @@ const {
   pursuitLeaveSummaryCore: pursuitLeaveSummaryForLeaveFlowCore,
   startExitAuditBoundCore
 } = require('./exit-relogin');
+const {
+  DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+  activeNoSelfSnapshotRecoveryState: activeNoSelfSnapshotRecoveryStateCore,
+  clearNoSelfSnapshotRecoveryState: clearNoSelfSnapshotRecoveryStateCore
+} = require('./no-self-snapshot-recovery-state');
 
 function createLeaveFlowRuntime(runtime = {}) {
   const {
@@ -21,6 +26,7 @@ function createLeaveFlowRuntime(runtime = {}) {
     cfg,
     storage = typeof localStorage !== 'undefined' ? localStorage : null,
     pageGlobal = typeof window !== 'undefined' ? window : null,
+    noSelfSnapshotRecoveryKey = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
     loginSuppressKey = '',
     loginSuppressReasonKey = '',
     enemyLeaveStateKey = '',
@@ -82,6 +88,7 @@ function createLeaveFlowRuntime(runtime = {}) {
   const LOGIN_SUPPRESS_KEY = loginSuppressKey;
   const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
   const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
+  const NO_SELF_SNAPSHOT_RECOVERY_KEY = noSelfSnapshotRecoveryKey;
 
   function summarizePursuit(pursuit = bot.pursuit) {
 	    if (!pursuit) return null;
@@ -351,13 +358,18 @@ function createLeaveFlowRuntime(runtime = {}) {
     const loginRequired = hasLoginRequiredText();
     const self = getSelf();
     const hasAliveSelf = Boolean(self && isAlive(self));
+    const snapshotExitRecovery = activeNoSelfSnapshotRecoveryStateCore(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+    if (snapshotExitRecovery && hasAliveSelf) clearNoSelfSnapshotRecoveryStateCore(localStorage, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY, reason: 'self restored before login' });
+    const ignoreStalePageSession = Boolean(snapshotExitRecovery && !hasAliveSelf);
     const currentStartLinuxDoLogin = readPageGlobal('startLinuxDoLogin', null, pageGlobal);
     const canStartLogin = Boolean(loginControl || typeof currentStartLinuxDoLogin === 'function');
-    const hasPageSession = Boolean(hasToken || hasNativeSession);
+    const effectiveHasToken = ignoreStalePageSession ? false : hasToken;
+    const effectiveHasNativeSession = ignoreStalePageSession ? false : hasNativeSession;
+    const hasPageSession = Boolean(effectiveHasToken || effectiveHasNativeSession);
     const needsLogin = !hasAliveSelf && (
       loginRequired
         || !hasPageSession
-        || (force && canStartLogin && (!hasNativeSession || allowLiveSessionTakeoverBypass))
+        || (force && canStartLogin && (!effectiveHasNativeSession || allowLiveSessionTakeoverBypass))
     );
 	    if (!needsLogin) {
 	      return force ? {
@@ -368,6 +380,9 @@ function createLeaveFlowRuntime(runtime = {}) {
         forced: true,
         hasToken,
         hasNativeSession,
+        effectiveHasToken,
+        effectiveHasNativeSession,
+        snapshotExitRecovery,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        snapshotGate: snapshotLoginGateStatus(),
@@ -388,6 +403,9 @@ function createLeaveFlowRuntime(runtime = {}) {
 	        importantLogFlush: blocked,
 	        hasToken,
 	        hasNativeSession,
+	        effectiveHasToken,
+	        effectiveHasNativeSession,
+	        snapshotExitRecovery,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        snapshotGate: snapshotLoginGateStatus(),
@@ -408,6 +426,9 @@ function createLeaveFlowRuntime(runtime = {}) {
         suppressReason: localStorage.getItem(LOGIN_SUPPRESS_REASON_KEY) || 'login flow',
 	        hasToken,
 	        hasNativeSession,
+	        effectiveHasToken,
+	        effectiveHasNativeSession,
+	        snapshotExitRecovery,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        snapshotGate: snapshotLoginGateStatus(),
@@ -424,6 +445,9 @@ function createLeaveFlowRuntime(runtime = {}) {
         error: lastError,
 	        hasToken,
 	        hasNativeSession,
+	        effectiveHasToken,
+	        effectiveHasNativeSession,
+	        snapshotExitRecovery,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        snapshotGate: snapshotLoginGateStatus(),
@@ -450,6 +474,9 @@ function createLeaveFlowRuntime(runtime = {}) {
 	        snapshotGate,
 	        hasToken,
 	        hasNativeSession,
+	        effectiveHasToken,
+	        effectiveHasNativeSession,
+	        snapshotExitRecovery,
 	        nativeWsReadyState: native?.wsReadyState ?? null,
 	        currentUserId: userId,
 	        liveSessionTakeover
@@ -461,6 +488,9 @@ function createLeaveFlowRuntime(runtime = {}) {
       reason,
       hasToken,
       hasNativeSession,
+      effectiveHasToken,
+      effectiveHasNativeSession,
+      snapshotExitRecovery,
       nativeWsReadyState: native?.wsReadyState ?? null,
       currentUserId: userId,
 	      loginRequired,

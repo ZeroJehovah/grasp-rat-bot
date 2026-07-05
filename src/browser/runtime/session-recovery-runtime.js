@@ -11,6 +11,10 @@ const {
   enemyReloginHoldRemainingMsBoundCore: enemyReloginHoldRemainingMsForSessionRecoveryBoundCore,
   offlineReloginHoldRemainingMsBoundCore: offlineReloginHoldRemainingMsForSessionRecoveryBoundCore
 } = require('./exit-relogin');
+const {
+  DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
+  activeNoSelfSnapshotRecoveryState
+} = require('./no-self-snapshot-recovery-state');
 
 function createSessionRecoveryRuntime(runtime = {}) {
   const {
@@ -20,6 +24,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
     pendingExitStateKey,
     sessionMismatchRecoveryKey,
     cloudflareReloadKey,
+    noSelfSnapshotRecoveryKey = DEFAULT_NO_SELF_SNAPSHOT_RECOVERY_KEY,
     loginSuppressKey,
     loginSuppressReasonKey,
     enemyLeaveStateKey,
@@ -60,6 +65,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
   const PENDING_EXIT_STATE_KEY = pendingExitStateKey;
   const SESSION_MISMATCH_RECOVERY_KEY = sessionMismatchRecoveryKey;
   const CLOUDFLARE_RELOAD_KEY = cloudflareReloadKey;
+  const NO_SELF_SNAPSHOT_RECOVERY_KEY = noSelfSnapshotRecoveryKey;
   const LOGIN_SUPPRESS_KEY = loginSuppressKey;
   const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
   const ENEMY_LEAVE_STATE_KEY = enemyLeaveStateKey;
@@ -426,7 +432,8 @@ function createSessionRecoveryRuntime(runtime = {}) {
     const userId = Number(control?.currentUserId || getCurrentUserId() || 0);
     const loginRequired = Boolean(hasLoginRequiredText() || findLoginControl());
     const snapshotSelf = snapshotSelfPresenceState(userId);
-    const hasSessionEvidence = Boolean(userId && !loginRequired && (
+    const snapshotExitRecovery = activeNoSelfSnapshotRecoveryState(localStorage, userId, { key: NO_SELF_SNAPSHOT_RECOVERY_KEY });
+    const hasSessionEvidence = Boolean(!snapshotExitRecovery && userId && !loginRequired && (
       control?.hasToken
       || controlHasNativeGameSession(control)
       || snapshotSelf.present
@@ -435,7 +442,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
       || Number.isFinite(wsReadyStateNumber(control?.wsReadyState))
     ));
     const reconnectChurn = Boolean(control?.nativeReconnectChurn);
-    const sessionMismatch = controlHasAuthoritativeSessionMismatch(control, snapshotSelf);
+    const sessionMismatch = Boolean(!snapshotExitRecovery && controlHasAuthoritativeSessionMismatch(control, snapshotSelf));
     const ageMs = Math.max(0, Math.round(Number(noSelfAgeMs || 0) || 0));
     const leaveMs = Math.max(0, Number(cfg.gameSessionNoSelfLeaveMs || 0) || 0);
     const timedOut = Boolean(leaveMs && ageMs >= leaveMs);
@@ -471,6 +478,7 @@ function createSessionRecoveryRuntime(runtime = {}) {
       leaveMs,
       timedOut,
       sessionMismatch,
+      snapshotExitRecovery,
       snapshotSelf,
       mismatchLeaveMs,
       mismatchTimedOut,
