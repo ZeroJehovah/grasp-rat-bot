@@ -42,7 +42,7 @@ Implementation status:
 - [x] Commit 2 - Add Dependency Width Guards
 - [x] Commit 3 - Introduce Runtime Domain Contexts
 - [x] Commit 4 - Move Orchestration Composition To Domain Contexts
-- [ ] Commit 5 - Move Orchestration Decision To Domain Contexts
+- [x] Commit 5 - Move Orchestration Decision To Domain Contexts
 - [ ] Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
 - [ ] Commit 7 - Split Remaining Control-Flow Owners
 - [ ] Commit 8 - Final Documentation, Budgets, And Release Closeout
@@ -271,6 +271,8 @@ Completion criteria:
 
 - Decision runtime no longer receives a 200+ field flat object.
 - Profit priority and combat native/realtime-only constraints remain verified.
+
+Completed in `bootstrap-0.4.549`: `createOrchestrationDecisionRuntime()` now accepts `domainContexts`, resolves grouped bootstrap/state/entity/native/control/profit/combat/logging/ui/safety dependencies, and keeps its old flat-runtime fallback only for compatibility. `createOrchestrationRuntime()` builds `decisionDomainContexts` by merging the composed orchestration safety helpers into the named contexts before creating decision bindings. Static verification now guards this wiring, keeps the decision line budget under `1160`, and tightens the decision dependency-width budget to `1/10`.
 
 ### Commit 6 - Move Orchestration Tick And Startup To Domain Contexts
 
