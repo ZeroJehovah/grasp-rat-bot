@@ -35,6 +35,9 @@ const REQUIRED_DIST_TOKENS = [
   'function createEntityStateRuntime',
   'function createExitDetailRuntime',
   'function createEntryGlueRuntime',
+  'function createPostLoginZoomRuntime',
+  'function createLoginPointSafetyRuntime',
+  'function createControlLoginRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -167,6 +170,9 @@ async function main() {
   const runtimeEntityStateSource = readText('src/browser/runtime/entity-state-runtime.js');
   const runtimeExitDetailSource = readText('src/browser/runtime/exit-detail-runtime.js');
   const runtimeEntryGlueSource = readText('src/browser/runtime/entry-glue-runtime.js');
+  const runtimePostLoginZoomSource = readText('src/browser/runtime/post-login-zoom-runtime.js');
+  const runtimeLoginPointSafetySource = readText('src/browser/runtime/login-point-safety-runtime.js');
+  const runtimeControlLoginSource = readText('src/browser/runtime/control-login-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
@@ -384,14 +390,55 @@ async function main() {
     assert(runtimeTickSafetySource.includes('function runCallbackSafely'), 'callback safety wrapper missing from module');
   });
 
-  check('control flow runtime owns login exit pending exit and leave flow bodies', () => {
+  check('control login gate runtimes own extracted login safety bodies', () => {
     assert(runtimeEntrySource.includes("require('./runtime/control-flow-runtime')"), 'runtime entry does not import control flow runtime module');
     assert(runtimeEntrySource.includes('createControlFlowRuntime({'), 'runtime entry does not create control flow runtime bindings');
+    assert(runtimeControlFlowSource.includes("require('./post-login-zoom-runtime')"), 'control flow runtime does not import post-login zoom runtime');
+    assert(runtimeControlFlowSource.includes("require('./login-point-safety-runtime')"), 'control flow runtime does not import login-point safety runtime');
+    assert(runtimeControlFlowSource.includes("require('./control-login-runtime')"), 'control flow runtime does not import control-login runtime');
+    assert(runtimeControlFlowSource.includes('createPostLoginZoomRuntime({'), 'control flow runtime does not create post-login zoom bindings');
+    assert(runtimeControlFlowSource.includes('createLoginPointSafetyRuntime({'), 'control flow runtime does not create login-point safety bindings');
+    assert(runtimeControlFlowSource.includes('createControlLoginRuntime({'), 'control flow runtime does not create control-login bindings');
+    assert(!/function\s+schedulePostLoginZoomOut\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns post-login zoom scheduling body');
+    assert(!/function\s+noteSelfUnavailableForPostLoginZoom\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns post-login zoom self-unavailable body');
+    assert(!/function\s+loginPointSafetyStatus\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login-point safety status body');
+    assert(!/function\s+resetLoginPointSafetyGate\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login-point safety reset body');
+    assert(!/function\s+maybeRecordLoginPoint\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login-point recording body');
+    assert(!/function\s+noteLoginSnapshotProbe\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login snapshot probe body');
+    assert(!/function\s+snapshotLoginGateStatus\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login snapshot gate status body');
+    assert(!/function\s+loginSnapshotGateAllowsLogin\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login snapshot allow body');
+    assert(!/function\s+loginSnapshotGateDisplayReason\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns login snapshot display reason body');
+    assert(!/function\s+markManualLoginBypass\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns manual login bypass body');
+    assert(!/function\s+manualLoginBypassActive\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns manual login bypass active body');
+    assert(!/function\s+installStartLinuxDoLoginGate\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns startLinuxDoLogin gate body');
+    assert(!/function\s+installNativeLoginGateInterceptors\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns native login interceptor body');
+    assert(runtimePostLoginZoomSource.includes('function createPostLoginZoomRuntime'), 'post-login zoom runtime factory missing');
+    assert(runtimePostLoginZoomSource.includes('function schedulePostLoginZoomOut'), 'post-login zoom scheduling body missing from module');
+    assert(runtimePostLoginZoomSource.includes('function noteSelfUnavailableForPostLoginZoom'), 'post-login zoom self-unavailable body missing from module');
+    assert(runtimeLoginPointSafetySource.includes('function createLoginPointSafetyRuntime'), 'login-point safety runtime factory missing');
+    assert(runtimeLoginPointSafetySource.includes('function loginPointSafetyStatus'), 'login-point safety status body missing from module');
+    assert(runtimeLoginPointSafetySource.includes('function resetLoginPointSafetyGate'), 'login-point safety reset body missing from module');
+    assert(runtimeLoginPointSafetySource.includes('function maybeRecordLoginPoint'), 'login-point recording body missing from module');
+    assert(runtimeLoginPointSafetySource.includes('function noteLoginPointSafetyProbe'), 'login-point safety probe body missing from module');
+    assert(runtimeLoginPointSafetySource.includes('function inferLoginPointLoginAt'), 'login-point login-time inference missing from module');
+    assert(runtimeLoginPointSafetySource.includes('loginSuppressKey'), 'login-point safety module does not receive login suppress key dependency');
+    assert(runtimeControlLoginSource.includes('function createControlLoginRuntime'), 'control-login runtime factory missing');
+    assert(runtimeControlLoginSource.includes('function findLoginControl'), 'login control finder missing from module');
+    assert(runtimeControlLoginSource.includes('function hasLoginRequiredText'), 'login required text detector missing from module');
+    assert(runtimeControlLoginSource.includes('function setLoginSuppress'), 'login suppress body missing from module');
+    assert(runtimeControlLoginSource.includes('function snapshotLoginGateStatus'), 'login snapshot gate status body missing from module');
+    assert(runtimeControlLoginSource.includes('function noteLoginSnapshotProbe'), 'login snapshot probe body missing from module');
+    assert(runtimeControlLoginSource.includes('function ensureLoginSnapshotGate'), 'login snapshot gate ensure body missing from module');
+    assert(runtimeControlLoginSource.includes('function markManualLoginBypass'), 'manual login bypass body missing from module');
+    assert(runtimeControlLoginSource.includes('function installStartLinuxDoLoginGate'), 'startLinuxDoLogin gate body missing from module');
+    assert(runtimeControlLoginSource.includes('function installNativeLoginGateInterceptors'), 'native login interceptor body missing from module');
+  });
+
+  check('control flow runtime owns remaining reload exit pending exit and leave flow bodies', () => {
     assert(!/function\s+requestReload\s*\(/.test(runtimeEntrySource), 'runtime entry still owns reload request body');
     assert(!/function\s+handlePendingExit\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pending exit body');
     assert(!/async\s+function\s+maybeStartAutoLogin\s*\(/.test(runtimeEntrySource), 'runtime entry still owns auto-login body');
     assert(!/async\s+function\s+leaveOffline\s*\(/.test(runtimeEntrySource), 'runtime entry still owns offline leave body');
-    assert(!/function\s+loginPointSafetyStatus\s*\(/.test(runtimeEntrySource), 'runtime entry still owns login-point safety body');
     assert(!/function\s+updatePursuitTracking\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pursuit tracking body');
     assert(!/async\s+function\s+issueLeaveCommand\s*\(/.test(runtimeEntrySource), 'runtime entry still owns leave command body');
     assert(runtimeControlFlowSource.includes('function createControlFlowRuntime'), 'control flow runtime factory missing');
@@ -399,7 +446,6 @@ async function main() {
     assert(runtimeControlFlowSource.includes('async function handlePendingExit'), 'pending exit body missing from control flow module');
     assert(runtimeControlFlowSource.includes('async function maybeStartAutoLogin'), 'auto-login body missing from control flow module');
     assert(runtimeControlFlowSource.includes('async function leaveOffline'), 'offline leave body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('function loginPointSafetyStatus'), 'login-point safety body missing from control flow module');
     assert(runtimeControlFlowSource.includes('function updatePursuitTracking'), 'pursuit tracking body missing from control flow module');
     assert(runtimeControlFlowSource.includes('async function issueLeaveCommand'), 'leave command body missing from control flow module');
   });

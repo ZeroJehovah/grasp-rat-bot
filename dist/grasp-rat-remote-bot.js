@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.535" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.536" };
     }
   });
 
@@ -6976,6 +6976,1352 @@
     }
   });
 
+  // src/browser/runtime/post-login-zoom-runtime.js
+  var require_post_login_zoom_runtime = __commonJS({
+    "src/browser/runtime/post-login-zoom-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function createPostLoginZoomRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          pageGlobal = typeof window !== "undefined" ? window : null,
+          botKey = "",
+          readPageGlobal = () => null,
+          getCurrentUserId = () => 0,
+          getSessionToken = () => "",
+          getNativeState = () => null
+        } = runtime;
+        const BOT_KEY = botKey;
+        function isVisible(el) {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        }
+        function controlText(el) {
+          return (el?.innerText || el?.value || el?.getAttribute?.("aria-label") || el?.getAttribute?.("title") || "").trim();
+        }
+        function describeControl(el) {
+          if (!el) return "";
+          if (el.id) return "#" + el.id;
+          const text = controlText(el);
+          if (text) return text;
+          return String(el.tagName || "").toLowerCase();
+        }
+        function requestNativeViewportResize(reason = "bot") {
+          try {
+            window.dispatchEvent(new Event("resize"));
+            bot.lastNativeViewportResizeRequest = {
+              at: Date.now(),
+              reason: String(reason || "bot")
+            };
+            return true;
+          } catch (err) {
+            bot.lastNativeViewportResizeRequest = {
+              at: Date.now(),
+              reason: String(reason || "bot"),
+              error: err?.message || String(err)
+            };
+            return false;
+          }
+        }
+        function findZoomControl(direction = "out") {
+          const out = String(direction || "out") !== "in";
+          const directSelector = out ? '#zoomOutBtn, [data-testid="zoom-out"], [aria-label="zoom out"], [aria-label="Zoom out"]' : '#zoomInBtn, [data-testid="zoom-in"], [aria-label="zoom in"], [aria-label="Zoom in"]';
+          const direct = document.querySelector(directSelector);
+          if (direct) return direct;
+          const candidates = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"]'));
+          return candidates.find((el) => {
+            const text = controlText(el);
+            return out ? /zoom\s*out|缩小|缩放-|地图-|视图-/i.test(text) : /zoom\s*in|放大|缩放\+|地图\+|视图\+/i.test(text);
+          }) || null;
+        }
+        function findZoomOutControl() {
+          return findZoomControl("out");
+        }
+        function clickZoomControl(direction = "out") {
+          const out = String(direction || "out") !== "in";
+          const control = findZoomControl(out ? "out" : "in");
+          const label = out ? "zoom-out" : "zoom-in";
+          if (!control) return { clicked: false, error: label + " control not found", direction: out ? "out" : "in" };
+          if (control.disabled) return { clicked: false, error: label + " control disabled", control: describeControl(control), direction: out ? "out" : "in" };
+          try {
+            control.click();
+            return { clicked: true, control: describeControl(control), direction: out ? "out" : "in" };
+          } catch (err) {
+            return { clicked: false, error: err?.message || String(err), control: describeControl(control), direction: out ? "out" : "in" };
+          }
+        }
+        function clickZoomOutControl() {
+          return clickZoomControl("out");
+        }
+        function postLoginZoomScaleTextRadiusCm() {
+          const text = String(document.getElementById("scaleText")?.textContent || "");
+          const match = text.match(/r\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b/i);
+          if (!match) return 0;
+          const value = Number(match[1]);
+          if (!Number.isFinite(value) || value <= 0) return 0;
+          return /km/i.test(match[2]) ? value * 1e5 : value * 100;
+        }
+        function postLoginZoomCurrentViewRadiusCm() {
+          const nativeState = getNativeState();
+          const values = [
+            postLoginZoomScaleTextRadiusCm(),
+            nativeState?.viewRadiusCm,
+            nativeState?.view_radius_cm,
+            nativeState?.viewRadius,
+            nativeState?.view_radius
+          ];
+          for (const value of values) {
+            const radius = Number(value);
+            if (Number.isFinite(radius) && radius > 0) return radius;
+          }
+          return 0;
+        }
+        function postLoginZoomTargetRadiusCm() {
+          const configured = Number(cfg.postLoginZoomFitRadiusCm || 0);
+          if (Number.isFinite(configured) && configured > 0) return configured;
+          const nativeAuthority = Number(cfg.nativeCoinAuthoritativeRadius || 0);
+          return Number.isFinite(nativeAuthority) && nativeAuthority > 0 ? nativeAuthority : 5e4;
+        }
+        function postLoginZoomFitBounds() {
+          const targetRatio = Math.min(0.99, Math.max(0.5, Number(cfg.postLoginZoomFitTargetRatio || 0.96) || 0.96));
+          const tolerance = Math.max(5e-3, Number(cfg.postLoginZoomFitTolerance || 0.04) || 0.04);
+          return {
+            targetRatio,
+            minRatio: Math.max(0.1, targetRatio - tolerance),
+            maxRatio: Math.min(1, targetRatio + tolerance)
+          };
+        }
+        function postLoginZoomViewElements() {
+          const world = document.getElementById("world") || document.querySelector(".map-shell canvas") || document.querySelector(".map-shell");
+          const shell = world?.closest?.(".map-shell") || document.querySelector(".map-shell") || world?.parentElement || null;
+          if (!world || !shell) return null;
+          const worldRect = world.getBoundingClientRect();
+          const shellRect = shell.getBoundingClientRect();
+          if (!(worldRect.width > 0) || !(worldRect.height > 0) || !(shellRect.width > 0) || !(shellRect.height > 0)) return null;
+          return {
+            world,
+            shell,
+            width: shellRect.width,
+            height: shellRect.height,
+            worldWidth: worldRect.width,
+            worldHeight: worldRect.height,
+            worldOffsetX: worldRect.left - shellRect.left,
+            worldOffsetY: worldRect.top - shellRect.top
+          };
+        }
+        function postLoginZoomProjection(selfSummary, view) {
+          if (typeof targetOverlayProjection === "function") {
+            const projection = targetOverlayProjection(selfSummary, view);
+            if (projection) return projection;
+          }
+          const radius = postLoginZoomCurrentViewRadiusCm();
+          const shortSide = Math.max(1, Math.min(Number(view?.worldWidth || view?.width || 1), Number(view?.worldHeight || view?.height || 1)));
+          const units = Math.max(1, radius || postLoginZoomTargetRadiusCm()) * 2 / shortSide;
+          return {
+            units,
+            cx: Number(view?.worldWidth || view?.width || 0) / 2,
+            cy: Number(view?.worldHeight || view?.height || 0) / 2,
+            centerX: Number(selfSummary?.x || 0),
+            centerY: Number(selfSummary?.y || 0),
+            offsetX: Number(view?.worldOffsetX || 0),
+            offsetY: Number(view?.worldOffsetY || 0),
+            source: "post-login-fallback"
+          };
+        }
+        function postLoginZoomSelfScreenPoint(selfSummary, view, projection) {
+          if (typeof targetOverlayPoint === "function") {
+            const point = targetOverlayPoint(selfSummary, selfSummary, view, projection);
+            if (point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))) return point;
+          }
+          return {
+            x: (Number(projection?.offsetX) || 0) + Number(projection?.cx || 0),
+            y: (Number(projection?.offsetY) || 0) + Number(projection?.cy || 0)
+          };
+        }
+        function postLoginZoomFitMeasurement(selfSummary) {
+          const view = postLoginZoomViewElements();
+          if (!view) return { ok: false, error: "map view not found" };
+          const projection = postLoginZoomProjection(selfSummary, view);
+          const units = Number(projection?.units);
+          if (!Number.isFinite(units) || units <= 0) return { ok: false, error: "view projection unavailable" };
+          const center = postLoginZoomSelfScreenPoint(selfSummary, view, projection);
+          const centerX = Number(center?.x);
+          const centerY = Number(center?.y);
+          if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return { ok: false, error: "self screen point unavailable" };
+          const paddingPx = Math.max(0, Number(cfg.postLoginZoomFitPaddingPx || 0) || 0);
+          const availablePx = Math.min(centerX, Number(view.width || 0) - centerX, centerY, Number(view.height || 0) - centerY) - paddingPx;
+          if (!(availablePx > 0)) return { ok: false, error: "no visible room for view circle" };
+          const radiusCm = postLoginZoomTargetRadiusCm();
+          const circleRadiusPx = radiusCm / units;
+          const fitRatio = circleRadiusPx / availablePx;
+          const bounds = postLoginZoomFitBounds();
+          return {
+            ok: true,
+            radiusCm: Math.round(radiusCm),
+            viewRadiusCm: Math.round(postLoginZoomCurrentViewRadiusCm() || 0),
+            units: Number(units.toFixed(2)),
+            circleRadiusPx: Math.round(circleRadiusPx),
+            availablePx: Math.round(availablePx),
+            paddingPx: Math.round(paddingPx),
+            centerX: Math.round(centerX),
+            centerY: Math.round(centerY),
+            width: Math.round(Number(view.width || 0)),
+            height: Math.round(Number(view.height || 0)),
+            fitRatio: Number(fitRatio.toFixed(3)),
+            targetRatio: bounds.targetRatio,
+            minRatio: Number(bounds.minRatio.toFixed(3)),
+            maxRatio: Number(bounds.maxRatio.toFixed(3)),
+            source: projection.source || ""
+          };
+        }
+        function postLoginZoomFitDecision(measure) {
+          if (!measure?.ok) return { done: false, direction: "out", reason: measure?.error || "unmeasured" };
+          const ratio = Number(measure.fitRatio);
+          const maxRatio = Number(measure.maxRatio);
+          if (!Number.isFinite(ratio) || !Number.isFinite(maxRatio)) {
+            return { done: false, direction: "out", reason: "invalid-ratio" };
+          }
+          if (ratio > maxRatio) return { done: false, direction: "out", reason: "circle-clipped" };
+          return { done: true, direction: "", reason: "visible-range-fit" };
+        }
+        function postLoginZoomWheelTarget() {
+          const view = postLoginZoomViewElements();
+          return view?.world || view?.shell || document.getElementById("world") || document.querySelector(".map-shell") || document.body;
+        }
+        function dispatchPostLoginZoomWheel(direction = "out") {
+          const target = postLoginZoomWheelTarget();
+          if (!target || typeof WheelEvent !== "function") return { dispatched: false, method: "wheel", error: "wheel target unavailable", direction };
+          const out = String(direction || "out") !== "in";
+          const rect = typeof target.getBoundingClientRect === "function" ? target.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth || 1, height: window.innerHeight || 1 };
+          const delta = Math.max(1, Number(cfg.postLoginZoomWheelDeltaY || 100) || 100);
+          const event = new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            deltaMode: 0,
+            deltaX: 0,
+            deltaY: out ? delta : -delta,
+            clientX: Number(rect.left || 0) + Math.max(1, Number(rect.width || 1)) / 2,
+            clientY: Number(rect.top || 0) + Math.max(1, Number(rect.height || 1)) / 2
+          });
+          const notCanceled = target.dispatchEvent(event);
+          return {
+            dispatched: true,
+            method: "wheel",
+            direction: out ? "out" : "in",
+            deltaY: out ? delta : -delta,
+            target: describeControl(target),
+            defaultPrevented: Boolean(event.defaultPrevented),
+            canceled: !notCanceled
+          };
+        }
+        function postLoginZoomStepImproved(before, after, direction) {
+          if (!before?.ok || !after?.ok) return false;
+          const beforeRatio = Number(before.fitRatio);
+          const afterRatio = Number(after.fitRatio);
+          if (!Number.isFinite(beforeRatio) || !Number.isFinite(afterRatio)) return false;
+          const minimumChange = 4e-3;
+          return String(direction || "out") !== "in" && afterRatio <= beforeRatio - minimumChange;
+        }
+        function finishPostLoginZoomResult(state2, status, detail = {}) {
+          const latest = state2.lastResult || {};
+          state2.lastResult = {
+            ...latest,
+            ...detail,
+            status,
+            finishedAt: Date.now()
+          };
+          return state2.lastResult;
+        }
+        function currentBotIsInstalled() {
+          return readPageGlobal(BOT_KEY, null, pageGlobal) === bot;
+        }
+        function schedulePostLoginZoomFallbackClicks(state2, reason = "") {
+          const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
+          const latest = state2.lastResult || {};
+          latest.fallbackReason = reason || latest.fallbackReason || "";
+          latest.fallbackRequestedClicks = clicks;
+          latest.requestedClicks = clicks;
+          state2.lastResult = latest;
+          if (!clicks) return finishPostLoginZoomResult(state2, "failed", { lastError: reason || "fit measurement unavailable" });
+          const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
+          for (let index = 0; index < clicks; index += 1) {
+            setTimeout(() => {
+              if (!currentBotIsInstalled() || !bot.running) return;
+              requestNativeViewportResize("post-login-zoom-fallback-click-" + (index + 1));
+              const result = clickZoomOutControl();
+              const current = state2.lastResult || {};
+              current.completedClicks = Number(current.completedClicks || 0) + (result.clicked ? 1 : 0);
+              current.failedClicks = Number(current.failedClicks || 0) + (result.clicked ? 0 : 1);
+              current.lastError = result.error || current.lastError || "";
+              current.lastAction = result;
+              current.control = result.control || current.control || "";
+              current.finishedAt = Date.now();
+              state2.lastResult = current;
+              requestNativeViewportResize("post-login-zoom-after-fallback-click-" + (index + 1));
+            }, index * intervalMs);
+          }
+          setTimeout(() => {
+            if (!currentBotIsInstalled() || !bot.running) return;
+            finishPostLoginZoomResult(state2, "fallback-clicks");
+          }, clicks * intervalMs + 20);
+          return state2.lastResult;
+        }
+        function schedulePostLoginZoomFitStep(selfSummary, stepIndex = 0, delayMs = 0) {
+          setTimeout(() => {
+            if (!currentBotIsInstalled() || !bot.running) return;
+            const state2 = bot.postLoginZoom;
+            if (!state2?.lastResult) return;
+            const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24));
+            requestNativeViewportResize("post-login-zoom-fit-step-" + (stepIndex + 1));
+            const before = postLoginZoomFitMeasurement(selfSummary);
+            const decision = postLoginZoomFitDecision(before);
+            const latest = state2.lastResult || {};
+            latest.lastMeasure = before;
+            latest.fitRatio = before?.ok ? before.fitRatio : null;
+            latest.viewRadiusCm = before?.ok ? before.viewRadiusCm : null;
+            latest.lastDecision = decision;
+            state2.lastResult = latest;
+            if (!before?.ok && stepIndex === 0) {
+              schedulePostLoginZoomFallbackClicks(state2, before?.error || "fit measurement unavailable");
+              return;
+            }
+            if (decision.done) {
+              finishPostLoginZoomResult(state2, "fit", { lastError: "" });
+              return;
+            }
+            if (stepIndex >= maxSteps) {
+              finishPostLoginZoomResult(state2, "max-steps", { lastError: "post-login zoom fit max steps reached" });
+              return;
+            }
+            const action = dispatchPostLoginZoomWheel(decision.direction);
+            latest.wheelSteps = Number(latest.wheelSteps || 0) + (action.dispatched ? 1 : 0);
+            latest.failedWheelSteps = Number(latest.failedWheelSteps || 0) + (action.dispatched ? 0 : 1);
+            latest.lastAction = action;
+            latest.lastError = action.error || "";
+            state2.lastResult = latest;
+            const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
+            setTimeout(() => {
+              if (!currentBotIsInstalled() || !bot.running) return;
+              const current = state2.lastResult || {};
+              const after = postLoginZoomFitMeasurement(selfSummary);
+              current.lastMeasure = after;
+              current.fitRatio = after?.ok ? after.fitRatio : current.fitRatio;
+              current.viewRadiusCm = after?.ok ? after.viewRadiusCm : current.viewRadiusCm;
+              if (!postLoginZoomStepImproved(before, after, decision.direction)) {
+                const fallback = clickZoomControl(decision.direction);
+                current.fallbackClicks = Number(current.fallbackClicks || 0) + 1;
+                current.completedClicks = Number(current.completedClicks || 0) + (fallback.clicked ? 1 : 0);
+                current.failedClicks = Number(current.failedClicks || 0) + (fallback.clicked ? 0 : 1);
+                current.lastAction = { ...fallback, method: "button-fallback" };
+                current.lastError = fallback.error || current.lastError || "";
+                current.control = fallback.control || current.control || "";
+              }
+              state2.lastResult = current;
+              schedulePostLoginZoomFitStep(selfSummary, stepIndex + 1, intervalMs);
+            }, intervalMs);
+          }, delayMs);
+        }
+        function postLoginZoomSessionKey(selfSummary) {
+          const userId = selfSummary?.user_id ?? getCurrentUserId() ?? "";
+          const token = getSessionToken();
+          if (token) return String(userId) + ":token:" + String(token).slice(0, 24);
+          return String(userId) + ":generation:" + Number(bot.postLoginZoom?.generation || 0);
+        }
+        function noteSelfUnavailableForPostLoginZoom() {
+          const state2 = bot.postLoginZoom;
+          if (!state2) return;
+          const t = Date.now();
+          if (!state2.missingSince) state2.missingSince = t;
+          const missingMs = Math.max(0, t - Number(state2.missingSince || t));
+          if (missingMs < Math.max(0, Number(cfg.postLoginZoomArmMissingMs || 0))) return;
+          if (!state2.armed) {
+            state2.generation = Number(state2.generation || 0) + 1;
+            state2.armed = true;
+            state2.scheduledKey = "";
+          }
+        }
+        function schedulePostLoginZoomOut(selfSummary) {
+          const state2 = bot.postLoginZoom;
+          if (!state2) return null;
+          const t = Date.now();
+          state2.lastSeenSelfAt = t;
+          state2.missingSince = 0;
+          const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
+          if (!state2.armed) return null;
+          const key = postLoginZoomSessionKey(selfSummary);
+          if (!key || state2.appliedKey === key || state2.scheduledKey === key) return null;
+          state2.armed = false;
+          state2.appliedKey = key;
+          state2.scheduledKey = key;
+          state2.scheduledAt = t;
+          const fitBounds = postLoginZoomFitBounds();
+          state2.lastResult = {
+            key,
+            mode: "fit-visible-range",
+            scheduledAt: t,
+            startDelayMs: Math.max(0, Number(cfg.postLoginZoomStartDelayMs || 0) || 0),
+            requestedRadiusCm: Math.round(postLoginZoomTargetRadiusCm()),
+            targetRatio: fitBounds.targetRatio,
+            minRatio: Number(fitBounds.minRatio.toFixed(3)),
+            maxRatio: Number(fitBounds.maxRatio.toFixed(3)),
+            maxSteps: Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24)),
+            fallbackRequestedClicks: clicks,
+            completedClicks: 0,
+            failedClicks: 0,
+            wheelSteps: 0,
+            failedWheelSteps: 0,
+            fallbackClicks: 0,
+            lastError: ""
+          };
+          requestNativeViewportResize("post-login-zoom-schedule");
+          setTimeout(() => requestNativeViewportResize("post-login-zoom-before-clicks"), state2.lastResult.startDelayMs);
+          schedulePostLoginZoomFitStep(selfSummary, 0, state2.lastResult.startDelayMs);
+          return state2.lastResult;
+        }
+        return {
+          isVisible,
+          controlText,
+          describeControl,
+          requestNativeViewportResize,
+          findZoomControl,
+          findZoomOutControl,
+          clickZoomControl,
+          clickZoomOutControl,
+          postLoginZoomScaleTextRadiusCm,
+          postLoginZoomCurrentViewRadiusCm,
+          postLoginZoomTargetRadiusCm,
+          postLoginZoomFitBounds,
+          postLoginZoomViewElements,
+          postLoginZoomProjection,
+          postLoginZoomSelfScreenPoint,
+          postLoginZoomFitMeasurement,
+          postLoginZoomFitDecision,
+          postLoginZoomWheelTarget,
+          dispatchPostLoginZoomWheel,
+          postLoginZoomStepImproved,
+          finishPostLoginZoomResult,
+          currentBotIsInstalled,
+          schedulePostLoginZoomFallbackClicks,
+          schedulePostLoginZoomFitStep,
+          postLoginZoomSessionKey,
+          noteSelfUnavailableForPostLoginZoom,
+          schedulePostLoginZoomOut
+        };
+      }
+      module.exports = {
+        createPostLoginZoomRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/login-point-safety-runtime.js
+  var require_login_point_safety_runtime = __commonJS({
+    "src/browser/runtime/login-point-safety-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function createLoginPointSafetyRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          loginPointSafetyKey = "",
+          loginSuppressKey = "",
+          loginSuppressReasonKey = "",
+          getCurrentUserId = () => 0,
+          dropValue = () => 0,
+          truthyFlag = (value) => Boolean(value),
+          staminaRemaining = () => null,
+          staminaLimitValue = (_entity, _windowName, fallback) => fallback,
+          isJoinModeActive = () => false,
+          isFiringEntity = () => false,
+          isMovingThreat = () => false,
+          isAlive = (value) => Boolean(value),
+          isInvulnerable = () => false
+        } = runtime;
+        const localStorage2 = storage;
+        const LOGIN_POINT_SAFETY_KEY = loginPointSafetyKey;
+        const LOGIN_SUPPRESS_KEY = loginSuppressKey;
+        const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
+        function loginPointSafetySuccessRequired() {
+          return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 3) || 3));
+        }
+        function optionalFiniteNumber(value) {
+          if (value === void 0 || value === null || value === "") return null;
+          const n = Number(value);
+          return Number.isFinite(n) ? n : null;
+        }
+        function loginPointSafetyLastExitHp(state2 = null) {
+          return optionalFiniteNumber(
+            state2?.lastExitSelfHp ?? state2?.lastExitHp ?? state2?.lastExitSelf?.hp ?? state2?.lastExitSelf?.selfHp
+          );
+        }
+        function loginPointSafetyHealthyHpThreshold() {
+          return Math.max(0, Number(cfg.loginPointSafetyHealthyHpThreshold ?? 80) || 80);
+        }
+        function loginPointSafetyLowHpRadius() {
+          return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 3e4) || 3e4);
+        }
+        function loginPointSafetyHealthyRadius() {
+          return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 17e3) || 17e3);
+        }
+        function loginPointSafetyRadiusInfo(state2 = null) {
+          const lastExitSelfHp = loginPointSafetyLastExitHp(state2);
+          const healthyHpThreshold = loginPointSafetyHealthyHpThreshold();
+          const lowHpRadius = loginPointSafetyLowHpRadius();
+          const healthyRadius = loginPointSafetyHealthyRadius();
+          const healthyExit = Number.isFinite(lastExitSelfHp) && lastExitSelfHp >= healthyHpThreshold;
+          return {
+            radius: healthyExit ? healthyRadius : lowHpRadius,
+            lowHpRadius,
+            healthyRadius,
+            healthyHpThreshold,
+            lastExitSelfHp: Number.isFinite(lastExitSelfHp) ? lastExitSelfHp : null,
+            lastExitSelfHpKnown: Number.isFinite(lastExitSelfHp),
+            radiusReason: healthyExit ? "last-exit-hp-healthy" : "last-exit-hp-low-or-unknown"
+          };
+        }
+        function loginPointSafetyRadius(state2 = null) {
+          return loginPointSafetyRadiusInfo(state2).radius;
+        }
+        function loginPointSafetyDayKey(t = Date.now()) {
+          const d = new Date(t);
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, "0");
+          const day = String(d.getDate()).padStart(2, "0");
+          return year + "-" + month + "-" + day;
+        }
+        function finiteNumber(...values) {
+          for (const value of values) {
+            const n = Number(value);
+            if (Number.isFinite(n)) return n;
+          }
+          return NaN;
+        }
+        function loginPointSafetyExitSelfHpFrom(...values) {
+          for (const value of values) {
+            if (value === void 0 || value === null) continue;
+            if (typeof value === "object") {
+              const nested = loginPointSafetyExitSelfHpFrom(
+                value.hp,
+                value.selfHp,
+                value.currentHp,
+                value.self?.hp,
+                value.self?.selfHp,
+                value.summary?.hp,
+                value.detail?.self?.hp
+              );
+              if (Number.isFinite(nested)) return nested;
+              continue;
+            }
+            const n = optionalFiniteNumber(value);
+            if (Number.isFinite(n)) return n;
+          }
+          return NaN;
+        }
+        function loginPointSafetyExitSelfForDetail(detail = null, meta = null, fallback = null) {
+          return meta?.self || detail?.self || detail?.injury?.self || detail?.injury || detail?.combat?.self || detail?.offlineSafety?.self || fallback || null;
+        }
+        function loginPointEntityKey(entity) {
+          const id = entity?.user_id ?? entity?.userId ?? entity?.id;
+          if (id !== void 0 && id !== null && id !== "") return "id:" + String(id);
+          const name = String(entity?.name || "").trim();
+          return name ? "name:" + name : "";
+        }
+        function loginPointActorSummary(entity, extra = {}) {
+          if (!entity || typeof entity !== "object") return null;
+          const key = loginPointEntityKey(entity);
+          if (!key) return null;
+          const rawId = entity.user_id ?? entity.userId ?? entity.id;
+          return {
+            key,
+            id: rawId === void 0 || rawId === null || rawId === "" ? "" : String(rawId),
+            name: String(entity.name || ""),
+            x: Number.isFinite(Number(entity.x)) ? Math.round(Number(entity.x)) : null,
+            y: Number.isFinite(Number(entity.y)) ? Math.round(Number(entity.y)) : null,
+            drop: Math.max(0, Math.round(dropValue(entity))),
+            mode: String(entity.current_join_mode || entity.mode || ""),
+            ...extra
+          };
+        }
+        function normalizeLoginPointSafetyState(state2 = null, t = Date.now()) {
+          const source = state2 && typeof state2 === "object" ? state2 : {};
+          const required = loginPointSafetySuccessRequired();
+          const point = source.point && Number.isFinite(Number(source.point.x)) && Number.isFinite(Number(source.point.y)) ? {
+            x: Number(source.point.x),
+            y: Number(source.point.y),
+            userId: source.point.userId ?? source.point.id ?? null,
+            at: Number(source.point.at || 0) || 0,
+            tick: Number(source.point.tick || 0) || 0,
+            loginAt: Number(source.point.loginAt || 0) || 0,
+            source: String(source.point.source || "")
+          } : null;
+          const dayKey = loginPointSafetyDayKey(t);
+          const damagedBy = source.damagedBy && source.damagedBy.dayKey === dayKey ? {
+            dayKey,
+            actors: Array.isArray(source.damagedBy.actors) ? source.damagedBy.actors.filter((actor) => actor && actor.key).slice(-80) : []
+          } : { dayKey, actors: [] };
+          const movement = source.movement && typeof source.movement === "object" ? { ...source.movement } : {};
+          const lastExitSelfHp = loginPointSafetyLastExitHp(source);
+          const radiusInfo = loginPointSafetyRadiusInfo({ lastExitSelfHp });
+          return {
+            point,
+            streak: Math.max(0, Math.round(Number(source.streak || 0) || 0)),
+            required,
+            radius: radiusInfo.radius,
+            lowHpRadius: radiusInfo.lowHpRadius,
+            healthyRadius: radiusInfo.healthyRadius,
+            healthyHpThreshold: radiusInfo.healthyHpThreshold,
+            radiusReason: radiusInfo.radiusReason,
+            lastExitSelfHp: Number.isFinite(lastExitSelfHp) ? lastExitSelfHp : null,
+            lastExitSelfHpKnown: Number.isFinite(lastExitSelfHp),
+            lastExitSelfHpAt: Number(source.lastExitSelfHpAt || source.lastExitHpAt || 0) || 0,
+            lastExitSelfHpReason: String(source.lastExitSelfHpReason || source.lastExitHpReason || ""),
+            lastSampleAt: Number(source.lastSampleAt || source.lastOkAt || source.lastUnsafeAt || source.lastErrorAt || 0) || 0,
+            lastOkAt: Number(source.lastOkAt || 0) || 0,
+            lastUnsafeAt: Number(source.lastUnsafeAt || 0) || 0,
+            lastErrorAt: Number(source.lastErrorAt || 0) || 0,
+            lastError: String(source.lastError || ""),
+            lastTick: Number(source.lastTick || 0) || 0,
+            resetAt: Number(source.resetAt || 0) || 0,
+            resetReason: String(source.resetReason || ""),
+            lastDanger: source.lastDanger && typeof source.lastDanger === "object" ? { ...source.lastDanger } : null,
+            movement,
+            damagedBy
+          };
+        }
+        function loginPointHasPoint(state2) {
+          return Boolean(
+            state2?.point && Number.isFinite(Number(state2.point.x)) && Number.isFinite(Number(state2.point.y))
+          );
+        }
+        function loginPointPointStamp(state2) {
+          if (!loginPointHasPoint(state2)) return 0;
+          return Math.max(Number(state2.point.at || 0) || 0, Number(state2.point.loginAt || 0) || 0);
+        }
+        function mergeLoginPointSafetyState(memoryState, storedState, t = Date.now()) {
+          const memory = memoryState && typeof memoryState === "object" ? normalizeLoginPointSafetyState(memoryState, t) : null;
+          const stored = storedState && typeof storedState === "object" ? normalizeLoginPointSafetyState(storedState, t) : null;
+          if (!memory) return stored || normalizeLoginPointSafetyState(null, t);
+          if (!stored) return memory;
+          const memoryHasPoint = loginPointHasPoint(memory);
+          const storedHasPoint = loginPointHasPoint(stored);
+          if (storedHasPoint && (!memoryHasPoint || loginPointPointStamp(stored) > loginPointPointStamp(memory))) {
+            return stored;
+          }
+          if (Number(stored.lastExitSelfHpAt || 0) > Number(memory.lastExitSelfHpAt || 0)) {
+            return normalizeLoginPointSafetyState({
+              ...memory,
+              lastExitSelfHp: stored.lastExitSelfHp,
+              lastExitSelfHpKnown: stored.lastExitSelfHpKnown,
+              lastExitSelfHpAt: stored.lastExitSelfHpAt,
+              lastExitSelfHpReason: stored.lastExitSelfHpReason
+            }, t);
+          }
+          return memory;
+        }
+        function readLoginPointSafetyState(t = Date.now()) {
+          let stored = null;
+          try {
+            stored = JSON.parse(localStorage2.getItem(LOGIN_POINT_SAFETY_KEY) || "null");
+          } catch (_) {
+            stored = null;
+          }
+          const state2 = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
+          bot.loginPointSafety = state2;
+          return state2;
+        }
+        function writeLoginPointSafetyState(state2) {
+          bot.loginPointSafety = state2;
+          try {
+            localStorage2.setItem(LOGIN_POINT_SAFETY_KEY, JSON.stringify(state2));
+          } catch (_) {
+          }
+          return state2;
+        }
+        function loginPointDamageActorKeys(state2) {
+          return new Set((state2?.damagedBy?.actors || []).map((actor) => String(actor.key || "")).filter(Boolean));
+        }
+        function loginPointDamageEvidence(candidate, injury = {}) {
+          if (!candidate || typeof candidate !== "object") return "";
+          const rawId = candidate.user_id ?? candidate.userId ?? candidate.id;
+          const incomingOwnerId = injury?.incomingBullet?.ownerId ?? injury?.incomingBullet?.owner_id ?? candidate.incomingBulletOwnerId ?? candidate.damageEvidence?.incomingBulletOwnerId ?? null;
+          if (incomingOwnerId !== null && incomingOwnerId !== void 0 && rawId !== void 0 && rawId !== null && String(incomingOwnerId) === String(rawId)) {
+            return "incoming-bullet-owner";
+          }
+          if (truthyFlag(candidate.firing) || truthyFlag(candidate.isFiring) || truthyFlag(candidate.shooting) || truthyFlag(candidate.damageEvidence?.firing)) {
+            return "firing-near-self-hp-drop";
+          }
+          if (truthyFlag(candidate.combat) || truthyFlag(candidate.engagedCombat) || truthyFlag(candidate.damageEvidence?.combat) || String(candidate.combatIntent || candidate.damageEvidence?.combatIntent || "") === "engaged") {
+            return "combat-engaged-self-hp-drop";
+          }
+          return "";
+        }
+        function loginPointEntityMoved(state2, entity, t) {
+          const key = loginPointEntityKey(entity);
+          if (!key) return false;
+          const x = Number(entity.x);
+          const y = Number(entity.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+          const threshold = Math.max(0, Number(cfg.loginPointSafetyMoveThreshold ?? 500) || 500);
+          const previous = state2.movement?.[key] || null;
+          let moved = false;
+          if (previous && Number.isFinite(Number(previous.x)) && Number.isFinite(Number(previous.y))) {
+            moved = Math.hypot(x - Number(previous.x), y - Number(previous.y)) >= threshold;
+          }
+          if (!state2.movement || typeof state2.movement !== "object") state2.movement = {};
+          state2.movement[key] = {
+            x,
+            y,
+            at: t,
+            movedAt: moved ? t : Number(previous?.movedAt || 0) || 0
+          };
+          const entries = Object.entries(state2.movement).filter(([, item]) => t - Number(item?.at || 0) <= 10 * 60 * 1e3).slice(-300);
+          state2.movement = Object.fromEntries(entries);
+          return moved || Boolean(state2.movement[key].movedAt && t - Number(state2.movement[key].movedAt || 0) <= 10 * 60 * 1e3);
+        }
+        function loginPointActiveModeStaminaSpent(entity) {
+          const remaining = staminaRemaining(entity, "5s");
+          if (remaining === null) return false;
+          const limit = staminaLimitValue(entity, "5s", 1e4);
+          return Number.isFinite(limit) && limit > 0 && remaining < limit * cfg.staminaFullRatio;
+        }
+        function loginPointActiveModeDangerReason(state2, entity, t) {
+          if (!isJoinModeActive(entity)) return "";
+          const moved = loginPointEntityMoved(state2, entity, t);
+          if (isFiringEntity(entity)) return "active-mode-firing";
+          if (isMovingThreat(entity) || moved) return "active-mode-moving";
+          if (loginPointActiveModeStaminaSpent(entity)) return "active-mode-stamina-spent";
+          if (truthyFlag(entity.combat) || truthyFlag(entity.engagedCombat) || String(entity.combatIntent || "") === "engaged") {
+            return "active-mode-combat";
+          }
+          return "";
+        }
+        function loginPointDangerReason(state2, entity, t) {
+          if (!entity || typeof entity !== "object") return "";
+          const damagedKeys = loginPointDamageActorKeys(state2);
+          const key = loginPointEntityKey(entity);
+          if (key && damagedKeys.has(key)) return "damaged-self-today";
+          const activeModeReason = loginPointActiveModeDangerReason(state2, entity, t);
+          if (activeModeReason) return activeModeReason;
+          return "";
+        }
+        function evaluateLoginPointSafety(state2, detail = {}, t = Date.now()) {
+          if (!state2.point) return { safe: true, reason: "no-login-point", danger: null };
+          const entities = Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities;
+          if (!Array.isArray(entities)) {
+            return { safe: false, reason: "snapshot-entities-missing", danger: null };
+          }
+          const point = state2.point;
+          const radius = loginPointSafetyRadius(state2);
+          for (const entity of entities) {
+            if (!entity || typeof entity !== "object") continue;
+            if (!isAlive(entity) || isInvulnerable(entity)) continue;
+            const id = Number(entity.user_id ?? entity.userId ?? entity.id ?? NaN);
+            if (Number.isFinite(id) && Number(point.userId ?? NaN) === id) continue;
+            const x = Number(entity.x);
+            const y = Number(entity.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            const distance = Math.hypot(x - Number(point.x), y - Number(point.y));
+            if (!(distance <= radius)) continue;
+            const reason = loginPointDangerReason(state2, entity, t);
+            if (!reason) continue;
+            return {
+              safe: false,
+              reason,
+              danger: loginPointActorSummary(entity, {
+                distance: Math.round(distance)
+              })
+            };
+          }
+          return { safe: true, reason: "safe", danger: null };
+        }
+        function noteLoginPointSafetyProbe(success, detail = {}) {
+          const t = Date.now();
+          const state2 = readLoginPointSafetyState(t);
+          state2.required = loginPointSafetySuccessRequired();
+          state2.radius = loginPointSafetyRadius(state2);
+          state2.lastSampleAt = t;
+          state2.lastTick = Number(detail.tick || state2.lastTick || 0) || 0;
+          if (!loginPointHasPoint(state2)) {
+            state2.streak = 0;
+            state2.lastDanger = null;
+            if (success) {
+              state2.lastOkAt = 0;
+              state2.lastError = "";
+            } else {
+              state2.lastErrorAt = t;
+              state2.lastError = String(detail.error || detail.message || "snapshot failed");
+            }
+            writeLoginPointSafetyState(state2);
+            return loginPointSafetyStatus(t);
+          }
+          let ok = Boolean(success);
+          let safety = { safe: ok, reason: ok ? "safe" : "snapshot-error", danger: null };
+          if (ok) {
+            safety = evaluateLoginPointSafety(state2, detail, t);
+            ok = Boolean(safety.safe);
+          }
+          if (ok) {
+            state2.streak = Math.min(state2.required, Math.max(0, Number(state2.streak || 0)) + 1);
+            state2.lastOkAt = t;
+            state2.lastError = "";
+            state2.lastDanger = null;
+          } else {
+            state2.streak = 0;
+            if (success) {
+              state2.lastUnsafeAt = t;
+              state2.lastDanger = {
+                reason: safety.reason || "unsafe",
+                actor: safety.danger || null,
+                at: t
+              };
+              state2.lastError = "";
+            } else {
+              state2.lastErrorAt = t;
+              state2.lastError = String(detail.error || detail.message || "snapshot failed");
+              state2.lastDanger = null;
+            }
+          }
+          writeLoginPointSafetyState(state2);
+          return loginPointSafetyStatus(t);
+        }
+        function loginPointSafetyStatus(t = Date.now()) {
+          const state2 = readLoginPointSafetyState(t);
+          const required = loginPointSafetySuccessRequired();
+          const hasPoint = Boolean(state2.point);
+          const lastSampleAt = Number(state2.lastSampleAt || state2.lastOkAt || state2.lastUnsafeAt || state2.lastErrorAt || 0) || 0;
+          const radiusInfo = loginPointSafetyRadiusInfo(state2);
+          return {
+            ...state2,
+            required,
+            radius: radiusInfo.radius,
+            lowHpRadius: radiusInfo.lowHpRadius,
+            healthyRadius: radiusInfo.healthyRadius,
+            healthyHpThreshold: radiusInfo.healthyHpThreshold,
+            radiusReason: radiusInfo.radiusReason,
+            lastExitSelfHp: radiusInfo.lastExitSelfHp,
+            lastExitSelfHpKnown: radiusInfo.lastExitSelfHpKnown,
+            hasPoint,
+            missingPoint: !hasPoint && required > 0,
+            satisfied: required <= 0 || hasPoint && state2.streak >= required,
+            remaining: hasPoint ? Math.max(0, required - state2.streak) : required,
+            lastSampleAt,
+            lastOkAgeMs: state2.lastOkAt ? Math.max(0, Math.round(t - Number(state2.lastOkAt || t))) : null,
+            lastUnsafeAgeMs: state2.lastUnsafeAt ? Math.max(0, Math.round(t - Number(state2.lastUnsafeAt || t))) : null,
+            lastErrorAgeMs: state2.lastErrorAt ? Math.max(0, Math.round(t - Number(state2.lastErrorAt || t))) : null,
+            lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
+          };
+        }
+        function resetLoginPointSafetyGate(reason = "exit", exitSelfLike = null) {
+          const t = Date.now();
+          const state2 = readLoginPointSafetyState(t);
+          const exitHp = loginPointSafetyExitSelfHpFrom(exitSelfLike);
+          state2.streak = 0;
+          state2.lastDanger = null;
+          state2.lastError = "";
+          state2.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null;
+          state2.lastExitSelfHpKnown = Number.isFinite(exitHp);
+          state2.lastExitSelfHpAt = t;
+          state2.lastExitSelfHpReason = String(reason || "exit");
+          state2.radius = loginPointSafetyRadius(state2);
+          state2.resetAt = t;
+          state2.resetReason = String(reason || "exit");
+          writeLoginPointSafetyState(state2);
+          return loginPointSafetyStatus(t);
+        }
+        function rememberLoginPointDamageThreat(injury, reason = "self-damage") {
+          const t = Date.now();
+          const state2 = readLoginPointSafetyState(t);
+          const candidates = [
+            injury?.nearestActive,
+            injury?.nearestAvoidance,
+            injury?.nearestHuman
+          ].filter((candidate) => Boolean(loginPointDamageEvidence(candidate, injury)));
+          if (!candidates.length) return state2;
+          const existing = new Map((state2.damagedBy?.actors || []).map((actor) => [String(actor.key || ""), actor]));
+          for (const candidate of candidates) {
+            const evidence = loginPointDamageEvidence(candidate, injury);
+            const actor = loginPointActorSummary(candidate, { at: t, reason, evidence });
+            if (!actor?.key) continue;
+            existing.set(actor.key, { ...existing.get(actor.key) || {}, ...actor, at: t, reason });
+          }
+          state2.damagedBy = {
+            dayKey: loginPointSafetyDayKey(t),
+            actors: Array.from(existing.values()).slice(-80)
+          };
+          writeLoginPointSafetyState(state2);
+          return state2;
+        }
+        function maybeRecordLoginPoint(currentSummary) {
+          if (!currentSummary || !Number.isFinite(Number(currentSummary.x)) || !Number.isFinite(Number(currentSummary.y))) return null;
+          const t = Date.now();
+          const loginAt = inferLoginPointLoginAt(t);
+          if (!loginAt) return null;
+          const maxAge = Math.max(Number(cfg.postLoginGraceMs || 45e3) * 2, 6e4);
+          if (t - loginAt > maxAge) return null;
+          const state2 = readLoginPointSafetyState(t);
+          if (Number(state2.point?.loginAt || 0) >= loginAt) return state2;
+          bot.lastLoginAt = loginAt;
+          state2.point = {
+            x: Number(currentSummary.x),
+            y: Number(currentSummary.y),
+            userId: currentSummary.id ?? currentSummary.user_id ?? getCurrentUserId() ?? null,
+            at: t,
+            tick: Number(bot.globalState?.tick || 0) || 0,
+            loginAt,
+            source: "post-login-self"
+          };
+          state2.streak = 0;
+          state2.lastSampleAt = 0;
+          state2.lastOkAt = 0;
+          state2.lastUnsafeAt = 0;
+          state2.lastErrorAt = 0;
+          state2.lastTick = 0;
+          state2.lastDanger = null;
+          state2.lastError = "";
+          state2.movement = {};
+          writeLoginPointSafetyState(state2);
+          return state2;
+        }
+        function inferLoginPointLoginAt(t = Date.now()) {
+          const candidates = [
+            bot.lastLoginAt,
+            bot.lastLoginResult?.at,
+            bot.lastManualLoginResult?.at,
+            bot.session?.startedAt
+          ].map((value) => Number(value || 0)).filter((value) => Number.isFinite(value) && value > 0 && value <= t);
+          try {
+            const suppressUntil = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+            const suppressReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
+            if (suppressUntil > t && /oauth|callback|login/i.test(suppressReason)) {
+              const inferredAt = Math.max(0, suppressUntil - Math.max(1e3, Number(cfg.postLoginGraceMs) || 45e3));
+              if (inferredAt > 0 && inferredAt <= t) candidates.push(inferredAt);
+            }
+          } catch (_) {
+          }
+          if (candidates.length) return Math.max(...candidates);
+          return 0;
+        }
+        return {
+          loginPointSafetySuccessRequired,
+          optionalFiniteNumber,
+          loginPointSafetyLastExitHp,
+          loginPointSafetyHealthyHpThreshold,
+          loginPointSafetyLowHpRadius,
+          loginPointSafetyHealthyRadius,
+          loginPointSafetyRadiusInfo,
+          loginPointSafetyRadius,
+          loginPointSafetyDayKey,
+          finiteNumber,
+          loginPointSafetyExitSelfHpFrom,
+          loginPointSafetyExitSelfForDetail,
+          loginPointEntityKey,
+          loginPointActorSummary,
+          normalizeLoginPointSafetyState,
+          loginPointHasPoint,
+          loginPointPointStamp,
+          mergeLoginPointSafetyState,
+          readLoginPointSafetyState,
+          writeLoginPointSafetyState,
+          loginPointDamageActorKeys,
+          loginPointDamageEvidence,
+          loginPointEntityMoved,
+          loginPointActiveModeStaminaSpent,
+          loginPointActiveModeDangerReason,
+          loginPointDangerReason,
+          evaluateLoginPointSafety,
+          noteLoginPointSafetyProbe,
+          loginPointSafetyStatus,
+          resetLoginPointSafetyGate,
+          rememberLoginPointDamageThreat,
+          maybeRecordLoginPoint,
+          inferLoginPointLoginAt
+        };
+      }
+      module.exports = {
+        createLoginPointSafetyRuntime
+      };
+    }
+  });
+
+  // src/browser/runtime/control-login-runtime.js
+  var require_control_login_runtime = __commonJS({
+    "src/browser/runtime/control-login-runtime.js"(exports, module) {
+      "use strict";
+      init_define_GRASP_RAT_RUNTIME_CONFIG();
+      function createControlLoginRuntime(runtime = {}) {
+        const {
+          bot,
+          cfg,
+          storage = typeof localStorage2 !== "undefined" ? localStorage2 : null,
+          pageGlobal = typeof window !== "undefined" ? window : null,
+          botKey = "",
+          loginSuppressKey = "",
+          loginSuppressReasonKey = "",
+          readPageGlobal = () => null,
+          installPageGlobal = () => {
+          },
+          normalizeLoginSnapshotGateStateCore = (value) => value || {},
+          loginSnapshotSuccessRequiredCore = () => 0,
+          loginPointSafetyStatus = () => ({}),
+          resetLoginPointSafetyGate = () => ({}),
+          noteLoginPointSafetyProbe = () => ({}),
+          isVisible = () => false,
+          controlText = () => "",
+          getSelf = () => null,
+          summarizeSelf = (value) => value,
+          getCurrentUserId = () => 0,
+          summarizeControl = () => null,
+          updateBotPanel = () => {
+          }
+        } = runtime;
+        const localStorage2 = storage;
+        const BOT_KEY = botKey;
+        const LOGIN_SUPPRESS_KEY = loginSuppressKey;
+        const LOGIN_SUPPRESS_REASON_KEY = loginSuppressReasonKey;
+        function findLoginControl() {
+          const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
+          if (direct && isVisible(direct)) return direct;
+          const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(isVisible);
+          return candidates.find((el) => {
+            const text = controlText(el);
+            if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
+            return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text);
+          }) || null;
+        }
+        function hasLoginRequiredText() {
+          const text = (document.body?.innerText || "").slice(0, 5e3);
+          return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
+        }
+        function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {
+          const requestedUntil = Date.now() + Math.max(1e3, Number(ms) || cfg.postLoginGraceMs);
+          let existingUntil = 0;
+          let existingReason = "";
+          try {
+            existingUntil = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+            existingReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
+          } catch (_) {
+          }
+          const reuseExisting = existingUntil > requestedUntil;
+          const until = reuseExisting ? existingUntil : requestedUntil;
+          const suppressReason = reuseExisting ? String(existingReason || reason || "login flow") : String(reason || "login flow");
+          try {
+            localStorage2.setItem(LOGIN_SUPPRESS_KEY, String(until));
+            localStorage2.setItem(LOGIN_SUPPRESS_REASON_KEY, suppressReason);
+          } catch (_) {
+          }
+          return until;
+        }
+        function loginSuppressRemainingMs() {
+          let until = 0;
+          try {
+            until = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+          } catch (_) {
+          }
+          const remaining = Math.max(0, until - Date.now());
+          if (!remaining && until) {
+            try {
+              localStorage2.removeItem(LOGIN_SUPPRESS_KEY);
+              localStorage2.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+            } catch (_) {
+            }
+          }
+          return remaining;
+        }
+        function loginSuppressStatus(t = Date.now()) {
+          let until = 0;
+          let reason = "";
+          try {
+            until = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
+            reason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
+          } catch (_) {
+          }
+          const remainingMs = Math.max(0, Math.round(until - t));
+          if (!remainingMs && until) {
+            try {
+              localStorage2.removeItem(LOGIN_SUPPRESS_KEY);
+              localStorage2.removeItem(LOGIN_SUPPRESS_REASON_KEY);
+            } catch (_) {
+            }
+            until = 0;
+            reason = "";
+          }
+          return {
+            until,
+            reason,
+            remainingMs
+          };
+        }
+        function snapshotLoginGateStatus(t = Date.now()) {
+          const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
+          const required = loginSnapshotSuccessRequiredCore();
+          state2.required = required;
+          if (state2.streak > required) state2.streak = required;
+          const lastSampleAt = Number(state2.lastSampleAt || state2.lastOkAt || state2.lastErrorAt || 0) || 0;
+          const pointSafety = loginPointSafetyStatus(t);
+          const snapshotConnectivitySatisfied = true;
+          const loginPointSafetySatisfied = Boolean(pointSafety.satisfied);
+          return {
+            ...state2,
+            lastSampleAt,
+            satisfied: loginPointSafetySatisfied,
+            snapshotConnectivitySatisfied,
+            loginPointSafetySatisfied,
+            loginPointSafetyBlocked: !loginPointSafetySatisfied,
+            remaining: Math.max(0, required - state2.streak),
+            pointSafety,
+            lastOkAgeMs: state2.lastOkAt ? Math.max(0, Math.round(t - Number(state2.lastOkAt || t))) : null,
+            lastErrorAgeMs: state2.lastErrorAt ? Math.max(0, Math.round(t - Number(state2.lastErrorAt || t))) : null,
+            lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
+          };
+        }
+        function resetLoginSnapshotGate(reason = "exit", exitSelfLike = null) {
+          const t = Date.now();
+          bot.loginSnapshotGate = {
+            ...normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore()),
+            streak: 0,
+            required: loginSnapshotSuccessRequiredCore(),
+            lastError: "",
+            resetAt: t,
+            resetReason: String(reason || "exit")
+          };
+          resetLoginPointSafetyGate(reason, exitSelfLike);
+          return snapshotLoginGateStatus(t);
+        }
+        function noteLoginSnapshotProbe(success, detail = {}) {
+          const t = Date.now();
+          const required = loginSnapshotSuccessRequiredCore();
+          const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
+          state2.required = required;
+          state2.lastSampleAt = t;
+          if (success) {
+            state2.streak = Math.min(required, Math.max(0, Number(state2.streak || 0)) + 1);
+            state2.lastOkAt = t;
+            state2.lastTick = Number(detail.tick || state2.lastTick || 0) || 0;
+            state2.lastError = "";
+          } else {
+            state2.streak = 0;
+            state2.lastErrorAt = t;
+            state2.lastError = String(detail.error || detail.message || "");
+          }
+          bot.loginSnapshotGate = state2;
+          noteLoginPointSafetyProbe(success, {
+            ...detail,
+            entities: Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities
+          });
+          return snapshotLoginGateStatus(t);
+        }
+        function loginSnapshotGateAllowsLogin(gate) {
+          if (!gate) return false;
+          if (gate.satisfied) return true;
+          return Boolean(gate.liveSessionTakeoverBypass && gate.pointSafety?.satisfied);
+        }
+        function loginSnapshotGateBlockReason(gate = snapshotLoginGateStatus()) {
+          const status = gate || snapshotLoginGateStatus();
+          if (loginSnapshotGateAllowsLogin(status)) return "";
+          const pointSafety = status.pointSafety || loginPointSafetyStatus();
+          if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return "login-point-missing";
+          if (!pointSafety.satisfied) return "login-point-safety";
+          return "snapshot-gate";
+        }
+        async function ensureLoginSnapshotGate(reason = "login", options = {}) {
+          let status = snapshotLoginGateStatus();
+          if (status.satisfied) return status;
+          const allowTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed);
+          if (allowTakeoverBypass && status.pointSafety?.satisfied) {
+            status.blockReason = String(reason || "login");
+            status.liveSessionTakeoverBypass = true;
+            status.liveSessionTakeover = options.liveSessionTakeover;
+            return status;
+          }
+          status.blockReason = String(reason || "login");
+          status.passiveSnapshotOnly = true;
+          if (!status.satisfied && allowTakeoverBypass && status.pointSafety?.satisfied) {
+            status.liveSessionTakeoverBypass = true;
+            status.liveSessionTakeover = options.liveSessionTakeover;
+          }
+          return status;
+        }
+        function loginSnapshotGateDisplayReason(snapshotGate = snapshotLoginGateStatus()) {
+          const gate = snapshotGate || snapshotLoginGateStatus();
+          if (gate.satisfied) return "";
+          const pointSafety = gate.pointSafety || loginPointSafetyStatus();
+          if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) {
+            return "\u7B49\u5F85\u767B\u5F55\u70B9\u5750\u6807\uFF0C\u9700\u5148\u5728\u6E38\u620F\u5185\u8BFB\u53D6\u81EA\u8EAB\u5750\u6807";
+          }
+          if (pointSafety.hasPoint && !pointSafety.satisfied) {
+            const pieces = [
+              "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167",
+              String(pointSafety.streak || 0) + "/" + String(pointSafety.required || 0),
+              "\u534A\u5F84" + Math.round(pointSafety.radius || 0) + "cm"
+            ];
+            if (pointSafety.lastDanger?.reason) {
+              const actor = pointSafety.lastDanger.actor || {};
+              pieces.push("\u5371\u9669\uFF1A" + pointSafety.lastDanger.reason + (actor.name || actor.id ? " " + (actor.name || "#" + actor.id) : ""));
+            }
+            if (pointSafety.lastError) pieces.push("\u6700\u8FD1\u9519\u8BEF\uFF1A" + pointSafety.lastError);
+            return pieces.join("\uFF0C");
+          }
+          return "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167";
+        }
+        function markManualLoginBypass(reason = "manual login", durationMs = 5e3) {
+          try {
+            installPageGlobal("__graspRatManualLoginBypassUntil", Date.now() + Math.max(1e3, Number(durationMs) || 5e3), pageGlobal);
+            installPageGlobal("__graspRatManualLoginBypassReason", String(reason || "manual login"), pageGlobal);
+          } catch (_) {
+          }
+        }
+        function manualLoginBypassActive() {
+          try {
+            return Number(readPageGlobal("__graspRatManualLoginBypassUntil", 0, pageGlobal) || 0) > Date.now();
+          } catch (_) {
+            return false;
+          }
+        }
+        function nativeLoginEventControl(event) {
+          const raw = event?.submitter || event?.target || null;
+          const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
+          if (!el) return null;
+          if (el.matches?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]')) return el;
+          const text = controlText(el);
+          if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return null;
+          return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text) ? el : null;
+        }
+        function blockNativeLoginEventIfNeeded(event) {
+          const control = nativeLoginEventControl(event);
+          if (!control) return;
+          if (event?.isTrusted) {
+            markManualLoginBypass("trusted native login " + String(event.type || "event"));
+            return;
+          }
+          if (manualLoginBypassActive()) return;
+          const gate = snapshotLoginGateStatus();
+          if (loginSnapshotGateAllowsLogin(gate)) return;
+          const point = gate.pointSafety || loginPointSafetyStatus();
+          if (!point?.hasPoint && !point?.missingPoint) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          const block = {
+            at: Date.now(),
+            reason: loginSnapshotGateBlockReason(gate),
+            control: control.id ? "#" + control.id : controlText(control) || control.tagName?.toLowerCase?.() || "",
+            snapshotGate: gate,
+            displayReason: loginSnapshotGateDisplayReason(gate)
+          };
+          bot.lastLoginResult = {
+            needed: true,
+            attempted: false,
+            reason: "snapshot-gate",
+            error: "",
+            nativeLoginBlocked: block,
+            snapshotGate: gate
+          };
+          bot.lastDecision = {
+            kind: "wait",
+            reason: "login-snapshot-gate",
+            dx: 0,
+            dy: 0,
+            self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
+            currentUserId: getCurrentUserId(),
+            control: summarizeControl(),
+            login: bot.lastLoginResult,
+            displayReason: block.displayReason
+          };
+          updateBotPanel(bot.lastDecision);
+        }
+        function installStartLinuxDoLoginGate() {
+          if (readPageGlobal("__graspRatStartLinuxDoLoginGateInstalled", false, pageGlobal)) return;
+          if (readPageGlobal("__graspRatBotStartLinuxDoLoginGateVersion", "", pageGlobal) === cfg.version) return;
+          const current = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
+          const preservedRaw = readPageGlobal("__graspRatBotRawStartLinuxDoLogin", null, pageGlobal);
+          const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
+          installPageGlobal("__graspRatBotRawStartLinuxDoLogin", previous, pageGlobal);
+          const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
+            if (manualLoginBypassActive()) {
+              if (typeof previous === "function") return previous.apply(this, args);
+              return previous;
+            }
+            const gate = snapshotLoginGateStatus();
+            if (!loginSnapshotGateAllowsLogin(gate)) {
+              const point = gate.pointSafety || loginPointSafetyStatus();
+              if (point?.hasPoint || point?.missingPoint) {
+                const block = {
+                  at: Date.now(),
+                  reason: loginSnapshotGateBlockReason(gate),
+                  snapshotGate: gate,
+                  displayReason: loginSnapshotGateDisplayReason(gate)
+                };
+                bot.lastLoginResult = {
+                  needed: true,
+                  attempted: false,
+                  reason: "snapshot-gate",
+                  error: "",
+                  nativeLoginBlocked: block,
+                  snapshotGate: gate
+                };
+                bot.lastDecision = {
+                  kind: "wait",
+                  reason: "login-snapshot-gate",
+                  dx: 0,
+                  dy: 0,
+                  self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
+                  currentUserId: getCurrentUserId(),
+                  control: summarizeControl(),
+                  login: bot.lastLoginResult,
+                  displayReason: block.displayReason
+                };
+                updateBotPanel(bot.lastDecision);
+                return false;
+              }
+            }
+            if (typeof previous === "function") return previous.apply(this, args);
+            return previous;
+          };
+          try {
+            installPageGlobal("startLinuxDoLogin", guardedStartLinuxDoLogin, pageGlobal);
+            installPageGlobal("__graspRatBotStartLinuxDoLoginGateVersion", cfg.version, pageGlobal);
+          } catch (_) {
+          }
+        }
+        function installNativeLoginGateInterceptors() {
+          if (bot.nativeLoginGateInstalled) return;
+          bot.nativeLoginGateInstalled = true;
+          installStartLinuxDoLoginGate();
+          for (const type of ["pointerdown", "mousedown", "touchstart", "click", "submit"]) {
+            document.addEventListener(type, blockNativeLoginEventIfNeeded, true);
+          }
+        }
+        return {
+          findLoginControl,
+          hasLoginRequiredText,
+          setLoginSuppress,
+          loginSuppressRemainingMs,
+          loginSuppressStatus,
+          snapshotLoginGateStatus,
+          resetLoginSnapshotGate,
+          noteLoginSnapshotProbe,
+          loginSnapshotGateAllowsLogin,
+          loginSnapshotGateBlockReason,
+          ensureLoginSnapshotGate,
+          loginSnapshotGateDisplayReason,
+          markManualLoginBypass,
+          manualLoginBypassActive,
+          nativeLoginEventControl,
+          blockNativeLoginEventIfNeeded,
+          installStartLinuxDoLoginGate,
+          installNativeLoginGateInterceptors
+        };
+      }
+      module.exports = {
+        createControlLoginRuntime
+      };
+    }
+  });
+
   // src/browser/runtime/control-flow-runtime.js
   var require_control_flow_runtime = __commonJS({
     "src/browser/runtime/control-flow-runtime.js"(exports, module) {
@@ -7036,6 +8382,9 @@
         resetClashLeaveRescueRoundCore,
         resetClashLeaveRescueRoundCore: resetClashLeaveRescueRoundForPendingExitCore
       } = require_leave_command2();
+      var { createPostLoginZoomRuntime } = require_post_login_zoom_runtime();
+      var { createLoginPointSafetyRuntime } = require_login_point_safety_runtime();
+      var { createControlLoginRuntime } = require_control_login_runtime();
       function createControlFlowRuntime(runtime = {}) {
         const {
           bot,
@@ -7814,1167 +9163,138 @@
             } : null
           };
         }
-        function isVisible(el) {
-          if (!el) return false;
-          const style = getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-        }
-        function controlText(el) {
-          return (el?.innerText || el?.value || el?.getAttribute?.("aria-label") || el?.getAttribute?.("title") || "").trim();
-        }
-        function describeControl(el) {
-          if (!el) return "";
-          if (el.id) return "#" + el.id;
-          const text = controlText(el);
-          if (text) return text;
-          return String(el.tagName || "").toLowerCase();
-        }
-        function requestNativeViewportResize(reason = "bot") {
-          try {
-            window.dispatchEvent(new Event("resize"));
-            bot.lastNativeViewportResizeRequest = {
-              at: Date.now(),
-              reason: String(reason || "bot")
-            };
-            return true;
-          } catch (err) {
-            bot.lastNativeViewportResizeRequest = {
-              at: Date.now(),
-              reason: String(reason || "bot"),
-              error: err?.message || String(err)
-            };
-            return false;
-          }
-        }
-        function findZoomControl(direction = "out") {
-          const out = String(direction || "out") !== "in";
-          const directSelector = out ? '#zoomOutBtn, [data-testid="zoom-out"], [aria-label="zoom out"], [aria-label="Zoom out"]' : '#zoomInBtn, [data-testid="zoom-in"], [aria-label="zoom in"], [aria-label="Zoom in"]';
-          const direct = document.querySelector(directSelector);
-          if (direct) return direct;
-          const candidates = Array.from(document.querySelectorAll('button, input[type="button"], [role="button"]'));
-          return candidates.find((el) => {
-            const text = controlText(el);
-            return out ? /zoom\s*out|缩小|缩放-|地图-|视图-/i.test(text) : /zoom\s*in|放大|缩放\+|地图\+|视图\+/i.test(text);
-          }) || null;
-        }
-        function findZoomOutControl() {
-          return findZoomControl("out");
-        }
-        function clickZoomControl(direction = "out") {
-          const out = String(direction || "out") !== "in";
-          const control = findZoomControl(out ? "out" : "in");
-          const label = out ? "zoom-out" : "zoom-in";
-          if (!control) return { clicked: false, error: label + " control not found", direction: out ? "out" : "in" };
-          if (control.disabled) return { clicked: false, error: label + " control disabled", control: describeControl(control), direction: out ? "out" : "in" };
-          try {
-            control.click();
-            return { clicked: true, control: describeControl(control), direction: out ? "out" : "in" };
-          } catch (err) {
-            return { clicked: false, error: err?.message || String(err), control: describeControl(control), direction: out ? "out" : "in" };
-          }
-        }
-        function clickZoomOutControl() {
-          return clickZoomControl("out");
-        }
-        function postLoginZoomScaleTextRadiusCm() {
-          const text = String(document.getElementById("scaleText")?.textContent || "");
-          const match = text.match(/r\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*(km|m)\b/i);
-          if (!match) return 0;
-          const value = Number(match[1]);
-          if (!Number.isFinite(value) || value <= 0) return 0;
-          return /km/i.test(match[2]) ? value * 1e5 : value * 100;
-        }
-        function postLoginZoomCurrentViewRadiusCm() {
-          const nativeState = getNativeState();
-          const values = [
-            postLoginZoomScaleTextRadiusCm(),
-            nativeState?.viewRadiusCm,
-            nativeState?.view_radius_cm,
-            nativeState?.viewRadius,
-            nativeState?.view_radius
-          ];
-          for (const value of values) {
-            const radius = Number(value);
-            if (Number.isFinite(radius) && radius > 0) return radius;
-          }
-          return 0;
-        }
-        function postLoginZoomTargetRadiusCm() {
-          const configured = Number(cfg.postLoginZoomFitRadiusCm || 0);
-          if (Number.isFinite(configured) && configured > 0) return configured;
-          const nativeAuthority = Number(cfg.nativeCoinAuthoritativeRadius || 0);
-          return Number.isFinite(nativeAuthority) && nativeAuthority > 0 ? nativeAuthority : 5e4;
-        }
-        function postLoginZoomFitBounds() {
-          const targetRatio = Math.min(0.99, Math.max(0.5, Number(cfg.postLoginZoomFitTargetRatio || 0.96) || 0.96));
-          const tolerance = Math.max(5e-3, Number(cfg.postLoginZoomFitTolerance || 0.04) || 0.04);
-          return {
-            targetRatio,
-            minRatio: Math.max(0.1, targetRatio - tolerance),
-            maxRatio: Math.min(1, targetRatio + tolerance)
-          };
-        }
-        function postLoginZoomViewElements() {
-          const world = document.getElementById("world") || document.querySelector(".map-shell canvas") || document.querySelector(".map-shell");
-          const shell = world?.closest?.(".map-shell") || document.querySelector(".map-shell") || world?.parentElement || null;
-          if (!world || !shell) return null;
-          const worldRect = world.getBoundingClientRect();
-          const shellRect = shell.getBoundingClientRect();
-          if (!(worldRect.width > 0) || !(worldRect.height > 0) || !(shellRect.width > 0) || !(shellRect.height > 0)) return null;
-          return {
-            world,
-            shell,
-            width: shellRect.width,
-            height: shellRect.height,
-            worldWidth: worldRect.width,
-            worldHeight: worldRect.height,
-            worldOffsetX: worldRect.left - shellRect.left,
-            worldOffsetY: worldRect.top - shellRect.top
-          };
-        }
-        function postLoginZoomProjection(selfSummary, view) {
-          if (typeof targetOverlayProjection === "function") {
-            const projection = targetOverlayProjection(selfSummary, view);
-            if (projection) return projection;
-          }
-          const radius = postLoginZoomCurrentViewRadiusCm();
-          const shortSide = Math.max(1, Math.min(Number(view?.worldWidth || view?.width || 1), Number(view?.worldHeight || view?.height || 1)));
-          const units = Math.max(1, radius || postLoginZoomTargetRadiusCm()) * 2 / shortSide;
-          return {
-            units,
-            cx: Number(view?.worldWidth || view?.width || 0) / 2,
-            cy: Number(view?.worldHeight || view?.height || 0) / 2,
-            centerX: Number(selfSummary?.x || 0),
-            centerY: Number(selfSummary?.y || 0),
-            offsetX: Number(view?.worldOffsetX || 0),
-            offsetY: Number(view?.worldOffsetY || 0),
-            source: "post-login-fallback"
-          };
-        }
-        function postLoginZoomSelfScreenPoint(selfSummary, view, projection) {
-          if (typeof targetOverlayPoint === "function") {
-            const point = targetOverlayPoint(selfSummary, selfSummary, view, projection);
-            if (point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))) return point;
-          }
-          return {
-            x: (Number(projection?.offsetX) || 0) + Number(projection?.cx || 0),
-            y: (Number(projection?.offsetY) || 0) + Number(projection?.cy || 0)
-          };
-        }
-        function postLoginZoomFitMeasurement(selfSummary) {
-          const view = postLoginZoomViewElements();
-          if (!view) return { ok: false, error: "map view not found" };
-          const projection = postLoginZoomProjection(selfSummary, view);
-          const units = Number(projection?.units);
-          if (!Number.isFinite(units) || units <= 0) return { ok: false, error: "view projection unavailable" };
-          const center = postLoginZoomSelfScreenPoint(selfSummary, view, projection);
-          const centerX = Number(center?.x);
-          const centerY = Number(center?.y);
-          if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return { ok: false, error: "self screen point unavailable" };
-          const paddingPx = Math.max(0, Number(cfg.postLoginZoomFitPaddingPx || 0) || 0);
-          const availablePx = Math.min(centerX, Number(view.width || 0) - centerX, centerY, Number(view.height || 0) - centerY) - paddingPx;
-          if (!(availablePx > 0)) return { ok: false, error: "no visible room for view circle" };
-          const radiusCm = postLoginZoomTargetRadiusCm();
-          const circleRadiusPx = radiusCm / units;
-          const fitRatio = circleRadiusPx / availablePx;
-          const bounds = postLoginZoomFitBounds();
-          return {
-            ok: true,
-            radiusCm: Math.round(radiusCm),
-            viewRadiusCm: Math.round(postLoginZoomCurrentViewRadiusCm() || 0),
-            units: Number(units.toFixed(2)),
-            circleRadiusPx: Math.round(circleRadiusPx),
-            availablePx: Math.round(availablePx),
-            paddingPx: Math.round(paddingPx),
-            centerX: Math.round(centerX),
-            centerY: Math.round(centerY),
-            width: Math.round(Number(view.width || 0)),
-            height: Math.round(Number(view.height || 0)),
-            fitRatio: Number(fitRatio.toFixed(3)),
-            targetRatio: bounds.targetRatio,
-            minRatio: Number(bounds.minRatio.toFixed(3)),
-            maxRatio: Number(bounds.maxRatio.toFixed(3)),
-            source: projection.source || ""
-          };
-        }
-        function postLoginZoomFitDecision(measure) {
-          if (!measure?.ok) return { done: false, direction: "out", reason: measure?.error || "unmeasured" };
-          const ratio = Number(measure.fitRatio);
-          const maxRatio = Number(measure.maxRatio);
-          if (!Number.isFinite(ratio) || !Number.isFinite(maxRatio)) {
-            return { done: false, direction: "out", reason: "invalid-ratio" };
-          }
-          if (ratio > maxRatio) return { done: false, direction: "out", reason: "circle-clipped" };
-          return { done: true, direction: "", reason: "visible-range-fit" };
-        }
-        function postLoginZoomWheelTarget() {
-          const view = postLoginZoomViewElements();
-          return view?.world || view?.shell || document.getElementById("world") || document.querySelector(".map-shell") || document.body;
-        }
-        function dispatchPostLoginZoomWheel(direction = "out") {
-          const target = postLoginZoomWheelTarget();
-          if (!target || typeof WheelEvent !== "function") return { dispatched: false, method: "wheel", error: "wheel target unavailable", direction };
-          const out = String(direction || "out") !== "in";
-          const rect = typeof target.getBoundingClientRect === "function" ? target.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth || 1, height: window.innerHeight || 1 };
-          const delta = Math.max(1, Number(cfg.postLoginZoomWheelDeltaY || 100) || 100);
-          const event = new WheelEvent("wheel", {
-            bubbles: true,
-            cancelable: true,
-            deltaMode: 0,
-            deltaX: 0,
-            deltaY: out ? delta : -delta,
-            clientX: Number(rect.left || 0) + Math.max(1, Number(rect.width || 1)) / 2,
-            clientY: Number(rect.top || 0) + Math.max(1, Number(rect.height || 1)) / 2
-          });
-          const notCanceled = target.dispatchEvent(event);
-          return {
-            dispatched: true,
-            method: "wheel",
-            direction: out ? "out" : "in",
-            deltaY: out ? delta : -delta,
-            target: describeControl(target),
-            defaultPrevented: Boolean(event.defaultPrevented),
-            canceled: !notCanceled
-          };
-        }
-        function postLoginZoomStepImproved(before, after, direction) {
-          if (!before?.ok || !after?.ok) return false;
-          const beforeRatio = Number(before.fitRatio);
-          const afterRatio = Number(after.fitRatio);
-          if (!Number.isFinite(beforeRatio) || !Number.isFinite(afterRatio)) return false;
-          const minimumChange = 4e-3;
-          return String(direction || "out") !== "in" && afterRatio <= beforeRatio - minimumChange;
-        }
-        function finishPostLoginZoomResult(state2, status, detail = {}) {
-          const latest = state2.lastResult || {};
-          state2.lastResult = {
-            ...latest,
-            ...detail,
-            status,
-            finishedAt: Date.now()
-          };
-          return state2.lastResult;
-        }
-        function currentBotIsInstalled() {
-          return readPageGlobal(BOT_KEY, null, pageGlobal) === bot;
-        }
-        function schedulePostLoginZoomFallbackClicks(state2, reason = "") {
-          const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
-          const latest = state2.lastResult || {};
-          latest.fallbackReason = reason || latest.fallbackReason || "";
-          latest.fallbackRequestedClicks = clicks;
-          latest.requestedClicks = clicks;
-          state2.lastResult = latest;
-          if (!clicks) return finishPostLoginZoomResult(state2, "failed", { lastError: reason || "fit measurement unavailable" });
-          const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
-          for (let index = 0; index < clicks; index += 1) {
-            setTimeout(() => {
-              if (!currentBotIsInstalled() || !bot.running) return;
-              requestNativeViewportResize("post-login-zoom-fallback-click-" + (index + 1));
-              const result = clickZoomOutControl();
-              const current = state2.lastResult || {};
-              current.completedClicks = Number(current.completedClicks || 0) + (result.clicked ? 1 : 0);
-              current.failedClicks = Number(current.failedClicks || 0) + (result.clicked ? 0 : 1);
-              current.lastError = result.error || current.lastError || "";
-              current.lastAction = result;
-              current.control = result.control || current.control || "";
-              current.finishedAt = Date.now();
-              state2.lastResult = current;
-              requestNativeViewportResize("post-login-zoom-after-fallback-click-" + (index + 1));
-            }, index * intervalMs);
-          }
-          setTimeout(() => {
-            if (!currentBotIsInstalled() || !bot.running) return;
-            finishPostLoginZoomResult(state2, "fallback-clicks");
-          }, clicks * intervalMs + 20);
-          return state2.lastResult;
-        }
-        function schedulePostLoginZoomFitStep(selfSummary, stepIndex = 0, delayMs = 0) {
-          setTimeout(() => {
-            if (!currentBotIsInstalled() || !bot.running) return;
-            const state2 = bot.postLoginZoom;
-            if (!state2?.lastResult) return;
-            const maxSteps = Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24));
-            requestNativeViewportResize("post-login-zoom-fit-step-" + (stepIndex + 1));
-            const before = postLoginZoomFitMeasurement(selfSummary);
-            const decision = postLoginZoomFitDecision(before);
-            const latest = state2.lastResult || {};
-            latest.lastMeasure = before;
-            latest.fitRatio = before?.ok ? before.fitRatio : null;
-            latest.viewRadiusCm = before?.ok ? before.viewRadiusCm : null;
-            latest.lastDecision = decision;
-            state2.lastResult = latest;
-            if (!before?.ok && stepIndex === 0) {
-              schedulePostLoginZoomFallbackClicks(state2, before?.error || "fit measurement unavailable");
-              return;
-            }
-            if (decision.done) {
-              finishPostLoginZoomResult(state2, "fit", { lastError: "" });
-              return;
-            }
-            if (stepIndex >= maxSteps) {
-              finishPostLoginZoomResult(state2, "max-steps", { lastError: "post-login zoom fit max steps reached" });
-              return;
-            }
-            const action = dispatchPostLoginZoomWheel(decision.direction);
-            latest.wheelSteps = Number(latest.wheelSteps || 0) + (action.dispatched ? 1 : 0);
-            latest.failedWheelSteps = Number(latest.failedWheelSteps || 0) + (action.dispatched ? 0 : 1);
-            latest.lastAction = action;
-            latest.lastError = action.error || "";
-            state2.lastResult = latest;
-            const intervalMs = Math.max(0, Number(cfg.postLoginZoomOutIntervalMs || 0));
-            setTimeout(() => {
-              if (!currentBotIsInstalled() || !bot.running) return;
-              const current = state2.lastResult || {};
-              const after = postLoginZoomFitMeasurement(selfSummary);
-              current.lastMeasure = after;
-              current.fitRatio = after?.ok ? after.fitRatio : current.fitRatio;
-              current.viewRadiusCm = after?.ok ? after.viewRadiusCm : current.viewRadiusCm;
-              if (!postLoginZoomStepImproved(before, after, decision.direction)) {
-                const fallback = clickZoomControl(decision.direction);
-                current.fallbackClicks = Number(current.fallbackClicks || 0) + 1;
-                current.completedClicks = Number(current.completedClicks || 0) + (fallback.clicked ? 1 : 0);
-                current.failedClicks = Number(current.failedClicks || 0) + (fallback.clicked ? 0 : 1);
-                current.lastAction = { ...fallback, method: "button-fallback" };
-                current.lastError = fallback.error || current.lastError || "";
-                current.control = fallback.control || current.control || "";
-              }
-              state2.lastResult = current;
-              schedulePostLoginZoomFitStep(selfSummary, stepIndex + 1, intervalMs);
-            }, intervalMs);
-          }, delayMs);
-        }
-        function postLoginZoomSessionKey(selfSummary) {
-          const userId = selfSummary?.user_id ?? getCurrentUserId() ?? "";
-          const token = getSessionToken();
-          if (token) return String(userId) + ":token:" + String(token).slice(0, 24);
-          return String(userId) + ":generation:" + Number(bot.postLoginZoom?.generation || 0);
-        }
-        function noteSelfUnavailableForPostLoginZoom() {
-          const state2 = bot.postLoginZoom;
-          if (!state2) return;
-          const t = Date.now();
-          if (!state2.missingSince) state2.missingSince = t;
-          const missingMs = Math.max(0, t - Number(state2.missingSince || t));
-          if (missingMs < Math.max(0, Number(cfg.postLoginZoomArmMissingMs || 0))) return;
-          if (!state2.armed) {
-            state2.generation = Number(state2.generation || 0) + 1;
-            state2.armed = true;
-            state2.scheduledKey = "";
-          }
-        }
-        function schedulePostLoginZoomOut(selfSummary) {
-          const state2 = bot.postLoginZoom;
-          if (!state2) return null;
-          const t = Date.now();
-          state2.lastSeenSelfAt = t;
-          state2.missingSince = 0;
-          const clicks = Math.max(0, Math.round(Number(cfg.postLoginZoomOutClicks || 0)));
-          if (!state2.armed) return null;
-          const key = postLoginZoomSessionKey(selfSummary);
-          if (!key || state2.appliedKey === key || state2.scheduledKey === key) return null;
-          state2.armed = false;
-          state2.appliedKey = key;
-          state2.scheduledKey = key;
-          state2.scheduledAt = t;
-          const fitBounds = postLoginZoomFitBounds();
-          state2.lastResult = {
-            key,
-            mode: "fit-visible-range",
-            scheduledAt: t,
-            startDelayMs: Math.max(0, Number(cfg.postLoginZoomStartDelayMs || 0) || 0),
-            requestedRadiusCm: Math.round(postLoginZoomTargetRadiusCm()),
-            targetRatio: fitBounds.targetRatio,
-            minRatio: Number(fitBounds.minRatio.toFixed(3)),
-            maxRatio: Number(fitBounds.maxRatio.toFixed(3)),
-            maxSteps: Math.max(1, Math.round(Number(cfg.postLoginZoomFitMaxSteps || 24) || 24)),
-            fallbackRequestedClicks: clicks,
-            completedClicks: 0,
-            failedClicks: 0,
-            wheelSteps: 0,
-            failedWheelSteps: 0,
-            fallbackClicks: 0,
-            lastError: ""
-          };
-          requestNativeViewportResize("post-login-zoom-schedule");
-          setTimeout(() => requestNativeViewportResize("post-login-zoom-before-clicks"), state2.lastResult.startDelayMs);
-          schedulePostLoginZoomFitStep(selfSummary, 0, state2.lastResult.startDelayMs);
-          return state2.lastResult;
-        }
-        function findLoginControl() {
-          const direct = document.querySelector('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]');
-          if (direct && isVisible(direct)) return direct;
-          const candidates = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')).filter(isVisible);
-          return candidates.find((el) => {
-            const text = controlText(el);
-            if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return false;
-            return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text);
-          }) || null;
-        }
-        function hasLoginRequiredText() {
-          const text = (document.body?.innerText || "").slice(0, 5e3);
-          return /login required|please login|please sign in|not logged in|未登录|请先登录|请登录|需要登录/i.test(text);
-        }
-        function setLoginSuppress(reason, ms = cfg.postLoginGraceMs) {
-          const requestedUntil = Date.now() + Math.max(1e3, Number(ms) || cfg.postLoginGraceMs);
-          let existingUntil = 0;
-          let existingReason = "";
-          try {
-            existingUntil = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-            existingReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-          } catch (_) {
-          }
-          const reuseExisting = existingUntil > requestedUntil;
-          const until = reuseExisting ? existingUntil : requestedUntil;
-          const suppressReason = reuseExisting ? String(existingReason || reason || "login flow") : String(reason || "login flow");
-          try {
-            localStorage2.setItem(LOGIN_SUPPRESS_KEY, String(until));
-            localStorage2.setItem(LOGIN_SUPPRESS_REASON_KEY, suppressReason);
-          } catch (_) {
-          }
-          return until;
-        }
-        function loginSuppressRemainingMs() {
-          let until = 0;
-          try {
-            until = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-          } catch (_) {
-          }
-          const remaining = Math.max(0, until - Date.now());
-          if (!remaining && until) {
-            try {
-              localStorage2.removeItem(LOGIN_SUPPRESS_KEY);
-              localStorage2.removeItem(LOGIN_SUPPRESS_REASON_KEY);
-            } catch (_) {
-            }
-          }
-          return remaining;
-        }
-        function loginSuppressStatus(t = Date.now()) {
-          let until = 0;
-          let reason = "";
-          try {
-            until = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-            reason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-          } catch (_) {
-          }
-          const remainingMs = Math.max(0, Math.round(until - t));
-          if (!remainingMs && until) {
-            try {
-              localStorage2.removeItem(LOGIN_SUPPRESS_KEY);
-              localStorage2.removeItem(LOGIN_SUPPRESS_REASON_KEY);
-            } catch (_) {
-            }
-            until = 0;
-            reason = "";
-          }
-          return {
-            until,
-            reason,
-            remainingMs
-          };
-        }
-        function loginPointSafetySuccessRequired() {
-          return Math.max(0, Math.round(Number(cfg.loginPointSafetySuccessRequired ?? 3) || 3));
-        }
-        function optionalFiniteNumber(value) {
-          if (value === void 0 || value === null || value === "") return null;
-          const n = Number(value);
-          return Number.isFinite(n) ? n : null;
-        }
-        function loginPointSafetyLastExitHp(state2 = null) {
-          return optionalFiniteNumber(
-            state2?.lastExitSelfHp ?? state2?.lastExitHp ?? state2?.lastExitSelf?.hp ?? state2?.lastExitSelf?.selfHp
-          );
-        }
-        function loginPointSafetyHealthyHpThreshold() {
-          return Math.max(0, Number(cfg.loginPointSafetyHealthyHpThreshold ?? 80) || 80);
-        }
-        function loginPointSafetyLowHpRadius() {
-          return Math.max(0, Number(cfg.loginPointSafetyRadius ?? 3e4) || 3e4);
-        }
-        function loginPointSafetyHealthyRadius() {
-          return Math.max(0, Number(cfg.loginPointSafetyHealthyRadius ?? 17e3) || 17e3);
-        }
-        function loginPointSafetyRadiusInfo(state2 = null) {
-          const lastExitSelfHp = loginPointSafetyLastExitHp(state2);
-          const healthyHpThreshold = loginPointSafetyHealthyHpThreshold();
-          const lowHpRadius = loginPointSafetyLowHpRadius();
-          const healthyRadius = loginPointSafetyHealthyRadius();
-          const healthyExit = Number.isFinite(lastExitSelfHp) && lastExitSelfHp >= healthyHpThreshold;
-          return {
-            radius: healthyExit ? healthyRadius : lowHpRadius,
-            lowHpRadius,
-            healthyRadius,
-            healthyHpThreshold,
-            lastExitSelfHp: Number.isFinite(lastExitSelfHp) ? lastExitSelfHp : null,
-            lastExitSelfHpKnown: Number.isFinite(lastExitSelfHp),
-            radiusReason: healthyExit ? "last-exit-hp-healthy" : "last-exit-hp-low-or-unknown"
-          };
-        }
-        function loginPointSafetyRadius(state2 = null) {
-          return loginPointSafetyRadiusInfo(state2).radius;
-        }
-        function loginPointSafetyDayKey(t = Date.now()) {
-          const d = new Date(t);
-          const year = d.getFullYear();
-          const month = String(d.getMonth() + 1).padStart(2, "0");
-          const day = String(d.getDate()).padStart(2, "0");
-          return year + "-" + month + "-" + day;
-        }
-        function finiteNumber(...values) {
-          for (const value of values) {
-            const n = Number(value);
-            if (Number.isFinite(n)) return n;
-          }
-          return NaN;
-        }
-        function loginPointSafetyExitSelfHpFrom(...values) {
-          for (const value of values) {
-            if (value === void 0 || value === null) continue;
-            if (typeof value === "object") {
-              const nested = loginPointSafetyExitSelfHpFrom(
-                value.hp,
-                value.selfHp,
-                value.currentHp,
-                value.self?.hp,
-                value.self?.selfHp,
-                value.summary?.hp,
-                value.detail?.self?.hp
-              );
-              if (Number.isFinite(nested)) return nested;
-              continue;
-            }
-            const n = optionalFiniteNumber(value);
-            if (Number.isFinite(n)) return n;
-          }
-          return NaN;
-        }
-        function loginPointSafetyExitSelfForDetail(detail = null, meta = null, fallback = null) {
-          return meta?.self || detail?.self || detail?.injury?.self || detail?.injury || detail?.combat?.self || detail?.offlineSafety?.self || fallback || null;
-        }
-        function loginPointEntityKey(entity) {
-          const id = entity?.user_id ?? entity?.userId ?? entity?.id;
-          if (id !== void 0 && id !== null && id !== "") return "id:" + String(id);
-          const name = String(entity?.name || "").trim();
-          return name ? "name:" + name : "";
-        }
-        function loginPointActorSummary(entity, extra = {}) {
-          if (!entity || typeof entity !== "object") return null;
-          const key = loginPointEntityKey(entity);
-          if (!key) return null;
-          const rawId = entity.user_id ?? entity.userId ?? entity.id;
-          return {
-            key,
-            id: rawId === void 0 || rawId === null || rawId === "" ? "" : String(rawId),
-            name: String(entity.name || ""),
-            x: Number.isFinite(Number(entity.x)) ? Math.round(Number(entity.x)) : null,
-            y: Number.isFinite(Number(entity.y)) ? Math.round(Number(entity.y)) : null,
-            drop: Math.max(0, Math.round(dropValue(entity))),
-            mode: String(entity.current_join_mode || entity.mode || ""),
-            ...extra
-          };
-        }
-        function normalizeLoginPointSafetyState(state2 = null, t = Date.now()) {
-          const source = state2 && typeof state2 === "object" ? state2 : {};
-          const required = loginPointSafetySuccessRequired();
-          const point = source.point && Number.isFinite(Number(source.point.x)) && Number.isFinite(Number(source.point.y)) ? {
-            x: Number(source.point.x),
-            y: Number(source.point.y),
-            userId: source.point.userId ?? source.point.id ?? null,
-            at: Number(source.point.at || 0) || 0,
-            tick: Number(source.point.tick || 0) || 0,
-            loginAt: Number(source.point.loginAt || 0) || 0,
-            source: String(source.point.source || "")
-          } : null;
-          const dayKey = loginPointSafetyDayKey(t);
-          const damagedBy = source.damagedBy && source.damagedBy.dayKey === dayKey ? {
-            dayKey,
-            actors: Array.isArray(source.damagedBy.actors) ? source.damagedBy.actors.filter((actor) => actor && actor.key).slice(-80) : []
-          } : { dayKey, actors: [] };
-          const movement = source.movement && typeof source.movement === "object" ? { ...source.movement } : {};
-          const lastExitSelfHp = loginPointSafetyLastExitHp(source);
-          const radiusInfo = loginPointSafetyRadiusInfo({ lastExitSelfHp });
-          return {
-            point,
-            streak: Math.max(0, Math.round(Number(source.streak || 0) || 0)),
-            required,
-            radius: radiusInfo.radius,
-            lowHpRadius: radiusInfo.lowHpRadius,
-            healthyRadius: radiusInfo.healthyRadius,
-            healthyHpThreshold: radiusInfo.healthyHpThreshold,
-            radiusReason: radiusInfo.radiusReason,
-            lastExitSelfHp: Number.isFinite(lastExitSelfHp) ? lastExitSelfHp : null,
-            lastExitSelfHpKnown: Number.isFinite(lastExitSelfHp),
-            lastExitSelfHpAt: Number(source.lastExitSelfHpAt || source.lastExitHpAt || 0) || 0,
-            lastExitSelfHpReason: String(source.lastExitSelfHpReason || source.lastExitHpReason || ""),
-            lastSampleAt: Number(source.lastSampleAt || source.lastOkAt || source.lastUnsafeAt || source.lastErrorAt || 0) || 0,
-            lastOkAt: Number(source.lastOkAt || 0) || 0,
-            lastUnsafeAt: Number(source.lastUnsafeAt || 0) || 0,
-            lastErrorAt: Number(source.lastErrorAt || 0) || 0,
-            lastError: String(source.lastError || ""),
-            lastTick: Number(source.lastTick || 0) || 0,
-            resetAt: Number(source.resetAt || 0) || 0,
-            resetReason: String(source.resetReason || ""),
-            lastDanger: source.lastDanger && typeof source.lastDanger === "object" ? { ...source.lastDanger } : null,
-            movement,
-            damagedBy
-          };
-        }
-        function loginPointHasPoint(state2) {
-          return Boolean(
-            state2?.point && Number.isFinite(Number(state2.point.x)) && Number.isFinite(Number(state2.point.y))
-          );
-        }
-        function loginPointPointStamp(state2) {
-          if (!loginPointHasPoint(state2)) return 0;
-          return Math.max(Number(state2.point.at || 0) || 0, Number(state2.point.loginAt || 0) || 0);
-        }
-        function mergeLoginPointSafetyState(memoryState, storedState, t = Date.now()) {
-          const memory = memoryState && typeof memoryState === "object" ? normalizeLoginPointSafetyState(memoryState, t) : null;
-          const stored = storedState && typeof storedState === "object" ? normalizeLoginPointSafetyState(storedState, t) : null;
-          if (!memory) return stored || normalizeLoginPointSafetyState(null, t);
-          if (!stored) return memory;
-          const memoryHasPoint = loginPointHasPoint(memory);
-          const storedHasPoint = loginPointHasPoint(stored);
-          if (storedHasPoint && (!memoryHasPoint || loginPointPointStamp(stored) > loginPointPointStamp(memory))) {
-            return stored;
-          }
-          if (Number(stored.lastExitSelfHpAt || 0) > Number(memory.lastExitSelfHpAt || 0)) {
-            return normalizeLoginPointSafetyState({
-              ...memory,
-              lastExitSelfHp: stored.lastExitSelfHp,
-              lastExitSelfHpKnown: stored.lastExitSelfHpKnown,
-              lastExitSelfHpAt: stored.lastExitSelfHpAt,
-              lastExitSelfHpReason: stored.lastExitSelfHpReason
-            }, t);
-          }
-          return memory;
-        }
-        function readLoginPointSafetyState(t = Date.now()) {
-          let stored = null;
-          try {
-            stored = JSON.parse(localStorage2.getItem(LOGIN_POINT_SAFETY_KEY) || "null");
-          } catch (_) {
-            stored = null;
-          }
-          const state2 = mergeLoginPointSafetyState(bot.loginPointSafety, stored, t);
-          bot.loginPointSafety = state2;
-          return state2;
-        }
-        function writeLoginPointSafetyState(state2) {
-          bot.loginPointSafety = state2;
-          try {
-            localStorage2.setItem(LOGIN_POINT_SAFETY_KEY, JSON.stringify(state2));
-          } catch (_) {
-          }
-          return state2;
-        }
-        function loginPointDamageActorKeys(state2) {
-          return new Set((state2?.damagedBy?.actors || []).map((actor) => String(actor.key || "")).filter(Boolean));
-        }
-        function loginPointDamageEvidence(candidate, injury = {}) {
-          if (!candidate || typeof candidate !== "object") return "";
-          const rawId = candidate.user_id ?? candidate.userId ?? candidate.id;
-          const incomingOwnerId = injury?.incomingBullet?.ownerId ?? injury?.incomingBullet?.owner_id ?? candidate.incomingBulletOwnerId ?? candidate.damageEvidence?.incomingBulletOwnerId ?? null;
-          if (incomingOwnerId !== null && incomingOwnerId !== void 0 && rawId !== void 0 && rawId !== null && String(incomingOwnerId) === String(rawId)) {
-            return "incoming-bullet-owner";
-          }
-          if (truthyFlag(candidate.firing) || truthyFlag(candidate.isFiring) || truthyFlag(candidate.shooting) || truthyFlag(candidate.damageEvidence?.firing)) {
-            return "firing-near-self-hp-drop";
-          }
-          if (truthyFlag(candidate.combat) || truthyFlag(candidate.engagedCombat) || truthyFlag(candidate.damageEvidence?.combat) || String(candidate.combatIntent || candidate.damageEvidence?.combatIntent || "") === "engaged") {
-            return "combat-engaged-self-hp-drop";
-          }
-          return "";
-        }
-        function loginPointEntityMoved(state2, entity, t) {
-          const key = loginPointEntityKey(entity);
-          if (!key) return false;
-          const x = Number(entity.x);
-          const y = Number(entity.y);
-          if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-          const threshold = Math.max(0, Number(cfg.loginPointSafetyMoveThreshold ?? 500) || 500);
-          const previous = state2.movement?.[key] || null;
-          let moved = false;
-          if (previous && Number.isFinite(Number(previous.x)) && Number.isFinite(Number(previous.y))) {
-            moved = Math.hypot(x - Number(previous.x), y - Number(previous.y)) >= threshold;
-          }
-          if (!state2.movement || typeof state2.movement !== "object") state2.movement = {};
-          state2.movement[key] = {
-            x,
-            y,
-            at: t,
-            movedAt: moved ? t : Number(previous?.movedAt || 0) || 0
-          };
-          const entries = Object.entries(state2.movement).filter(([, item]) => t - Number(item?.at || 0) <= 10 * 60 * 1e3).slice(-300);
-          state2.movement = Object.fromEntries(entries);
-          return moved || Boolean(state2.movement[key].movedAt && t - Number(state2.movement[key].movedAt || 0) <= 10 * 60 * 1e3);
-        }
-        function loginPointActiveModeStaminaSpent(entity) {
-          const remaining = staminaRemaining(entity, "5s");
-          if (remaining === null) return false;
-          const limit = staminaLimitValue(entity, "5s", 1e4);
-          return Number.isFinite(limit) && limit > 0 && remaining < limit * cfg.staminaFullRatio;
-        }
-        function loginPointActiveModeDangerReason(state2, entity, t) {
-          if (!isJoinModeActive(entity)) return "";
-          const moved = loginPointEntityMoved(state2, entity, t);
-          if (isFiringEntity(entity)) return "active-mode-firing";
-          if (isMovingThreat(entity) || moved) return "active-mode-moving";
-          if (loginPointActiveModeStaminaSpent(entity)) return "active-mode-stamina-spent";
-          if (truthyFlag(entity.combat) || truthyFlag(entity.engagedCombat) || String(entity.combatIntent || "") === "engaged") {
-            return "active-mode-combat";
-          }
-          return "";
-        }
-        function loginPointDangerReason(state2, entity, t) {
-          if (!entity || typeof entity !== "object") return "";
-          const damagedKeys = loginPointDamageActorKeys(state2);
-          const key = loginPointEntityKey(entity);
-          if (key && damagedKeys.has(key)) return "damaged-self-today";
-          const activeModeReason = loginPointActiveModeDangerReason(state2, entity, t);
-          if (activeModeReason) return activeModeReason;
-          return "";
-        }
-        function evaluateLoginPointSafety(state2, detail = {}, t = Date.now()) {
-          if (!state2.point) return { safe: true, reason: "no-login-point", danger: null };
-          const entities = Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities;
-          if (!Array.isArray(entities)) {
-            return { safe: false, reason: "snapshot-entities-missing", danger: null };
-          }
-          const point = state2.point;
-          const radius = loginPointSafetyRadius(state2);
-          for (const entity of entities) {
-            if (!entity || typeof entity !== "object") continue;
-            if (!isAlive(entity) || isInvulnerable(entity)) continue;
-            const id = Number(entity.user_id ?? entity.userId ?? entity.id ?? NaN);
-            if (Number.isFinite(id) && Number(point.userId ?? NaN) === id) continue;
-            const x = Number(entity.x);
-            const y = Number(entity.y);
-            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            const distance = Math.hypot(x - Number(point.x), y - Number(point.y));
-            if (!(distance <= radius)) continue;
-            const reason = loginPointDangerReason(state2, entity, t);
-            if (!reason) continue;
-            return {
-              safe: false,
-              reason,
-              danger: loginPointActorSummary(entity, {
-                distance: Math.round(distance)
-              })
-            };
-          }
-          return { safe: true, reason: "safe", danger: null };
-        }
-        function noteLoginPointSafetyProbe(success, detail = {}) {
-          const t = Date.now();
-          const state2 = readLoginPointSafetyState(t);
-          state2.required = loginPointSafetySuccessRequired();
-          state2.radius = loginPointSafetyRadius(state2);
-          state2.lastSampleAt = t;
-          state2.lastTick = Number(detail.tick || state2.lastTick || 0) || 0;
-          if (!loginPointHasPoint(state2)) {
-            state2.streak = 0;
-            state2.lastDanger = null;
-            if (success) {
-              state2.lastOkAt = 0;
-              state2.lastError = "";
-            } else {
-              state2.lastErrorAt = t;
-              state2.lastError = String(detail.error || detail.message || "snapshot failed");
-            }
-            writeLoginPointSafetyState(state2);
-            return loginPointSafetyStatus(t);
-          }
-          let ok = Boolean(success);
-          let safety = { safe: ok, reason: ok ? "safe" : "snapshot-error", danger: null };
-          if (ok) {
-            safety = evaluateLoginPointSafety(state2, detail, t);
-            ok = Boolean(safety.safe);
-          }
-          if (ok) {
-            state2.streak = Math.min(state2.required, Math.max(0, Number(state2.streak || 0)) + 1);
-            state2.lastOkAt = t;
-            state2.lastError = "";
-            state2.lastDanger = null;
-          } else {
-            state2.streak = 0;
-            if (success) {
-              state2.lastUnsafeAt = t;
-              state2.lastDanger = {
-                reason: safety.reason || "unsafe",
-                actor: safety.danger || null,
-                at: t
-              };
-              state2.lastError = "";
-            } else {
-              state2.lastErrorAt = t;
-              state2.lastError = String(detail.error || detail.message || "snapshot failed");
-              state2.lastDanger = null;
-            }
-          }
-          writeLoginPointSafetyState(state2);
-          return loginPointSafetyStatus(t);
-        }
-        function loginPointSafetyStatus(t = Date.now()) {
-          const state2 = readLoginPointSafetyState(t);
-          const required = loginPointSafetySuccessRequired();
-          const hasPoint = Boolean(state2.point);
-          const lastSampleAt = Number(state2.lastSampleAt || state2.lastOkAt || state2.lastUnsafeAt || state2.lastErrorAt || 0) || 0;
-          const radiusInfo = loginPointSafetyRadiusInfo(state2);
-          return {
-            ...state2,
-            required,
-            radius: radiusInfo.radius,
-            lowHpRadius: radiusInfo.lowHpRadius,
-            healthyRadius: radiusInfo.healthyRadius,
-            healthyHpThreshold: radiusInfo.healthyHpThreshold,
-            radiusReason: radiusInfo.radiusReason,
-            lastExitSelfHp: radiusInfo.lastExitSelfHp,
-            lastExitSelfHpKnown: radiusInfo.lastExitSelfHpKnown,
-            hasPoint,
-            missingPoint: !hasPoint && required > 0,
-            satisfied: required <= 0 || hasPoint && state2.streak >= required,
-            remaining: hasPoint ? Math.max(0, required - state2.streak) : required,
-            lastSampleAt,
-            lastOkAgeMs: state2.lastOkAt ? Math.max(0, Math.round(t - Number(state2.lastOkAt || t))) : null,
-            lastUnsafeAgeMs: state2.lastUnsafeAt ? Math.max(0, Math.round(t - Number(state2.lastUnsafeAt || t))) : null,
-            lastErrorAgeMs: state2.lastErrorAt ? Math.max(0, Math.round(t - Number(state2.lastErrorAt || t))) : null,
-            lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
-          };
-        }
-        function resetLoginPointSafetyGate(reason = "exit", exitSelfLike = null) {
-          const t = Date.now();
-          const state2 = readLoginPointSafetyState(t);
-          const exitHp = loginPointSafetyExitSelfHpFrom(exitSelfLike);
-          state2.streak = 0;
-          state2.lastDanger = null;
-          state2.lastError = "";
-          state2.lastExitSelfHp = Number.isFinite(exitHp) ? exitHp : null;
-          state2.lastExitSelfHpKnown = Number.isFinite(exitHp);
-          state2.lastExitSelfHpAt = t;
-          state2.lastExitSelfHpReason = String(reason || "exit");
-          state2.radius = loginPointSafetyRadius(state2);
-          state2.resetAt = t;
-          state2.resetReason = String(reason || "exit");
-          writeLoginPointSafetyState(state2);
-          return loginPointSafetyStatus(t);
-        }
-        function rememberLoginPointDamageThreat(injury, reason = "self-damage") {
-          const t = Date.now();
-          const state2 = readLoginPointSafetyState(t);
-          const candidates = [
-            injury?.nearestActive,
-            injury?.nearestAvoidance,
-            injury?.nearestHuman
-          ].filter((candidate) => Boolean(loginPointDamageEvidence(candidate, injury)));
-          if (!candidates.length) return state2;
-          const existing = new Map((state2.damagedBy?.actors || []).map((actor) => [String(actor.key || ""), actor]));
-          for (const candidate of candidates) {
-            const evidence = loginPointDamageEvidence(candidate, injury);
-            const actor = loginPointActorSummary(candidate, { at: t, reason, evidence });
-            if (!actor?.key) continue;
-            existing.set(actor.key, { ...existing.get(actor.key) || {}, ...actor, at: t, reason });
-          }
-          state2.damagedBy = {
-            dayKey: loginPointSafetyDayKey(t),
-            actors: Array.from(existing.values()).slice(-80)
-          };
-          writeLoginPointSafetyState(state2);
-          return state2;
-        }
-        function maybeRecordLoginPoint(currentSummary) {
-          if (!currentSummary || !Number.isFinite(Number(currentSummary.x)) || !Number.isFinite(Number(currentSummary.y))) return null;
-          const t = Date.now();
-          const loginAt = inferLoginPointLoginAt(t);
-          if (!loginAt) return null;
-          const maxAge = Math.max(Number(cfg.postLoginGraceMs || 45e3) * 2, 6e4);
-          if (t - loginAt > maxAge) return null;
-          const state2 = readLoginPointSafetyState(t);
-          if (Number(state2.point?.loginAt || 0) >= loginAt) return state2;
-          bot.lastLoginAt = loginAt;
-          state2.point = {
-            x: Number(currentSummary.x),
-            y: Number(currentSummary.y),
-            userId: currentSummary.id ?? currentSummary.user_id ?? getCurrentUserId() ?? null,
-            at: t,
-            tick: Number(bot.globalState?.tick || 0) || 0,
-            loginAt,
-            source: "post-login-self"
-          };
-          state2.streak = 0;
-          state2.lastSampleAt = 0;
-          state2.lastOkAt = 0;
-          state2.lastUnsafeAt = 0;
-          state2.lastErrorAt = 0;
-          state2.lastTick = 0;
-          state2.lastDanger = null;
-          state2.lastError = "";
-          state2.movement = {};
-          writeLoginPointSafetyState(state2);
-          return state2;
-        }
-        function inferLoginPointLoginAt(t = Date.now()) {
-          const candidates = [
-            bot.lastLoginAt,
-            bot.lastLoginResult?.at,
-            bot.lastManualLoginResult?.at,
-            bot.session?.startedAt
-          ].map((value) => Number(value || 0)).filter((value) => Number.isFinite(value) && value > 0 && value <= t);
-          try {
-            const suppressUntil = Number(localStorage2.getItem(LOGIN_SUPPRESS_KEY) || 0) || 0;
-            const suppressReason = String(localStorage2.getItem(LOGIN_SUPPRESS_REASON_KEY) || "");
-            if (suppressUntil > t && /oauth|callback|login/i.test(suppressReason)) {
-              const inferredAt = Math.max(0, suppressUntil - Math.max(1e3, Number(cfg.postLoginGraceMs) || 45e3));
-              if (inferredAt > 0 && inferredAt <= t) candidates.push(inferredAt);
-            }
-          } catch (_) {
-          }
-          if (candidates.length) return Math.max(...candidates);
-          return 0;
-        }
-        function snapshotLoginGateStatus(t = Date.now()) {
-          const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
-          const required = loginSnapshotSuccessRequiredCore();
-          state2.required = required;
-          if (state2.streak > required) state2.streak = required;
-          const lastSampleAt = Number(state2.lastSampleAt || state2.lastOkAt || state2.lastErrorAt || 0) || 0;
-          const pointSafety = loginPointSafetyStatus(t);
-          const snapshotConnectivitySatisfied = true;
-          const loginPointSafetySatisfied = Boolean(pointSafety.satisfied);
-          return {
-            ...state2,
-            lastSampleAt,
-            satisfied: loginPointSafetySatisfied,
-            snapshotConnectivitySatisfied,
-            loginPointSafetySatisfied,
-            loginPointSafetyBlocked: !loginPointSafetySatisfied,
-            remaining: Math.max(0, required - state2.streak),
-            pointSafety,
-            lastOkAgeMs: state2.lastOkAt ? Math.max(0, Math.round(t - Number(state2.lastOkAt || t))) : null,
-            lastErrorAgeMs: state2.lastErrorAt ? Math.max(0, Math.round(t - Number(state2.lastErrorAt || t))) : null,
-            lastSampleAgeMs: lastSampleAt ? Math.max(0, Math.round(t - lastSampleAt)) : null
-          };
-        }
-        function resetLoginSnapshotGate(reason = "exit", exitSelfLike = null) {
-          const t = Date.now();
-          bot.loginSnapshotGate = {
-            ...normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore()),
-            streak: 0,
-            required: loginSnapshotSuccessRequiredCore(),
-            lastError: "",
-            resetAt: t,
-            resetReason: String(reason || "exit")
-          };
-          resetLoginPointSafetyGate(reason, exitSelfLike);
-          return snapshotLoginGateStatus(t);
-        }
-        function noteLoginSnapshotProbe(success, detail = {}) {
-          const t = Date.now();
-          const required = loginSnapshotSuccessRequiredCore();
-          const state2 = normalizeLoginSnapshotGateStateCore(bot.loginSnapshotGate, loginSnapshotSuccessRequiredCore());
-          state2.required = required;
-          state2.lastSampleAt = t;
-          if (success) {
-            state2.streak = Math.min(required, Math.max(0, Number(state2.streak || 0)) + 1);
-            state2.lastOkAt = t;
-            state2.lastTick = Number(detail.tick || state2.lastTick || 0) || 0;
-            state2.lastError = "";
-          } else {
-            state2.streak = 0;
-            state2.lastErrorAt = t;
-            state2.lastError = String(detail.error || detail.message || "");
-          }
-          bot.loginSnapshotGate = state2;
-          noteLoginPointSafetyProbe(success, {
-            ...detail,
-            entities: Array.isArray(detail.entities) ? detail.entities : bot.globalState.entities
-          });
-          return snapshotLoginGateStatus(t);
-        }
-        function loginSnapshotGateAllowsLogin(gate) {
-          if (!gate) return false;
-          if (gate.satisfied) return true;
-          return Boolean(gate.liveSessionTakeoverBypass && gate.pointSafety?.satisfied);
-        }
-        function loginSnapshotGateBlockReason(gate = snapshotLoginGateStatus()) {
-          const status = gate || snapshotLoginGateStatus();
-          if (loginSnapshotGateAllowsLogin(status)) return "";
-          const pointSafety = status.pointSafety || loginPointSafetyStatus();
-          if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) return "login-point-missing";
-          if (!pointSafety.satisfied) return "login-point-safety";
-          return "snapshot-gate";
-        }
-        async function ensureLoginSnapshotGate(reason = "login", options = {}) {
-          let status = snapshotLoginGateStatus();
-          if (status.satisfied) return status;
-          const allowTakeoverBypass = Boolean(options.allowLiveSessionTakeoverBypass && options.liveSessionTakeover?.allowed);
-          if (allowTakeoverBypass && status.pointSafety?.satisfied) {
-            status.blockReason = String(reason || "login");
-            status.liveSessionTakeoverBypass = true;
-            status.liveSessionTakeover = options.liveSessionTakeover;
-            return status;
-          }
-          status.blockReason = String(reason || "login");
-          status.passiveSnapshotOnly = true;
-          if (!status.satisfied && allowTakeoverBypass && status.pointSafety?.satisfied) {
-            status.liveSessionTakeoverBypass = true;
-            status.liveSessionTakeover = options.liveSessionTakeover;
-          }
-          return status;
-        }
-        function loginSnapshotGateDisplayReason(snapshotGate = snapshotLoginGateStatus()) {
-          const gate = snapshotGate || snapshotLoginGateStatus();
-          if (gate.satisfied) return "";
-          const pointSafety = gate.pointSafety || loginPointSafetyStatus();
-          if (!pointSafety.hasPoint && Number(pointSafety.required || 0) > 0) {
-            return "\u7B49\u5F85\u767B\u5F55\u70B9\u5750\u6807\uFF0C\u9700\u5148\u5728\u6E38\u620F\u5185\u8BFB\u53D6\u81EA\u8EAB\u5750\u6807";
-          }
-          if (pointSafety.hasPoint && !pointSafety.satisfied) {
-            const pieces = [
-              "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167",
-              String(pointSafety.streak || 0) + "/" + String(pointSafety.required || 0),
-              "\u534A\u5F84" + Math.round(pointSafety.radius || 0) + "cm"
-            ];
-            if (pointSafety.lastDanger?.reason) {
-              const actor = pointSafety.lastDanger.actor || {};
-              pieces.push("\u5371\u9669\uFF1A" + pointSafety.lastDanger.reason + (actor.name || actor.id ? " " + (actor.name || "#" + actor.id) : ""));
-            }
-            if (pointSafety.lastError) pieces.push("\u6700\u8FD1\u9519\u8BEF\uFF1A" + pointSafety.lastError);
-            return pieces.join("\uFF0C");
-          }
-          return "\u7B49\u5F85\u767B\u5F55\u70B9\u5B89\u5168\u5FEB\u7167";
-        }
-        function markManualLoginBypass(reason = "manual login", durationMs = 5e3) {
-          try {
-            installPageGlobal("__graspRatManualLoginBypassUntil", Date.now() + Math.max(1e3, Number(durationMs) || 5e3), pageGlobal);
-            installPageGlobal("__graspRatManualLoginBypassReason", String(reason || "manual login"), pageGlobal);
-          } catch (_) {
-          }
-        }
-        function manualLoginBypassActive() {
-          try {
-            return Number(readPageGlobal("__graspRatManualLoginBypassUntil", 0, pageGlobal) || 0) > Date.now();
-          } catch (_) {
-            return false;
-          }
-        }
-        function nativeLoginEventControl(event) {
-          const raw = event?.submitter || event?.target || null;
-          const el = raw?.closest?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"], a, button, input[type="submit"], input[type="button"], [role="button"]') || null;
-          if (!el) return null;
-          if (el.matches?.('#joinBtn, #loginBtn, [data-testid="login"], [data-testid="join"]')) return el;
-          const text = controlText(el);
-          if (/leave|logout|sign out|cancel|退出|离开|取消/i.test(text)) return null;
-          return /linuxdo|login|sign in|oauth|authorize|join|start|play|登录|登陆|授权|加入|进入|开始/i.test(text) ? el : null;
-        }
-        function blockNativeLoginEventIfNeeded(event) {
-          const control = nativeLoginEventControl(event);
-          if (!control) return;
-          if (event?.isTrusted) {
-            markManualLoginBypass("trusted native login " + String(event.type || "event"));
-            return;
-          }
-          if (manualLoginBypassActive()) return;
-          const gate = snapshotLoginGateStatus();
-          if (loginSnapshotGateAllowsLogin(gate)) return;
-          const point = gate.pointSafety || loginPointSafetyStatus();
-          if (!point?.hasPoint && !point?.missingPoint) return;
-          event.preventDefault();
-          event.stopPropagation();
-          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-          const block = {
-            at: Date.now(),
-            reason: loginSnapshotGateBlockReason(gate),
-            control: control.id ? "#" + control.id : controlText(control) || control.tagName?.toLowerCase?.() || "",
-            snapshotGate: gate,
-            displayReason: loginSnapshotGateDisplayReason(gate)
-          };
-          bot.lastLoginResult = {
-            needed: true,
-            attempted: false,
-            reason: "snapshot-gate",
-            error: "",
-            nativeLoginBlocked: block,
-            snapshotGate: gate
-          };
-          bot.lastDecision = {
-            kind: "wait",
-            reason: "login-snapshot-gate",
-            dx: 0,
-            dy: 0,
-            self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
-            currentUserId: getCurrentUserId(),
-            control: summarizeControl(),
-            login: bot.lastLoginResult,
-            displayReason: block.displayReason
-          };
-          updateBotPanel(bot.lastDecision);
-        }
-        function installStartLinuxDoLoginGate() {
-          if (readPageGlobal("__graspRatStartLinuxDoLoginGateInstalled", false, pageGlobal)) return;
-          if (readPageGlobal("__graspRatBotStartLinuxDoLoginGateVersion", "", pageGlobal) === cfg.version) return;
-          const current = readPageGlobal("startLinuxDoLogin", null, pageGlobal);
-          const preservedRaw = readPageGlobal("__graspRatBotRawStartLinuxDoLogin", null, pageGlobal);
-          const previous = preservedRaw && preservedRaw !== current ? preservedRaw : current;
-          installPageGlobal("__graspRatBotRawStartLinuxDoLogin", previous, pageGlobal);
-          const guardedStartLinuxDoLogin = function graspRatBotGuardedStartLinuxDoLogin(...args) {
-            if (manualLoginBypassActive()) {
-              if (typeof previous === "function") return previous.apply(this, args);
-              return previous;
-            }
-            const gate = snapshotLoginGateStatus();
-            if (!loginSnapshotGateAllowsLogin(gate)) {
-              const point = gate.pointSafety || loginPointSafetyStatus();
-              if (point?.hasPoint || point?.missingPoint) {
-                const block = {
-                  at: Date.now(),
-                  reason: loginSnapshotGateBlockReason(gate),
-                  snapshotGate: gate,
-                  displayReason: loginSnapshotGateDisplayReason(gate)
-                };
-                bot.lastLoginResult = {
-                  needed: true,
-                  attempted: false,
-                  reason: "snapshot-gate",
-                  error: "",
-                  nativeLoginBlocked: block,
-                  snapshotGate: gate
-                };
-                bot.lastDecision = {
-                  kind: "wait",
-                  reason: "login-snapshot-gate",
-                  dx: 0,
-                  dy: 0,
-                  self: getSelf() ? summarizeSelf(getSelf()) : bot.lastSelf,
-                  currentUserId: getCurrentUserId(),
-                  control: summarizeControl(),
-                  login: bot.lastLoginResult,
-                  displayReason: block.displayReason
-                };
-                updateBotPanel(bot.lastDecision);
-                return false;
-              }
-            }
-            if (typeof previous === "function") return previous.apply(this, args);
-            return previous;
-          };
-          try {
-            installPageGlobal("startLinuxDoLogin", guardedStartLinuxDoLogin, pageGlobal);
-            installPageGlobal("__graspRatBotStartLinuxDoLoginGateVersion", cfg.version, pageGlobal);
-          } catch (_) {
-          }
-        }
-        function installNativeLoginGateInterceptors() {
-          if (bot.nativeLoginGateInstalled) return;
-          bot.nativeLoginGateInstalled = true;
-          installStartLinuxDoLoginGate();
-          for (const type of ["pointerdown", "mousedown", "touchstart", "click", "submit"]) {
-            document.addEventListener(type, blockNativeLoginEventIfNeeded, true);
-          }
-        }
+        const {
+          isVisible,
+          controlText,
+          describeControl,
+          requestNativeViewportResize,
+          findZoomControl,
+          findZoomOutControl,
+          clickZoomControl,
+          clickZoomOutControl,
+          postLoginZoomScaleTextRadiusCm,
+          postLoginZoomCurrentViewRadiusCm,
+          postLoginZoomTargetRadiusCm,
+          postLoginZoomFitBounds,
+          postLoginZoomViewElements,
+          postLoginZoomProjection,
+          postLoginZoomSelfScreenPoint,
+          postLoginZoomFitMeasurement,
+          postLoginZoomFitDecision,
+          postLoginZoomWheelTarget,
+          dispatchPostLoginZoomWheel,
+          postLoginZoomStepImproved,
+          finishPostLoginZoomResult,
+          currentBotIsInstalled,
+          schedulePostLoginZoomFallbackClicks,
+          schedulePostLoginZoomFitStep,
+          postLoginZoomSessionKey,
+          noteSelfUnavailableForPostLoginZoom,
+          schedulePostLoginZoomOut
+        } = createPostLoginZoomRuntime({
+          bot,
+          cfg,
+          pageGlobal,
+          botKey: BOT_KEY,
+          readPageGlobal,
+          getCurrentUserId: (...args) => getCurrentUserId(...args),
+          getSessionToken: (...args) => getSessionToken(...args),
+          getNativeState: (...args) => getNativeState(...args)
+        });
+        const {
+          loginPointSafetySuccessRequired,
+          optionalFiniteNumber,
+          loginPointSafetyLastExitHp,
+          loginPointSafetyHealthyHpThreshold,
+          loginPointSafetyLowHpRadius,
+          loginPointSafetyHealthyRadius,
+          loginPointSafetyRadiusInfo,
+          loginPointSafetyRadius,
+          loginPointSafetyDayKey,
+          finiteNumber,
+          loginPointSafetyExitSelfHpFrom,
+          loginPointSafetyExitSelfForDetail,
+          loginPointEntityKey,
+          loginPointActorSummary,
+          normalizeLoginPointSafetyState,
+          loginPointHasPoint,
+          loginPointPointStamp,
+          mergeLoginPointSafetyState,
+          readLoginPointSafetyState,
+          writeLoginPointSafetyState,
+          loginPointDamageActorKeys,
+          loginPointDamageEvidence,
+          loginPointEntityMoved,
+          loginPointActiveModeStaminaSpent,
+          loginPointActiveModeDangerReason,
+          loginPointDangerReason,
+          evaluateLoginPointSafety,
+          noteLoginPointSafetyProbe,
+          loginPointSafetyStatus,
+          resetLoginPointSafetyGate,
+          rememberLoginPointDamageThreat,
+          maybeRecordLoginPoint,
+          inferLoginPointLoginAt
+        } = createLoginPointSafetyRuntime({
+          bot,
+          cfg,
+          storage: localStorage2,
+          loginPointSafetyKey: LOGIN_POINT_SAFETY_KEY,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          getCurrentUserId: (...args) => getCurrentUserId(...args),
+          dropValue,
+          truthyFlag,
+          staminaRemaining,
+          staminaLimitValue,
+          isJoinModeActive,
+          isFiringEntity,
+          isMovingThreat,
+          isAlive,
+          isInvulnerable
+        });
+        const {
+          findLoginControl,
+          hasLoginRequiredText,
+          setLoginSuppress,
+          loginSuppressRemainingMs,
+          loginSuppressStatus,
+          snapshotLoginGateStatus,
+          resetLoginSnapshotGate,
+          noteLoginSnapshotProbe,
+          loginSnapshotGateAllowsLogin,
+          loginSnapshotGateBlockReason,
+          ensureLoginSnapshotGate,
+          loginSnapshotGateDisplayReason,
+          markManualLoginBypass,
+          manualLoginBypassActive,
+          nativeLoginEventControl,
+          blockNativeLoginEventIfNeeded,
+          installStartLinuxDoLoginGate,
+          installNativeLoginGateInterceptors
+        } = createControlLoginRuntime({
+          bot,
+          cfg,
+          storage: localStorage2,
+          pageGlobal,
+          botKey: BOT_KEY,
+          loginSuppressKey: LOGIN_SUPPRESS_KEY,
+          loginSuppressReasonKey: LOGIN_SUPPRESS_REASON_KEY,
+          readPageGlobal,
+          installPageGlobal,
+          normalizeLoginSnapshotGateStateCore,
+          loginSnapshotSuccessRequiredCore,
+          loginPointSafetyStatus: (...args) => loginPointSafetyStatus(...args),
+          resetLoginPointSafetyGate: (...args) => resetLoginPointSafetyGate(...args),
+          noteLoginPointSafetyProbe: (...args) => noteLoginPointSafetyProbe(...args),
+          isVisible,
+          controlText,
+          getSelf: (...args) => getSelf(...args),
+          summarizeSelf: (...args) => summarizeSelf(...args),
+          getCurrentUserId: (...args) => getCurrentUserId(...args),
+          summarizeControl: (...args) => summarizeControl(...args),
+          updateBotPanel: (...args) => updateBotPanel(...args)
+        });
         function reloginCooldownCandidates(t = Date.now()) {
           const suppress = loginSuppressStatus(t);
           const candidates = [];
