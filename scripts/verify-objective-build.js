@@ -118,7 +118,7 @@ const POST_MIGRATION_DEPENDENCY_WIDTH_BUDGETS = {
   },
   'control flow composition runtime': {
     factory: 'createControlFlowRuntime',
-    max: 74
+    max: 76
   }
 };
 
@@ -714,6 +714,10 @@ async function main() {
     assert(runtimeControlFlowSource.includes('createPendingExitRuntime({'), 'control flow runtime does not create pending-exit bindings');
     assert(runtimeControlFlowSource.includes('createClashLeaveRescueRuntime({'), 'control flow runtime does not create Clash leave rescue bindings');
     assert(runtimeControlFlowSource.includes('createLeaveFlowRuntime({'), 'control flow runtime does not create leave-flow bindings');
+    assert(factoryRuntimeDestructuringFields(runtimeControlFlowSource, 'createControlFlowRuntime').some(field => /^newExitAuditRequestId\b/.test(field)), 'control flow runtime does not receive newExitAuditRequestId dependency');
+    assert(factoryRuntimeDestructuringFields(runtimeControlFlowSource, 'createControlFlowRuntime').some(field => /^syncPausedFromPage\b/.test(field)), 'control flow runtime does not receive syncPausedFromPage dependency');
+    assert(/createControlFlowRuntime\(\{[\s\S]*?\bnewExitAuditRequestId,/.test(runtimeEntrySource), 'runtime entry does not pass newExitAuditRequestId into control flow runtime');
+    assert(/createControlFlowRuntime\(\{[\s\S]*?\bsyncPausedFromPage: \(\.\.\.args\) => syncPausedFromPage\(\.\.\.args\)/.test(runtimeEntrySource), 'runtime entry does not pass syncPausedFromPage into control flow runtime');
     assert(!/function\s+pendingExitSkipNewLeave\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns pending-exit skip body');
     assert(!/function\s+rememberPendingExit\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns pending-exit recording body');
     assert(!/function\s+noteLeave403SnapshotProbe\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns leave-403 snapshot probe body');
