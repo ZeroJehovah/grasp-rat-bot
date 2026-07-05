@@ -8,6 +8,12 @@ const __graspRatRuntimeStartup = (() => {
   const { createRuntimeBotState } = require('./runtime/runtime-bot-state');
   const { createBotApiRuntime } = require('./runtime/bot-api-runtime');
   const { createEntityStateRuntime } = require('./runtime/entity-state-runtime');
+  const { createExitDetailRuntime } = require('./runtime/exit-detail-runtime');
+  const { createEntryGlueRuntime } = require('./runtime/entry-glue-runtime');
+  const {
+    exitMotionStopLockRemainingMsCore,
+    postExitDecisionWithoutTargetCore
+  } = require('./runtime/exit-motion');
   const runtimeShell = createRuntimeShellContext(__GRASP_RAT_RUNTIME_CONFIG__, {
     storage: localStorage,
     now: Date.now,
@@ -94,82 +100,126 @@ const __graspRatRuntimeStartup = (() => {
     summarizePendingExitForBotObjectCore
   } = botStatusCores;
 
-			  const bot = createRuntimeBotState({
-      cfg,
-      config,
-      preserved,
-      previousBot,
-      targetWhitelistState,
-      initialPendingExitState,
-      restoredEnemyLeaveState,
-      restoredOfflineLeaveState,
-      restoredFailures,
-      readPersistentLastSelfState,
-      readPageGlobal,
-      pageGlobal,
-      normalizeLoginSnapshotGateStateCore,
-      loginSnapshotSuccessRequiredCore,
-      performanceNow: () => performance.now()
-    });
+  const bot = createRuntimeBotState({
+    cfg,
+    config,
+    preserved,
+    previousBot,
+    targetWhitelistState,
+    initialPendingExitState,
+    restoredEnemyLeaveState,
+    restoredOfflineLeaveState,
+    restoredFailures,
+    readPersistentLastSelfState,
+    readPageGlobal,
+    pageGlobal,
+    normalizeLoginSnapshotGateStateCore,
+    loginSnapshotSuccessRequiredCore,
+    performanceNow: () => performance.now()
+  });
 
-    Object.assign(bot, createBotApiRuntime({
-      bot,
-      cfg,
-      storage: localStorage,
-      pageGlobal,
-      botKey: BOT_KEY,
-      pausedKey: PAUSED_KEY,
-      pauseReasonKey: PAUSE_REASON_KEY,
-      enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY,
-      readPageGlobal,
-      installPageGlobal,
-      wallNow: Date.now,
-      performanceNow: () => performance.now(),
-      stopMotionSafely: (...args) => stopMotionSafely(...args),
-      detachNativeMessagePump: (...args) => detachNativeMessagePump(...args),
-      closeControlWs: (...args) => closeControlWs(...args),
-      flushCombatLogs: (...args) => flushCombatLogs(...args),
-      logStatus: (...args) => logStatus(...args),
-      removeBotPanel: (...args) => removeBotPanel(...args),
-      removeTargetOverlay: (...args) => removeTargetOverlay(...args),
-      renderTargetOverlay: (...args) => renderTargetOverlay(...args),
-      forceLoginNow: (...args) => forceLoginNow(...args),
-      configureCombatLogging: (...args) => configureCombatLogging(...args),
-      tick: (...args) => tick(...args),
-      syncPausedFromPage: (...args) => syncPausedFromPage(...args),
-      triggerNativeTick: (...args) => triggerNativeTick(...args),
-      getSelf: (...args) => getSelf(...args),
-      summarizeSelf: (...args) => summarizeSelf(...args),
-      updateKillHistory: (...args) => updateKillHistory(...args),
-      updateSessionStats: (...args) => updateSessionStats(...args),
-      summarizeSessionStats: (...args) => summarizeSessionStats(...args),
-      summarizeTodaySessionStats: (...args) => summarizeTodaySessionStats(...args),
-      activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
-      activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
-      exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
-      postExitDecisionWithoutTargetForStatusCore,
-      summarizeNetworkQuality: (...args) => summarizeNetworkQuality(...args),
-      summarizeTargetWhitelistStatus: (...args) => summarizeTargetWhitelistStatus(...args),
-      summarizeCombatLoggingStatus: (...args) => summarizeCombatLoggingStatus(...args),
-      summarizeImportantLoggingStatus: (...args) => summarizeImportantLoggingStatus(...args),
-      unresolvedExitAuditLogCount: (...args) => unresolvedExitAuditLogCount(...args),
-      pendingExitAuditLogIds: (...args) => pendingExitAuditLogIds(...args),
-      summarizeSessionMismatchRecoveryStatus: (...args) => summarizeSessionMismatchRecoveryStatus(...args),
-      snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
-      summarizeReloginGateStatus: (...args) => summarizeReloginGateStatus(...args),
-      arrayCount: (...args) => arrayCount(...args),
-      summarizeControl: (...args) => summarizeControl(...args),
-      summarizeServerPositionStall: (...args) => summarizeServerPositionStall(...args),
-      summarizeActionSettlementStall: (...args) => summarizeActionSettlementStall(...args),
-      normalizePendingExitReloadConfirmationCore,
-      pendingExitRetryMsForBotObjectCore,
-      summarizePendingExitForBotObjectCore,
-      summarizePursuit: (...args) => summarizePursuit(...args),
-      latestEnemyLeaveSummary: (...args) => latestEnemyLeaveSummary(...args),
-      latestEnemyLeaveDisplayReason: (...args) => latestEnemyLeaveDisplayReason(...args),
-      readEnemyLeaveStreakBoundCore,
-      summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args)
-    }));
+  function exitMotionStopLockRemainingMs(t = Date.now()) {
+    return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
+  }
+
+  const {
+    activeEnemyLeaveDetail,
+    activeOfflineLeaveDetail,
+    latestEnemyLeaveResult,
+    latestEnemyLeaveSummary,
+    latestEnemyLeaveDisplayReason
+  } = createExitDetailRuntime({
+    bot,
+    enemyLeaveStateKey: ENEMY_LEAVE_STATE_KEY,
+    offlineLeaveStateKey: OFFLINE_LEAVE_STATE_KEY,
+    readPersistentExitState,
+    clearPersistentExitState,
+    refreshExitDetail,
+    now: Date.now
+  });
+
+  const {
+    clearPostExitTargetState,
+    readPauseReason,
+    syncPausedFromPage,
+    getOwnEntity,
+    logStatus
+  } = createEntryGlueRuntime({
+    bot,
+    storage: localStorage,
+    pageGlobal,
+    pausedKey: PAUSED_KEY,
+    pauseReasonKey: PAUSE_REASON_KEY,
+    readPageGlobal,
+    stopMotionSafely: (...args) => stopMotionSafely(...args),
+    removeTargetOverlay: (...args) => removeTargetOverlay(...args),
+    updateBotPanel: (...args) => updateBotPanel(...args),
+    getSelf: (...args) => getSelf(...args),
+    exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
+    postExitDecisionWithoutTargetCore,
+    resetOpportunitySwitchLock: (...args) => resetOpportunitySwitchLock(...args),
+    now: Date.now,
+    consoleObject: console
+  });
+
+  Object.assign(bot, createBotApiRuntime({
+    bot,
+    cfg,
+    storage: localStorage,
+    pageGlobal,
+    botKey: BOT_KEY,
+    pausedKey: PAUSED_KEY,
+    pauseReasonKey: PAUSE_REASON_KEY,
+    enemyLeaveStreakKey: ENEMY_LEAVE_STREAK_KEY,
+    readPageGlobal,
+    installPageGlobal,
+    wallNow: Date.now,
+    performanceNow: () => performance.now(),
+    stopMotionSafely: (...args) => stopMotionSafely(...args),
+    detachNativeMessagePump: (...args) => detachNativeMessagePump(...args),
+    closeControlWs: (...args) => closeControlWs(...args),
+    flushCombatLogs: (...args) => flushCombatLogs(...args),
+    logStatus: (...args) => logStatus(...args),
+    removeBotPanel: (...args) => removeBotPanel(...args),
+    removeTargetOverlay: (...args) => removeTargetOverlay(...args),
+    renderTargetOverlay: (...args) => renderTargetOverlay(...args),
+    forceLoginNow: (...args) => forceLoginNow(...args),
+    configureCombatLogging: (...args) => configureCombatLogging(...args),
+    tick: (...args) => tick(...args),
+    syncPausedFromPage: (...args) => syncPausedFromPage(...args),
+    triggerNativeTick: (...args) => triggerNativeTick(...args),
+    getSelf: (...args) => getSelf(...args),
+    summarizeSelf: (...args) => summarizeSelf(...args),
+    updateKillHistory: (...args) => updateKillHistory(...args),
+    updateSessionStats: (...args) => updateSessionStats(...args),
+    summarizeSessionStats: (...args) => summarizeSessionStats(...args),
+    summarizeTodaySessionStats: (...args) => summarizeTodaySessionStats(...args),
+    activeEnemyLeaveDetail: (...args) => activeEnemyLeaveDetail(...args),
+    activeOfflineLeaveDetail: (...args) => activeOfflineLeaveDetail(...args),
+    exitMotionStopLockRemainingMs: (...args) => exitMotionStopLockRemainingMs(...args),
+    postExitDecisionWithoutTargetForStatusCore,
+    summarizeNetworkQuality: (...args) => summarizeNetworkQuality(...args),
+    summarizeTargetWhitelistStatus: (...args) => summarizeTargetWhitelistStatus(...args),
+    summarizeCombatLoggingStatus: (...args) => summarizeCombatLoggingStatus(...args),
+    summarizeImportantLoggingStatus: (...args) => summarizeImportantLoggingStatus(...args),
+    unresolvedExitAuditLogCount: (...args) => unresolvedExitAuditLogCount(...args),
+    pendingExitAuditLogIds: (...args) => pendingExitAuditLogIds(...args),
+    summarizeSessionMismatchRecoveryStatus: (...args) => summarizeSessionMismatchRecoveryStatus(...args),
+    snapshotLoginGateStatus: (...args) => snapshotLoginGateStatus(...args),
+    summarizeReloginGateStatus: (...args) => summarizeReloginGateStatus(...args),
+    arrayCount: (...args) => arrayCount(...args),
+    summarizeControl: (...args) => summarizeControl(...args),
+    summarizeServerPositionStall: (...args) => summarizeServerPositionStall(...args),
+    summarizeActionSettlementStall: (...args) => summarizeActionSettlementStall(...args),
+    normalizePendingExitReloadConfirmationCore,
+    pendingExitRetryMsForBotObjectCore,
+    summarizePendingExitForBotObjectCore,
+    summarizePursuit: (...args) => summarizePursuit(...args),
+    latestEnemyLeaveSummary: (...args) => latestEnemyLeaveSummary(...args),
+    latestEnemyLeaveDisplayReason: (...args) => latestEnemyLeaveDisplayReason(...args),
+    readEnemyLeaveStreakBoundCore,
+    summarizePendingCombatLeave: (...args) => summarizePendingCombatLeave(...args)
+  }));
 
 	  const {
 	    hypot,
@@ -245,46 +295,17 @@ const __graspRatRuntimeStartup = (() => {
     staminaHoldContradictedByStaminaEvidence
   });
 
-const { attackWorthTakingCore } = require('./runtime/attack-worth');
+  const { attackWorthTakingCore } = require('./runtime/attack-worth');
 
-const {
-    exitMotionStopLockRemainingMsCore,
-    postExitDecisionWithoutTargetCore
-  } = require('./runtime/exit-motion');
-const {
+  const {
     reloginDelayForHpCore,
     unsafeExitReloginMinDelayMsCore
   } = require('./runtime/exit-relogin');
-const {
+  const {
     staminaExhaustedWindowLabel
   } = require('./runtime/exit-summary');
 
   const unsafeExitReloginMinDelayMs = () => unsafeExitReloginMinDelayMsCore(cfg);
-
-  function exitMotionStopLockRemainingMs(t = Date.now()) {
-    return exitMotionStopLockRemainingMsCore(bot.lastExitMotionStopAt, cfg.exitMotionStopLockMs, t);
-  }
-
-  function clearPostExitTargetState(reason = 'exit-confirmed') {
-    const exitMotionLockRemainingMs = exitMotionStopLockRemainingMs();
-    bot.lastTarget = null;
-    bot.lastTargetAt = 0;
-    bot.opportunityChoice = null;
-    resetOpportunitySwitchLock();
-    bot.staleCoinEscape = null;
-    bot.coinApproachLock = null;
-    removeTargetOverlay();
-    if (bot.lastDecision && typeof bot.lastDecision === 'object') {
-      bot.lastDecision = postExitDecisionWithoutTargetCore(bot.lastDecision, reason, {
-        lastExitMotionStopReason: bot.lastExitMotionStopReason,
-        exitMotionLockRemainingMs
-      });
-      try {
-        updateBotPanel(bot.lastDecision);
-      } catch (_) {}
-    }
-  }
-
 
   const { createTargetOverlayRuntime } = require('./runtime/target-overlay');
   const {
@@ -311,58 +332,7 @@ const {
   });
 
 
-const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require('./runtime/display-format');
-
-
-	  function activeEnemyLeaveDetail(t = Date.now()) {
-	    const current = latestEnemyLeaveResult();
-	    const restored = readPersistentExitState(ENEMY_LEAVE_STATE_KEY, t);
-	    const picked = current || restored || bot.lastEnemyLeaveResult || null;
-	    if (!picked) return null;
-	    const refreshed = refreshExitDetail(picked, t);
-	    if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
-	      clearPersistentExitState(ENEMY_LEAVE_STATE_KEY);
-	      if (bot.lastEnemyLeaveResult === picked) bot.lastEnemyLeaveResult = null;
-	      return null;
-	    }
-	    bot.lastEnemyLeaveResult = refreshed;
-	    if (Number(refreshed?.reloginUntil || 0) > 0) bot.pursuitReloginUntil = Math.max(Number(bot.pursuitReloginUntil || 0), Number(refreshed.reloginUntil));
-	    return refreshed;
-	  }
-
-	  function activeOfflineLeaveDetail(t = Date.now()) {
-	    const picked = bot.lastOfflineLeaveResult || readPersistentExitState(OFFLINE_LEAVE_STATE_KEY, t);
-	    if (!picked) return null;
-	    const refreshed = refreshExitDetail(picked, t);
-	    if (!refreshed?.holdRemainingMs && Number(refreshed?.reloginUntil || 0)) {
-	      clearPersistentExitState(OFFLINE_LEAVE_STATE_KEY);
-	      if (bot.lastOfflineLeaveResult === picked) bot.lastOfflineLeaveResult = null;
-	      return null;
-	    }
-	    bot.lastOfflineLeaveResult = refreshed;
-	    if (Number(refreshed?.reloginUntil || 0) > 0) bot.offlineReloginUntil = Math.max(Number(bot.offlineReloginUntil || 0), Number(refreshed.reloginUntil));
-	    return refreshed;
-	  }
-
-	  function latestEnemyLeaveResult() {
-	    const candidates = [
-	      { at: Number(bot.lastEnemyLeaveResult?.at || 0), result: bot.lastEnemyLeaveResult },
-	      { at: Number(bot.lastCombatLeaveResult?.at || bot.lastCombatLeaveAt || 0), result: bot.lastCombatLeaveResult },
-	      { at: Number(bot.lastPursuitLeaveResult?.at || bot.lastPursuitLeaveAt || 0), result: bot.lastPursuitLeaveResult },
-	      { at: Number(bot.lastInjuryLeaveResult?.at || bot.lastInjuryLeaveAt || 0), result: bot.lastInjuryLeaveResult }
-    ].filter(item => item.result);
-    return candidates.sort((a, b) => b.at - a.at)[0]?.result || null;
-  }
-
-  function latestEnemyLeaveSummary() {
-    const result = latestEnemyLeaveResult();
-    return result?.summary || result?.exitSummary || result?.enemyLeaveSummary || result?.displayReason || '';
-  }
-
-  function latestEnemyLeaveDisplayReason() {
-    const result = latestEnemyLeaveResult();
-    return result?.displayReason || result?.summary || result?.exitSummary || result?.enemyLeaveSummary || '';
-  }
+  const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = require('./runtime/display-format');
 
   const { createStatusPanelRuntime } = require('./runtime/status-panel');
   const {
@@ -378,19 +348,8 @@ const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = 
     summarizePursuit: (...args) => summarizePursuit(...args)
   });
 
-			  function logStatus(text, detail) {
-			    bot.lastAction = text;
-			    if (detail) bot.lastDecision = detail;
-			    if (bot.running) updateBotPanel(bot.lastDecision || detail || { kind: 'wait', reason: text, self: bot.lastSelf });
-			    if (typeof log === 'function') log('[bot] ' + text, 'info');
-			    console.log('[grasp-rat-bot]', text, detail || '');
-			  }
-
-
-
-
-      const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require('./runtime/runtime-utils');
-      const { arrayCount } = require('./runtime/array-count');
+  const { safeStringify, safeJsonClone, sanitizeCombatLogIdPart } = require('./runtime/runtime-utils');
+  const { arrayCount } = require('./runtime/array-count');
 
   let rememberCombatEngagement;
   let clearCombatEngagement;
@@ -1016,46 +975,6 @@ const { escapeHtml, formatDistance, formatDurationMs, actorLabel, hpDisplay } = 
 
 
 
-
-
-
-
-
-
-
-  function readPauseReason() {
-    let reason = '';
-    try {
-      reason = String(localStorage.getItem(PAUSE_REASON_KEY) || '');
-    } catch (_) {}
-    return String(readPageGlobal('__graspRatBotPauseReason', '', pageGlobal) || reason || '');
-  }
-
-  function syncPausedFromPage(stopOnPause = true) {
-    let localPaused = false;
-    try {
-      localPaused = localStorage.getItem(PAUSED_KEY) === 'true';
-    } catch (_) {}
-    const paused = Boolean(readPageGlobal('__graspRatBotPaused', false, pageGlobal) === true || localPaused);
-    if (paused !== bot.paused) {
-      bot.paused = paused;
-      bot.pauseChangedAt = Date.now();
-      if (paused) {
-        if (stopOnPause) stopMotionSafely('paused');
-        removeTargetOverlay();
-      }
-    }
-    bot.pauseReason = paused ? (readPauseReason() || bot.pauseReason || 'manual') : '';
-    return paused;
-  }
-
-  function getOwnEntity() {
-    try {
-      return typeof getSelf === 'function' ? getSelf() : null;
-    } catch (_) {
-      return null;
-    }
-  }
 
 
 
