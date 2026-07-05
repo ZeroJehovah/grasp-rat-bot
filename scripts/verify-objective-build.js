@@ -38,6 +38,9 @@ const REQUIRED_DIST_TOKENS = [
   'function createPostLoginZoomRuntime',
   'function createLoginPointSafetyRuntime',
   'function createControlLoginRuntime',
+  'function createPendingExitRuntime',
+  'function createClashLeaveRescueRuntime',
+  'function createLeaveFlowRuntime',
   'function updateBotPanel',
   'function getNativeState',
   'function createOrchestrationRuntime',
@@ -173,6 +176,9 @@ async function main() {
   const runtimePostLoginZoomSource = readText('src/browser/runtime/post-login-zoom-runtime.js');
   const runtimeLoginPointSafetySource = readText('src/browser/runtime/login-point-safety-runtime.js');
   const runtimeControlLoginSource = readText('src/browser/runtime/control-login-runtime.js');
+  const runtimePendingExitSource = readText('src/browser/runtime/pending-exit-runtime.js');
+  const runtimeClashLeaveRescueSource = readText('src/browser/runtime/clash-leave-rescue-runtime.js');
+  const runtimeLeaveFlowSource = readText('src/browser/runtime/leave-flow-runtime.js');
   const runtimeTargetWhitelistSource = readText('src/browser/runtime/target-whitelist.js');
   const runtimeStaminaStatusSource = readText('src/browser/runtime/stamina-status.js');
   const runtimeTargetOverlaySource = readText('src/browser/runtime/target-overlay.js');
@@ -434,7 +440,46 @@ async function main() {
     assert(runtimeControlLoginSource.includes('function installNativeLoginGateInterceptors'), 'native login interceptor body missing from module');
   });
 
-  check('control flow runtime owns remaining reload exit pending exit and leave flow bodies', () => {
+  check('control exit flow runtimes own extracted pending exit leave and rescue bodies', () => {
+    assert(runtimeControlFlowSource.includes("require('./pending-exit-runtime')"), 'control flow runtime does not import pending-exit runtime');
+    assert(runtimeControlFlowSource.includes("require('./clash-leave-rescue-runtime')"), 'control flow runtime does not import Clash leave rescue runtime');
+    assert(runtimeControlFlowSource.includes("require('./leave-flow-runtime')"), 'control flow runtime does not import leave-flow runtime');
+    assert(runtimeControlFlowSource.includes('createPendingExitRuntime({'), 'control flow runtime does not create pending-exit bindings');
+    assert(runtimeControlFlowSource.includes('createClashLeaveRescueRuntime({'), 'control flow runtime does not create Clash leave rescue bindings');
+    assert(runtimeControlFlowSource.includes('createLeaveFlowRuntime({'), 'control flow runtime does not create leave-flow bindings');
+    assert(!/function\s+pendingExitSkipNewLeave\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns pending-exit skip body');
+    assert(!/function\s+rememberPendingExit\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns pending-exit recording body');
+    assert(!/function\s+noteLeave403SnapshotProbe\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns leave-403 snapshot probe body');
+    assert(!/async\s+function\s+handlePendingExit\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns pending-exit handler body');
+    assert(!/async\s+function\s+issueLeaveCommand\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns leave command body');
+    assert(!/function\s+scheduleClashLeaveRescueRetry\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns Clash leave rescue retry body');
+    assert(!/async\s+function\s+maybeStartAutoLogin\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns auto-login body');
+    assert(!/async\s+function\s+forceLoginNow\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns force-login body');
+    assert(!/async\s+function\s+leaveOffline\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns offline leave body');
+    assert(!/async\s+function\s+leaveForInjury\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns injury leave body');
+    assert(!/async\s+function\s+leaveForPursuit\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns pursuit leave body');
+    assert(!/async\s+function\s+leaveForCombat\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns combat leave body');
+    assert(!/async\s+function\s+leaveDuringEnemyHold\s*\(/.test(runtimeControlFlowSource), 'control flow runtime still owns enemy-hold leave body');
+    assert(runtimePendingExitSource.includes('function createPendingExitRuntime'), 'pending-exit runtime factory missing');
+    assert(runtimePendingExitSource.includes('function pendingExitSkipNewLeave'), 'pending-exit skip body missing from module');
+    assert(runtimePendingExitSource.includes('function rememberPendingExit'), 'pending-exit recording body missing from module');
+    assert(runtimePendingExitSource.includes('function noteLeave403SnapshotProbe'), 'leave-403 snapshot probe body missing from pending-exit module');
+    assert(runtimePendingExitSource.includes('async function handlePendingExit'), 'pending-exit handler body missing from module');
+    assert(runtimeClashLeaveRescueSource.includes('function createClashLeaveRescueRuntime'), 'Clash leave rescue runtime factory missing');
+    assert(runtimeClashLeaveRescueSource.includes('function scheduleClashLeaveRescueRetry'), 'Clash leave rescue retry body missing from module');
+    assert(runtimeClashLeaveRescueSource.includes('async function issueLeaveCommand'), 'leave command body missing from Clash leave rescue module');
+    assert(runtimeLeaveFlowSource.includes('function createLeaveFlowRuntime'), 'leave-flow runtime factory missing');
+    assert(runtimeLeaveFlowSource.includes('async function maybeStartAutoLogin'), 'auto-login body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('async function forceLoginNow'), 'force-login body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('async function leaveOffline'), 'offline leave body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('async function leaveForInjury'), 'injury leave body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('async function leaveForPursuit'), 'pursuit leave body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('async function leaveForCombat'), 'combat leave body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('async function leaveDuringEnemyHold'), 'enemy-hold leave body missing from leave-flow module');
+    assert(runtimeLeaveFlowSource.includes('function updatePursuitTracking'), 'pursuit tracking body missing from leave-flow module');
+  });
+
+  check('control flow runtime owns remaining reload session and relogin gate bodies', () => {
     assert(!/function\s+requestReload\s*\(/.test(runtimeEntrySource), 'runtime entry still owns reload request body');
     assert(!/function\s+handlePendingExit\s*\(/.test(runtimeEntrySource), 'runtime entry still owns pending exit body');
     assert(!/async\s+function\s+maybeStartAutoLogin\s*\(/.test(runtimeEntrySource), 'runtime entry still owns auto-login body');
@@ -443,11 +488,9 @@ async function main() {
     assert(!/async\s+function\s+issueLeaveCommand\s*\(/.test(runtimeEntrySource), 'runtime entry still owns leave command body');
     assert(runtimeControlFlowSource.includes('function createControlFlowRuntime'), 'control flow runtime factory missing');
     assert(runtimeControlFlowSource.includes('function requestReload'), 'reload request body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('async function handlePendingExit'), 'pending exit body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('async function maybeStartAutoLogin'), 'auto-login body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('async function leaveOffline'), 'offline leave body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('function updatePursuitTracking'), 'pursuit tracking body missing from control flow module');
-    assert(runtimeControlFlowSource.includes('async function issueLeaveCommand'), 'leave command body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('function hasNativeGameSession'), 'native game-session body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('function summarizeReloginGateStatus'), 'relogin gate summary body missing from control flow module');
+    assert(runtimeControlFlowSource.includes('function clearCurrentReloginHold'), 'manual relogin-hold clear body missing from control flow module');
   });
 
   check('native state runtime owns snapshot state transport session and network bodies', () => {
